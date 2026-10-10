@@ -19,19 +19,14 @@ module.exports = ({ config }) => {
     icon: "./assets/icon.png",
     userInterfaceStyle: "light",
     newArchEnabled: true,
-    splash: {
-      image: "./assets/icon.png",
-      resizeMode: "contain",
-      backgroundColor: "#000000"
-    },
     android: {
       versionCode,
       package: isDevBuild 
         ? "com.skylucky.kimiphone.dev"  // Dev Client 包名
         : "com.skylucky.kimiphone",       // Release 包名
       adaptiveIcon: {
-        foregroundImage: "./assets/icon.png",
-        backgroundColor: "#000000"
+        foregroundImage: "./assets/adaptive-icon.png",
+        backgroundColor: isDevBuild ? "#FFFFFF" : "#000000"
       },
       edgeToEdgeEnabled: true,
       permissions: [
@@ -41,12 +36,25 @@ module.exports = ({ config }) => {
         "android.permission.PACKAGE_USAGE_STATS"
       ]
     },
+    // 黑底属于启动屏，应用内状态栏仍需透明，让各页面背景延伸到系统栏。
+    androidStatusBar: {
+      translucent: true
+    },
     plugins: [
       "./plugins/withAppVersion",
       "./plugins/withAndroidReleaseSigning",
       "./plugins/withFixedFontScale",
       "expo-router",
       "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          image: "./assets/icon.png",
+          imageWidth: 200,
+          resizeMode: "contain",
+          backgroundColor: "#000000"
+        }
+      ],
       "expo-sqlite",
       ["expo-secure-store", { configureAndroidBackup: false }],
       "./plugins/withMcpCredentialBackup",

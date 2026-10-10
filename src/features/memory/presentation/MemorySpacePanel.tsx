@@ -1,6 +1,6 @@
 /** 面板复用 Memory 的查询和命令，星空不拥有记忆事实或路由。 */
-import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Pressable, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, Keyboard, KeyboardAvoidingView, Modal, Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronRight, Plus, Search, X } from 'lucide-react-native';
 import { useTheme, useThemedStyles } from '@shared/theme';
@@ -21,6 +21,17 @@ export default function MemorySpacePanel({ visible, snapshot, error, busy, refre
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<'entries' | 'triggers'>('entries');
   const [triggerInput, setTriggerInput] = useState('');
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useEffect(() => {
+    if (!visible) return;
+    setKeyboardVisible(Keyboard.isVisible());
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [visible]);
   const selected = snapshot?.selectedSpace;
   const filtered = useMemo(() => {
     const normalized = normalizeMemoryText(query);
@@ -28,7 +39,8 @@ export default function MemorySpacePanel({ visible, snapshot, error, busy, refre
   }, [snapshot, query]);
 
   return <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose} statusBarTranslucent>
-    <KeyboardAvoidingView style={styles.modal} behavior="height">
+    {/* 隐藏事件的坐标仍可能落在 Modal 内；隐藏后停止避让，避免 height 模式反复改变自身测量高度。 */}
+    <KeyboardAvoidingView style={styles.modal} behavior="padding" enabled={visible && keyboardVisible}>
       <Pressable style={styles.scrim} accessibilityRole="button" accessibilityLabel="收起记忆面板" onPress={onClose} />
       <SafeAreaView edges={['bottom']} style={styles.sheet}>
         <View style={styles.handle} />
