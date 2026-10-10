@@ -1,0 +1,121 @@
+import React, { createContext, useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import type {
+  ChatColorOverrides,
+  ChatColorToken,
+  PresentationTheme,
+  PresentationThemeId,
+  ThemeContextValue,
+} from './types';
+import { DEFAULT_THEME_ID, getThemeById, getThemeSelectionDisabledReason, AVAILABLE_THEMES } from './themeRegistry';
+import {
+  loadChatColorOverrides,
+  loadStoredThemeId,
+  saveChatColorOverrides,
+  saveThemeId,
+} from './themeStorage';
+
+export const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+interface ThemeProviderProps {
+  children: ReactNode;
+}
+
+/** 将覆盖层合并到主题的 chat 颜色上，返回新的主题对象。 */
+function applyChatColorOverrides(
+  base: PresentationTheme,
+  overrides: ChatColorOverrides
+): PresentationTheme {
+  if (!overrides.userText && !overrides.aiText) {
+    return base;
+  }
+  return {
+    ...base,
+    colors: {
+      ...base.colors,
+      chat: {
+        ...base.colors.chat,
+        userText: overrides.userText ?? base.colors.chat.userText,
+        aiText: overrides.aiText ?? base.colors.chat.aiText,
+      },
+    },
+  };
+}
+
+export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
+  const [themeId, setThemeIdState] = useState<PresentationThemeId>(DEFAULT_THEME_ID);
+  const [baseTheme, setBaseTheme] = useState<PresentationTheme>(getThemeById(DEFAULT_THEME_ID));
+  const [chatColorOverrides, setChatColorOverridesState] = useState<ChatColorOverrides>({});
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const init = async () => {
+      const storedId = await loadStoredThemeId();
+      const storedOverrides = await loadChatColorOverrides(storedId);
+      if (isMounted) {
+        setThemeIdState(storedId);
+        setBaseTheme(applyChatColorOverrides(getThemeById(storedId), storedOverrides));
+        setChatColorOverridesState(storedOverrides);
+      }
+    };
+
+    void init();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const setThemeId = useCallback(async (nextId: PresentationThemeId) => {
+    const disabledReason = getThemeSelectionDisabledReason(nextId);
+    if (disabledReason) {
+      throw new Error(disabledReason);
+    }
+    setThemeIdState(nextId);
+    const storedOverrides = await loadChatColorOverrides(nextId);
+    setBaseTheme(applyChatColorOverrides(getThemeById(nextId), storedOverrides));
+    setChatColorOverridesState(storedOverrides);
+    await saveThemeId(nextId);
+  }, []);
+
+  const setChatColorOverride = useCallback(
+    async (token: ChatColorToken, color: string) => {
+      const nextOverrides: ChatColorOverrides = {
+        ...chatColorOverrides,
+        [token]: color,
+      };
+      setChatColorOverridesState(nextOverrides);
+      setBaseTheme(applyChatColorOverrides(getThemeById(themeId), nextOverrides));
+      await saveChatColorOverrides(themeId, nextOverrides);
+    },
+    [chatColorOverrides, themeId]
+  );
+
+  const resetChatColorOverride = useCallback(
+    async (token: ChatColorToken) => {
+      const nextOverrides: ChatColorOverrides = { ...chatColorOverrides };
+      delete nextOverrides[token];
+      setChatColorOverridesState(nextOverrides);
+      setBaseTheme(applyChatColorOverrides(getThemeById(themeId), nextOverrides));
+      await saveChatColorOverrides(themeId, nextOverrides);
+    },
+    [chatColorOverrides, themeId]
+  );
+
+  const value: ThemeContextValue = {
+    theme: baseTheme,
+    themeId,
+    setThemeId,
+    availableThemes: AVAILABLE_THEMES,
+    chatColorOverrides,
+    setChatColorOverride,
+    resetChatColorOverride,
+  };
+
+  return (
+    <ThemeContext.Provider value={value}>
+      {children}
+    </ThemeContext.Provider>
+  );
+};

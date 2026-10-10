@@ -1,0 +1,103 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+.expo-verify-flatlist/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# 本地环境配置；只提交无个人信息的示例。
+.env*
+!.env.example
+
+# typescript
+*.tsbuildinfo
+.tmp_tsc_output.txt
+
+# generated native folders
+/ios
+/android
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vs/
+*.sublime-project
+*.sublime-workspace
+.vscode/settings.json
+
+# Testing
+coverage/
+.nyc_output/
+
+# Build outputs
+build/
+*.apk
+*.aab
+*.ipa
+*.app
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+.cache/
+
+# 个人开发配置和签名材料
+*.keystore
+local.properties
+credentials.json
+
+# 本地历史文档、私人材料和开源准备备份，不随源码公开。
+.docs/
+.nest/
+
+# 本地 React Native 配置探测输出，不属于项目配置。
+/rnconfig.json
+/rnconfig.err
+
+.kilo/
+.codex/
+.agents/
+.trae/
+.workbuddy/
+
+# 个人清单，不提交
+万一.txt

@@ -1,0 +1,27 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.neteasepublicdata'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.neteasepublicdata"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  testImplementation "junit:junit:4.13.2"
+  testImplementation "org.json:json:20240303"
+}
+
+tasks.withType(Test).configureEach {
+  systemProperty 'netease.realNetwork', project.findProperty('neteaseRealNetwork') ?: 'false'
+}

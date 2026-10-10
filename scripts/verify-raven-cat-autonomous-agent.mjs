@@ -1,0 +1,256 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
+}
+
+function loadModule(relativePath, mocks) {
+  const code = read(relativePath);
+  const compiled = ts.transpileModule(code, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    fileName: relativePath,
+    reportDiagnostics: true,
+  });
+  assert.deepEqual(
+    (compiled.diagnostics ?? []).filter((item) => item.category === ts.DiagnosticCategory.Error),
+    [],
+    `${relativePath} 无法编译`,
+  );
+  const module = { exports: {} };
+  new Function('exports', 'require', 'module', compiled.outputText)(
+    module.exports,
+    (specifier) => {
+      assert.ok(Object.hasOwn(mocks, specifier), `未声明运行时 mock：${specifier}`);
+      return mocks[specifier];
+    },
+    module,
+  );
+  return module.exports;
+}
+
+// ---------------------------------------------------------------------------
+// 公共 Host autonomous bootstrap：assistant / session / transcript / tool
+// exposure / runPreparation / gateway / 行动记录 / runVisibleAgent。
+// ---------------------------------------------------------------------------
+const bootstrapPath = 'src/features/companion/application/RunHostAutonomousAgent.ts';
+let runtimeDependencies;
+let gatewayParams;
+class TestModelGateway {
+  constructor(params) {
+    gatewayParams = params;
+  }
+}
+const bootstrapModule = loadModule(bootstrapPath, {
+  '@shared/aiTools': {
+    applyHostModelRunToolExposure: (allowed, preparation) => [
+      ...allowed.filter((name) => !preparation.managedToolNames.includes(name)),
+      ...preparation.dynamicAllowedToolNames,
+    ],
+  },
+  '@platform/ai': { createAIClient: (config) => ({ config }) },
+  '@platform/agentRuntime': { BaseAIClientAgentModelGateway: TestModelGateway },
+  './CompanionRuntimeDependencies': {
+    getCompanionRuntimeDependencies: () => runtimeDependencies,
+  },
+});
+const { runHostAutonomousAgent } = bootstrapModule;
+
+const assistant = {
+  id: 'host-ai', agentId: 'host-agent', name: 'Raven', model: 'test-model',
+  apiKey: 'key', apiBaseUrl: 'https://example.test', systemPrompt: 'persona',
+  temperature: 0.7, topP: 1, maxTokens: 2000, enableTools: true,
+  allowMultipleBubbles: true, isHostAI: true, isBlocked: false,
+};
+let activeSession = { id: 'real-session', aiAssistantId: 'host-ai', name: '真实会话' };
+let transcriptVersion = 1;
+let capturedRunRequest;
+let capturedPromptParams;
+let preparationReads = 0;
+const createdToolContexts = [];
+
+runtimeDependencies = {
+  runPreparation: {
+    prepare: async () => {
+      preparationReads += 1;
+      return {
+        additionalPromptBlocks: [{ togetherListeningSnapshot: 'Song A' }],
+        managedToolNames: [
+          'invite_listening_together',
+          'respond_to_listening_invitation',
+          'leave_listening_together',
+        ],
+        dynamicAllowedToolNames: ['invite_listening_together'],
+      };
+    },
+  },
+  repositories: {
+    assistants: { getById: async () => assistant },
+  },
+  chat: {
+    // 每个 AI 只有一个 canonical conversation：缺失时 resolve 会创建，
+    // 语义等价于旧的 ensure（不再存在 active/alternate session 选择）。
+    resolveCanonicalConversation: async () => activeSession ?? {
+      id: 'ensured-session', aiAssistantId: 'host-ai', name: '自动创建会话',
+    },
+    listRecentTranscript: async () => [
+      { role: 'user', text: `latest-user-${transcriptVersion}`, createdAt: '2026-08-30T07:00:00Z' },
+      { role: 'assistant', text: `latest-assistant-${transcriptVersion}`, createdAt: '2026-08-30T07:01:00Z' },
+      { role: 'system', text: 'timeline-only-system', createdAt: '2026-08-30T07:02:00Z' },
+    ],
+    runVisibleAgent: async (request) => {
+      const prepared = await request.prepare(new AbortController().signal);
+      capturedRunRequest = { ...request, ...prepared };
+      return {
+        runId: request.runId,
+        taskId: capturedRunRequest.request.task.id,
+        status: 'completed', terminalCode: 'COMPLETED', finalText: 'internal only',
+        history: [], steps: [], stepCount: 1, toolCallCount: 0,
+      };
+    },
+  },
+  tools: {
+    resolveMcpExposure: async (assistantId) => {
+      assert.equal(assistantId, 'host-ai', '主动任务必须按实际 owner AI 解析 MCP 暴露面');
+      return {
+        allowedToolNames: ['mcp.service.lookup'],
+        services: [{ name: 'service', description: 'test service' }],
+      };
+    },
+    resolveAllowedNames: async () => ['normal_host_tool', 'create_ai_schedule'],
+    getRuntimeAllowedNames: (config) => [...config.allowedToolNames],
+    buildDescription: (config) => `tools:${config.allowedToolNames.join(',')}`,
+    createContext: (params) => {
+      createdToolContexts.push(params);
+      return { ...params, sessionId: params.sessionId };
+    },
+  },
+  prompt: {
+    assembleChatPromptPack: async (params) => {
+      capturedPromptParams = params;
+      return { systemPrompt: 'same-chat-system', modelMessages: [{ role: 'user', content: params.currentInput }] };
+    },
+  },
+};
+
+const triggeredAt = '2026-08-30T08:00:05.000Z';
+const wakeBlock = { content: JSON.stringify({ wakeContext: {
+  wakeId: 'wake-claimed',
+  wakeAt: '2026-08-30T08:00:00.000Z',
+  note: '看看最近的对话',
+  triggeredAt,
+  companionState: 'desiredEnabled=true, activationStatus=enabled, scheduleRevision=7, hostAIId=host-ai',
+} }) };
+
+const firstResult = await runHostAutonomousAgent({
+  runId: 'run-autonomous',
+  ownerAIId: 'host-ai',
+  triggeredAt,
+  correlationId: 'wake-claimed',
+  scenarioId: 'raven_cat.ai_schedule_trigger',
+  triggerSource: 'raven_cat_ai_schedule',
+  triggerReason: 'ai_schedule',
+  relatedEntityType: 'raven_cat_ai_schedule',
+  relatedEntityId: 'wake-claimed',
+  taskGoal: '当前主理 AI 因 Self Wake 获得一次自主行动机会。',
+  taskSource: 'raven_cat_ai_schedule',
+  additionalPromptBlocks: [wakeBlock],
+});
+assert.equal(firstResult.finalText, 'internal only');
+assert.equal(capturedRunRequest.runId, 'run-autonomous');
+assert.equal(capturedRunRequest.request.task.source, 'raven_cat_ai_schedule');
+assert.equal(capturedRunRequest.request.task.assistantId, 'host-ai');
+assert.equal(capturedRunRequest.request.task.sessionId, 'real-session');
+assert.deepEqual(capturedRunRequest.request.task.allowedToolNames, [
+  'normal_host_tool', 'create_ai_schedule', 'mcp.service.lookup', 'invite_listening_together',
+]);
+assert.equal(capturedRunRequest.finalAssistantPolicy, 'record_as_activity');
+assert.deepEqual(
+  {
+    triggerSource: capturedRunRequest.runtimeContext.triggerSource,
+    triggerReason: capturedRunRequest.runtimeContext.triggerReason,
+    relatedEntityType: capturedRunRequest.runtimeContext.relatedEntityType,
+    relatedEntityId: capturedRunRequest.runtimeContext.relatedEntityId,
+    replyRunId: capturedRunRequest.runtimeContext.replyRunId,
+  },
+  {
+    triggerSource: 'raven_cat_ai_schedule',
+    triggerReason: 'ai_schedule',
+    relatedEntityType: 'raven_cat_ai_schedule',
+    relatedEntityId: 'wake-claimed',
+    replyRunId: 'run-autonomous',
+  },
+);
+assert.equal(preparationReads, 1, '一次 autonomous run 只能准备一份 Together Listening snapshot');
+assert.equal(capturedRunRequest.request.beforeComplete, undefined);
+assert.deepEqual(gatewayParams.initialMessages, [{ role: 'user', content: capturedPromptParams.currentInput }]);
+assert.equal(capturedPromptParams.sessionId, 'real-session');
+assert.ok(capturedPromptParams.currentInput.includes(wakeBlock.content));
+assert.deepEqual(capturedPromptParams.additionalBlocks, [{ togetherListeningSnapshot: 'Song A' }]);
+
+activeSession = null;
+transcriptVersion = 2;
+await runHostAutonomousAgent({
+  runId: 'run-without-session', ownerAIId: 'host-ai', triggeredAt,
+  correlationId: 'wake-claimed', scenarioId: 'raven_cat.ai_schedule_trigger',
+  triggerSource: 'raven_cat_ai_schedule', triggerReason: 'ai_schedule',
+  relatedEntityType: 'raven_cat_ai_schedule', relatedEntityId: 'wake-claimed',
+  taskGoal: 'goal', taskSource: 'raven_cat_ai_schedule', additionalPromptBlocks: [wakeBlock],
+});
+assert.equal(capturedRunRequest.request.task.sessionId, 'ensured-session');
+assert.equal(createdToolContexts.at(-1).sessionId, 'ensured-session');
+assert.deepEqual(gatewayParams.initialMessages, [{ role: 'user', content: capturedPromptParams.currentInput }]);
+
+activeSession = { id: 'real-session', aiAssistantId: 'host-ai', name: '真实会话' };
+await runHostAutonomousAgent({
+  runId: 'run-latest-context', ownerAIId: 'host-ai', triggeredAt,
+  correlationId: 'wake-claimed', scenarioId: 'raven_cat.ai_schedule_trigger',
+  triggerSource: 'raven_cat_ai_schedule', triggerReason: 'ai_schedule',
+  relatedEntityType: 'raven_cat_ai_schedule', relatedEntityId: 'wake-claimed',
+  taskGoal: 'goal', taskSource: 'raven_cat_ai_schedule', additionalPromptBlocks: [wakeBlock],
+});
+assert.deepEqual(gatewayParams.initialMessages, [{ role: 'user', content: capturedPromptParams.currentInput }]);
+assert.equal(capturedPromptParams.sessionId, 'real-session');
+
+// ---------------------------------------------------------------------------
+// Self Wake wrapper 与 AI Schedule wrapper 只提供各自 trigger context，并委托
+// 公共 bootstrap，不复制整条 autonomous run 链。
+// ---------------------------------------------------------------------------
+const promptBlocks = loadModule('src/features/companion/application/CompanionPromptBlocks.ts', {});
+let capturedScheduleInput;
+const scheduleWrapper = loadModule('src/features/companion/application/RunAIScheduleAutonomousAgent.ts', {
+  './CompanionPromptBlocks': promptBlocks,
+  './RunHostAutonomousAgent': {
+    runHostAutonomousAgent: async (input) => { capturedScheduleInput = input; return { terminalCode: 'COMPLETED' }; },
+  },
+});
+await scheduleWrapper.runAIScheduleAutonomousAgent({
+  runId: 'run-s', claimedSchedule: {
+    scheduleId: 'schedule-x', ownerAIId: 'host-ai', remindAt: '2026-09-13T09:00:00.000Z',
+    summary: '考试', details: '数据库考试', sourceExcerpt: '用户说上午有考试',
+  }, triggeredAt,
+});
+assert.equal(capturedScheduleInput.scenarioId, 'raven_cat.ai_schedule_trigger');
+assert.equal(capturedScheduleInput.triggerSource, 'raven_cat_ai_schedule');
+assert.equal(capturedScheduleInput.triggerReason, 'ai_schedule');
+assert.equal(capturedScheduleInput.relatedEntityType, 'raven_cat_ai_schedule');
+assert.equal(capturedScheduleInput.relatedEntityId, 'schedule-x');
+assert.equal(capturedScheduleInput.taskSource, 'raven_cat_ai_schedule');
+const scheduleContext = capturedScheduleInput.additionalPromptBlocks.find(
+  (block) => block.definitionId === 'context.raven_cat_ai_schedule',
+);
+for (const fact of ['schedule-x', '2026-09-13T09:00:00.000Z', '考试', '数据库考试', '用户说上午有考试', triggeredAt]) {
+  assert.ok(scheduleContext.content.includes(fact), `AI Schedule 机器上下文缺少触发事实：${fact}`);
+}
+
+const configureSource = read('src/host/composition/configureCompanionRuntime.ts');
+assert.match(configureSource, /runVisibleAgent:\s*runChatVisibleAgent/);
+assert.match(configureSource, /assembleChatPromptPack:\s*assembleResolvedChatPromptPack/);
+assert.doesNotMatch(configureSource, /new AgentRuntime/);
+
+console.log('WAKE-5C / AI Schedule autonomous bootstrap、最新上下文、真实 session、Host 复用与自然 completion 已验证。');

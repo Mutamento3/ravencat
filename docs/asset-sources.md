@@ -1,0 +1,31 @@
+# 图片与图标来源
+
+2026-10-10 已按维护者说明与 Expo 官方模板逐项核对。维护者确认六张原创图片随项目采用根目录 [MIT 许可证](../LICENSE)，版权署名为枫渡；两张 Expo 模板图片保留上游许可和署名，不纳入维护者原创声明。
+
+## 保留的资源
+
+| 文件 | 当前用途 | 来源 | 许可 |
+|---|---|---|---|
+| `assets/icon.png` | 应用图标、启动图、Android 自适应图标前景和默认群头像 | 枫渡原创，替换了同名 Expo 图片 | 项目 MIT |
+| `assets/adaptive-icon.png` | 保留的另一版图标，当前配置未引用 | 枫渡原创，替换了同名 Expo 图片 | 项目 MIT |
+| `assets/fengdu.png` | 默认用户头像 | 枫渡原创 | 项目 MIT |
+| `assets/raven.png` | 默认 AI 头像 | 枫渡原创 | 项目 MIT |
+| `assets/yaya.png` | 内置鸦鸦悬浮皮肤，供原生模块生成资源 | 枫渡原创 | 项目 MIT |
+| `assets/ravenphone_bg.png` | 默认时刻封面 | 枫渡原创 | 项目 MIT |
+| `assets/favicon.png` | 保留的模板资源，Android 配置未引用 | Expo `expo-template-blank` | Expo MIT |
+| `assets/splash-icon.png` | 保留的模板资源，当前启动图使用 `icon.png` | Expo `expo-template-blank` | Expo MIT |
+
+文件名沿用 Expo 模板不代表图片本身仍来自 Expo。`icon.png` 和 `adaptive-icon.png` 的当前内容由维护者替换为原创图像。
+
+两张保留的 Expo 图片与上游 commit `cfd65241fb73317b63e6736e7890a784a69940fc` 的 [favicon.png](https://github.com/expo/expo/blob/cfd65241fb73317b63e6736e7890a784a69940fc/templates/expo-template-blank/assets/favicon.png)、[splash-icon.png](https://github.com/expo/expo/blob/cfd65241fb73317b63e6736e7890a784a69940fc/templates/expo-template-blank/assets/splash-icon.png) 逐字节一致。对应 [Expo MIT 原文](third-party/upstream/expo-54.0.33-LICENSE.txt)已随仓库保留。
+
+`modules/ravencat-floating-layer/android/src/main/res/drawable-nodpi/` 中的默认用户与 AI 头像分别是 `fengdu.png`、`raven.png` 的相同副本，沿用其项目 MIT。构建生成的鸦鸦皮肤资源来源于 `yaya.png`，不形成另一套素材来源。
+
+
+## 已移出公开源码的资源
+
+`crab.svg`、`crab2.svg`、`kimiball.svg`、`kimiball2.svg` 的版权来源未明确，且当前没有文件引用。它们已移入被 Git 忽略的 `tmp/open-source-preparation/assets/`，不随当前源码分发。旧悬浮皮肤 ID 的退役逻辑仍有恢复数据的用途，不因移出图片而删除。
+
+**移出工作树里的公开路径不会清除 Git 历史中的图片。** 若首次公开不希望包含这些资源，应从审阅后的源码快照建立独立新仓库；若发布既有历史，需要另行决定历史处理方案，不能直接将当前仓库转为公开后才处理。
+
+第三方字体与图标库见[第三方声明](third-party-notices.md)，不归为原创素材。

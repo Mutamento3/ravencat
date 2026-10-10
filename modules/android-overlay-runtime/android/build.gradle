@@ -1,0 +1,21 @@
+plugins {
+  id 'com.android.library'
+  id 'org.jetbrains.kotlin.android'
+}
+
+dependencies {
+  testImplementation 'junit:junit:4.13.2'
+}
+
+group = 'expo.modules.androidoverlayruntime'
+version = '0.1.0'
+
+android {
+  namespace 'expo.modules.androidoverlayruntime'
+  compileSdk rootProject.ext.compileSdkVersion
+
+  defaultConfig {
+    minSdk rootProject.ext.minSdkVersion
+    targetSdk rootProject.ext.targetSdkVersion
+  }
+}

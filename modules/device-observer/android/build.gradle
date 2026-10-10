@@ -1,0 +1,26 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.deviceobserver'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.deviceobserver"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  implementation "androidx.core:core-ktx:1.13.1"
+  // 本地 bundled 中文识别器：模型在构建期静态链接，运行时不依赖 Google Play 服务下载模型，
+  // 因此第一次 OCR 不会因为模型尚未下载而产生特殊空结果。它同时覆盖 Latin，不需要第二个识别器。
+  implementation "com.google.mlkit:text-recognition-chinese:16.0.1"
+  testImplementation "junit:junit:4.13.2"
+}

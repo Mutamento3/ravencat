@@ -1,0 +1,48 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.ravencatfloatinglayer'
+version = '0.7.10'
+
+// 设置页与原生悬浮窗共用项目里的同一张内置图片，避免手工复制后两端形象不一致。
+def bubbleSkinResources = layout.buildDirectory.dir('generated/bubble-skin-res')
+def prepareBubbleSkinResources = tasks.register('prepareBubbleSkinResources', Copy) {
+  from rootProject.file('../assets/yaya.png')
+  into bubbleSkinResources.map { it.dir('raw') }
+  rename { 'ravencat_yaya.png' }
+}
+
+android {
+  sourceSets.main.res.srcDir(bubbleSkinResources)
+  namespace "expo.modules.ravencatfloatinglayer"
+  defaultConfig {
+    versionCode 1
+    versionName "0.7.10"
+  }
+  lintOptions {
+    abortOnError false
+  }
+  testOptions {
+    unitTests {
+      includeAndroidResources = true
+    }
+  }
+}
+
+tasks.named('preBuild').configure { dependsOn prepareBubbleSkinResources }
+
+dependencies {
+  implementation project(':android-overlay-runtime')
+  compileOnly "com.facebook.react:react-android"
+  implementation "androidx.core:core-ktx:1.13.1"
+  implementation "androidx.work:work-runtime:2.8.0"
+  implementation "com.caverock:androidsvg-aar:1.4"
+  testImplementation "junit:junit:4.13.2"
+  // 桥接参数回归测试直接使用 React Native ReadableMap / ReadableArray。
+  testImplementation "com.facebook.react:react-android"
+  testImplementation "androidx.work:work-testing:2.8.0"
+  // View 级手势/头像解码测试需要真实 View 层级与 BitmapFactory，纯 JVM 测不到。
+  testImplementation "org.robolectric:robolectric:4.14.1"
+}

@@ -1,0 +1,279 @@
+/** 定义消息气泡及其主题变体的基础布局样式。 */
+
+import { Dimensions, StyleSheet } from 'react-native';
+import { isMoonKimiTheme, isPaperNoteTheme } from '@shared/theme';
+import type { PresentationTheme } from '@shared/theme';
+import { createMessageTextStyles } from './textStyles';
+import { createPaperNoteMessageStyles } from './paperNoteStyles';
+import { createMessageBubbleSupplementStyles } from './supplementStyles';
+
+export function createMessageBubbleStyles(theme: PresentationTheme) {
+  const isMoonKimi = isMoonKimiTheme(theme);
+  const isPaperNote = isPaperNoteTheme(theme);
+
+  const styles = StyleSheet.create({
+    container: {
+      marginVertical: 4,
+      maxWidth: isMoonKimi ? '92%' : '84%',
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+    },
+    myContainer: isMoonKimi ? {
+      alignSelf: 'flex-end',
+      flexDirection: 'row',
+      marginLeft: 0,
+      marginRight: theme.spacing.lg,
+      paddingRight: 0,
+      // 子级使用百分比宽度，父级必须提供明确宽度，避免 FlashList 回收时把内容测量为 0。
+      width: '80%',
+    } : {
+      alignSelf: 'flex-end',
+      flexDirection: 'row',
+      marginLeft: 50,
+      paddingRight: 0,
+    },
+    aiContainer: isMoonKimi ? {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      marginRight: 0,
+      marginLeft: theme.spacing.lg,
+      paddingLeft: 0,
+      width: '90%',
+    } : {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      marginRight: 50,
+      paddingLeft: 0,
+    },
+    reasoningContainer: isMoonKimi ? {
+      alignSelf: 'flex-start',
+      flexDirection: 'column',
+      marginLeft: theme.spacing.lg,
+      paddingLeft: 0,
+      width: '90%',
+    } : {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      marginRight: 50,
+      paddingLeft: 0,
+    },
+    toolStatusContainer: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      paddingLeft: 6,
+      width: '100%',
+    },
+    systemContainer: {
+      alignSelf: 'center',
+      flexDirection: 'row',
+      justifyContent: 'center',
+      width: '100%',
+      marginVertical: 8,
+    },
+    avatarWrapper: {
+      width: 36,
+      height: 36,
+      borderRadius: 4,
+      backgroundColor: theme.colors.brand.primary + '15',
+      justifyContent: 'center',
+      alignItems: 'center',
+      overflow: 'hidden',
+      marginHorizontal: 6,
+      alignSelf: 'flex-start',
+    },
+    avatarImage: {
+      width: 36,
+      height: 36,
+      borderRadius: 4,
+    },
+    avatarEmoji: {
+      fontSize: 20,
+    },
+    avatarText: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: theme.colors.brand.primary,
+    },
+    bubbleWrapper: {
+      maxWidth: '100%',
+      flexShrink: 1,
+      minWidth: 0,
+    },
+    wideMarkdownContainer: {
+      width: '100%',
+    },
+    wideMarkdownBubbleWrapper: {
+      flex: 1,
+    },
+    wideMarkdownBubble: {
+      width: '100%',
+    },
+    moonKimiUserBubbleWrapper: {
+      width: '100%',
+    },
+    moonKimiAssistantBubbleWrapper: {
+      width: '100%',
+    },
+    myBubbleWrapper: {
+      alignItems: 'flex-end',
+    },
+    aiBubbleWrapper: {
+      alignItems: 'flex-start',
+    },
+    // 群聊 AI 发送者名：高度 17 使气泡小三角尖端（名字高度 + marginTop 14 + 半箭头 5）
+    // 恰好落在 y=36，与 36px 头像底边对齐。
+    assistantNameLabel: {
+      height: 17,
+      fontSize: 12,
+      lineHeight: 17,
+      color: theme.colors.text.secondary,
+    },
+    bubble: {
+      position: 'relative',
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      borderRadius: theme.effects.glass.enabled ? theme.radius.lg : 4,
+      maxWidth: '100%',
+      flexShrink: 1,
+      alignSelf: 'flex-start',
+      overflow: 'hidden',
+      zIndex: 1,
+    },
+    framelessAttachmentBubble: {
+      paddingVertical: 0,
+      paddingHorizontal: 0,
+      borderRadius: 0,
+      backgroundColor: 'transparent',
+      maxWidth: 220,
+    },
+    attachmentsContainer: {
+      alignSelf: 'flex-start',
+      maxWidth: '100%',
+    },
+    attachmentsContainerWithText: {
+      marginBottom: 8,
+    },
+    attachmentItemSpacing: {
+      marginTop: 8,
+    },
+    myBubble: isMoonKimi ? {
+      backgroundColor: theme.colors.chat.bubbleUser,
+      borderRadius: 12,
+      maxWidth: '100%',
+      alignSelf: 'flex-end',
+    } : {
+      backgroundColor: theme.colors.chat.bubbleUser,
+    },
+    aiBubble: isMoonKimi ? {
+      backgroundColor: 'transparent',
+      borderRadius: 0,
+      borderWidth: 0,
+      paddingVertical: 0,
+      paddingHorizontal: 0,
+      width: '100%',
+      maxWidth: '100%',
+    } : {
+      backgroundColor: theme.colors.chat.bubbleAI,
+    },
+    reasoningContent: {
+      paddingVertical: 4,
+      paddingHorizontal: 0,
+      marginLeft: theme.spacing.md,
+      maxWidth: '100%',
+      lineHeight: 22,
+    },
+    moonKimiProcessCard: {
+      backgroundColor: theme.colors.background.app,
+      borderWidth: 1,
+      borderColor: theme.colors.border.default,
+      borderRadius: theme.radius.md,
+      paddingVertical: 0,
+      paddingHorizontal: theme.spacing.lg,
+      marginVertical: theme.spacing.sm,
+      alignSelf: 'stretch',
+    },
+    moonKimiProcessHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      height: 43,
+    },
+    moonKimiProcessIcon: {
+      marginRight: theme.spacing.sm,
+    },
+    moonKimiProcessLabel: {
+      flexGrow: 1,
+      flexShrink: 1,
+      fontSize: theme.typography.bodySmall.fontSize,
+      lineHeight: 20,
+      color: theme.colors.text.secondary,
+    },
+    moonKimiProcessBody: {
+      marginTop: theme.spacing.sm,
+      maxHeight: Dimensions.get('window').height * 0.33,
+    },
+    moonKimiProcessBodyContent: {
+      paddingBottom: theme.spacing.md,
+    },
+    systemBubble: {
+      backgroundColor: 'transparent',
+      alignSelf: 'center',
+      paddingVertical: 4,
+      paddingHorizontal: 0,
+      maxWidth: '80%',
+    },
+    toolStatusBubble: {
+      alignSelf: 'flex-start',
+      maxWidth: '100%',
+    },
+    toolStatusText: {
+      fontSize: 11,
+      textAlign: 'left',
+    },
+    replyContainer: {
+      marginTop: 6,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: theme.radius.sm,
+      maxWidth: 260,
+    },
+    myReplyContainer: {
+      alignSelf: isPaperNote ? 'flex-start' : 'flex-end',
+      backgroundColor: theme.colors.chat.quote,
+    },
+    aiReplyContainer: {
+      alignSelf: 'flex-start',
+      backgroundColor: theme.colors.chat.quote,
+    },
+    replyText: {
+      fontSize: 13,
+      lineHeight: 18,
+      color: theme.colors.text.secondary,
+    },
+    reasoningHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 4,
+      marginLeft: isMoonKimi ? theme.spacing.md : 6,
+    },
+    reasoningLabel: {
+      fontSize: 11,
+      color: theme.colors.text.secondary,
+      marginRight: 4,
+    },
+    arrow: {
+      fontSize: 11,
+      color: theme.colors.text.secondary,
+      transform: [{ rotate: '-90deg' }],
+    },
+    arrowExpanded: {
+      transform: [{ rotate: '90deg' }],
+    },
+  });
+
+  return {
+    ...styles,
+    ...createMessageTextStyles(theme),
+    ...createPaperNoteMessageStyles(theme),
+    ...createMessageBubbleSupplementStyles(theme),
+  };
+}

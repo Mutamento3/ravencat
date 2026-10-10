@@ -1,0 +1,122 @@
+[
+  {
+    "file": "react-native-0.81.5-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/facebook/react-native/v0.81.5/LICENSE"
+  },
+  {
+    "file": "metro-0.83.3-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/facebook/metro/v0.83.3/LICENSE"
+  },
+  {
+    "file": "liquid-glass-1.0.3-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/QmDeve/AndroidLiquidGlassView/v1.0.3/LICENSE"
+  },
+  {
+    "file": "okhttp-4.12.0-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/square/okhttp/parent-4.12.0/LICENSE.txt"
+  },
+  {
+    "file": "jsoup-1.21.2-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/jhy/jsoup/jsoup-1.21.2/LICENSE"
+  },
+  {
+    "file": "expo-54.0.33-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/expo/expo/cfd65241fb73317b63e6736e7890a784a69940fc/LICENSE"
+  },
+  {
+    "file": "expo-54.0.33-THIRD-PARTY-LICENSES.txt",
+    "source": "https://raw.githubusercontent.com/expo/expo/cfd65241fb73317b63e6736e7890a784a69940fc/THIRD-PARTY-LICENSES"
+  },
+  {
+    "file": "androidsvg-1.4-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/BigBadaboom/androidsvg/Release_1.4/LICENSE"
+  },
+  {
+    "file": "ionicons-7.4.0-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/ionic-team/ionicons/v7.4.0/LICENSE"
+  },
+  {
+    "file": "radix-ui-react-compose-refs-1.1.2-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE",
+    "packages": [
+      "@radix-ui/react-compose-refs@1.1.2"
+    ]
+  },
+  {
+    "file": "radix-ui-react-slot-1.2.0-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE",
+    "packages": [
+      "@radix-ui/react-slot@1.2.0"
+    ]
+  },
+  {
+    "file": "unrs-resolver-binding-win32-x64-msvc-1.12.2-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/unrs/unrs-resolver/ccb26d205e2938b16069c64a28996b48ee97ff94/LICENSE",
+    "packages": [
+      "@unrs/resolver-binding-win32-x64-msvc@1.12.2"
+    ]
+  },
+  {
+    "file": "babel-plugin-react-compiler-1.0.0-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/facebook/react/5c15c1cd3442f28044217703b5625f98c40042ee/LICENSE",
+    "packages": [
+      "babel-plugin-react-compiler@1.0.0"
+    ]
+  },
+  {
+    "file": "react-devtools-core-6.1.5-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/facebook/react/5d87cd224452c68d09bef99656b6261e9772a210/LICENSE",
+    "packages": [
+      "react-devtools-core@6.1.5"
+    ]
+  },
+  {
+    "file": "unrs-resolver-1.12.2-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/unrs/unrs-resolver/ccb26d205e2938b16069c64a28996b48ee97ff94/LICENSE",
+    "packages": [
+      "unrs-resolver@1.12.2"
+    ]
+  },
+  {
+    "file": "bplist-parser-0.3.1-LICENSE.txt",
+    "source": "https://registry.npmjs.org/bplist-parser/-/bplist-parser-0.3.1.tgz",
+    "sourceFile": "README.md",
+    "packages": [
+      "bplist-parser@0.3.1"
+    ]
+  },
+  {
+    "file": "imurmurhash-0.1.4-LICENSE.txt",
+    "source": "https://registry.npmjs.org/imurmurhash/-/imurmurhash-0.1.4.tgz",
+    "sourceFile": "README.md",
+    "packages": [
+      "imurmurhash@0.1.4"
+    ]
+  },
+  {
+    "file": "esrecurse-4.3.0-LICENSE.txt",
+    "source": "https://registry.npmjs.org/esrecurse/-/esrecurse-4.3.0.tgz",
+    "sourceFile": "esrecurse.js",
+    "packages": [
+      "esrecurse@4.3.0"
+    ]
+  },
+  {
+    "file": "netease-api-enhanced-f5ce55bcb46e-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/NeteaseCloudMusicApiEnhanced/api-enhanced/f5ce55bcb46e29c8e5350ca796fb1cc9d9914acd/LICENSE"
+  },
+  {
+    "file": "appdirsjs-1.2.7-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/codingjerk/appdirsjs/b81427c80133be6d1d15bdbf81862dce432da60f/_LICENSE.md",
+    "packages": [
+      "appdirsjs@1.2.7"
+    ]
+  },
+  {
+    "file": "is-regexp-1.0.0-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/sindresorhus/is-regexp/ccbe7faf479d3abc4c958df1cf94898f902c2dc4/license",
+    "packages": [
+      "is-regexp@1.0.0"
+    ]
+  }
+]

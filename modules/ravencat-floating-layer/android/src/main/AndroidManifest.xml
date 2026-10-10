@@ -1,0 +1,42 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+  <application>
+    <receiver android:name="expo.modules.ravencatfloatinglayer.RavenCatAIScheduleAlarmReceiver" android:exported="false" />
+    <receiver android:name="expo.modules.ravencatfloatinglayer.RavenCatAIScheduleBootReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
+    <service
+      android:name="expo.modules.ravencatfloatinglayer.service.RavenCatOverlayService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="持续显示用户可见且可交互的 RavenCat 悬浮球与消息面板" />
+    </service>
+    <service
+      android:name="expo.modules.ravencatfloatinglayer.RavenCatCompanionWakeHeadlessTaskService"
+      android:exported="false" />
+    <!-- 一次 wake 执行的有界前台执行宿主；生命周期归 Proactive Companion execution host，
+         不是常驻服务，也不属于 Floating Interaction。 -->
+    <service
+      android:name="expo.modules.ravencatfloatinglayer.companion.RavenCatCompanionExecutionService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="在后台完成一次已经到期的 AI 主动行动执行，执行结束即停止" />
+    </service>
+    <service
+      android:name="expo.modules.ravencatfloatinglayer.RavenCatFloatingMessageHeadlessTaskService"
+      android:exported="false" />
+  </application>
+</manifest>

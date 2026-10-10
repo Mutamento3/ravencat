@@ -1,0 +1,27 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.devicecontrol'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.devicecontrol"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  implementation "androidx.core:core-ktx:1.13.1"
+  // Device Observer 稳定事实源与 DTO（多订阅者事件源，只消费不 publish）
+  implementation project(':device-observer')
+  // 通用 Overlay primitive；只复用 Window/permission/launch intent，不复用 Floating lifecycle
+  implementation project(':android-overlay-runtime')
+  testImplementation "junit:junit:4.13.2"
+}

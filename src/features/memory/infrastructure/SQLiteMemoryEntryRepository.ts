@@ -1,0 +1,331 @@
+/** 正文与派生任务在同一事务标记，所有运行时访问经单写者协调器。 */
+import { databaseCoordinator, type DatabaseReadExecutor, type DatabaseTransactionExecutor } from '@platform/persistence';
+import { MemoryNotFoundError, MemoryVectorDimensionError, normalizeMemoryText, type MemoryEntry, type MemoryRecallSettings, type PassiveTriggerKeyword } from '../domain/Memory';
+import type { CreateMemoryRecord, MemoryEmbeddingClaim, MemoryEmbeddingModel, MemoryRepository } from '../domain/MemoryRepository';
+
+/** 只提交首次选择；向量 revision 与 claim 的同步仍由 commit 后的原有队列负责。 */
+export async function initializeMemoryEmbeddingModelInTransaction(transaction: DatabaseTransactionExecutor, modelConfigId: string): Promise<void> {
+  await transaction.runAsync('UPDATE memory_model_settings SET embedding_model_config_id = ? WHERE id = 1 AND embedding_model_config_id IS NULL', [modelConfigId]);
+}
+
+interface EntryRow {
+  id: string; pool_id: string; content: string; summary: string | null; content_revision: number;
+  remembered_at: string; created_at: string; updated_at: string;
+  status: MemoryEntry['embeddingStatus']; model_name: string | null;
+  last_error: string | null; failed_at: string | null;
+}
+
+const ENTRY_COLUMNS = 'm.*, e.status, e.model_name, e.last_error, e.failed_at';
+const ENTRY_QUERY = `SELECT ${ENTRY_COLUMNS}
+  FROM memory_items m JOIN memory_item_embeddings e ON e.memory_id = m.id`;
+
+/** 三个 consumer 共用关系定义，显式关联不依赖记忆文本。 */
+const TRIGGER_ASSOCIATION = `(INSTR(m.normalized_content, t.normalized_keyword) > 0
+  OR INSTR(m.normalized_summary, t.normalized_keyword) > 0
+  OR EXISTS (SELECT 1 FROM memory_passive_associations a WHERE a.trigger_id = t.id AND a.memory_id = m.id))`;
+
+function mapEntry(row: EntryRow): MemoryEntry {
+  return {
+    id: row.id, poolId: row.pool_id, content: row.content, summary: row.summary, contentRevision: row.content_revision,
+    rememberedAt: row.remembered_at, createdAt: row.created_at, updatedAt: row.updated_at,
+    embeddingStatus: row.status, embeddingModelName: row.model_name,
+    embeddingError: row.last_error, embeddingFailedAt: row.failed_at,
+  };
+}
+
+function executor(name: string) {
+  return databaseCoordinator.openTaskExecutor({ name: `memory.${name}`, feature: 'memory', priority: 'maintenance' });
+}
+
+async function readEntry(db: DatabaseReadExecutor, poolId: string, memoryId: string): Promise<MemoryEntry> {
+  const row = await db.getFirstAsync<EntryRow>(`${ENTRY_QUERY} WHERE m.pool_id = ? AND m.id = ?`, [poolId, memoryId]);
+  if (!row) throw new MemoryNotFoundError();
+  return mapEntry(row);
+}
+
+async function markContentPending(tx: DatabaseTransactionExecutor, memoryId: string): Promise<void> {
+  await tx.runAsync(`INSERT INTO memory_item_embeddings (memory_id, content_revision, model_fingerprint, model_name, status)
+    SELECT m.id, m.content_revision, s.model_fingerprint, s.model_name,
+      CASE WHEN s.model_fingerprint IS NULL THEN 'not_requested' ELSE 'pending' END
+    FROM memory_items m CROSS JOIN memory_v3_state s WHERE m.id = ? AND s.id = 1
+    ON CONFLICT(memory_id) DO UPDATE SET content_revision = excluded.content_revision,
+      model_fingerprint = excluded.model_fingerprint, model_name = excluded.model_name,
+      status = excluded.status, attempts = 0, retry_at = NULL, claim_id = NULL,
+      claim_expires_at = NULL, last_error = NULL, failed_at = NULL`, [memoryId]);
+}
+
+async function readValidVectors(db: DatabaseReadExecutor, poolId: string, fingerprint: string, dimension: number) {
+    const state = await db.getFirstAsync<{ dimension: number | null }>(
+      'SELECT dimension FROM memory_v3_state WHERE id = 1 AND model_fingerprint = ?', [fingerprint]);
+    if (state?.dimension !== null && state?.dimension !== undefined && state.dimension !== dimension) throw new MemoryVectorDimensionError();
+    const rows = await db.getAllAsync<{ memory_id: string; vector_json: string }>(
+      `SELECT e.memory_id, e.vector_json FROM memory_item_embeddings e JOIN memory_items m ON m.id = e.memory_id
+       WHERE m.pool_id = ? AND e.status = 'ready' AND e.model_fingerprint = ?
+       AND e.content_revision = m.content_revision AND e.dimension = ?
+       AND EXISTS (SELECT 1 FROM memory_v3_state WHERE id = 1 AND model_fingerprint = ?)`,
+    [poolId, fingerprint, dimension, fingerprint]);
+    return rows.map((row) => {
+      const vector: unknown = JSON.parse(row.vector_json);
+      if (!Array.isArray(vector) || vector.length !== dimension || !vector.every((value) => typeof value === 'number' && Number.isFinite(value)) || !vector.some((value) => value !== 0)) {
+        throw new Error('持久化记忆向量不符合维度／有限数值契约');
+      }
+      return { memoryId: row.memory_id, vector: vector as number[] };
+    });
+}
+
+export class SQLiteMemoryEntryRepository implements MemoryRepository {
+  async getEmbeddingModelId(): Promise<string | null> {
+    const row = await executor('model-settings.read').getFirstAsync<{ embedding_model_config_id: string | null }>(
+      'SELECT embedding_model_config_id FROM memory_model_settings WHERE id = 1');
+    return row!.embedding_model_config_id;
+  }
+  async setEmbeddingModelId(modelConfigId: string | null): Promise<void> {
+    await executor('model-settings.write').runAsync(
+      'UPDATE memory_model_settings SET embedding_model_config_id = ? WHERE id = 1', [modelConfigId]);
+  }
+
+  async listEntries(poolId: string) {
+    const rows = await executor('listEntries').getAllAsync<EntryRow>(`${ENTRY_QUERY}
+      WHERE m.pool_id = ? ORDER BY m.remembered_at DESC, m.id`, [poolId]);
+    return rows.map(mapEntry);
+  }
+
+  async getEntry(poolId: string, memoryId: string) {
+    const row = await executor('getEntry').getFirstAsync<EntryRow>(`${ENTRY_QUERY} WHERE m.pool_id = ? AND m.id = ?`, [poolId, memoryId]);
+    return row ? mapEntry(row) : null;
+  }
+
+  async createEntry(input: CreateMemoryRecord) {
+    return executor('createEntry').withExclusiveTransactionAsync((tx) => this.createEntryInTransaction(tx, input));
+  }
+
+  /** Host 转存复用同一写入逻辑，由外层事务同时提交协议删除。 */
+  async createEntryInTransaction(tx: DatabaseTransactionExecutor, input: CreateMemoryRecord): Promise<MemoryEntry> {
+    if (input.writeKey !== null) {
+      const receipt = await tx.getFirstAsync<{ memory_id: string | null }>(
+        'SELECT memory_id FROM memory_write_receipts WHERE pool_id = ? AND write_key = ?', [input.poolId, input.writeKey]);
+      if (receipt) {
+        if (receipt.memory_id === null) throw new MemoryNotFoundError();
+        return readEntry(tx, input.poolId, receipt.memory_id);
+      }
+    }
+    await tx.runAsync(`INSERT INTO memory_items
+      (id, pool_id, content, summary, normalized_content, normalized_summary, content_revision, write_key, remembered_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+    [input.id, input.poolId, input.content, input.summary, input.normalizedContent, normalizeMemoryText(input.summary ?? ''), input.writeKey, input.now, input.now, input.now]);
+    await markContentPending(tx, input.id);
+    if (input.writeKey !== null) {
+      await tx.runAsync('INSERT INTO memory_write_receipts (pool_id, write_key, memory_id) VALUES (?, ?, ?)',
+        [input.poolId, input.writeKey, input.id]);
+    }
+    return readEntry(tx, input.poolId, input.id);
+  }
+
+  async updateEntry(poolId: string, memoryId: string, content: string, normalizedContent: string, now: string, summary?: string | null) {
+    return executor('updateEntry').withExclusiveTransactionAsync(async (tx) => {
+      const summarySet = summary === undefined ? '' : 'summary = ?, normalized_summary = ?,';
+      const summaryParams = summary === undefined ? [] : [summary, normalizeMemoryText(summary ?? '')];
+      const result = await tx.runAsync(`UPDATE memory_items SET content = ?, normalized_content = ?, ${summarySet}
+        content_revision = content_revision + 1, updated_at = ? WHERE pool_id = ? AND id = ?`,
+      [content, normalizedContent, ...summaryParams, now, poolId, memoryId]);
+      if (result.changes === 0) throw new MemoryNotFoundError();
+      await markContentPending(tx, memoryId);
+      return readEntry(tx, poolId, memoryId);
+    });
+  }
+
+  async deleteEntry(poolId: string, memoryId: string) {
+    const result = await executor('deleteEntry').runAsync('DELETE FROM memory_items WHERE pool_id = ? AND id = ?', [poolId, memoryId]);
+    return result.changes > 0;
+  }
+
+  async getPreferredAssistantId() {
+    const state = await executor('getPreference').getFirstAsync<{ preferred_assistant_id: string | null }>(
+      'SELECT preferred_assistant_id FROM memory_v3_state WHERE id = 1');
+    return state!.preferred_assistant_id;
+  }
+
+  async setPreferredAssistantId(assistantId: string) {
+    await executor('setPreference').runAsync('UPDATE memory_v3_state SET preferred_assistant_id = ? WHERE id = 1', [assistantId]);
+  }
+
+  async getRecallSettings(poolId: string) {
+    return executor('getSettings').withExclusiveTransactionAsync(async (tx) => {
+      await tx.runAsync('INSERT OR IGNORE INTO memory_recall_settings (pool_id) VALUES (?)', [poolId]);
+      const row = await tx.getFirstAsync<{ passive_limit: number; active_page_size: number }>(
+        'SELECT passive_limit, active_page_size FROM memory_recall_settings WHERE pool_id = ?', [poolId]);
+      return { passiveLimit: row!.passive_limit, activePageSize: row!.active_page_size };
+    });
+  }
+
+  async setRecallSettings(poolId: string, settings: MemoryRecallSettings) {
+    await executor('setSettings').runAsync(`INSERT INTO memory_recall_settings (pool_id, passive_limit, active_page_size)
+      VALUES (?, ?, ?) ON CONFLICT(pool_id) DO UPDATE SET passive_limit = excluded.passive_limit,
+      active_page_size = excluded.active_page_size`, [poolId, settings.passiveLimit, settings.activePageSize]);
+  }
+
+  async listTriggers(poolId: string): Promise<PassiveTriggerKeyword[]> {
+    const rows = await executor('listTriggers').getAllAsync<{
+      id: string; keyword: string; normalized_keyword: string; associated_count: number; enabled_count: number;
+    }>(`SELECT t.id, t.keyword, t.normalized_keyword, COUNT(m.id) AS associated_count,
+      COUNT(m.id) - COUNT(d.memory_id) AS enabled_count FROM memory_passive_triggers t
+      LEFT JOIN memory_items m ON m.pool_id = t.pool_id AND ${TRIGGER_ASSOCIATION}
+      LEFT JOIN memory_passive_disabled d ON d.trigger_id = t.id AND d.memory_id = m.id
+      WHERE t.pool_id = ? GROUP BY t.id ORDER BY t.normalized_keyword, t.id`, [poolId]);
+    return rows.map((row) => ({ id: row.id, poolId, keyword: row.keyword, normalizedKeyword: row.normalized_keyword,
+      associatedCount: row.associated_count, enabledCount: row.enabled_count }));
+  }
+
+  async createTriggers(poolId: string, triggers: { id: string; keyword: string; normalizedKeyword: string }[], memoryId?: string) {
+    await executor('createTriggers').withExclusiveTransactionAsync(async (tx) => {
+      if (memoryId !== undefined) await readEntry(tx, poolId, memoryId);
+      for (const trigger of triggers) {
+        await tx.runAsync(`INSERT INTO memory_passive_triggers (id, pool_id, keyword, normalized_keyword)
+          VALUES (?, ?, ?, ?) ON CONFLICT(pool_id, normalized_keyword) DO NOTHING`,
+        [trigger.id, poolId, trigger.keyword, trigger.normalizedKeyword]);
+        if (memoryId !== undefined) {
+          await tx.runAsync(`INSERT OR IGNORE INTO memory_passive_associations (trigger_id, memory_id)
+            SELECT id, ? FROM memory_passive_triggers WHERE pool_id = ? AND normalized_keyword = ?`,
+          [memoryId, poolId, trigger.normalizedKeyword]);
+          await tx.runAsync(`DELETE FROM memory_passive_disabled WHERE memory_id = ?
+            AND trigger_id IN (SELECT id FROM memory_passive_triggers WHERE pool_id = ? AND normalized_keyword = ?)`,
+          [memoryId, poolId, trigger.normalizedKeyword]);
+        }
+      }
+    });
+  }
+
+  async deleteTrigger(poolId: string, triggerId: string) {
+    await executor('deleteTrigger').runAsync('DELETE FROM memory_passive_triggers WHERE pool_id = ? AND id = ?', [poolId, triggerId]);
+  }
+
+  async listTriggerMemories(poolId: string, triggerId: string) {
+    const rows = await executor('listTriggerMemories').getAllAsync<EntryRow & { disabled_id: string | null }>(`SELECT ${ENTRY_COLUMNS}, d.memory_id AS disabled_id
+      FROM memory_items m JOIN memory_item_embeddings e ON e.memory_id = m.id
+      JOIN memory_passive_triggers t ON t.pool_id = m.pool_id AND t.id = ?
+      LEFT JOIN memory_passive_disabled d ON d.trigger_id = t.id AND d.memory_id = m.id
+      WHERE m.pool_id = ? AND ${TRIGGER_ASSOCIATION}
+      ORDER BY m.remembered_at DESC, m.id`, [triggerId, poolId]);
+    return rows.map((row) => ({ memory: mapEntry(row), autoRecall: row.disabled_id === null }));
+  }
+
+  async setAutoRecall(poolId: string, triggerId: string, memoryId: string, enabled: boolean) {
+    if (enabled) {
+      await executor('enableRecall').withExclusiveTransactionAsync(async (tx) => {
+        // 已有字面关系只恢复开关；用户选择额外记忆时才固化手动关系。
+        await tx.runAsync(`INSERT OR IGNORE INTO memory_passive_associations (trigger_id, memory_id)
+          SELECT t.id, m.id FROM memory_passive_triggers t JOIN memory_items m ON m.pool_id = t.pool_id
+          WHERE t.pool_id = ? AND t.id = ? AND m.id = ?
+            AND INSTR(m.normalized_content, t.normalized_keyword) = 0 AND INSTR(m.normalized_summary, t.normalized_keyword) = 0`,
+        [poolId, triggerId, memoryId]);
+        await tx.runAsync(`DELETE FROM memory_passive_disabled WHERE trigger_id = ? AND memory_id = ?
+          AND EXISTS (SELECT 1 FROM memory_passive_triggers t WHERE t.id = ? AND t.pool_id = ?)
+          AND EXISTS (SELECT 1 FROM memory_items m WHERE m.id = ? AND m.pool_id = ?)`,
+        [triggerId, memoryId, triggerId, poolId, memoryId, poolId]);
+      });
+    } else {
+      await executor('disableRecall').runAsync(`INSERT OR IGNORE INTO memory_passive_disabled (trigger_id, memory_id)
+        SELECT t.id, m.id FROM memory_passive_triggers t JOIN memory_items m ON m.pool_id = t.pool_id
+        WHERE t.pool_id = ? AND t.id = ? AND m.id = ?`, [poolId, triggerId, memoryId]);
+    }
+  }
+
+  async recallPassive(poolId: string, normalizedInput: string) {
+    const settings = await this.getRecallSettings(poolId);
+    const rows = await executor('recallPassive').getAllAsync<EntryRow>(`${ENTRY_QUERY} WHERE m.pool_id = ?
+      AND EXISTS (SELECT 1 FROM memory_passive_triggers t WHERE t.pool_id = m.pool_id
+        AND INSTR(?, t.normalized_keyword) > 0 AND ${TRIGGER_ASSOCIATION}
+        AND NOT EXISTS (SELECT 1 FROM memory_passive_disabled d WHERE d.trigger_id = t.id AND d.memory_id = m.id))
+      ORDER BY m.remembered_at DESC, m.id LIMIT ?`, [poolId, normalizedInput, settings.passiveLimit]);
+    return rows.map(mapEntry);
+  }
+
+  async syncEmbeddingModel(model: MemoryEmbeddingModel | null) {
+    await executor('syncEmbeddingModel').withExclusiveTransactionAsync(async (tx) => {
+      const fingerprint = model?.fingerprint ?? null;
+      await tx.runAsync(`UPDATE memory_item_embeddings SET model_fingerprint = ?, model_name = ?,
+        status = CASE WHEN ? IS NULL THEN 'not_requested' WHEN vector_json IS NULL THEN 'pending' ELSE 'stale' END,
+        attempts = 0, retry_at = NULL, claim_id = NULL, claim_expires_at = NULL, last_error = NULL, failed_at = NULL
+        WHERE model_fingerprint IS NOT ?`, [fingerprint, model?.name ?? null, fingerprint, fingerprint]);
+      await tx.runAsync('UPDATE memory_v3_state SET dimension = CASE WHEN model_fingerprint IS ? THEN dimension ELSE NULL END, model_fingerprint = ?, model_name = ? WHERE id = 1',
+        [fingerprint, fingerprint, model?.name ?? null]);
+    });
+  }
+
+  async readRecallCandidates(poolId: string, fingerprint: string | null, dimension: number | null) {
+    return executor('recallCandidates').withExclusiveTransactionAsync(async (tx) => {
+      const rows = await tx.getAllAsync<EntryRow>(`${ENTRY_QUERY} WHERE m.pool_id = ?`, [poolId]);
+      const vectors = fingerprint !== null && dimension !== null ? await readValidVectors(tx, poolId, fingerprint, dimension) : [];
+      return { entries: rows.map(mapEntry), vectors };
+    });
+  }
+
+  async claimEmbedding(fingerprint: string, claimId: string, now: string, expiresAt: string) {
+    return executor('claimEmbedding').withExclusiveTransactionAsync(async (tx) => {
+      const row = await tx.getFirstAsync<{ memory_id: string; content: string; summary: string | null; content_revision: number; attempts: number }>(
+        `SELECT e.memory_id, m.content, m.summary, m.content_revision, e.attempts FROM memory_item_embeddings e
+         JOIN memory_items m ON m.id = e.memory_id WHERE e.model_fingerprint = ?
+         AND e.status IN ('pending', 'stale', 'retry_wait') AND e.attempts < 3
+         AND (e.retry_at IS NULL OR e.retry_at <= ?) AND (e.claim_id IS NULL OR e.claim_expires_at <= ?)
+         AND EXISTS (SELECT 1 FROM memory_v3_state WHERE id = 1 AND model_fingerprint = ?)
+         ORDER BY m.created_at, m.id LIMIT 1`, [fingerprint, now, now, fingerprint]);
+      if (!row) return null;
+      await tx.runAsync('UPDATE memory_item_embeddings SET claim_id = ?, claim_expires_at = ? WHERE memory_id = ?',
+        [claimId, expiresAt, row.memory_id]);
+      return { memoryId: row.memory_id, content: row.content, summary: row.summary, contentRevision: row.content_revision,
+        modelFingerprint: fingerprint, claimId, attempts: row.attempts };
+    });
+  }
+
+  async completeEmbedding(claim: MemoryEmbeddingClaim, vector: number[]) {
+    return executor('completeEmbedding').withExclusiveTransactionAsync(async (tx) => {
+    const state = await tx.getFirstAsync<{ dimension: number | null }>(
+      'SELECT dimension FROM memory_v3_state WHERE id = 1 AND model_fingerprint = ?', [claim.modelFingerprint]);
+    if (!state) return 'discarded';
+    if (state.dimension !== null && state.dimension !== vector.length) return 'dimension_mismatch';
+    const result = await tx.runAsync(`UPDATE memory_item_embeddings SET vector_json = ?,
+      dimension = ?, status = 'ready', attempts = attempts + 1, claim_id = NULL, claim_expires_at = NULL,
+      retry_at = NULL, last_error = NULL, failed_at = NULL WHERE memory_id = ? AND claim_id = ?
+      AND content_revision = ? AND model_fingerprint = ?
+      AND EXISTS (SELECT 1 FROM memory_items WHERE id = ? AND content_revision = ?)
+      AND EXISTS (SELECT 1 FROM memory_v3_state WHERE id = 1 AND model_fingerprint = ?)`,
+    [JSON.stringify(vector), vector.length, claim.memoryId, claim.claimId, claim.contentRevision, claim.modelFingerprint,
+      claim.memoryId, claim.contentRevision, claim.modelFingerprint]);
+    if (!result.changes) return 'discarded';
+    await tx.runAsync('UPDATE memory_v3_state SET dimension = ? WHERE id = 1', [vector.length]);
+    return 'accepted';
+    });
+  }
+
+  async failEmbedding(claim: MemoryEmbeddingClaim, error: string, terminal: boolean, now: string, retryAt: string) {
+    const failed = terminal || claim.attempts + 1 >= 3;
+    const result = await executor('failEmbedding').runAsync(`UPDATE memory_item_embeddings SET status = ?, attempts = attempts + 1,
+      retry_at = ?, last_error = ?, failed_at = ?, claim_id = NULL, claim_expires_at = NULL
+      WHERE memory_id = ? AND claim_id = ? AND content_revision = ? AND model_fingerprint = ?
+      AND EXISTS (SELECT 1 FROM memory_v3_state WHERE id = 1 AND model_fingerprint = ?)`,
+    [failed ? 'failed' : 'retry_wait', failed ? null : retryAt, error, failed ? now : null,
+      claim.memoryId, claim.claimId, claim.contentRevision, claim.modelFingerprint, claim.modelFingerprint]);
+    return result.changes > 0;
+  }
+
+  async releaseEmbedding(claim: MemoryEmbeddingClaim) {
+    await executor('releaseEmbedding').runAsync('UPDATE memory_item_embeddings SET claim_id = NULL, claim_expires_at = NULL WHERE memory_id = ? AND claim_id = ?',
+      [claim.memoryId, claim.claimId]);
+  }
+
+  async retryEmbedding(poolId: string, memoryId: string) {
+    await executor('retryEmbedding').withExclusiveTransactionAsync(async (tx) => {
+      await readEntry(tx, poolId, memoryId);
+      await markContentPending(tx, memoryId);
+    });
+  }
+
+  async getNextEmbeddingWakeAt(fingerprint: string) {
+    const row = await executor('nextWake').getFirstAsync<{ wake_at: string | null }>(`SELECT MIN(
+      CASE WHEN claim_id IS NOT NULL THEN claim_expires_at ELSE retry_at END) AS wake_at
+      FROM memory_item_embeddings WHERE model_fingerprint = ? AND status IN ('pending','stale','retry_wait') AND attempts < 3`, [fingerprint]);
+    return row!.wake_at;
+  }
+}
+
+export const memoryEntryRepository = new SQLiteMemoryEntryRepository();

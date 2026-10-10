@@ -1,0 +1,450 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const ts = require('typescript');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'group-prompt-privacy-'));
+
+function loadTypeScriptModule(relativePath, mocks) {
+  const sourcePath = path.join(repoRoot, relativePath);
+  const output = ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    fileName: sourcePath,
+  });
+  const module = { exports: {} };
+  const execute = new Function('exports', 'require', 'module', output.outputText);
+  execute(module.exports, (specifier) => {
+    assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 存在未声明依赖：${specifier}`);
+    return mocks[specifier];
+  }, module);
+  return module.exports;
+}
+
+const builtInContent = loadTypeScriptModule('src/host/prompt/PromptBuiltInContent.ts', {});
+const { PromptPackBlockFactory } = loadTypeScriptModule(
+  'src/host/prompt/PromptPackBlockFactory.ts',
+  {
+    '@shared': { DEFAULT_SELF_NAME: '用户' },
+    '@features/memory': {
+      recallPassiveMemory: async () => [],
+    },
+    '@features/assistants': {
+      agentRegistryService: { getSummary: async () => ({ entries: [], text: '' }) },
+    },
+    '@features/moments': {
+      loadMomentActorDirectory: async () => ({
+        resolve: (ref) => ({ ...ref, displayName: ref.nameSnapshot, avatar: null, exists: true }),
+      }),
+    },
+    './PromptBuiltInContent': builtInContent,
+    '@shared/prompt': {},
+  },
+);
+
+const factory = new PromptPackBlockFactory();
+const aiConfig = {};
+const groupChat = {
+  groupId: 'group-secret-1',
+  groupName: '测试群',
+  currentAIId: 'ai-secret-2',
+  // 故意让 legacy agent key 指向另一成员，验证最终 ownership 只看 assistant ID。
+  currentAgentId: 'agent-secret-1',
+  currentAIName: '同名成员',
+  recentWindowLimit: 10,
+  members: [
+    { aiAssistantId: 'ai-secret-1', agentId: 'agent-secret-1', name: '同名成员' },
+    { aiAssistantId: 'ai-secret-2', agentId: 'agent-secret-2', name: '同名成员' },
+    { aiAssistantId: 'ai-secret-3', agentId: 'agent-secret-3', name: '同名成员' },
+  ],
+};
+const contextBlock = factory.createGroupChatContextBlock({ groupChat, userDisplayName: '橙子' }, aiConfig);
+assert.match(contextBlock.content, /你自己，显示名“同名成员”/);
+assert.equal((contextBlock.content.match(/你自己，显示名/g) || []).length, 1, '群上下文只能按 assistant ID 标记一个当前 AI');
+assert.equal((contextBlock.content.match(/其他成员，显示名/g) || []).length, 2);
+assert.doesNotMatch(contextBlock.content, /SELF|OTHER_AI|USER（|ai_assistant_id|agent_id/);
+for (const secret of [
+  groupChat.groupId,
+  ...groupChat.members.flatMap((member) => [member.aiAssistantId, member.agentId]),
+]) {
+  assert.ok(!contextBlock.content.includes(secret), `群上下文不得暴露真实身份：${secret}`);
+}
+
+const confidentialityBlock = factory.createGroupMemberReplyConfidentialityBlock(aiConfig, '橙子');
+assert.equal(confidentialityBlock.definitionId, 'output.group_member_reply_confidentiality');
+assert.equal(confidentialityBlock.protection, 'locked');
+assert.equal(confidentialityBlock.required, true);
+assert.doesNotMatch(confidentialityBlock.content, /SELF|OTHER_AI|USER（/);
+// 用户显示名占位符必须在生成块时替换为当前会话显示名，不得泄漏占位符本身。
+assert.ok(confidentialityBlock.content.includes('橙子'), '保密规则正文必须替换为当前用户显示名');
+assert.ok(!confidentialityBlock.content.includes('${userDisplayName}'), '用户显示名占位符必须被替换');
+
+const chatMetadata = loadTypeScriptModule('src/features/chat/messages/domain/chatMessageMetadata.ts', {
+  './ChatSticker': loadTypeScriptModule('src/features/chat/messages/domain/ChatSticker.ts', {}),
+});
+const { PromptHistoryBuilder } = loadTypeScriptModule(
+  'src/host/prompt/PromptHistoryBuilder.ts',
+  {
+    '@features/chat': {
+      getMessageSharedRecord: chatMetadata.getMessageSharedRecord,
+      buildChatSystemEventModelText: chatMetadata.buildChatSystemEventModelText,
+      buildChatUserMessageModelInput: async (message) => {
+        const attachment = JSON.parse(message.metadataJson || '{}').attachments?.[0];
+        if (attachment?.type === 'image') {
+          return {
+            displayText: `[图片] ${attachment.fileName}`,
+            modelInput: [
+              { type: 'text', text: `用户发送了一张图片：${attachment.fileName}` },
+              { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } },
+            ],
+          };
+        }
+        return attachment?.type === 'file'
+          ? {
+              displayText: `[文件] ${attachment.fileName}`,
+              modelInput: attachment.parsedText,
+            }
+          : { displayText: message.text, modelInput: message.text };
+      },
+      buildSessionPreviewTextFromMessage: (message) => message.text,
+      getMessageAttachments: (message) => JSON.parse(message.metadataJson || '{}').attachments || [],
+      isCallStatusMessageMetadata: (metadata) => metadata?.type === 'callStatus',
+      isTogetherListeningMessageMetadata: (metadata) => metadata?.type === 'togetherListening',
+      loadOlderTimelineMessages: async ({ cursor, limit }) => {
+        const older = globalThis.__GROUP_PROMPT_TIMELINE__.filter((message) => message.id < cursor);
+        const messages = older.slice(-limit);
+        return {
+          success: true,
+          messages,
+          hasMore: older.length > messages.length,
+          nextCursor: older.length > messages.length ? messages[0].id : null,
+        };
+      },
+      openConversationTimeline: async ({ limit }) => {
+        const all = globalThis.__GROUP_PROMPT_TIMELINE__;
+        const messages = all.slice(-limit);
+        return {
+          success: true,
+          messages,
+          hasMore: all.length > messages.length,
+          nextCursor: all.length > messages.length ? messages[0].id : null,
+        };
+      },
+      parseMessageMetadata: (message) => JSON.parse(message.metadataJson || '{}'),
+      getMessageSticker: (message) => JSON.parse(message.metadataJson || '{}').sticker || null,
+      buildStickerModelText: (sticker) => `[表情]${sticker?.name || ''}`,
+      buildVoiceMessageModelText: (message) =>
+        JSON.parse(message.metadataJson || '{}').voice?.transcript || '',
+    },
+  },
+);
+const historyBuilder = new PromptHistoryBuilder();
+globalThis.__GROUP_PROMPT_TIMELINE__ = [];
+const runtimeContext = { groupChat, userDisplayName: '橙子' };
+const userHistory = await historyBuilder.buildRuntimeMessageContent(
+  { id: 1, text: '大家好', metadataJson: null },
+  true,
+  runtimeContext,
+  'ai-secret-1',
+);
+const togetherInvitationHistory = await historyBuilder.buildRuntimeMessageContent(
+  {
+    id: 2,
+    text: '用户邀请你一起听网易云音乐。',
+    metadataJson: JSON.stringify({
+      type: 'togetherListening',
+      activityId: 'activity-1',
+      initiator: 'user',
+      phase: 'pending_ai_response',
+      endReason: null,
+      source: 'togetherListening',
+    }),
+  },
+  true,
+  {},
+  'ai-secret-1',
+);
+assert.equal(togetherInvitationHistory, '用户邀请你一起听网易云音乐。');
+const togetherLifecycleHistory = await historyBuilder.buildRuntimeMessageContent(
+  {
+    id: 2,
+    text: '用户邀请你一起听网易云音乐。',
+    metadataJson: JSON.stringify({
+      type: 'togetherListening',
+      activityId: 'activity-1',
+      initiator: 'user',
+      phase: 'active',
+      endReason: null,
+      source: 'togetherListening',
+    }),
+  },
+  true,
+  {},
+  'ai-secret-1',
+);
+assert.equal(togetherLifecycleHistory, '');
+const selfHistory = await historyBuilder.buildRuntimeMessageContent(
+  {
+    text: '这是 B 的发言',
+    agentId: 'agent-secret-2',
+    metadataJson: JSON.stringify({
+      actorAIId: 'ai-secret-2',
+      actorAgentId: 'agent-secret-2',
+      actorName: '同名成员',
+    }),
+  },
+  false,
+  runtimeContext,
+  'ai-secret-2',
+);
+const otherHistory = await historyBuilder.buildRuntimeMessageContent(
+  {
+    text: '这是 A 的发言',
+    agentId: 'agent-secret-1',
+    metadataJson: JSON.stringify({
+      actorAIId: 'ai-secret-1',
+      actorAgentId: 'agent-secret-1',
+      actorName: '同名成员',
+    }),
+  },
+  false,
+  runtimeContext,
+  'ai-secret-2',
+);
+assert.equal(userHistory, '橙子：大家好');
+assert.equal(selfHistory, '这是 B 的发言', '当前 AI 历史不需要 SELF wrapper');
+assert.equal(otherHistory, '同名成员：这是 A 的发言', '外部 AI 只保留低显著显示名归因');
+const renderedHistory = [userHistory, selfHistory, otherHistory].join('\n');
+for (const secret of [
+  groupChat.groupId,
+  ...groupChat.members.flatMap((member) => [member.aiAssistantId, member.agentId]),
+]) {
+  assert.ok(!renderedHistory.includes(secret), `群历史不得暴露真实身份：${secret}`);
+}
+assert.doesNotMatch(renderedHistory, /speaker_type|speaker_relation|ai_assistant_id|agent_id|group_id/);
+assert.doesNotMatch(renderedHistory, /SELF|OTHER_AI|USER（/);
+
+globalThis.__GROUP_PROMPT_TIMELINE__ = [
+  { id: 21, createdAt: '2026-08-13T08:59:00.000Z', text: '用户输入', isMe: true, senderType: 'user', metadataJson: null },
+  // 旧消息可能只有 actorAgentId；它只能通过成员投影回 assistant ID。
+  { id: 22, createdAt: '2026-08-13T09:00:00.000Z', text: 'A 发言', isMe: false, senderType: 'assistant', agentId: 'agent-secret-1', metadataJson: JSON.stringify({ actorAgentId: 'agent-secret-1', actorName: '同名成员' }) },
+  { id: 23, createdAt: '2026-08-13T09:01:00.000Z', text: 'B 发言', isMe: false, senderType: 'assistant', agentId: 'agent-secret-2', metadataJson: JSON.stringify({ actorAIId: 'ai-secret-2', actorAgentId: 'agent-secret-2', actorName: '同名成员' }) },
+  { id: 24, createdAt: '2026-08-13T09:02:00.000Z', text: 'C 发言', isMe: false, senderType: 'assistant', agentId: 'agent-secret-3', metadataJson: JSON.stringify({ actorAIId: 'ai-secret-3', actorAgentId: 'agent-secret-3', actorName: '同名成员' }) },
+];
+const perspectiveHistory = await historyBuilder.loadRecentMessages('chat.group_member_reply', {
+  sessionId: groupChat.groupId,
+  currentInput: '当前请求',
+  aiConfig: { id: 'ai-secret-2' },
+  toolContext: {},
+  runtimeContext: { ...runtimeContext, recentWindowLimit: 10 },
+});
+assert.deepEqual(
+  perspectiveHistory.map((message) => message.role),
+  ['user', 'user', 'assistant', 'user'],
+  '当前 active B 的 perspective 必须是 user → A → assistant(B) → user(C)',
+);
+assert.equal(perspectiveHistory[1].content, '同名成员：A 发言');
+assert.equal(perspectiveHistory[2].content, 'B 发言');
+assert.equal(perspectiveHistory[3].content, '同名成员：C 发言');
+
+const currentUserInput = await historyBuilder.buildRuntimeMessageContent(
+  { id: 25, text: '当前触发输入', metadataJson: null },
+  true,
+  { ...runtimeContext, groupChat: { ...groupChat, currentTurnUserMessageIds: [25] } },
+  'ai-secret-2',
+);
+assert.match(currentUserInput, /^【当前需要回应的“橙子”发来的消息】/);
+assert.notEqual(currentUserInput, '橙子：当前触发输入', '当前输入必须区别于普通历史外部消息');
+
+const historicalFileMetadata = JSON.stringify({
+  attachments: [{
+    type: 'file',
+    fileName: 'history.md',
+    parsedText: '这是历史消息中持久化的 Markdown 正文',
+  }],
+});
+const currentFileMetadata = JSON.stringify({
+  attachments: [{
+    type: 'file',
+    fileName: 'current.md',
+    parsedText: '这是本轮文件的 Markdown 正文',
+  }],
+});
+const currentImageMetadata = JSON.stringify({
+  attachments: [{ type: 'image', fileName: 'current.png' }],
+});
+globalThis.__GROUP_PROMPT_TIMELINE__ = [
+  { id: 9, createdAt: '2026-08-13T08:59:00.000Z', text: '', isMe: true, senderType: 'user', metadataJson: historicalFileMetadata },
+  { id: 10, createdAt: '2026-08-13T09:00:00.000Z', text: '', isMe: true, senderType: 'user', metadataJson: currentFileMetadata },
+  { id: 11, createdAt: '2026-08-13T09:01:00.000Z', text: '', isMe: true, senderType: 'user', metadataJson: currentImageMetadata },
+  { id: 12, createdAt: '2026-08-13T09:02:00.000Z', text: 'AI1 已经回复', isMe: false, senderType: 'assistant', agentId: 'agent-secret-1', metadataJson: JSON.stringify({ actorAgentId: 'agent-secret-1', actorName: '同名成员' }) },
+  { id: 13, createdAt: '2026-08-13T09:03:00.000Z', text: '执行中途的新用户消息', isMe: true, senderType: 'user', metadataJson: null },
+];
+const ai2Timeline = await historyBuilder.loadRecentMessages('chat.group_member_reply', {
+  sessionId: groupChat.groupId,
+  currentInput: '本轮发言请求',
+  aiConfig: { id: 'ai-secret-2' },
+  toolContext: {},
+  runtimeContext: {
+    userDisplayName: '橙子',
+    recentWindowLimit: 30,
+    groupChat: {
+      ...groupChat,
+      currentAIId: 'ai-secret-2',
+      currentAgentId: 'agent-secret-2',
+      currentTurnUserMessageIds: [10, 11],
+      inputUpperBoundMessageId: 11,
+    },
+  },
+});
+assert.deepEqual(ai2Timeline.map((message) => message.sourceMessageId), [9, 10, 11, 12]);
+assert.match(ai2Timeline[0].content, /这是历史消息中持久化的 Markdown 正文/);
+assert.match(ai2Timeline[1].content, /当前需要回应的“橙子”发来的消息/);
+assert.match(ai2Timeline[1].content, /这是本轮文件的 Markdown 正文/);
+assert.ok(Array.isArray(ai2Timeline[2].content), '本轮图片必须保留在原用户消息的位置');
+assert.match(ai2Timeline[2].content[0].text, /当前需要回应的“橙子”发来的消息/);
+assert.equal(ai2Timeline[2].content.filter((part) => part.type === 'image_url').length, 1);
+assert.equal(ai2Timeline[3].role, 'user');
+assert.match(ai2Timeline[3].content, /^同名成员：AI1 已经回复/);
+assert.ok(!ai2Timeline.some((message) => message.sourceMessageId === 13), '快照之后的新用户消息不得进入本轮');
+
+const manyCurrentMessages = Array.from({ length: 35 }, (_, index) => ({
+  id: 101 + index,
+  createdAt: new Date(Date.UTC(2026, 7, 13, 10, index)).toISOString(),
+  text: `连续用户消息 ${index + 1}`,
+  isMe: true,
+  senderType: 'user',
+  metadataJson: null,
+}));
+globalThis.__GROUP_PROMPT_TIMELINE__ = [
+  { id: 100, createdAt: '2026-08-13T09:59:00.000Z', text: '更早的背景', isMe: false, senderType: 'assistant', agentId: 'agent-secret-1', metadataJson: null },
+  ...manyCurrentMessages,
+];
+const manyCurrentTimeline = await historyBuilder.loadRecentMessages('chat.group_member_reply', {
+  sessionId: groupChat.groupId,
+  currentInput: '本轮发言请求',
+  aiConfig: { id: 'ai-secret-2' },
+  toolContext: {},
+  runtimeContext: {
+    userDisplayName: '橙子',
+    recentWindowLimit: 30,
+    groupChat: {
+      ...groupChat,
+      currentTurnUserMessageIds: manyCurrentMessages.map((message) => message.id),
+      inputUpperBoundMessageId: 135,
+    },
+  },
+});
+assert.deepEqual(
+  manyCurrentTimeline
+    .filter((message) => manyCurrentMessages.some((current) => current.id === message.sourceMessageId))
+    .map((message) => message.sourceMessageId),
+  manyCurrentMessages.map((message) => message.id),
+  '本轮用户消息不得被 30 条背景上下文窗口截断或重新排序',
+);
+assert.equal(manyCurrentTimeline.at(-1)?.sourceMessageId, 135, '时间线末尾的本轮用户消息不得被删除');
+assert.equal(manyCurrentTimeline[0].role, 'user', '群聊中的外部 AI 历史也属于 user perspective');
+
+// PromptPack 生成的 role 必须原样到达最终 Provider，不得被 Chat Agent Gateway
+// 的 history 适配重新统一成 assistant。
+const providerMessages = [];
+const baseAIClientGatewayModule = loadTypeScriptModule(
+  'src/platform/agentRuntime/BaseAIClientAgentModelGateway.ts',
+  {
+    '@platform/ai': {
+      AgentModelGateway: class FakeAgentModelGateway {
+        constructor(provider) {
+          this.provider = provider;
+        }
+
+        async complete(request) {
+          const response = await this.provider.chatWithTools(request.messages, request.tools, request);
+          return {
+            assistantText: response.text,
+            reasoningText: response.reasoningText || '',
+            toolCalls: [],
+            finishReason: 'stop',
+            usage: null,
+          };
+        }
+
+        async stream(request) {
+          return this.complete(request);
+        }
+      },
+    },
+    '@shared/diagnostics/TurnTimelineLog': { logTurnTimeline: () => {} },
+  },
+);
+const { ChatAgentModelGateway } = loadTypeScriptModule(
+  'src/features/chat/reply/agent/ChatAgentModelGateway.ts',
+  { '@platform/agentRuntime': baseAIClientGatewayModule },
+);
+const gateway = new ChatAgentModelGateway({
+  client: {
+    chat: async (messages) => {
+      providerMessages.push(messages);
+      return {
+        success: true,
+        text: 'provider response',
+        reasoningText: '',
+        finishReason: 'stop',
+        messageId: 'provider-message',
+        promptTokens: 1,
+        completionTokens: 1,
+        totalTokens: 2,
+        error: null,
+        toolCalls: null,
+        isToolCall: false,
+      };
+    },
+    chatWithTools: async () => {
+      throw new Error('zero-tools case must call chat');
+    },
+    chatStream: async () => {
+      throw new Error('complete case must call chat');
+    },
+    chatStreamWithTools: async () => {
+      throw new Error('complete case must call chat');
+    },
+  },
+  initialMessages: perspectiveHistory,
+  diagnosticContext: { sessionId: 'group-secret-1', runId: 'run-1', correlationId: 'corr-1' },
+});
+await gateway.runTurn({
+  task: {},
+  history: [],
+  tools: [],
+  transport: 'complete',
+  signal: new AbortController().signal,
+});
+assert.equal(providerMessages.length, 1);
+assert.deepEqual(
+  providerMessages[0].map((message) => message.role),
+  ['user', 'user', 'assistant', 'user'],
+  '最终 fake provider 必须收到 PromptPack 的 perspective role',
+);
+
+// 普通私聊仍保持真人 user / AI assistant 的既有语义。
+globalThis.__GROUP_PROMPT_TIMELINE__ = [
+  { id: 31, createdAt: '2026-08-13T10:00:00.000Z', text: '私聊用户', isMe: true, senderType: 'user', metadataJson: null },
+  { id: 32, createdAt: '2026-08-13T10:01:00.000Z', text: '私聊 AI', isMe: false, senderType: 'assistant', metadataJson: null },
+];
+const privateHistory = await historyBuilder.loadRecentMessages('chat.private_reply', {
+  sessionId: 'private-session',
+  currentInput: '当前私聊请求',
+  aiConfig: { id: 'private-ai' },
+  toolContext: {},
+  runtimeContext: {},
+});
+assert.deepEqual(privateHistory.map((message) => message.role), ['user', 'assistant']);
+assert.deepEqual(privateHistory.map((message) => message.content), ['私聊用户', '私聊 AI']);
+
+// 单聊与通话的摘要／完整原文契约由 verify-memory-v3-prompt 验证，退休旧 over-fetch 窗口断言。
+
+console.log('群聊 Prompt 隐私与 perspective role 契约通过（同名身份区分、真实 ID 隔离、低显著归因、Provider role 透传）。');
+fs.rmSync(tempRoot, { recursive: true, force: true });

@@ -1,0 +1,105 @@
+/** 通用输入框组件。 */
+
+import type { StyleProp, TextStyle, ViewStyle } from 'react-native';
+import React from 'react';
+import { View, Text, TextInput, StyleSheet } from 'react-native';
+import { useTheme, useThemedStyles } from '@shared/theme';
+import type { PresentationTheme } from '@shared/theme';
+
+export interface InputFieldProps {
+  label?: string;
+  hint?: string;
+  value: string;
+  onChangeText: (text: string) => void;
+  onBlur?: () => void;
+  error?: string;
+  multiline?: boolean;
+  /** 内容换行时输入框高度自动增长，单行时保持普通单行高度。 */
+  autoGrow?: boolean;
+  placeholder?: string;
+  style?: StyleProp<ViewStyle>;
+  inputStyle?: StyleProp<TextStyle>;
+  maxLength?: number;
+  keyboardType?: 'default' | 'number-pad' | 'decimal-pad' | 'numeric' | 'email-address' | 'phone-pad' | 'url';
+  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  autoCorrect?: boolean;
+  numberOfLines?: number;
+  textAlignVertical?: 'auto' | 'top' | 'bottom' | 'center';
+}
+
+const createStyles = (theme: PresentationTheme) =>
+  StyleSheet.create({
+    container: {
+      marginBottom: theme.spacing.lg,
+    },
+    label: {
+      fontSize: 14,
+      color: theme.colors.text.secondary,
+      marginBottom: theme.spacing.sm,
+      fontWeight: '500',
+    },
+    input: {
+      backgroundColor: theme.colors.surface.input,
+      borderRadius: theme.radius.md,
+      paddingHorizontal: theme.spacing.md,
+      paddingVertical: 12,
+      fontSize: 16,
+      color: theme.colors.text.primary,
+    },
+    textArea: {
+      height: 80,
+      paddingTop: 12,
+      textAlignVertical: 'top',
+    },
+    hint: {
+      fontSize: 12,
+      color: theme.colors.text.tertiary,
+      marginTop: theme.spacing.xs,
+    },
+  });
+
+export default function InputField({
+  label,
+  hint,
+  value,
+  onChangeText,
+  onBlur,
+  error,
+  multiline = false,
+  autoGrow = false,
+  placeholder,
+  style,
+  inputStyle,
+  maxLength,
+  keyboardType,
+  autoCapitalize,
+  autoCorrect,
+  numberOfLines,
+  textAlignVertical,
+}: InputFieldProps) {
+  const theme = useTheme();
+  const styles = useThemedStyles(createStyles);
+
+  return (
+    <View style={[styles.container, style]}>
+      {label ? <Text style={styles.label}>{label}</Text> : null}
+      <TextInput
+        style={[styles.input, multiline && styles.textArea, inputStyle, error && { borderWidth: 1, borderColor: theme.colors.feedback.error }]}
+        value={value}
+        onChangeText={onChangeText}
+        onBlur={onBlur}
+        placeholder={placeholder}
+        placeholderTextColor={theme.colors.text.tertiary}
+        multiline={multiline || autoGrow}
+        maxLength={maxLength}
+        keyboardType={keyboardType}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
+        numberOfLines={numberOfLines}
+        textAlignVertical={textAlignVertical}
+      />
+      {error ? <Text accessibilityRole="alert" style={[styles.hint, { color: theme.colors.feedback.error }]}>{error}</Text> : null}
+      {hint ? <Text style={styles.hint}>{hint}</Text> : null}
+    </View>
+  );
+}

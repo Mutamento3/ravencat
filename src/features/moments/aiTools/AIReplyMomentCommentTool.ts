@@ -1,0 +1,58 @@
+/** AI 回复某条 Moment 评论；Moment 由 commentId 在 Application 内反查。 */
+import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
+import { replyMomentCommentAsAgent } from '../application/MomentAccess';
+import { MomentDomainError } from '../domain/MomentErrors';
+import type { MomentToolContext } from './MomentToolContext';
+
+interface AIReplyMomentCommentArgs { commentId: string; content: string }
+interface AIReplyMomentCommentResult { success: boolean; message?: string; error?: string; data?: { momentId: string; commentIds: string[] } }
+
+export const definition = {
+  name: 'aiReplyMomentComment',
+  description: '回复时刻中的指定评论。先用 getMomentDetail 阅读正文和评论区，直接使用返回的 commentId，不要向用户索要内部 ID。系统反查所属时刻并校验可见性；结果返回新回复的 commentId，可用于撤回。',
+  parameters: {
+    type: 'object' as const,
+    properties: {
+      commentId: { type: 'string' as const, description: '被回复的评论ID' },
+      content: { type: 'string' as const, description: '回复内容', maxLength: 500 },
+    },
+    required: ['commentId', 'content'],
+  },
+};
+
+export async function execute(
+  args: AIReplyMomentCommentArgs,
+  context: MomentToolContext
+): Promise<AIReplyMomentCommentResult> {
+  const agentId = context.getAgentId()?.trim() || null;
+  const aiName = context.getAIName();
+  if (!args.commentId) return { success: false, error: '缺少评论ID' };
+  if (!agentId || !aiName) return { success: false, error: 'AI 身份缺少不可变 agentId，无法回复' };
+  if (context.isBlocked()) return { success: false, error: '当前 AI 已被拉黑，无法回复' };
+
+  try {
+    throwIfAbortSignalAborted(context.abortSignal);
+    const comments = await replyMomentCommentAsAgent(
+      context.repositories.moment!,
+      { agentId, nameSnapshot: aiName },
+      args.commentId,
+      [args.content],
+      context.abortSignal
+    );
+    return {
+      success: true,
+      message: `回复成功。momentId: ${comments[0].momentId}\n${comments.map((comment) => `commentId: ${comment.id}，parentCommentId: ${comment.parentCommentId}\n内容: ${comment.content}`).join('\n')}\n需要撤回时直接用新回复的 commentId 调用 aiDeleteOwnMomentComment。`,
+      data: { momentId: comments[0].momentId, commentIds: comments.map((comment) => comment.id) },
+    };
+  } catch (error) {
+    throwIfAbortSignalAborted(context.abortSignal);
+    if (error instanceof MomentDomainError) {
+      if (error.code === 'empty_content') return { success: false, error: '回复内容不能为空' };
+      return { success: false, error: '未找到该评论或所属时刻不可见' };
+    }
+    console.error('[AIReplyMomentCommentTool] Failed:', error);
+    return { success: false, error: '回复失败' };
+  }
+}
+
+export const AIReplyMomentCommentTool = { name: definition.name, definition, execute };

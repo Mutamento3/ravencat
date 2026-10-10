@@ -1,0 +1,171 @@
+// 连接测试、错误分类与工具支持探测逻辑
+
+import { type AppDialogButton, type AppDialogTone } from '@shared/ui';
+import { useState, useCallback } from 'react';
+import {
+  detectConnectionParamError,
+  detectToolsSupportByConfig,
+  getAIConnectionErrorInfo,
+} from '../../../application/AIModelService';
+import type { ParamErrorInfo, ErrorDisplayInfo } from '../../../application/modelTypes';
+import { runConnectionTestByConfig } from '../sharedModelConfig';
+import type { ConnectionParams } from './modelSettingsHelpers';
+
+interface UseConnectionTestProps {
+  apiBaseUrl: string;
+  apiKey: string;
+  selectedModel: string;
+  getConnectionParams: () => ConnectionParams;
+  enableTools: boolean;
+  setEnableTools: (value: boolean) => void;
+  onShowAlert?: (title: string, message: string, buttons?: AppDialogButton[], tone?: AppDialogTone) => void;
+}
+
+interface UseConnectionTestReturn {
+  isTesting: boolean;
+  testResult: 'success' | 'error' | 'param_error' | null;
+  testErrorInfo: ParamErrorInfo | { message: string; type?: string } | null;
+  resetTestState: () => void;
+  handleTestConnection: () => Promise<void>;
+}
+
+export default function useConnectionTest({
+  apiBaseUrl,
+  apiKey,
+  selectedModel,
+  getConnectionParams,
+  enableTools,
+  setEnableTools,
+  onShowAlert,
+}: UseConnectionTestProps): UseConnectionTestReturn {
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<'success' | 'error' | 'param_error' | null>(null);
+  const [testErrorInfo, setTestErrorInfo] = useState<ParamErrorInfo | { message: string; type?: string } | null>(null);
+
+  const resetTestState = useCallback(() => {
+    setTestResult(null);
+    setTestErrorInfo(null);
+  }, []);
+
+  const handleTestConnection = useCallback(async () => {
+    if (!apiBaseUrl || !apiKey || !selectedModel) {
+      return;
+    }
+
+    setIsTesting(true);
+    resetTestState();
+
+    try {
+      const connectionParams = getConnectionParams();
+      const result = await runConnectionTestByConfig({
+        apiBaseUrl,
+        apiKey,
+        selectedModel,
+        requestOptions: connectionParams,
+      });
+
+      if (result.success) {
+        const supportsTools = await detectToolsSupportByConfig(
+          apiBaseUrl,
+          apiKey,
+          selectedModel,
+          connectionParams
+        );
+
+        if (supportsTools && !enableTools) {
+          setEnableTools(true);
+          onShowAlert?.(
+            '已自动开启工具调用',
+            `检测到模型 "${selectedModel}" 支持工具调用功能，已自动为您开启。`,
+            [{ text: '知道了', style: 'default' }], 'success'
+          );
+        } else if (supportsTools && enableTools) {
+          onShowAlert?.(
+            '连接成功',
+            `模型 "${selectedModel}" 连接正常，工具调用功能已开启。`,
+            [{ text: '知道了', style: 'default' }], 'success'
+          );
+        } else {
+          onShowAlert?.(
+            '连接成功',
+            `模型 "${selectedModel}" 连接正常。`,
+            [{ text: '知道了', style: 'default' }], 'success'
+          );
+        }
+
+        setTestResult('success');
+        return;
+      }
+
+      const paramError = detectConnectionParamError(result.rawError as string);
+
+      if (paramError.isParamError) {
+        setTestResult('param_error');
+        setTestErrorInfo(paramError);
+
+        if (onShowAlert) {
+          const paramDisplayName = paramError.paramName === 'temperature'
+            ? 'Temperature'
+            : paramError.paramName === 'topP'
+              ? 'Top P'
+              : 'Max Tokens';
+          const suggestion = paramError.allowedValue
+            ? `请将 ${paramDisplayName} 设置为 ${paramError.allowedValue} 后再测试。`
+            : `请调整 ${paramDisplayName} 后再测试。`;
+
+          onShowAlert(
+            '参数设置错误',
+            `${paramError.message}\n\n${suggestion}`,
+            [{ text: '知道了', style: 'default' }], 'error'
+          );
+        }
+      } else {
+        setTestResult('error');
+        setTestErrorInfo({
+          message: (result.errorInfo as ErrorDisplayInfo | undefined)?.message || (result.rawError as string),
+          type: (result.errorInfo as ErrorDisplayInfo | undefined)?.type || 'connection',
+        });
+
+        onShowAlert?.(
+          (result.errorInfo as ErrorDisplayInfo | undefined)?.title || '连接失败',
+          (result.errorInfo as ErrorDisplayInfo | undefined)?.message || (result.rawError as string) || '无法连接到模型，请检查 API Key 和 URL。',
+          [{ text: '知道了', style: 'default' }], 'error'
+        );
+      }
+
+      console.log('[ModelSettings] Test connection failed:', result.rawError);
+    } catch (error) {
+      const errorInfo = getAIConnectionErrorInfo(error as Error);
+
+      setTestResult('error');
+      setTestErrorInfo({ message: errorInfo.message, type: errorInfo.type || 'connection' });
+
+      onShowAlert?.(
+        errorInfo.title || '连接错误',
+        errorInfo.message || '测试连接时发生错误。',
+        [{ text: '知道了', style: 'default' }], 'error'
+      );
+
+      console.log('[ModelSettings] Test connection error:', errorInfo.message);
+    } finally {
+      setIsTesting(false);
+    }
+  }, [
+    apiBaseUrl,
+    apiKey,
+    selectedModel,
+    getConnectionParams,
+    enableTools,
+    setEnableTools,
+    onShowAlert,
+    resetTestState,
+  ]);
+
+  return {
+    isTesting,
+    testResult,
+    testErrorInfo,
+    resetTestState,
+    handleTestConnection,
+  };
+}

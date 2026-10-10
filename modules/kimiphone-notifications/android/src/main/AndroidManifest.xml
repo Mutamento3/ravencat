@@ -1,0 +1,32 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.VIBRATE" />
+  <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+  <application>
+    <service
+      android:name="expo.modules.kimiphonenotifications.CallNotificationActionHeadlessTaskService"
+      android:exported="false" />
+    <service
+      android:name="expo.modules.kimiphonenotifications.TogetherListeningNotificationActionHeadlessTaskService"
+      android:exported="false" />
+    <receiver
+      android:name="expo.modules.kimiphonenotifications.NotificationActionReceiver"
+      android:exported="false" />
+    <!-- 系统来电 surface：锁屏/熄屏时由 FullScreenIntent 拉起；不进入最近任务列表。 -->
+    <activity
+      android:name="expo.modules.kimiphonenotifications.IncomingCallActivity"
+      android:exported="false"
+      android:showWhenLocked="true"
+      android:turnScreenOn="true"
+      android:excludeFromRecents="true"
+      android:launchMode="singleTop"
+      android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+    <activity
+      android:name="expo.modules.kimiphonenotifications.TogetherListeningNotificationActivity"
+      android:exported="false"
+      android:excludeFromRecents="true"
+      android:launchMode="singleTop"
+      android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+  </application>
+</manifest>

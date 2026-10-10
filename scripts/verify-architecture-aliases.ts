@@ -1,0 +1,21 @@
+import '@host';
+import '@features/calls';
+import '@features/calls/composition';
+import '@features/chat';
+import '@features/chat/composition';
+import '@features/mcpTools';
+import '@features/memory';
+import '@features/memory/composition';
+import '@features/companion';
+import '@features/companion/composition';
+import '@features/wallet';
+import '@platform';
+import '@platform/device';
+import '@platform/persistence';
+import '@shared';
+import '@shared/aiTools';
+import '@shared/prompt';
+import '@shared/theme';
+import '@shared/ui';
+
+console.log('Architecture aliases resolved.');

@@ -1,0 +1,34 @@
+/** 默认概览、详情列表与正文编辑复用主题。 */
+import { StyleSheet } from 'react-native';
+import type { PresentationTheme } from '@shared/theme';
+
+export const createPromptCenterStyles = (theme: PresentationTheme) => StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: theme.colors.background.app },
+  screen: { flex: 1, backgroundColor: theme.colors.background.screen },
+  content: { padding: theme.spacing.lg, paddingBottom: 48, gap: 12 },
+  hero: { paddingTop: 10, paddingBottom: 12 },
+  eyebrow: { color: theme.colors.brand.primary, fontSize: 12, fontWeight: '600', letterSpacing: 1 },
+  heading: { marginTop: 8, color: theme.colors.text.primary, fontSize: 27, fontWeight: '700' },
+  description: { marginTop: 8, color: theme.colors.text.secondary, fontSize: 13, lineHeight: 21 },
+  section: { paddingTop: 12, paddingBottom: 2, color: theme.colors.text.tertiary, fontSize: 12, fontWeight: '600', letterSpacing: 1 },
+  row: { minHeight: 76, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.default, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light },
+  number: { width: 30, height: 30, borderRadius: 15, textAlign: 'center', textAlignVertical: 'center', overflow: 'hidden', color: theme.colors.brand.primary, backgroundColor: theme.colors.surface.raised, fontSize: 12, fontWeight: '700', lineHeight: 30 },
+  copy: { flex: 1, gap: 5 },
+  title: { color: theme.colors.text.primary, fontSize: 15, fontWeight: '600' },
+  subtitle: { color: theme.colors.text.tertiary, fontSize: 12, lineHeight: 18 },
+  muted: { opacity: 0.55 },
+  card: { padding: 18, gap: 12, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.default, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  collapsibleHeader: { minHeight: 44 },
+  starButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  body: { color: theme.colors.text.secondary, fontSize: 13, lineHeight: 21 },
+  action: { color: theme.colors.brand.primary, fontSize: 14, fontWeight: '600' },
+  danger: { color: theme.colors.feedback.error, fontSize: 13 },
+  actions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  input: { padding: 14, borderRadius: theme.radius.md, backgroundColor: theme.colors.surface.default, color: theme.colors.text.primary, fontSize: 15 },
+  editor: { minHeight: 320, textAlignVertical: 'top', lineHeight: 23 },
+  button: { padding: 15, alignItems: 'center', borderRadius: theme.radius.lg, backgroundColor: theme.colors.brand.primary },
+  buttonText: { color: theme.colors.brand.onPrimary, fontSize: 15, fontWeight: '600' },
+  dragging: { borderColor: theme.colors.brand.primary, opacity: 0.8 },
+  loading: { marginTop: 80 },
+});

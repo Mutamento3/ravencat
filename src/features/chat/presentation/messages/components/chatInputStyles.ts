@@ -1,0 +1,275 @@
+/** 定义聊天输入区及其主题快捷操作的样式。 */
+
+import { StyleSheet } from 'react-native';
+
+import type { PresentationTheme } from '@shared/theme';
+
+// Moon Kimi 局部视觉常量，不构成独立主题系统。
+const MOON_KIMI_CHIP_H_PADDING = 14;
+const MOON_KIMI_CHIP_ICON_TEXT_GAP = 6;
+
+export function createInputAreaStyles(theme: PresentationTheme) {
+  return StyleSheet.create({
+    container: {
+      // 透明背景使回复预览自然悬浮在聊天背景上。
+    },
+    replyPreviewContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginHorizontal: 30,
+      marginTop: 8,
+      marginBottom: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 3,
+      backgroundColor: theme.colors.chat.quote,
+      borderRadius: theme.radius.mini,
+    },
+    replyPreviewTextContainer: {
+      flex: 1,
+    },
+    replyPreviewText: {
+      fontSize: 13,
+      color: theme.colors.text.secondary,
+    },
+    replyCancelBtn: {
+      padding: 4,
+      marginLeft: 8,
+    },
+    inputContainer: {
+      flexDirection: 'row',
+      padding: 8,
+      paddingHorizontal: 12,
+      borderTopWidth: 0.5,
+      borderTopColor: theme.colors.border.light,
+      backgroundColor: theme.colors.chat.inputBar,
+      alignItems: 'center',
+    },
+    moonKimiInputContainer: {
+      borderTopWidth: 0,
+      backgroundColor: theme.colors.background.screen,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.sm,
+      flexDirection: 'column',
+      alignItems: 'stretch',
+    },
+    moonKimiInputBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.colors.chat.input,
+      borderRadius: theme.radius.xl,
+      paddingHorizontal: theme.spacing.sm,
+      paddingVertical: 10,
+      minHeight: 56,
+    },
+    input: {
+      flex: 1,
+      backgroundColor: theme.colors.chat.input,
+      borderRadius: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      paddingTop: 8,
+      marginRight: 8,
+      fontSize: 16,
+      color: theme.colors.text.primary,
+      maxHeight: 100,
+      minHeight: 36,
+      borderWidth: 0.5,
+      borderColor: theme.colors.border.default,
+    },
+    moonKimiInput: {
+      flex: 1,
+      backgroundColor: 'transparent',
+      borderWidth: 0,
+      paddingHorizontal: theme.spacing.sm,
+      paddingVertical: 8,
+      paddingTop: 8,
+      minHeight: 36,
+      fontSize: theme.typography.body.fontSize,
+      color: theme.colors.text.primary,
+      maxHeight: 100,
+      textAlignVertical: 'center',
+    },
+    moonKimiInputIconButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    moonKimiVoiceButton: {
+      width: 25,
+      height: 25,
+      borderRadius: 17,
+      borderWidth: 2,
+      borderColor: theme.colors.icon.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    rightActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    iconButton: {
+      width: 32,
+      height: 32,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginLeft: 4,
+    },
+    iconButtonActive: {},
+    voiceButton: {
+      width: 32,
+      height: 32,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 8,
+    },
+    voiceErrorBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginHorizontal: 12,
+      marginBottom: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.colors.feedback.error,
+      backgroundColor: theme.colors.chat.inputBar,
+    },
+    voiceErrorText: {
+      flex: 1,
+      marginLeft: 6,
+      fontSize: 13,
+      color: theme.colors.feedback.error,
+    },
+    voiceReviewContainer: {
+      marginHorizontal: 12,
+      marginBottom: 6,
+      paddingHorizontal: 12,
+      paddingTop: 10,
+      paddingBottom: 10,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: theme.colors.border.default,
+      backgroundColor: theme.colors.chat.inputBar,
+      gap: 8,
+    },
+    voiceReviewHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    voiceReviewTitle: {
+      flex: 1,
+      fontSize: 13,
+      fontWeight: '500',
+      color: theme.colors.text.secondary,
+    },
+    voiceReviewDuration: {
+      fontSize: 12,
+      color: theme.colors.text.tertiary,
+    },
+    voiceReviewInput: {
+      minHeight: 64,
+      maxHeight: 140,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderRadius: 8,
+      fontSize: 15,
+      lineHeight: 21,
+      color: theme.colors.text.primary,
+      backgroundColor: theme.colors.surface.default,
+    },
+    voiceReviewActions: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      gap: 8,
+    },
+    voiceReviewButton: {
+      minWidth: 72,
+      height: 36,
+      paddingHorizontal: 16,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    voiceReviewCancelButton: {
+      borderWidth: 1,
+      borderColor: theme.colors.border.default,
+      backgroundColor: theme.colors.surface.default,
+    },
+    voiceReviewSendButton: {
+      backgroundColor: theme.colors.brand.primary,
+    },
+    voiceReviewSendButtonDisabled: {
+      opacity: 0.45,
+    },
+    voiceReviewButtonText: {
+      fontSize: 14,
+      fontWeight: '500',
+    },
+    moonKimiQuickActionsContainer: {
+      paddingHorizontal: theme.spacing.lg,
+      paddingTop: theme.spacing.sm,
+      paddingBottom: theme.spacing.sm,
+      backgroundColor: theme.colors.chat.inputBar,
+    },
+    moonKimiQuickActionsContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.sm,
+    },
+    moonKimiQuickAction: {
+      minHeight: 36,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: MOON_KIMI_CHIP_H_PADDING,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: theme.colors.border.default,
+      backgroundColor: theme.colors.surface.default,
+    },
+    moonKimiQuickActionText: {
+      marginLeft: MOON_KIMI_CHIP_ICON_TEXT_GAP,
+      fontSize: theme.typography.bodySmall.fontSize,
+      color: theme.colors.text.primary,
+    },
+    sendButton: {
+      backgroundColor: theme.colors.brand.primary,
+      borderRadius: 6,
+      width: 52,
+      height: 36,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginLeft: 4,
+    },
+    sendButtonDisabled: {
+      backgroundColor: theme.colors.icon.disabled,
+    },
+    sendButtonText: {
+      color: theme.colors.brand.onPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    moonKimiSendButton: {
+      width: 23,
+      height: 23,
+      borderRadius: theme.radius.round,
+      backgroundColor: theme.colors.text.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginLeft: theme.spacing.xs,
+      // 可见圆形的右边缘需要与左侧语音图标的可见圆形对齐。
+      marginRight: 5,
+    },
+    moonKimiSendButtonDisabled: {
+      backgroundColor: theme.colors.icon.disabled,
+    },
+    moonKimiDisclaimer: {
+      textAlign: 'center',
+      fontSize: theme.typography.caption.fontSize,
+      color: theme.colors.text.tertiary,
+      marginTop: theme.spacing.sm,
+    },
+  });
+}

@@ -1,0 +1,152 @@
+/** 提供聊天消息更新、重载与输入状态事件总线契约及发布工具。 */
+export type ChatEventName =
+  | 'messagesUpdated'
+  | 'messagesPatched'
+  | 'messagesReloadRequested'
+  | 'typingStatusChanged'
+  | 'regenerationChanged'
+  | 'groupSpeechPlanChanged';
+
+export interface ChatEventBusPayload {
+  sessionId: string;
+  isTyping?: boolean;
+  typingCorrelationId?: string;
+  activeTypingCount?: number;
+  updatedMessageIds?: number[];
+  regenerationError?: string;
+}
+
+export interface ChatMessagesPatchedPayload {
+  sessionId: string;
+  updatedMessageIds: number[];
+}
+
+export interface ChatEventBus {
+  emit: (
+    eventName: ChatEventName,
+    payload: ChatEventBusPayload
+  ) => void | Promise<void>;
+}
+
+const chatEventBuses = new Set<ChatEventBus>();
+const activeTypingCorrelations = new Map<string, Set<string>>();
+
+export function emitChatRegenerationChanged(sessionId: string, regenerationError?: string): void {
+  for (const eventBus of chatEventBuses) {
+    Promise.resolve(eventBus.emit('regenerationChanged', { sessionId, regenerationError })).catch(
+      (error) => console.error('[ChatEvents] 重写状态投影失败', error),
+    );
+  }
+}
+
+export function setChatEventBus(eventBus: ChatEventBus): () => void {
+  chatEventBuses.add(eventBus);
+
+  return () => {
+    chatEventBuses.delete(eventBus);
+  };
+}
+
+export function emitChatMessagesUpdated(sessionId: string): void {
+  for (const eventBus of Array.from(chatEventBuses)) {
+    Promise.resolve(eventBus.emit('messagesUpdated', { sessionId })).catch(
+      (error) => {
+        console.error('[ChatEvents] Failed to emit messagesUpdated:', error);
+      }
+    );
+  }
+}
+
+export function emitChatMessagesPatched(payload: ChatMessagesPatchedPayload): void {
+  const normalizedMessageIds = Array.from(
+    new Set(
+      (payload.updatedMessageIds || []).filter(
+        (messageId) => Number.isInteger(messageId) && messageId > 0
+      )
+    )
+  );
+
+  if (!payload.sessionId || normalizedMessageIds.length === 0) {
+    return;
+  }
+
+  for (const eventBus of Array.from(chatEventBuses)) {
+    Promise.resolve(
+      eventBus.emit('messagesPatched', {
+        sessionId: payload.sessionId,
+        updatedMessageIds: normalizedMessageIds,
+      })
+    ).catch(
+      (error) => {
+        console.error('[ChatEvents] Failed to emit messagesPatched:', error);
+      }
+    );
+  }
+}
+
+export function emitChatMessagesReloadRequested(sessionId: string): void {
+  if (!sessionId) {
+    return;
+  }
+
+  for (const eventBus of Array.from(chatEventBuses)) {
+    Promise.resolve(eventBus.emit('messagesReloadRequested', { sessionId })).catch(
+      (error) => {
+        console.error('[ChatEvents] Failed to emit messagesReloadRequested:', error);
+      }
+    );
+  }
+}
+
+export function emitChatTypingStatusChanged(
+  sessionId: string,
+  isTyping: boolean,
+  correlationId = 'legacy',
+): void {
+  const normalizedCorrelationId = correlationId.trim() || 'legacy';
+  const correlations = activeTypingCorrelations.get(sessionId) ?? new Set<string>();
+  if (isTyping) {
+    correlations.add(normalizedCorrelationId);
+    activeTypingCorrelations.set(sessionId, correlations);
+  } else {
+    correlations.delete(normalizedCorrelationId);
+    if (correlations.size === 0) {
+      activeTypingCorrelations.delete(sessionId);
+    }
+  }
+  const activeTypingCount = correlations.size;
+  for (const eventBus of Array.from(chatEventBuses)) {
+    Promise.resolve(eventBus.emit('typingStatusChanged', {
+      sessionId,
+      isTyping: activeTypingCount > 0,
+      typingCorrelationId: normalizedCorrelationId,
+      activeTypingCount,
+    })).catch(
+      (error) => {
+        console.error('[ChatEvents] Failed to emit typingStatusChanged:', error);
+      }
+    );
+  }
+}
+
+/**
+ * 发布群发言 plan 持久事实发生变化。事件不携带 plan 快照，consumer 收到后
+ * 从 Group query 重读，避免事件 payload 发展成第二份业务状态。
+ */
+export function emitChatGroupSpeechPlanChanged(groupId: string): void {
+  if (!groupId) {
+    return;
+  }
+
+  for (const eventBus of Array.from(chatEventBuses)) {
+    Promise.resolve(eventBus.emit('groupSpeechPlanChanged', { sessionId: groupId })).catch(
+      (error) => {
+        console.error('[ChatEvents] Failed to emit groupSpeechPlanChanged:', error);
+      }
+    );
+  }
+}
+
+export function getActiveChatTypingCount(sessionId: string): number {
+  return activeTypingCorrelations.get(sessionId)?.size ?? 0;
+}

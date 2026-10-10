@@ -1,0 +1,101 @@
+/** AI 发布文本 Moment；作者身份只取自 trusted ToolContext。 */
+import { listAIAssistants } from '@features/assistants';
+import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
+import { createAgentMoment } from '../application/CreateMoment';
+import { MomentDomainError } from '../domain/MomentErrors';
+import type { MomentAudience } from '../domain/MomentRepository';
+import type { MomentToolContext } from './MomentToolContext';
+
+interface AICreateMomentArgs {
+  content: string;
+  audience?: {
+    mode: 'all' | 'selected' | 'all_except';
+    agentIds?: string[];
+  };
+}
+
+interface AICreateMomentResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+  data?: { momentId: string };
+}
+
+export const definition = {
+  name: 'aiCreateMoment',
+  description: '发布一条文本时刻。',
+  parameters: {
+    type: 'object' as const,
+    properties: {
+      content: { type: 'string' as const, description: '时刻正文', maxLength: 2000 },
+      audience: {
+        type: 'object' as const,
+        description: '可见范围；省略时对全部 AI 可见',
+        properties: {
+          mode: {
+            type: 'string' as const,
+            enum: ['all', 'selected', 'all_except'],
+            description: 'all=全部；selected=仅指定；all_except=除指定外',
+          },
+          agentIds: {
+            type: 'array' as const,
+            items: { type: 'string' as const },
+            description: 'selected 的 allow list 或 all_except 的 deny list，只能使用「时刻可见范围候选」中的稳定 agentId',
+          },
+        },
+        required: ['mode'],
+      },
+    },
+    required: ['content'],
+  },
+};
+
+function toAudience(input: AICreateMomentArgs['audience']): MomentAudience {
+  if (!input || input.mode === 'all') return { mode: 'all' };
+  return { mode: input.mode, viewerAgentIds: input.agentIds ?? [] };
+}
+
+export async function execute(
+  args: AICreateMomentArgs,
+  context: MomentToolContext
+): Promise<AICreateMomentResult> {
+  const agentId = context.getAgentId()?.trim() || null;
+  const aiName = context.getAIName();
+  if (!agentId || !aiName) {
+    return { success: false, error: 'AI 身份缺少不可变 agentId，无法发布时刻' };
+  }
+  if (context.isBlocked()) {
+    return { success: false, error: '当前 AI 已被拉黑，无法发布时刻' };
+  }
+
+  try {
+    throwIfAbortSignalAborted(context.abortSignal);
+    const moment = await createAgentMoment(
+      context.repositories.moment!,
+      {
+        listAgentIds: async () => (await listAIAssistants()).map((assistant) => assistant.agentId),
+      },
+      {
+        agentId,
+        nameSnapshot: aiName,
+        content: args.content,
+        audience: toAudience(args.audience),
+        abortSignal: context.abortSignal,
+      }
+    );
+    return {
+      success: true,
+      message: `时刻发布成功。momentId: ${moment.id}\n内容: ${moment.content}\n可直接用此 momentId 读取详情或删除自己发布的时刻。`,
+      data: { momentId: moment.id },
+    };
+  } catch (error) {
+    throwIfAbortSignalAborted(context.abortSignal);
+    if (error instanceof MomentDomainError) {
+      return { success: false, error: error.message };
+    }
+    console.error('[AICreateMomentTool] Failed:', error);
+    return { success: false, error: '时刻发布失败' };
+  }
+}
+
+export const AICreateMomentTool = { name: definition.name, definition, execute };

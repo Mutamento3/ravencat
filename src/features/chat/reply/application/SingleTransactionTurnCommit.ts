@@ -1,0 +1,287 @@
+/**
+ * @fileoverview SingleTransactionTurnCommit —— canonical user_reply 的 T3 提交策略（方案 16.5）。
+ *
+ * 把 processAIReply 的最终落库替换为单事务 commitTurn：fence + 全量 items +
+ * preview + run 终态 + 游标推进。fence 失败 = 安静结束本 run：不落错误气泡、
+ * 不重试（用户消息事务已触发新一轮 claim，新输入自然被覆盖）。
+ * 工具续轮的中间 assistant 文本（前言）经 persistAssistantPrelude 只收集不单独落库，
+ * 并入本轮 items 随同一 T3 事务提交；canonical 路径任何 assistant 文本只经 T3 落库。
+ * commit 后再做 UI 通知、逐段回调与领域事件。
+ */
+
+import { getChatMessageRuntimeDependencies } from '../../messages/application/ChatMessageRuntime';
+import type { ChatMessage } from '../../messages/domain/ChatMessage';
+import { buildSessionPreviewTextFromMessage } from '../../messages/domain';
+import type {
+  ConversationTurnCommitItem,
+  ConversationTurnRun,
+} from '../domain/ConversationTurn';
+import { assertChatReplyNotAborted } from './ChatReplyAbort';
+import {
+  normalizeAssistantResponseText,
+  type PersistCompletedAssistantReplyParams,
+} from './AssistantReplyPersistence';
+import {
+  buildAssistantTurnItems,
+  type AssistantTurnCommitOutcome,
+  type AssistantTurnCommitPort,
+} from './AssistantTurnCommit';
+import type {
+  AIReplyConfig,
+  AIReplyRuntimeContext,
+  ProcessAIReplyCallbacks,
+} from './ChatReplyTypes';
+import { deliverCommittedAssistantSegment } from './CommittedAssistantSegmentDelivery';
+import { beginAssistantMessageArrival, finishAssistantMessageArrival } from '../delivery/AssistantMessageArrival';
+import { releaseMediaAssetCandidates } from '@features/media';
+import { emitChatMessagesReloadRequested } from '../../messages/events/ChatEvents';
+
+export function createSingleTransactionTurnCommit(
+  run: ConversationTurnRun,
+  assistantId: string,
+): AssistantTurnCommitPort {
+  let settled = false;
+  let outcome: AssistantTurnCommitOutcome | null = null;
+  // 工具续轮的中间 assistant 文本（前言）只收集不单独落库，随本轮 items 一起进 T3。
+  const preludeItems: ConversationTurnCommitItem[] = [];
+
+  /** 归一化 + 纯转换为本轮待提交条目；不做任何 IO。 */
+  function buildTurnItems({
+    sessionId,
+    response,
+    aiConfig,
+    runtimeContext = {},
+    policy,
+  }: PersistCompletedAssistantReplyParams): ConversationTurnCommitItem[] {
+    assertChatReplyNotAborted(runtimeContext);
+
+    const normalizedResponse = normalizeAssistantResponseText(
+      response.text,
+      policy,
+    );
+
+    return buildAssistantTurnItems({
+      sessionId,
+      aiConfig,
+      runtimeContext,
+      response,
+      normalizedText: normalizedResponse.text,
+      visibleSegments: normalizedResponse.segments,
+    });
+  }
+
+  /**
+   * canonical commit 的共享收口：items 已由调用方确定顺序，这里只做 T3
+   * 提交、结果状态与 assistant-only delivery。tool/reasoning 只能作为展示项
+   * 随事务写入，不能进入 preview 或 assistant 回调。
+   */
+  async function commitItems(
+    params: PersistCompletedAssistantReplyParams,
+    items: ConversationTurnCommitItem[],
+  ): Promise<{
+    outcome: AssistantTurnCommitOutcome;
+    messages: ChatMessage[];
+  }> {
+    const {
+      sessionId,
+      response,
+      callbacks = {},
+      aiConfig,
+      runtimeContext = {},
+    } = params;
+
+    settled = true;
+
+    if (items.length === 0 || (run.kind === 'regenerate' && !items.some((item) => item.message.senderType === 'assistant'))) {
+      await discardPreparedItems(items);
+      outcome = 'empty_items';
+      // 保持既有完成信号语义；这里没有任何消息，因此不会触发 assistant
+      // segment delivery 或 onFinalReply。
+      callbacks.onReplyCommitted?.();
+      return { outcome, messages: [] };
+    }
+
+    let result;
+    try {
+      result = await getChatMessageRuntimeDependencies().turns.commitTurn(run, items, {
+        assistantId, openedPackageIds: params.openedToolPackageIds ?? [],
+      });
+    } catch (error) {
+      await discardPreparedItems(items);
+      throw error;
+    }
+
+    if (result.outcome === 'fence_failed') {
+      await discardPreparedItems(items);
+      outcome = 'fence_failed';
+      // fence 失败：零事实落库，安静结束本 run，不重试。
+      console.info('[SingleTransactionTurnCommit] commit fence 失败，本 run 放弃提交', {
+        sessionId,
+        runId: run.runId,
+      });
+      return { outcome, messages: [] };
+    }
+
+    outcome = 'committed';
+    await finalizePreparedItems(items);
+    if (run.kind === 'regenerate') {
+      try {
+        await releaseMediaAssetCandidates(result.mediaAssetCandidates ?? []);
+      } catch (error) {
+        console.warn('[SingleTransactionTurnCommit] 重写提交后媒体候选清理失败', error);
+      }
+    }
+
+    const assistantSegments = result.messages.filter(
+      (message) => message.senderType === 'assistant'
+    );
+    if (assistantSegments.length === 0) {
+      callbacks.notifyUI?.(sessionId);
+      // tool/reasoning-only canonical turn 仍然完成一次 commit；完成信号不等于
+      // assistant delivery，不能因没有 assistant segment 而丢失原有回调语义。
+      callbacks.onReplyCommitted?.();
+      return { outcome, messages: result.messages };
+    }
+
+    const tracksArrival = Boolean(aiConfig?.id && aiConfig.name && !runtimeContext.suppressAIMessageReceivedEvent);
+    const messageIds = assistantSegments.map((message) => message.id);
+    const segmentTotal = assistantSegments.length;
+    try {
+      if (tracksArrival) {
+        await beginAssistantMessageArrival({
+          observer: { sessionId, aiId: aiConfig!.id, aiName: aiConfig!.name },
+          messageIds,
+        });
+      }
+      // 先登记原有分段到达投影，再刷新替换后的消息，避免整轮先闪现后重新分段。
+      if (run.kind === 'regenerate') emitChatMessagesReloadRequested(sessionId);
+      // 完整事实仍一次读回；展示消费者共享已登记的分段到达投影。
+      callbacks.notifyUI?.(sessionId);
+      for (const [segmentIndex, message] of assistantSegments.entries()) {
+        await notifyCommittedSegment({
+          message,
+          segmentIndex,
+          segmentTotal,
+          sessionId,
+          aiConfig,
+          runtimeContext,
+          callbacks,
+        });
+      }
+    } finally {
+      if (tracksArrival) await finishAssistantMessageArrival(messageIds);
+    }
+
+    const joinedText = assistantSegments
+      .map(buildSessionPreviewTextFromMessage)
+      .filter(Boolean)
+      .join('\n\n');
+    const previewText = joinedText
+      || [...assistantSegments]
+        .reverse()
+        .map(buildSessionPreviewTextFromMessage)
+        .find(Boolean)
+      || response.text.trim();
+    callbacks.onFinalReply?.({
+      status: 'completed',
+      sessionId,
+      correlationId: runtimeContext.correlationId || runtimeContext.replyRunId,
+      text: joinedText || response.text,
+      previewText,
+      joinedText,
+      logicalMessageId: assistantSegments[0].logicalMessageId || null,
+      firstSegmentMessageId: assistantSegments[0].id,
+      lastSegmentMessageId: assistantSegments[assistantSegments.length - 1].id,
+      segmentTotal,
+      segments: assistantSegments.map((message, segmentIndex) => ({
+        messageId: message.id,
+        segmentIndex,
+        text: buildSessionPreviewTextFromMessage(message),
+      })),
+    });
+
+    return { outcome, messages: result.messages };
+  }
+
+  return {
+    persistsIntermediates: false,
+    readOpenToolPackageIds: () => getChatMessageRuntimeDependencies().turns.listOpenToolPackageIds(run.sessionId, assistantId),
+
+    isCommitEligible: () => !settled,
+
+    turnCommitOutcome: () => outcome,
+
+    async persistAssistantPrelude(params) {
+      preludeItems.push(...buildTurnItems(params));
+    },
+
+    async commitAgentTimeline(params) {
+      return commitItems(params, params.items);
+    },
+
+    async persistCompletedAssistantReply(params) {
+      const items = [...preludeItems, ...buildTurnItems(params)];
+      await commitItems(params, items);
+    },
+  };
+}
+
+async function discardPreparedItems(items: ConversationTurnCommitItem[]): Promise<void> {
+  await Promise.all(items.map(async (item) => {
+    if (!item.discardAfterRollback) return;
+    try {
+      await item.discardAfterRollback();
+    } catch (error) {
+      console.warn('[SingleTransactionTurnCommit] 回滚后清理语音 backing 失败', error);
+    }
+  }));
+}
+
+async function finalizePreparedItems(items: ConversationTurnCommitItem[]): Promise<void> {
+  await Promise.all(items.map(async (item) => {
+    if (!item.finalizeAfterCommit) return;
+    try {
+      await item.finalizeAfterCommit();
+    } catch (error) {
+      console.warn('[SingleTransactionTurnCommit] commit 后清理复用 backing 失败', error);
+    }
+  }));
+}
+
+async function notifyCommittedSegment(params: {
+  message: ChatMessage;
+  segmentIndex: number;
+  segmentTotal: number;
+  sessionId: string;
+  aiConfig?: AIReplyConfig;
+  runtimeContext: AIReplyRuntimeContext;
+  callbacks: ProcessAIReplyCallbacks;
+}): Promise<void> {
+  const {
+    message,
+    segmentIndex,
+    segmentTotal,
+    sessionId,
+    aiConfig,
+    runtimeContext,
+    callbacks,
+  } = params;
+  const text = message.text;
+
+  await deliverCommittedAssistantSegment({
+    sessionId,
+    text,
+    metadataJson: message.metadataJson,
+    messageId: message.id,
+    logicalMessageId: message.logicalMessageId || null,
+    segmentIndex,
+    segmentTotal,
+    aiConfig,
+    runtimeContext,
+    callbacks,
+  });
+
+  if (segmentIndex === segmentTotal - 1 && (runtimeContext.triggerSource || 'chat') === 'chat') {
+    callbacks.onReplyCommitted?.();
+  }
+}

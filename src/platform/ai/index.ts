@@ -1,0 +1,40 @@
+/** AI Provider 技术能力公共出口。 */
+export { BaseAIClient } from './BaseAIClient';
+export { KimiClient } from './KimiClient';
+export { OpenAIClient, createAIClient } from './OpenAIClient';
+export { fetchModelList } from './modelDiscovery';
+export { testAPIConnection, detectToolsSupport } from './connectionTest';
+export {
+  detectParamError,
+  detectQuotaError,
+  detectServiceBusyError,
+  getErrorDisplayInfo,
+} from './errorMapping';
+export { normalizeAIBaseURL } from './baseUrl';
+export { AgentModelGateway } from './agent/AgentModelGateway';
+export { CompleteModelTurnAdapter } from './agent/CompleteModelTurnAdapter';
+export { StreamingModelTurnAdapter } from './agent/StreamingModelTurnAdapter';
+export { ModelTurnCollector } from './agent/ModelTurnCollector';
+export type {
+  AIClientConfig, ChatMessage, ContentPart, TextContentPart, ImageContentPart,
+  ToolCall, ChatResponse, ChatStreamDelta, ChatStreamOptions,
+  ChatStreamWithToolsOptions, EmbeddingResponse, ConnectionTestResult,
+  ParamErrorInfo, QuotaErrorInfo, ServiceBusyErrorInfo, ErrorDisplayInfo,
+  ModelInfo, ToolDefinition, ChatOptions, ChatWithToolsOptions,
+  ConnectionTestOptions,
+} from './types';
+export type {
+  AgentModelEventSink,
+  AgentModelProvider,
+  AgentModelRequest,
+} from './agent/AgentModelGateway';
+export type {
+  ModelEvent,
+  ModelEventSink,
+  ModelFinishReason,
+  ModelHistoryItem,
+  ModelToolCall,
+  ModelToolResultHistoryItem,
+  ModelTurnResult,
+  ModelUsage,
+} from './agent/ModelEvent';

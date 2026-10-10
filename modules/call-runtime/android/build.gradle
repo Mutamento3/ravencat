@@ -1,0 +1,23 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'expo.modules.callruntime'
+version = '1.0.0'
+android {
+  namespace 'expo.modules.callruntime'
+  defaultConfig { versionCode 1; versionName '1.0.0' }
+  testOptions { unitTests { includeAndroidResources = true } }
+}
+dependencies {
+  implementation project(':android-overlay-runtime')
+  implementation 'androidx.core:core-telecom:1.0.0'
+  implementation 'androidx.camera:camera-camera2:1.4.2'
+  implementation 'androidx.camera:camera-lifecycle:1.4.2'
+  implementation 'androidx.camera:camera-view:1.4.2'
+  implementation 'androidx.lifecycle:lifecycle-runtime:2.8.7'
+  compileOnly 'com.facebook.react:react-android'
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'org.robolectric:robolectric:4.14.1'
+  testImplementation 'com.facebook.react:react-android'
+}

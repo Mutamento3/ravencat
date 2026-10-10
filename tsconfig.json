@@ -1,0 +1,28 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "strict": false,
+    "noEmit": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@host": ["./src/host/index.ts"],
+      "@host/*": ["./src/host/*"],
+      "@features/*": ["./src/features/*"],
+      "@platform": ["./src/platform/index.ts"],
+      "@platform/*": ["./src/platform/*"],
+      "@shared": ["./src/shared/index.ts"],
+      "@shared/*": ["./src/shared/*"]
+    }
+  },
+  "include": [
+    "App.tsx",
+    "expo-env.d.ts",
+    "index.js",
+    "src/**/*",
+    ".expo/types/**/*.ts",
+    "scripts/verify-architecture-aliases.ts"
+  ]
+}

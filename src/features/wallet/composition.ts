@@ -1,0 +1,98 @@
+/**
+ * 将 Wallet 应用端口连接到当前仓储与聊天服务。
+ * 这是该功能唯一的装配点，应用代码不依赖具体 SQLite 实现或全局仓储单例。
+ */
+import { aiAssistantRepository, aiHostRepository } from '@features/assistants';
+import {
+  addWalletRecord as addWalletRecordUseCase,
+  type WalletAIReplyCallbacks,
+} from './application/AddRecord';
+import {
+  applyQuickActionAndReply as applyQuickActionAndReplyUseCase,
+  type UseQuickActionParams,
+  type WalletQuickActionCallbacks,
+} from './application/UseQuickAction';
+import {
+  queueLedgerAIReply as queueLedgerAIReplyUseCase,
+  type QueueLedgerAIReplyCallbacks,
+  type QueueLedgerAIReplyParams,
+} from './application/QueueLedgerAIReply';
+import {
+  triggerLedgerAIReply as triggerLedgerAIReplyUseCase,
+  type TriggerLedgerAIReplyParams,
+  type WalletChatReplyGateway,
+} from './application/TriggerLedgerAIReply';
+import {
+  addWalletQuickAction as addWalletQuickActionUseCase,
+  deleteWalletQuickAction as deleteWalletQuickActionUseCase,
+  deleteWalletRecord as deleteWalletRecordUseCase,
+  updateWalletRecord as updateWalletRecordUseCase,
+  getLedgerRangeSummary as getLedgerRangeSummaryUseCase,
+  getWalletScreenData as getWalletScreenDataUseCase,
+} from './application/WalletPresentation';
+import type { CreateWalletRecordInput, UpdateWalletRecordInput } from './domain/LedgerRepository';
+import type { QuickAction } from './domain/WalletRecord';
+import { ledgerRepository } from './infrastructure/SQLiteLedgerRepository';
+
+let chatReplyGateway: WalletChatReplyGateway;
+
+export function configureWalletRuntime(gateway: WalletChatReplyGateway): void {
+  chatReplyGateway = gateway;
+}
+
+const queueDeps = {
+  getLedgerAI: () => aiAssistantRepository.getLedgerAI(),
+  triggerReply: (params: TriggerLedgerAIReplyParams) =>
+    triggerLedgerAIReply(params),
+};
+
+const presentationDeps = {
+  assistantRepository: aiAssistantRepository,
+  ledgerRepository,
+};
+
+export const triggerLedgerAIReply = (params: TriggerLedgerAIReplyParams) =>
+  triggerLedgerAIReplyUseCase(params, {
+    hostRepository: aiHostRepository,
+    ledgerRepository,
+    chatReplyGateway,
+  });
+
+export const queueLedgerAIReply = (
+  params: QueueLedgerAIReplyParams,
+  callbacks: QueueLedgerAIReplyCallbacks = {}
+) => queueLedgerAIReplyUseCase(params, callbacks, queueDeps);
+
+export const addWalletRecord = (
+  params: CreateWalletRecordInput,
+  callbacks: WalletAIReplyCallbacks = {}
+) => addWalletRecordUseCase(params, callbacks, {
+  repository: ledgerRepository,
+  queueAIReply: queueLedgerAIReply,
+});
+
+export const applyQuickActionAndReply = (
+  params: UseQuickActionParams,
+  callbacks: WalletQuickActionCallbacks = {}
+) => applyQuickActionAndReplyUseCase(params, callbacks, {
+  repository: ledgerRepository,
+  queueAIReply: queueLedgerAIReply,
+});
+
+export const getWalletScreenData = (date = new Date()) =>
+  getWalletScreenDataUseCase(date, presentationDeps);
+
+export const deleteWalletRecord = (recordId: string) =>
+  deleteWalletRecordUseCase(recordId, presentationDeps);
+
+export const updateWalletRecord = (recordId: string, updates: UpdateWalletRecordInput) =>
+  updateWalletRecordUseCase(recordId, updates, presentationDeps);
+
+export const addWalletQuickAction = (action: Partial<QuickAction>) =>
+  addWalletQuickActionUseCase(action, presentationDeps);
+
+export const deleteWalletQuickAction = (id: string) =>
+  deleteWalletQuickActionUseCase(id, presentationDeps);
+
+export const getLedgerRangeSummary = (startDate: string, endDate: string) =>
+  getLedgerRangeSummaryUseCase(startDate, endDate, presentationDeps);

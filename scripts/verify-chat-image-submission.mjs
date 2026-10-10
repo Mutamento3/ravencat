@@ -1,0 +1,203 @@
+/** 图文一次发送的持久事实、回合触发、乐观替换与预览几何回归。 */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import ts from 'typescript';
+
+const root = path.resolve(import.meta.dirname, '..');
+const db = new DatabaseSync(':memory:');
+db.exec(`
+  CREATE TABLE messages (id INTEGER PRIMARY KEY, client_id TEXT, payload TEXT NOT NULL);
+  CREATE TABLE turn_state (revision INTEGER NOT NULL, active_run TEXT);
+  INSERT INTO turn_state VALUES (0, 'old-run');
+`);
+const rows = () => db.prepare('SELECT id, payload FROM messages ORDER BY id').all()
+  .map((row) => ({ ...JSON.parse(row.payload), id: row.id }));
+const state = { transactions: 0, writes: 0, failAt: null, dispatches: 0, failHost: false, previews: [], scheduled: [], rotations: 0 };
+const runtime = {
+  assistantDirectory: { getBlockState: async () => ({ isBlocked: false }) },
+  messages: {
+    async commitMessageInTransaction(_transaction, { message, previewText }) {
+      state.writes += 1;
+      if (state.writes === state.failAt) throw new Error('write failed');
+      const result = db.prepare('INSERT INTO messages (client_id, payload) VALUES (?, ?)')
+        .run(message.clientMessageId, JSON.stringify(message));
+      state.previews.push(previewText);
+      return { ...message, id: Number(result.lastInsertRowid) };
+    },
+  },
+  turns: {
+    async ensureTurnStateRowInTransaction() {},
+    async supersedeActiveRunInTransaction() {
+      const previous = db.prepare('SELECT active_run FROM turn_state').get().active_run;
+      db.exec('UPDATE turn_state SET revision = revision + 1, active_run = NULL');
+      return previous;
+    },
+  },
+  canonicalUserMessage: {
+    async onCommitted({ message }) {
+      state.dispatches += 1;
+      assert.equal(rows().at(-1).id, message.id, '宿主触发时必须已看见整批尾消息');
+      if (state.failHost) throw new Error('host unavailable');
+    },
+  },
+};
+const groupRuntime = {
+  currentUserDirectory: { getCurrent: async () => ({ name: '枫渡' }) },
+  groups: {
+    async rotateSpeechPlanForUserMessageInTransaction(_transaction, { userMessageId }) {
+      state.rotations += 1;
+      assert.equal(rows().at(-1).id, userMessageId, '群计划换代使用完整批次的尾消息');
+      return { kind: 'no_active_plan' };
+    },
+    async updatePreviewInTransaction() {},
+  },
+};
+const boundaries = {
+  '@features/media': {
+    MEDIA_ASSET_STORAGE_BACKEND: { persistentMedia: 'persistent-media' },
+    async prepareMediaAssetBatch(inputs) {
+      const assets = inputs.map((input) => ({ id: `media-${input.fileName}` }));
+      return {
+        commitInTransaction: async () => ({ assets }),
+        finalizeAfterCommit: async () => { state.finalized = (state.finalized ?? 0) + 1; },
+        discardAfterRollback: async () => { state.discarded = (state.discarded ?? 0) + 1; },
+      };
+    },
+  },
+  'expo-crypto': { randomUUID },
+  '@platform/persistence': {
+    databaseCoordinator: {
+      async transaction(_meta, task) {
+        state.transactions += 1;
+        db.exec('BEGIN');
+        try {
+          const value = await task({});
+          db.exec('COMMIT');
+          return value;
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      },
+    },
+  },
+  '@features/stickers': { recordUserStickerUse: async () => {} },
+  '@shared/diagnostics/TurnTimelineLog': { logTurnTimeline() {} },
+};
+const cached = new Map();
+function load(relativePath) {
+  const filename = path.resolve(root, relativePath);
+  if (cached.has(filename)) return cached.get(filename);
+  const module = { exports: {} };
+  cached.set(filename, module.exports);
+  const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const requireModule = (specifier) => {
+    if (boundaries[specifier]) return boundaries[specifier];
+    if (specifier === '@features/chat/messages/domain') return load('src/features/chat/messages/domain/chatMessageMetadata.ts');
+    if (specifier.endsWith('/ChatMessageRuntime') || specifier === './ChatMessageRuntime') {
+      return { getChatMessageRuntimeDependencies: () => runtime };
+    }
+    if (specifier.endsWith('/AgentTransientTimeline')) return { clearAgentTransientTimelineRun() {} };
+    if (specifier.endsWith('/ChatEvents')) return { emitChatMessagesUpdated() {}, emitChatGroupSpeechPlanChanged() {}, setChatEventBus() {} };
+    if (specifier === './ChatGroupRuntime') return { getChatGroupRuntimeDependencies: () => groupRuntime };
+    if (specifier === './GroupAutoInvocationScheduler') return { scheduleGroupAutoInvocation: (input) => state.scheduled.push(input) };
+    if (specifier === './GroupChatMessaging') return { invokeGroupChat() {} };
+    if (specifier === './GroupSpeechExecutionAbort') return { abortGroupSpeechPlanExecution() {} };
+    if (specifier === './ResolveChatImageModelInput') return {
+      resolveChatImageModelInput: async ({ imageUri }) => ({ parts: [{ type: 'image_url', image_url: { url: imageUri } }] }),
+    };
+    if (specifier.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(filename), `${specifier}.ts`)));
+    throw new Error(`未预期的边界：${specifier}`);
+  };
+  vm.runInThisContext(`(function(require, module, exports) { ${code}\n})`, { filename })(requireModule, module, module.exports);
+  return module.exports;
+}
+
+const { sendUserMessage } = load('src/features/chat/messages/application/SendUserMessage.ts');
+const { sendGroupUserMessage } = load('src/features/chat/group/application/GroupUserMessaging.ts');
+const timeline = load('src/features/chat/messages/application/MessageTimeline.ts');
+const { splitUserMessageSubmission } = load('src/features/chat/messages/application/UserMessageSubmission.ts');
+const { buildChatTurnAIInput } = load('src/features/chat/reply/application/BuildChatTurnAIInput.ts');
+const { fitPreviewImage, clampPreviewOffset } = load('src/features/chat/presentation/messages/MessageBubble/imagePreviewGeometry.ts');
+const image = { id: 'image-1', type: 'image', source: 'gallery', localUri: 'file:///cat.png', fileName: 'cat.png' };
+const anotherImage = { ...image, id: 'image-2' };
+const file = { ...image, id: 'file-1', type: 'file', fileName: 'notes.txt' };
+const params = { sessionId: 's1', text: '看看这两张', attachments: [image, anotherImage], clientMessageId: 'send-1', replyToId: 7, replyToText: '上一条' };
+const optimistic = timeline.createOptimisticUserTimelineMessages({ ...params, tempId: 10000, showTimeSeparatorBefore: true });
+const result = await sendUserMessage(params, { id: 'ai-1' });
+assert.equal(result.success, true);
+assert.equal(state.transactions, 1);
+assert.equal(state.dispatches, 1);
+assert.equal(db.prepare('SELECT revision FROM turn_state').get().revision, 1, '同次发送只换代一次');
+assert.deepEqual(result.userMessages.map((message) => message.text), ['', '', params.text]);
+assert.ok(result.userMessage.logicalMessageId);
+assert.equal(new Set(result.userMessages.map((message) => message.logicalMessageId)).size, 1, '同次图文发送共享逻辑消息身份');
+const canonical = ({ localUri, thumbnailUri, ...attachment }) => ({ ...attachment, mediaAssetId: `media-${attachment.fileName}` });
+assert.deepEqual(result.userMessages.slice(0, 2).map((message) => JSON.parse(message.metadataJson).attachments), [[canonical(image)], [canonical(anotherImage)]]);
+assert.equal(JSON.parse(result.userMessage.metadataJson).attachments, undefined, '文字消息不再包含图片');
+assert.deepEqual(result.userMessages.map((message) => message.replyToId), [null, null, 7]);
+assert.deepEqual(optimistic.map((message) => message.clientMessageId), result.userMessages.map((message) => message.clientMessageId));
+assert.deepEqual(optimistic.map((message) => message.showTimeSeparatorBefore), [true, false, false]);
+const merged = timeline.mergeTimelineMessages(optimistic, result.userMessages);
+assert.equal(merged.messages.length, 3, '所有乐观消息都应被替换，不残留重复气泡');
+assert.ok(merged.messages.every((message) => message.status === 'sent'));
+const modelInput = await buildChatTurnAIInput({
+  repository: { listUserMessagesInRange: async () => result.userMessages },
+  sessionId: 's1', replyCursorAtClaim: 0, inputHighWatermark: result.userMessage.id, assistantId: 'ai-1',
+});
+assert.equal(modelInput.turnInputMessages.length, 3, '同一回合模型输入同时包含图片和文字');
+assert.ok(modelInput.turnInputMessages.slice(0, 2).every((message) => message.content.some((part) => part.type === 'image_url')));
+assert.match(modelInput.turnInputMessages[2].content, /看看这两张/);
+
+const countBeforeRetry = rows().length;
+const retry = await sendUserMessage({ sessionId: 's1', text: '', attachments: [image], clientMessageId: 'failed-send:image:image-1' }, { id: 'ai-1' });
+assert.equal(rows().length, countBeforeRetry + 1, '独立重发只提交选中的图片');
+assert.equal(retry.userMessage.clientMessageId, 'failed-send:image:image-1', '重发沿用失败乐观消息的身份');
+assert.equal(retry.userMessage.logicalMessageId, null, '独立重发的单张图片是一条独立消息');
+assert.equal(splitUserMessageSubmission({ text: '文件说明', attachments: [file] }).length, 1, '文件图文语义不拆分');
+
+const beforeFailure = rows();
+const revisionBeforeFailure = db.prepare('SELECT revision FROM turn_state').get().revision;
+const dispatchesBeforeFailure = state.dispatches;
+state.failAt = state.writes + 2;
+const failed = await sendUserMessage({ ...params, clientMessageId: 'send-failed' }, { id: 'ai-1' });
+assert.equal(failed.success, false);
+assert.deepEqual(failed.userMessages, []);
+assert.deepEqual(rows(), beforeFailure, '中途写入失败必须回滚整组图文');
+assert.equal(db.prepare('SELECT revision FROM turn_state').get().revision, revisionBeforeFailure);
+assert.equal(state.dispatches, dispatchesBeforeFailure, '回滚后不得触发 AI');
+assert.equal(state.discarded, 1, '事务失败必须回收未提交的媒体 batch');
+state.failAt = null;
+state.failHost = true;
+const hostFailed = await sendUserMessage({ ...params, clientMessageId: 'send-host-failed' }, { id: 'ai-1' });
+assert.equal(hostFailed.success, false);
+assert.equal(hostFailed.userMessages.length, 3, '宿主失败仍返回全部已提交事实');
+assert.equal(rows().length, beforeFailure.length + 3);
+assert.equal(state.finalized, 3, '提交后宿主失败仍须将 backing 交给消息事实');
+state.failHost = false;
+
+const groupStart = rows().length;
+const transactionsBeforeGroup = state.transactions;
+const groupTail = await sendGroupUserMessage({ groupId: 'g1', text: '一起看', attachments: [image], clientMessageId: 'group-send' });
+const groupRows = rows().slice(groupStart);
+assert.equal(groupRows.length, 2);
+assert.deepEqual(groupRows.map((message) => message.text), ['', '一起看']);
+assert.equal(state.transactions, transactionsBeforeGroup + 1);
+assert.equal(state.rotations, 1);
+assert.equal(state.scheduled.length, 1);
+assert.equal(state.scheduled[0].latestUserMessageId, groupTail.id);
+
+assert.deepEqual(fitPreviewImage(1600, 900, 400, 800), { width: 400, height: 225 });
+assert.deepEqual(fitPreviewImage(400, 3200, 400, 800), { width: 100, height: 800 });
+assert.equal(clampPreviewOffset(500, 400, 400, 1), 0);
+assert.equal(clampPreviewOffset(500, 400, 400, 3), 400);
+assert.equal(clampPreviewOffset(-500, 400, 400, 3), -400);
+assert.equal(clampPreviewOffset(500, 100, 400, 3), 0, '图片尚未填满轴向时保持居中');
+db.close();
+console.log('图文原子发送、单次回复、独立重发、乐观替换、群聊整批提交与图片预览几何验证通过。');
