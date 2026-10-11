@@ -37,11 +37,14 @@ import {
 
 import {
   getDeviceObserverConnectionState,
+  getNotificationListenerAccessState,
+  openNotificationListenerSettings,
   openDeviceObserverSettings,
   type DeviceObserverConnectionState,
 } from '@features/deviceControl';
 import { createStyles } from './CompanionSettingsShared.styles';
 import { isUsageAccessGranted, openUsageAccessSettings } from '@platform/device';
+import { isApplicationUpdateInstallAllowed, openApplicationUpdateInstallSettings } from '@platform/updates/DownloadApplicationUpdate';
 
 interface CompanionSystemAccessScreenProps {
   onBack: () => void;
@@ -54,6 +57,8 @@ interface SystemAccessSnapshot {
   incomingCallChannelEnabled: boolean;
   batteryGranted: boolean;
   usageAccessGranted: boolean;
+  notificationListenerGranted: boolean;
+  updateInstallAllowed: boolean;
   observer: DeviceObserverConnectionState;
   incomingCallDiagnostics: IncomingCallDiagnostics;
 }
@@ -69,7 +74,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
   const refresh = useCallback(async (pullToRefresh = false) => {
     if (pullToRefresh) setRefreshing(true);
     try {
-      const [overlayGranted, notification, battery, observer, incomingCallDiagnostics, usageAccessGranted] =
+      const [overlayGranted, notification, battery, observer, incomingCallDiagnostics, usageAccessGranted, notificationListener] =
         await Promise.all([
           isOverlayPermissionGranted(),
           getCompanionNotificationDiagnostics(),
@@ -77,6 +82,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
           getDeviceObserverConnectionState(),
           getIncomingCallDiagnostics(),
           isUsageAccessGranted(),
+          getNotificationListenerAccessState(),
         ]);
       setSnapshot({
         overlayGranted,
@@ -87,6 +93,8 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
         incomingCallChannelEnabled: incomingCallDiagnostics.incomingCallChannelImportance > 0,
         batteryGranted: battery.ignoringBatteryOptimizations,
         usageAccessGranted,
+        notificationListenerGranted: notificationListener.status === 'granted',
+        updateInstallAllowed: isApplicationUpdateInstallAllowed(),
         observer,
         incomingCallDiagnostics,
       });
@@ -154,11 +162,25 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
             <View style={styles.card}>
               <View style={styles.cardContent}>
                 <PermissionRow label="通知提醒" value={snapshot.notificationGranted} onPress={() => void openNotificationSettings()} styles={styles} description="用于普通消息、主动联系和后台状态通知。" />
+                <PermissionRow label="通知使用权" value={snapshot.notificationListenerGranted} onPress={() => {
+                  void openNotificationListenerSettings().then((result) => {
+                    if (result.status === 'settings_open_failed') setErrorMessage(result.reason);
+                  }).catch((error: unknown) => setErrorMessage(toMessage(error, '无法打开通知使用权设置。')));
+                }} styles={styles} description="用于读取和控制网易云播放状态。部分手机位于“更多安全设置 → 设备和应用通知”。" />
                 <PermissionRow label="悬浮显示" value={snapshot.overlayGranted} onPress={() => void openOverlayPermissionSettings()} styles={styles} description="用于悬浮球与快捷聊天。" />
                 <PermissionRow label="屏幕内容读取" value={snapshot.observer.accessibilityConnected && snapshot.observer.canRetrieveWindowContent} onPress={() => void openDeviceObserverSettings()} styles={styles} description={observerHint(snapshot.observer)} />
                 <PermissionRow label="使用情况访问" value={snapshot.usageAccessGranted} onPress={() => {
                   void openUsageAccessSettings().catch((error: unknown) => setErrorMessage(toMessage(error, '无法打开使用情况访问设置。')));
                 }} styles={styles} description="允许主理 AI 按需查询应用前台使用时长。" last />
+              </View>
+            </View>
+
+            <Text style={styles.sectionTitle}>应用更新</Text>
+            <View style={styles.card}>
+              <View style={styles.cardContent}>
+                <PermissionRow label="安装未知应用" value={snapshot.updateInstallAllowed} onPress={() => {
+                  void openApplicationUpdateInstallSettings().catch((error: unknown) => setErrorMessage(toMessage(error, '无法打开安装未知应用设置。')));
+                }} styles={styles} description="允许 RavenCat 打开系统安装页更新自身。每次安装仍需手动确认。" last />
               </View>
             </View>
 

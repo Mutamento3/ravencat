@@ -1,6 +1,7 @@
+import { prepareConsumedTurnFixture } from './helpers/sqlite-bootstrap-fixture.mjs';
 import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /**
- * Phase 5A ConversationTurnCoordinator 第一片：migration 55 回填与 T1～T4 行为验证。
+ * Phase 5A ConversationTurnCoordinator 第一片：当前回合 fixture 与 T1～T4 行为验证。
  *
  * 依赖仓库统一的 Node 22.13+ 运行时与内置 node:sqlite；环境不满足时必须失败。
  *
@@ -43,26 +44,7 @@ const { CHAT_TOOL_PACKAGE_EXPOSURE_SCHEMA } = await import(transpileToModuleUrl(
 // ============================================================================
 // 提取迁移 55 源码并编译为可执行函数
 // ============================================================================
-const migrationsSource = read('src/platform/persistence/sqlite/migrations.ts');
-const migration55Marker = '// 迁移55';
-const markerIndex = migrationsSource.indexOf(migration55Marker);
-assert.ok(markerIndex > 0, 'migrations.ts 必须存在迁移55 注释');
-const finalBraceIndex = migrationsSource.trimEnd().length - 1;
-assert.equal(migrationsSource[finalBraceIndex], '}', 'runMigrations 必须以右大括号结尾');
-// 只重放迁移55 本体；后续迁移（如迁移56）不属于本测试的最小 schema。
-const nextMigrationIndex = migrationsSource.indexOf('// 迁移56');
-const migration55End = nextMigrationIndex > markerIndex ? nextMigrationIndex : finalBraceIndex;
-const migration55Body = migrationsSource.slice(markerIndex, migration55End);
-// 迁移55 本体调用了 migrations.ts 模块头部 import 的修复辅助函数，
-// 而这里只重放片段，因此必须把该辅助模块单独编译后显式注入。
-const turnIntegrityRepairUrl = transpileToModuleUrl(
-  read('src/platform/persistence/sqlite/conversationTurnIntegrityRepair.ts'),
-);
-const migrationModuleUrl = transpileToModuleUrl(
-  `import { repairConversationTurnForeignKeys } from ${JSON.stringify(turnIntegrityRepairUrl)};\n`
-  + `export async function runMigration55(db) {\n${migration55Body}\n}`,
-);
-const { runMigration55 } = await import(migrationModuleUrl);
+
 
 // ============================================================================
 // 仓储模块：桩掉 @platform/persistence，事务直接落在真实 node:sqlite 上
@@ -228,6 +210,8 @@ function createBaseDatabase() {
       metadata_json TEXT,
       is_read INTEGER DEFAULT 0,
       voice_played_at TEXT,
+      turn_run_id TEXT,
+      turn_item_index INTEGER,
       FOREIGN KEY (session_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
     );
   `);
@@ -284,7 +268,7 @@ function makeTimelineItem(senderType, text, createdAt) {
 }
 
 // ============================================================================
-// 测试 1：migration 55 建表、回填与索引
+// 测试 1：回合 fixture 与当前索引
 // ============================================================================
 {
   const db = createBaseDatabase();
@@ -295,7 +279,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   addMessage(db, { sessionId: 's1', text: '你好呀', isMe: false, createdAt: '2026-08-01T10:01:00.000Z' });
   const tailUserId = addMessage(db, { sessionId: 's1', text: '还在吗', isMe: true, createdAt: '2026-08-01T10:02:00.000Z' });
 
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
 
   const s1State = getTurnState(db, 's1');
   assert.equal(s1State.reply_cursor, tailUserId, '回填 reply_cursor 必须等于会话 MAX(messages.id)');
@@ -332,7 +316,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '输入', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   addMessage(db, { sessionId: 's1', text: '本轮输入', isMe: true, createdAt: '2026-08-01T10:00:01.000Z' });
   const coordinator = createCoordinator(db);
   globalThis.__TEST_TURN_COORDINATOR_HOLDER__ = coordinator;
@@ -376,9 +360,9 @@ function makeTimelineItem(senderType, text, createdAt) {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '你好', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   db.prepare(`UPDATE conversation_turn_state SET reply_cursor = 999, revision = 3 WHERE session_id = 's1'`).run();
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   const state = getTurnState(db, 's1');
   assert.equal(state.reply_cursor, 999, '重复执行不得覆盖已推进的 reply_cursor');
   assert.equal(state.revision, 3, '重复执行不得覆盖已推进的 revision');
@@ -388,7 +372,7 @@ function makeTimelineItem(senderType, text, createdAt) {
 {
   const db = createBaseDatabase();
   addSession(db, 's1');
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   const insertRun = db.prepare(`
     INSERT INTO conversation_turn_runs
       (run_id, session_id, kind, reply_cursor_at_claim, input_high_watermark, revision_at_claim, status, created_at)
@@ -431,7 +415,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '旧消息', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   const coordinator = createCoordinator(db);
   globalThis.__TEST_TURN_COORDINATOR_HOLDER__ = coordinator;
   const repo = new ConversationTurnRepository();
@@ -468,7 +452,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '历史消息', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   const coordinator = createCoordinator(db);
   globalThis.__TEST_TURN_COORDINATOR_HOLDER__ = coordinator;
   const repo = new ConversationTurnRepository();
@@ -527,7 +511,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '你好', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   // 回填游标已覆盖历史消息；补一条新用户消息构造待回复输入。
   addMessage(db, { sessionId: 's1', text: '新消息', isMe: true, createdAt: '2026-08-01T11:00:00.000Z' });
   const coordinator = createCoordinator(db);
@@ -562,7 +546,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '问题', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   // 回填游标已覆盖历史消息；补一条新用户消息构造待回复输入。
   addMessage(db, { sessionId: 's1', text: '新问题', isMe: true, createdAt: '2026-08-01T10:30:00.000Z' });
   const coordinator = createCoordinator(db);
@@ -615,7 +599,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '问题', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   // 回填游标已覆盖历史消息；补一条新用户消息构造待回复输入。
   addMessage(db, { sessionId: 's1', text: '新问题', isMe: true, createdAt: '2026-08-01T10:30:00.000Z' });
   const coordinator = createCoordinator(db);
@@ -669,7 +653,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '问题', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   // 回填游标已覆盖历史消息；补一条新用户消息构造待回复输入。
   addMessage(db, { sessionId: 's1', text: '新问题', isMe: true, createdAt: '2026-08-01T10:30:00.000Z' });
   const coordinator = createCoordinator(db);
@@ -700,7 +684,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   addMessage(db, { sessionId: 's2', text: 'u2', isMe: true, createdAt: '2026-08-01T10:01:00.000Z' });
   addMessage(db, { sessionId: 's3', text: 'u3', isMe: true, createdAt: '2026-08-01T10:02:00.000Z' });
   addMessage(db, { sessionId: 'group-1', text: 'group-old', isMe: true, createdAt: '2026-08-01T10:03:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   const coordinator = createCoordinator(db);
   globalThis.__TEST_TURN_COORDINATOR_HOLDER__ = coordinator;
   const repo = new ConversationTurnRepository();
@@ -757,7 +741,7 @@ function makeTimelineItem(senderType, text, createdAt) {
 {
   const db = createBaseDatabase();
   addSession(db, 's1'); addSession(db, 's2');
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   globalThis.__TEST_TURN_COORDINATOR_HOLDER__ = createCoordinator(db);
   db.exec("INSERT INTO ai_assistants(id) VALUES ('ai2')");
   const repo = new ConversationTurnRepository();
@@ -826,5 +810,5 @@ function makeTimelineItem(senderType, text, createdAt) {
 
 delete globalThis.__TEST_TURN_COORDINATOR_HOLDER__;
 
-console.log('ConversationTurnCoordinator 第一片：migration 55 回填与 T1～T4 行为验证通过。');
+console.log('ConversationTurnCoordinator 第一片：当前回合 fixture 与 T1～T4 行为验证通过。');
 console.log('真实 expo-sqlite 迁移与协调器调度仍需 Android 真机 fresh database 验收。');

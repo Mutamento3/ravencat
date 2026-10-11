@@ -2,7 +2,6 @@
 
 import { databaseCoordinator } from '../runtime';
 import { closeDBForRestoreRollback } from './connection';
-import { SCHEMAS, INDEXES } from './schema';
 import { runMigrations } from './migrations';
 
 // 同一 JS runtime 共用一次初始化结果；失败时清空，下次调用才允许重试。
@@ -28,22 +27,11 @@ export async function initDatabase(): Promise<void> {
       feature: 'persistence',
       priority: 'bootstrap',
     });
-    // 整个 bootstrap（全部建表 + 迁移 + 全部索引）作为调度器中的一个独占写作用域执行，
-    // 期间其他 read/write/transaction/barrier 不得插入；迁移 53/54 需要在事务外切换
-    // PRAGMA foreign_keys，因此不能使用 withExclusiveTransactionAsync。
+    // 版本判断、建库或升级、默认记录共用一个独占写作用域。
+    // runner 自己提交原子事务，期间其他数据库任务不得插入。
     // callback 拿到的是底层数据库执行器，其中的 SQL 不再逐条进入全局调度器。
     await db.withExclusiveWriteScopeAsync(async (database) => {
-      for (const sql of Object.values(SCHEMAS)) {
-        await database.execAsync(sql);
-      }
       await runMigrations(database);
-      for (const sql of Object.values(INDEXES)) {
-        try {
-          await database.execAsync(sql);
-        } catch (e: unknown) {
-          console.warn('Could not create index:', (e as Error).message);
-        }
-      }
     });
     console.log('🐦‍⬛ Database core initialized');
   })().catch((error) => {

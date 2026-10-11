@@ -14,9 +14,15 @@ interface ProfileTabProps {
   onOpenProfile(): void;
   onOpenBackup(): void;
   onClearData(): void | Promise<void>;
+  checkingUpdates: boolean;
+  availableUpdateVersion: string | null;
+  updateProgress: number | null;
+  updateDownloaded: boolean;
+  onCheckUpdates(): void;
 }
 
-export default function ProfileTab({ onOpenProfile, onOpenBackup, onClearData }: ProfileTabProps) {
+export default function ProfileTab({ onOpenProfile, onOpenBackup, onClearData,
+  checkingUpdates, availableUpdateVersion, updateProgress, updateDownloaded, onCheckUpdates }: ProfileTabProps) {
   const theme = useTheme();
   const styles = useMemo(() => createProfileStyles(theme), [theme]);
   const bottomPadding = useFloatingTabBarScrollPadding();
@@ -33,7 +39,10 @@ export default function ProfileTab({ onOpenProfile, onOpenBackup, onClearData }:
     <ScrollView style={styles.settingsContainer} contentContainerStyle={{ paddingBottom: theme.effects.glass.enabled ? bottomPadding : 0 }}>
       <ProfileContent profile={profile ?? DEFAULT_USER_PROFILE} hasLoadedProfile={!!profile}
         onOpenProfile={onOpenProfile}
-        onBackupPress={onOpenBackup} onClearAllData={clear} />
+        onBackupPress={onOpenBackup} onClearAllData={clear}
+        checkingUpdates={checkingUpdates} availableUpdateVersion={availableUpdateVersion}
+        updateProgress={updateProgress} updateDownloaded={updateDownloaded}
+        onCheckUpdates={onCheckUpdates} />
       <AutoSaveErrors error={error} blocked={false} retry={reload} />
     </ScrollView>
   </SafeAreaView>;

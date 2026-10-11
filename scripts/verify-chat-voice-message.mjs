@@ -1586,16 +1586,12 @@ await scenario('空 transcript 的语音消息必须抛错，不允许以空文�
   }));
 });
 
-await scenario('fresh schema 与迁移 82 都提供 voice_played_at', () => {
+await scenario('当前 schema 提供 voice_played_at', () => {
   assert.ok(
     read('src/platform/persistence/sqlite/schema.ts').includes('voice_played_at TEXT'),
     'fresh schema 必须有 voice_played_at',
   );
-  const migrations = read('src/platform/persistence/sqlite/migrations.ts');
-  assert.ok(
-    migrations.includes('ALTER TABLE messages ADD COLUMN voice_played_at TEXT'),
-    '旧库 migration 必须有 voice_played_at',
-  );
+
 });
 
 // ============================================================================

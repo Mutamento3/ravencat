@@ -1,3 +1,4 @@
+import { prepareConsumedTurnFixture } from './helpers/sqlite-bootstrap-fixture.mjs';
 import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 import { arrivalModuleUrl, arrival } from './chat-message-arrival-fixture.mjs';
 /**
@@ -42,26 +43,7 @@ const { CHAT_TOOL_PACKAGE_EXPOSURE_SCHEMA } = await import(transpileToModuleUrl(
 // ============================================================================
 // 提取迁移 55 源码并编译为可执行函数（与第一片脚本同一模式）
 // ============================================================================
-const migrationsSource = read('src/platform/persistence/sqlite/migrations.ts');
-const migration55Marker = '// 迁移55';
-const markerIndex = migrationsSource.indexOf(migration55Marker);
-assert.ok(markerIndex > 0, 'migrations.ts 必须存在迁移55 注释');
-const finalBraceIndex = migrationsSource.trimEnd().length - 1;
-assert.equal(migrationsSource[finalBraceIndex], '}', 'runMigrations 必须以右大括号结尾');
-// 只重放迁移55 本体；后续迁移（如迁移56）不属于本测试的最小 schema。
-const nextMigrationIndex = migrationsSource.indexOf('// 迁移56');
-const migration55End = nextMigrationIndex > markerIndex ? nextMigrationIndex : finalBraceIndex;
-const migration55Body = migrationsSource.slice(markerIndex, migration55End);
-// 迁移55 本体调用了 migrations.ts 模块头部 import 的修复辅助函数，
-// 而这里只重放片段，因此必须把该辅助模块单独编译后显式注入。
-const turnIntegrityRepairUrl = transpileToModuleUrl(
-  read('src/platform/persistence/sqlite/conversationTurnIntegrityRepair.ts'),
-);
-const migrationModuleUrl = transpileToModuleUrl(
-  `import { repairConversationTurnForeignKeys } from ${JSON.stringify(turnIntegrityRepairUrl)};\n`
-  + `export async function runMigration55(db) {\n${migration55Body}\n}`,
-);
-const { runMigration55 } = await import(migrationModuleUrl);
+
 
 // MediaAsset catalog 的真实建表语句：消息 metadata 的媒体引用写入必须能确认 catalog 行存在
 // （引用写入 fail-closed 守卫），因此 fixture 必须与生产 schema 一样包含 media_assets。
@@ -373,6 +355,8 @@ function createBaseDatabase() {
       metadata_json TEXT,
       is_read INTEGER DEFAULT 0,
       voice_played_at TEXT,
+      turn_run_id TEXT,
+      turn_item_index INTEGER,
       FOREIGN KEY (session_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
     );
   `);
@@ -432,7 +416,7 @@ async function setupTurnFixture() {
   const db = createBaseDatabase();
   addSession(db, 's1');
   addMessage(db, { sessionId: 's1', text: '旧消息', isMe: true, createdAt: '2026-08-01T10:00:00.000Z' });
-  await runMigration55(createExecutor(db));
+  await prepareConsumedTurnFixture(createExecutor(db));
   addMessage(db, { sessionId: 's1', text: '新消息', isMe: true, createdAt: '2026-08-01T11:00:00.000Z' });
   const coordinator = createCoordinator(db);
   globalThis.__TEST_TURN_APP_HOLDER__ = coordinator;

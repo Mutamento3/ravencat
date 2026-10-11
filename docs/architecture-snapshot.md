@@ -1119,6 +1119,7 @@
             └── index.ts
     ├── host
         ├── application
+            ├── ApplicationUpdates.ts
             ├── resetApplicationData.ts
             └── TransferProtocolToMemory.ts
         ├── composition
@@ -1217,6 +1218,7 @@
             ├── StickerEmbeddingQueueCoordinator.ts
             └── TogetherListeningRunPreparation.ts
         └── shell
+            ├── ApplicationUpdateProvider.tsx
             └── HostErrorBoundary.tsx
     ├── platform
         ├── agentRuntime
@@ -1302,6 +1304,7 @@
                 ├── DatabaseTaskScheduler.ts
                 └── index.ts
             ├── sqlite
+                ├── agentRuntimeSchema.ts
                 ├── assistantIdentityMigration.ts
                 ├── auxiliaryModelDefaultsSchema.ts
                 ├── backupSnapshot.ts
@@ -1313,6 +1316,7 @@
                 ├── connection.ts
                 ├── conversationPinMigration.ts
                 ├── conversationTurnIntegrityRepair.ts
+                ├── defaultRecords.ts
                 ├── groupMentionMetadataMigration.ts
                 ├── hostAIRelationshipSchema.ts
                 ├── initialization.ts
@@ -1334,6 +1338,9 @@
                 ├── userProfileSchema.ts
                 └── wallpaperSelectionSchema.ts
             └── typeAssertions.ts
+        ├── updates
+            ├── DownloadApplicationUpdate.ts
+            └── GitHubReleases.ts
         └── web
             ├── index.ts
             └── WebTools.ts
@@ -1468,6 +1475,23 @@
                             └── modules
                                 └── androidoverlayruntime
                                     └── OverlayInteractionExclusionTest.kt
+    ├── app-updates
+        ├── android
+            └── src
+                ├── main
+                    └── java
+                        └── expo
+                            └── modules
+                                └── appupdates
+                                    ├── AppUpdatesModule.kt
+                                    └── UpdateArtifact.kt
+                └── test
+                    └── java
+                        └── expo
+                            └── modules
+                                └── appupdates
+                                    └── UpdateArtifactTest.kt
+        └── index.ts
     ├── backup-storage
         ├── android
             └── src

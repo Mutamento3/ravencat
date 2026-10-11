@@ -572,36 +572,6 @@ assert.match(
   /moments: MOMENTS_SCHEMA/,
   'schema.ts 必须直接复用 momentsSchema 的建表常量',
 );
-assert.match(
-  read('src/platform/persistence/sqlite/migrations.ts'),
-  /迁移90[\s\S]*await migrateMomentsAudienceAllExcept\(db\)/,
-  'runMigrations 必须调用数据保留型迁移90',
-);
-assert.match(
-  read('src/platform/persistence/sqlite/migrations.ts'),
-  /迁移92[\s\S]*await migrateMomentMediaAndSettings\(db\)/,
-  'runMigrations 必须调用不回填历史图片或封面的 migration92',
-);
-assert.match(
-  read('src/platform/persistence/sqlite/migrations.ts'),
-  /迁移91[\s\S]*await migrateMomentSocialInbox\(db\)/,
-  'runMigrations 必须调用不回填历史事实的 migration91',
-);
-assert.match(
-  read('src/platform/persistence/sqlite/migrations.ts'),
-  /迁移87[\s\S]*await migrateMomentsV2\(db\)/,
-  'runMigrations 必须调用迁移87',
-);
-assert.match(
-  read('src/platform/persistence/sqlite/migrations.ts'),
-  /迁移93[\s\S]*await migrateMomentLocationLabel\(db\)/,
-  'runMigrations 必须调用数据保留型迁移93',
-);
-assert.doesNotMatch(
-  read('src/platform/persistence/sqlite/migrations.ts'),
-  /(?:FROM|INTO|TABLE|JOIN|UPDATE)\s+(?:IF\s+NOT\s+EXISTS\s+)?moment_ai_interactions/i,
-  '迁移链不得再创建或改写 moment_ai_interactions',
-);
 for (const legacyColumn of ['user_name', 'has_liked', 'has_commented', 'interacted_at']) {
   assert.ok(
     !momentsSchemaModule.MOMENTS_SCHEMA.includes(legacyColumn),

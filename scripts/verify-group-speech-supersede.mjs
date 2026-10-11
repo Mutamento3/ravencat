@@ -262,32 +262,6 @@ async function loadGroupChatRepository(coordinatorKey) {
   return import(transpileToModuleUrl(repositorySource));
 }
 
-async function loadMigration62() {
-  const source = read('src/platform/persistence/sqlite/migrations.ts');
-  const marker = '// 迁移62';
-  const markerIndex = source.indexOf(marker);
-  assert.ok(markerIndex >= 0, 'migrations.ts 必须包含迁移62');
-  const nextMigrationIndex = source.indexOf('// 迁移63', markerIndex);
-  assert.ok(nextMigrationIndex > markerIndex, '迁移62 必须位于迁移63之前');
-  const body = source.slice(markerIndex, nextMigrationIndex);
-  return import(transpileToModuleUrl(
-    `export async function runMigration62(db) {\n${body}\n}`,
-  ));
-}
-
-async function loadMigration63() {
-  const source = read('src/platform/persistence/sqlite/migrations.ts');
-  const marker = '// 迁移63';
-  const markerIndex = source.indexOf(marker);
-  assert.ok(markerIndex >= 0, 'migrations.ts 必须包含迁移63');
-  const nextMigrationIndex = source.indexOf('// 迁移64', markerIndex);
-  assert.ok(nextMigrationIndex > markerIndex, '迁移63 必须位于迁移64之前');
-  const body = source.slice(markerIndex, nextMigrationIndex);
-  return import(transpileToModuleUrl(
-    `export async function runMigration63(db) {\n${body}\n}`,
-  ));
-}
-
 // ---- 模块加载器：真实源码 + 边界依赖桩 -------------------------------------
 
 function loadAbortRegistryUrl() {
@@ -703,52 +677,6 @@ function loadPrepareGroupSpeechPlan() {
 // ---- 场景验证 -------------------------------------------------------------
 
 const NOW = '2026-08-14T12:00:00.000Z';
-
-async function verifyMigration62(runMigration62) {
-  // 升级库：旧表没有换代列。
-  const db = new DatabaseSync(':memory:');
-  db.exec(`
-    CREATE TABLE group_speech_plans (
-      id TEXT PRIMARY KEY, group_id TEXT NOT NULL, status TEXT NOT NULL,
-      invoked_user_message_ids_json TEXT, last_included_message_id INTEGER,
-      started_at TEXT, completed_at TEXT, error_message TEXT,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-    CREATE TABLE group_speech_tasks (
-      id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, group_id TEXT NOT NULL,
-      ai_assistant_id TEXT NOT NULL, agent_id TEXT NOT NULL,
-      sequence_order INTEGER NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL,
-      started_at TEXT, completed_at TEXT, error_message TEXT,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-  `);
-  db.prepare(
-    `INSERT INTO group_speech_tasks (id, plan_id, group_id, ai_assistant_id, agent_id,
-      sequence_order, source, status, created_at, updated_at)
-     VALUES ('t1', 'p1', 'g1', 'ai-A', 'agent-A', 0, 'admin', 'queued', ?, ?)`,
-  ).run(NOW, NOW);
-
-  await runMigration62(createExecutor(db));
-  const planColumns = db.prepare(`PRAGMA table_info('group_speech_plans')`).all();
-  const taskColumns = db.prepare(`PRAGMA table_info('group_speech_tasks')`).all();
-  assert.ok(planColumns.some((column) => column.name === 'supersedes_plan_id'));
-  assert.ok(taskColumns.some((column) => column.name === 'visible_reply_committed'));
-  assert.equal(
-    db.prepare(`SELECT visible_reply_committed AS flag FROM group_speech_tasks WHERE id = 't1'`)
-      .get().flag,
-    0,
-    '历史任务默认未提交可见回复',
-  );
-
-  await runMigration62(createExecutor(db));
-  assert.ok(true, '迁移62 重复执行必须幂等');
-  db.close();
-
-  // 新装库：schema 已含换代列，迁移必须是空操作。
-  const fresh = createSpeechPlanDatabase();
-  await runMigration62(createExecutor(fresh));
-  fresh.close();
-}
 
 async function verifyRotationInheritance(GroupChatRepository) {
   const db = createSpeechPlanDatabase();
@@ -2652,7 +2580,7 @@ async function verifyPlanningInterruption(GroupChatRepository) {
 // 迁移63 与 preview 消息绑定的仓库级行为：旧库升级后单活动索引覆盖
 // preparing（tryClaim 不得再 claim 出新 plan）；晚到的旧 messageId preview
 // 不得覆盖较新事实。
-async function verifyMigration63AndPreviewBinding(GroupChatRepository, runMigration63) {
+async function verifyCurrentPreviewBinding(GroupChatRepository) {
   // 升级库：旧索引不含 preparing，group_chats 无 last_message_id。
   const db = new DatabaseSync(':memory:');
   db.exec(`
@@ -2671,11 +2599,12 @@ async function verifyMigration63AndPreviewBinding(GroupChatRepository, runMigrat
     );
     CREATE UNIQUE INDEX idx_group_speech_plans_single_active
       ON group_speech_plans(group_id)
-      WHERE status IN ('pending', 'running');
+      WHERE status IN ('pending', 'preparing', 'running');
     CREATE TABLE group_chats (
       id TEXT PRIMARY KEY,
       last_message TEXT,
       last_time TEXT,
+      last_message_id INTEGER,
       updated_at TEXT
     );
     CREATE TABLE messages (
@@ -2686,14 +2615,14 @@ async function verifyMigration63AndPreviewBinding(GroupChatRepository, runMigrat
     );
   `);
 
-  await runMigration63(createExecutor(db));
+
   assert.ok(
     db.prepare(`PRAGMA table_info('group_chats')`).all()
       .some((column) => column.name === 'last_message_id'),
-    '迁移63 必须为 group_chats 增加 last_message_id',
+    '当前群聊 preview 保存 last_message_id',
   );
-  await runMigration63(createExecutor(db));
-  assert.ok(true, '迁移63 重复执行必须幂等');
+
+  assert.ok(true, '当前字段可重复读取');
 
   // 迁移后的库上验证单活动语义：preparing plan 存在时 tryClaim 不得再 claim。
   globalThis.__SUPERSEDE_COORDINATOR__ = createCoordinator(db);
@@ -2765,10 +2694,6 @@ async function verifyMigration63AndPreviewBinding(GroupChatRepository, runMigrat
 }
 
 const { GroupChatRepository } = await loadGroupChatRepository('__SUPERSEDE_COORDINATOR__');
-const { runMigration62 } = await loadMigration62();
-const { runMigration63 } = await loadMigration63();
-
-await verifyMigration62(runMigration62);
 await verifyRotationInheritance(GroupChatRepository);
 await verifyWindowExtension(GroupChatRepository);
 await verifyCommitAtomicity(GroupChatRepository);
@@ -2782,6 +2707,6 @@ await verifyForceTermination(GroupChatRepository);
 await verifyForceTerminationCommand(GroupChatRepository);
 await verifyPerBubbleCommitFence(GroupChatRepository);
 await verifyPlanningInterruption(GroupChatRepository);
-await verifyMigration63AndPreviewBinding(GroupChatRepository, runMigration63);
+await verifyCurrentPreviewBinding(GroupChatRepository);
 
 console.log('群聊用户消息换代（supersede/successor）行为验证通过。');

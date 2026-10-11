@@ -28,7 +28,6 @@ function read(relativePath) {
 }
 
 const schemaSource = read('src/platform/persistence/sqlite/schema.ts');
-const migrationsSource = read('src/platform/persistence/sqlite/migrations.ts');
 const sessionRepoSource = read('src/features/chat/conversation/infrastructure/SQLiteSessionRepository.ts');
 const groupRepoSource = read('src/features/chat/group/infrastructure/SQLiteGroupChatRepository.ts');
 const assistantRepoSource = read('src/features/assistants/infrastructure/SQLiteAssistantRepository.ts');
@@ -74,125 +73,6 @@ assert.doesNotMatch(
 // 重建 messages 后索引由 initDatabase 集中执行 INDEXES 恢复，schema 必须保留完整清单。
 assert.match(schemaSource, /idx_messages_session_id ON messages\(session_id\)/);
 assert.match(schemaSource, /idx_messages_session_id_id ON messages\(session_id, id DESC\)/);
-
-// ============================================================================
-// 迁移 54 静态契约
-// ============================================================================
-const migration54Marker = '// 迁移54';
-const markerIndex = migrationsSource.indexOf(migration54Marker);
-assert.ok(markerIndex > 0, 'migrations.ts 必须存在迁移54 注释');
-assert.equal(
-  migrationsSource.lastIndexOf(migration54Marker),
-  markerIndex,
-  '迁移54 注释只能出现一次',
-);
-assert.doesNotMatch(
-  migrationsSource.slice(0, markerIndex),
-  /chat_conversations/,
-  '迁移 1～53 不得引用 chat_conversations',
-);
-const finalBraceIndex = migrationsSource.trimEnd().length - 1;
-assert.equal(migrationsSource[finalBraceIndex], '}', 'runMigrations 必须以右大括号结尾');
-// 迁移 54 不再是最后一个迁移：静态契约只作用于迁移 54 自身，切片到下一个迁移注释为止。
-const nextMigrationIndex = migrationsSource.indexOf('// 迁移55');
-const migration54End = nextMigrationIndex > markerIndex ? nextMigrationIndex : finalBraceIndex;
-const migration54Body = migrationsSource.slice(markerIndex, migration54End);
-
-assert.match(
-  migration54Body,
-  /CREATE TABLE IF NOT EXISTS chat_conversations[\s\S]*id TEXT PRIMARY KEY[\s\S]*kind TEXT NOT NULL CHECK \(kind IN \('direct', 'group'\)\)/,
-  '迁移54 必须创建身份表',
-);
-assert.match(
-  migration54Body,
-  /INNER JOIN group_chats g ON g\.id = s\.id/,
-  '迁移54 必须检查 session/group ID 冲突',
-);
-assert.match(migration54Body, /WHERE c\.kind != 'direct'/, '必须检查 direct identity 类型冲突');
-assert.match(migration54Body, /WHERE c\.kind != 'group'/, '必须检查 group identity 类型冲突');
-assert.match(
-  migration54Body,
-  /INSERT OR IGNORE INTO chat_conversations \(id, kind\)\s*SELECT id, 'direct' FROM sessions/,
-  '必须回填 direct identity',
-);
-assert.match(
-  migration54Body,
-  /INSERT OR IGNORE INTO chat_conversations \(id, kind\)\s*SELECT id, 'group' FROM group_chats/,
-  '必须回填 group identity',
-);
-assert.match(
-  migration54Body,
-  /LEFT JOIN sessions s ON s\.id = m\.session_id[\s\S]*LEFT JOIN group_chats g ON g\.id = m\.session_id[\s\S]*WHERE s\.id IS NULL\s+AND g\.id IS NULL/,
-  '必须识别孤立消息',
-);
-// 孤立消息策略：老版本删除会话残留的消息 UI 永不可达，审计落库后删除，不再拒绝迁移。
-assert.match(
-  migration54Body,
-  /console\.warn\([\s\S]*孤立消息/,
-  '删除孤立消息前必须输出 console 诊断',
-);
-assert.match(
-  migration54Body,
-  /CREATE TABLE IF NOT EXISTS chat_orphan_message_audit/,
-  '必须创建孤立消息审计表',
-);
-assert.match(
-  migration54Body,
-  /INSERT OR REPLACE INTO chat_orphan_message_audit \(session_id, message_count, deleted_at\)/,
-  '删除前必须把孤立消息来源与数量持久化到审计表',
-);
-assert.match(
-  migration54Body,
-  /DELETE FROM messages\s+WHERE session_id NOT IN \(SELECT id FROM sessions\)\s+AND session_id NOT IN \(SELECT id FROM group_chats\)/,
-  '删除必须严格限定为不归属任何 sessions / group_chats 的孤立消息',
-);
-assert.doesNotMatch(
-  migration54Body,
-  /孤立消息，拒绝迁移/,
-  '孤立消息不得再导致拒绝迁移',
-);
-assert.match(
-  migration54Body,
-  /FROM chat_conversations c[\s\S]*LEFT JOIN sessions s ON s\.id = c\.id[\s\S]*WHERE s\.id IS NULL\s+AND g\.id IS NULL/,
-  '必须检查无详情 identity',
-);
-assert.match(
-  migration54Body,
-  /PRAGMA foreign_key_list\('messages'\)/,
-  '必须使用 PRAGMA foreign_key_list 判断是否重建',
-);
-assert.match(
-  migration54Body,
-  /fk\.on_delete === 'CASCADE'/,
-  '重建判断必须校验 ON DELETE CASCADE',
-);
-assert.match(
-  migration54Body,
-  /INSERT INTO messages_new \(\s*id, session_id/,
-  '复制必须使用显式列清单',
-);
-assert.doesNotMatch(migration54Body, /INSERT INTO messages_new SELECT \*/);
-assert.match(
-  migration54Body,
-  /COUNT\(\*\) AS c FROM messages_new/,
-  '必须对比复制前后数量',
-);
-assert.match(migration54Body, /MAX\(id\) AS m/, '必须对比复制前后 max id');
-assert.match(
-  migration54Body,
-  /PRAGMA foreign_keys = ON;[\s\S]*PRAGMA foreign_keys;[\s\S]*state\?\.foreign_keys !== 1/,
-  '恢复外键后必须读取 PRAGMA 状态验证，不能只依赖 execAsync 不抛错',
-);
-assert.match(
-  migration54Body,
-  /PRAGMA foreign_key_check\('messages'\)/,
-  '迁移完成后必须执行外键校验',
-);
-assert.match(migration54Body, /PRAGMA foreign_keys = OFF/, '重建前必须关闭外键约束');
-assert.match(migration54Body, /ROLLBACK/, '失败时必须有回滚路径');
-assert.doesNotMatch(migration54Body, /CREATE INDEX/, '不得在迁移内复制集中索引清单');
-assert.doesNotMatch(migration54Body, /INSERT INTO sessions/, '迁移不得伪造 session');
-assert.match(migration54Body, /cause: mErr/, '外层错误必须携带 cause');
 
 // ============================================================================
 // Repository 生命周期静态契约
@@ -293,5 +173,5 @@ assert.match(
 );
 
 console.log('群聊统一 conversation identity 静态契约验证通过。');
-console.log('node:sqlite 迁移契约由 verify:chat 必跑，也可独立执行：npm run verify:group-conversation-identity:sqlite。');
+console.log('数据库行为由 verify:database-baseline 验证。');
 console.log('真实 expo-sqlite 外键迁移仍需 Android 真机 fresh database 验收。');

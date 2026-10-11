@@ -28,7 +28,7 @@ function loadCommonJS(relativePath, mocks = {}, cache = new Map()) {
 }
 const { SCHEMAS } = loadCommonJS('src/platform/persistence/sqlite/schema.ts');
 const { runMigrations } = loadCommonJS('src/platform/persistence/sqlite/migrations.ts');
-const { migrateModelSelections, migrateChatImageModelSelections } = loadCommonJS('src/platform/persistence/sqlite/modelSelectionSchema.ts');
+const { migrateModelSelections } = loadCommonJS('src/platform/persistence/sqlite/modelSelectionSchema.ts');
 function executor(db) {
   const raw = {
     getFirstAsync: async (sql, params = []) => db.prepare(sql).get(...params) ?? null,
@@ -261,10 +261,15 @@ function initialModelRuntime(db) {
   db.close();
 }
 
-// 旧选择保留、失效引用不复活、显式停用不继承；第二次完整启动不重建旧表。
+// 当前选择保留、失效引用不复活、显式停用不继承；重启和备份恢复原样保留。
 {
   const db = createDatabase();
-  seedAssistants(db); legacyBindings(db);
+  seedAssistants(db);
+  await runMigrations(executor(db));
+  db.exec(`UPDATE memory_model_settings SET embedding_model_config_id='embedding';
+    UPDATE speech_recognition_settings SET model_config_id='stt';
+    INSERT INTO chat_assistant_image_settings VALUES ('explicit','vision'),('inherited','vision');
+    INSERT INTO assistant_voice_settings VALUES ('broken','deleted'),('disabled',NULL),('explicit','voice-own'),('inherited','voice-default');`);
   await runMigrations(executor(db));
   assert.deepEqual(selectionIds(db), ['embedding', 'vision', 'stt']);
   assert.deepEqual(voices(db), [['broken', 'deleted'], ['disabled', null], ['explicit', 'voice-own'], ['inherited', 'voice-default']]);
@@ -304,40 +309,6 @@ function initialModelRuntime(db) {
       assert.deepEqual(retiredTables(restored), []);
     } finally { restored.close(); }
   } finally { if (fs.existsSync(snapshot)) fs.unlinkSync(snapshot); fs.rmdirSync(directory); }
-  db.close();
-}
-// 95 → 96 升级失败时保留旧配置与版本；重跑与快照恢复不重写新选择。
-{
-  const db = createDatabase(); seedAssistants(db); legacyBindings(db);
-  await migrateModelSelections(executor(db));
-  db.exec("UPDATE chat_image_settings SET recognition_model_config_id = 'deleted-vision'");
-  db.exec("CREATE TRIGGER reject_image_selection BEFORE INSERT ON chat_assistant_image_settings BEGIN SELECT RAISE(ABORT, '模拟角色视觉迁移失败'); END");
-  await assert.rejects(migrateChatImageModelSelections(executor(db)), /模拟角色视觉迁移失败/);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 95);
-  assert.equal(db.prepare('SELECT recognition_model_config_id FROM chat_image_settings').get().recognition_model_config_id, 'deleted-vision');
-  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM chat_assistant_image_settings').get().count, 0);
-  db.exec('DROP TRIGGER reject_image_selection');
-  await migrateChatImageModelSelections(executor(db));
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 96, '单独完成视觉选择迁移时提交版本96');
-  assert.deepEqual(selectionIds(db), ['embedding', 'deleted-vision', 'stt']);
-  db.exec("UPDATE chat_assistant_image_settings SET recognition_model_config_id = NULL WHERE assistant_id = 'explicit'");
-  await runMigrations(executor(db));
-  assert.equal(selectionIds(db)[1], null, '新选择不能被旧策略开关复活');
-  db.close();
-}
-// 更早版本的 OCR 角色绑定先升级图片策略，再转成 Chat 明确选择。
-for (const multiple of [false, true]) {
-  const db = createDatabase(); seedAssistants(db); legacyBindings(db);
-  db.exec(`ALTER TABLE ai_assistants DROP COLUMN image_processing_mode;
-    INSERT INTO auxiliary_model_configs (id, capability_kind, name, base_url, api_key, model, enabled, created_at, updated_at)
-      VALUES ('old-vision', 'ocr', '旧视觉', 'https://example.invalid', 'test', 'vision', 1, '', ''),
-      ('other-vision', 'ocr', '另一视觉', 'https://example.invalid', 'test', 'vision', 1, '', '');
-    INSERT INTO assistant_capability_bindings VALUES ('explicit', 'ocr', 'auxiliary_model', 'old-vision', 1, '');`);
-  if (multiple) db.exec("INSERT INTO assistant_capability_bindings VALUES ('inherited', 'ocr', 'auxiliary_model', 'other-vision', 1, '')");
-  await runMigrations(executor(db));
-  assert.equal(selectionIds(db)[1], multiple ? null : 'old-vision');
-  assert.equal(db.prepare("SELECT image_processing_mode AS mode FROM ai_assistants WHERE id = 'explicit'").get().mode, 'vision_preprocess');
-  assert.deepEqual(retiredTables(db), []);
   db.close();
 }
 // 新安装没有任何自动选择。

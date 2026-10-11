@@ -177,93 +177,21 @@ function createAdapter(db) {
   };
 }
 
-function createLegacyDatabase() {
+function createCurrentDatabase() {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON;');
-  for (const [key, sql] of Object.entries(SCHEMAS)) {
-    if (key !== 'stickers' && key !== 'auxiliaryModelConfigs') db.exec(sql);
-  }
-  // 迁移 81 之后的 sticker 形态：无 semantic_revision。
-  db.exec(`
-    CREATE TABLE stickers (
-      id TEXT PRIMARY KEY NOT NULL,
-      media_asset_id TEXT NOT NULL UNIQUE,
-      group_id TEXT,
-      name TEXT NOT NULL,
-      description TEXT,
-      tags_json TEXT NOT NULL DEFAULT '[]',
-      emotion TEXT,
-      source_file_name TEXT,
-      mime_type TEXT NOT NULL,
-      width INTEGER,
-      height INTEGER,
-      is_animated INTEGER NOT NULL DEFAULT 0,
-      is_favorite INTEGER NOT NULL DEFAULT 0,
-      use_count INTEGER NOT NULL DEFAULT 0,
-      last_used_at TEXT,
-      annotation_status TEXT NOT NULL DEFAULT 'pending',
-      annotation_error TEXT,
-      annotation_claim_id TEXT,
-      annotation_claimed_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE auxiliary_model_configs (
-      id TEXT PRIMARY KEY NOT NULL,
-      capability_kind TEXT NOT NULL,
-      name TEXT NOT NULL,
-      base_url TEXT NOT NULL,
-      api_key TEXT,
-      model TEXT NOT NULL,
-      temperature REAL,
-      top_p REAL,
-      max_tokens INTEGER,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      metadata_json TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE capability_bindings (
-      capability_kind TEXT NOT NULL,
-      model_source TEXT NOT NULL,
-      model_config_id TEXT,
-      enabled INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY (capability_kind)
-    );
-    CREATE TABLE assistant_capability_bindings (
-      assistant_id TEXT NOT NULL,
-      capability_kind TEXT NOT NULL,
-      model_source TEXT NOT NULL,
-      model_config_id TEXT,
-      enabled INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY (assistant_id, capability_kind)
-    );
-  `);
-  db.prepare(
-    `INSERT INTO stickers (id, media_asset_id, name, mime_type, annotation_status, created_at, updated_at)
-     VALUES ('sticker-1', 'asset-1', '装无辜', 'image/png', 'ready', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
-  ).run();
-  const insertModel = db.prepare(
-    `INSERT INTO auxiliary_model_configs (id, capability_kind, name, base_url, api_key, model, enabled, created_at, updated_at)
-     VALUES (?, ?, ?, 'https://example.com/v1', 'key', 'm', 1, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
-  );
-  insertModel.run('cfg-legacy', 'sticker_annotation', '旧表情包识别模型');
-  insertModel.run('cfg-ocr', 'ocr', '视觉模型');
-  db.prepare(
-    `INSERT INTO capability_bindings (capability_kind, model_source, model_config_id, enabled, updated_at)
-     VALUES ('sticker_annotation', 'auxiliary_model', 'cfg-legacy', 1, '2026-09-01T00:00:00.000Z')`,
-  ).run();
-  db.prepare(
-    `INSERT INTO assistant_capability_bindings (assistant_id, capability_kind, model_source, model_config_id, enabled, updated_at)
-     VALUES ('ai-1', 'sticker_annotation', 'auxiliary_model', 'cfg-legacy', 1, '2026-09-01T00:00:00.000Z')`,
-  ).run();
+  for (const sql of Object.values(SCHEMAS)) db.exec(sql);
+  db.exec(`INSERT INTO media_assets (id,storage_backend,storage_key,hash_algorithm,content_hash,mime_type,byte_size,status,created_at,updated_at)
+    VALUES ('asset-1','app-private-file','test.png','sha256','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','image/png',1,'ready','2026-09-01','2026-09-01');
+    INSERT INTO stickers (id,media_asset_id,name,mime_type,annotation_status,created_at,updated_at)
+    VALUES ('sticker-1','asset-1','装无辜','image/png','ready','2026-09-01','2026-09-01');
+    INSERT INTO auxiliary_model_configs (id,capability_kind,name,base_url,model,created_at,updated_at)
+    VALUES ('cfg-ocr','ocr','视觉模型','https://example.invalid','test','2026-09-01','2026-09-01');`);
   return db;
 }
 
 {
-  const db = createLegacyDatabase();
+  const db = createCurrentDatabase();
   await runMigrations(createAdapter(db));
 
   const stickerColumns = db.prepare(`PRAGMA table_info('stickers')`).all().map((c) => c.name);

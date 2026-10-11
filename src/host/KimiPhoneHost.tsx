@@ -83,6 +83,7 @@ import {
 } from '@shared/runtime/ConversationListReadySignal';
 import { cancelActiveHostAgentRunsForReset } from './composition/agent';
 import HostErrorBoundary from './shell/HostErrorBoundary';
+import { ApplicationUpdateProvider } from './shell/ApplicationUpdateProvider';
 import {
   drainAndCancelAIScheduleProjectionRepair,
   getCompanionNotificationDiagnostics,
@@ -1417,7 +1418,9 @@ function HostLifecycle({
             onMinimizedCallEnded={() => { setMinimizedCallId(null); setCallRuntimeId(null); }}
           >
             <View style={styles.content}>
-              {children}
+              <ApplicationUpdateProvider enabled={dbReady && appState === 'active'}>
+                {children}
+              </ApplicationUpdateProvider>
             </View>
 
             {dbReady ? (

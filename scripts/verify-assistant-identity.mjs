@@ -257,7 +257,6 @@ const { migrateAssistantIdentityContract } = migrationModule;
   const db = new DatabaseSync(':memory:');
   for (const sql of Object.values(schemas)) db.exec(sql);
   // 模拟升级前数据库，旧角色保持默认行为，重复初始化不能覆盖已经保存的选择。
-  db.exec('ALTER TABLE ai_assistants DROP COLUMN disable_thinking');
   db.exec(`INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at)
     VALUES ('existing-role', 'existing-actor', '旧角色', 'model-a', 'created', 'old-time')`);
   const { runMigrations } = loadTypeScriptModuleWithMocks('src/platform/persistence/sqlite/migrations.ts');

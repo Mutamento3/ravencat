@@ -44,18 +44,23 @@ CREATE TABLE IF NOT EXISTS chat_summary_call_boundary (
   cleared_at TEXT NOT NULL
 );
 `;
-/** 等历史消息列补齐后再建立 anchor，兼容旧备份的真实 bootstrap 顺序。 */
-export async function migrateChatSummary(db: DatabaseWriteExecutor): Promise<void> {
-  await db.execAsync(CHAT_SUMMARY_SCHEMA);
-  await db.execAsync(`
-INSERT OR IGNORE INTO chat_timeline_run_anchors (session_id, turn_run_id, id, created_at)
-  SELECT session_id, turn_run_id, id, created_at FROM messages WHERE turn_run_id IS NOT NULL AND turn_item_index = 1;
+/** 消息插入时固化回合锚点，后续清除历史边界不影响摘要顺序。 */
+export const CHAT_TIMELINE_RUN_ANCHOR_SCHEMA = `
 CREATE TRIGGER IF NOT EXISTS capture_chat_timeline_run_anchor AFTER INSERT ON messages
   WHEN NEW.turn_run_id IS NOT NULL AND NEW.turn_item_index = 1
   BEGIN
     INSERT OR IGNORE INTO chat_timeline_run_anchors (session_id, turn_run_id, id, created_at)
       VALUES (NEW.session_id, NEW.turn_run_id, NEW.id, NEW.created_at);
   END;
+`;
+
+/** 等历史消息列补齐后再建立 anchor，兼容旧备份的真实 bootstrap 顺序。 */
+export async function migrateChatSummary(db: DatabaseWriteExecutor): Promise<void> {
+  await db.execAsync(CHAT_SUMMARY_SCHEMA);
+  await db.execAsync(`
+INSERT OR IGNORE INTO chat_timeline_run_anchors (session_id, turn_run_id, id, created_at)
+  SELECT session_id, turn_run_id, id, created_at FROM messages WHERE turn_run_id IS NOT NULL AND turn_item_index = 1;
+${CHAT_TIMELINE_RUN_ANCHOR_SCHEMA}
   `);
 }
 

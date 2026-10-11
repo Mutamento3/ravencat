@@ -82,6 +82,18 @@ export function createProfileStyles(theme: PresentationTheme) {
       padding: theme.spacing.xl,
       alignItems: 'center',
     },
+    menuItemDetail: {
+      ...theme.typography.caption,
+      color: theme.colors.text.secondary,
+      marginLeft: theme.spacing.sm,
+    },
+    updateDot: {
+      width: 8,
+      height: 8,
+      borderRadius: theme.radius.round,
+      backgroundColor: theme.colors.feedback.error,
+      marginLeft: theme.spacing.sm,
+    },
     versionText: {
       fontSize: 12,
       color: theme.colors.text.tertiary,

@@ -25,7 +25,7 @@ import { MEMORY_V3_SCHEMA } from './memoryV3Schema';
 import { MODEL_SELECTION_SCHEMA } from './modelSelectionSchema';
 import { TRANSLATION_SELECTION_SCHEMA } from './translationModelSchema';
 import { AUXILIARY_MODEL_DEFAULTS_SCHEMA } from './auxiliaryModelDefaultsSchema';
-import { CHAT_SUMMARY_SCHEMA } from './chatSummarySchema';
+import { CHAT_SUMMARY_SCHEMA, CHAT_TIMELINE_RUN_ANCHOR_SCHEMA } from './chatSummarySchema';
 import { CHAT_TOOL_PACKAGE_EXPOSURE_SCHEMA } from './chatToolPackageSchema';
 import {
   TOGETHER_LISTENING_ACTIVITIES_SCHEMA,
@@ -34,6 +34,9 @@ import {
   TOGETHER_LISTENING_SINGLE_CURRENT_INDEX,
 } from './togetherListeningSchema';
 import {
+  STICKER_SYSTEM_CONFIG_SCHEMA,
+  STICKER_EMBEDDINGS_SCHEMA,
+  STICKER_EMBEDDINGS_MODEL_INDEX,
   STICKER_GROUPS_ORDER_INDEX,
   STICKER_GROUPS_SCHEMA,
   STICKERS_ANNOTATION_INDEX,
@@ -61,7 +64,9 @@ import {
 import { CALL_BACKGROUND_SELECTION_SCHEMA } from './callBackgroundSchema';
 import { WALLPAPER_SELECTION_SCHEMA } from './wallpaperSelectionSchema';
 
+import { AGENT_RUNS_SCHEMA, AGENT_STEPS_SCHEMA, AGENT_TOOL_RECEIPTS_SCHEMA } from './agentRuntimeSchema';
 import { CHAT_REGENERATION_REQUESTS_SCHEMA } from './chatRegenerationSchema';
+import { MCP_SERVERS_SCHEMA, MCP_TOOL_GRANTS_SCHEMA, MCP_SERVER_ASSISTANTS_SCHEMA, MCP_TOOL_GRANTS_INDEXES } from './mcpSchema';
 
 export const SCHEMAS: Record<string, string> = {
   callBackgroundSelection: CALL_BACKGROUND_SELECTION_SCHEMA,
@@ -90,7 +95,7 @@ export const SCHEMAS: Record<string, string> = {
       enable_short_text_protocol INTEGER DEFAULT 1,
       allow_multiple_bubbles INTEGER DEFAULT 1,
       supports_vision INTEGER DEFAULT 0,
-      -- 仅供迁移88/96读取历史图片策略，当前运行时只使用角色视觉模型选择。
+      -- 已发布版保留的物理列；当前运行时使用角色视觉模型选择。
       image_processing_mode TEXT NOT NULL DEFAULT 'direct',
       vision_helper_ai_id TEXT,
       allow_helper_auto_join INTEGER DEFAULT 1,
@@ -99,6 +104,15 @@ export const SCHEMAS: Record<string, string> = {
       last_active_session_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      is_host_ai INTEGER DEFAULT 0,
+      host_cooldown_start TEXT,
+      host_cooldown_end TEXT,
+      host_revoke_cooldown_start TEXT,
+      host_revoke_cooldown_end TEXT,
+      private_context_primary_limit INTEGER NOT NULL DEFAULT 30,
+      private_context_secondary_limit INTEGER NOT NULL DEFAULT 10,
+      group_context_primary_limit INTEGER NOT NULL DEFAULT 40,
+      group_context_secondary_limit INTEGER NOT NULL DEFAULT 5,
       FOREIGN KEY (last_active_session_id) REFERENCES sessions(id) ON DELETE SET NULL,
       FOREIGN KEY (vision_helper_ai_id) REFERENCES ai_assistants(id) ON DELETE SET NULL
     );
@@ -153,6 +167,9 @@ export const SCHEMAS: Record<string, string> = {
       visible_after_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      is_archived INTEGER DEFAULT 0,
+      archive_reason TEXT,
+      tags TEXT,
       UNIQUE (ai_assistant_id),
       FOREIGN KEY (ai_assistant_id) REFERENCES ai_assistants(id) ON DELETE CASCADE
     );
@@ -463,7 +480,7 @@ export const SCHEMAS: Record<string, string> = {
     );
   `,
 
-  // V3 正文／摘要与旧物理表隔离，历史链末尾负责定向清旧。
+  // 记忆正文、向量与聊天摘要使用当前业务表。
   memoryV3: MEMORY_V3_SCHEMA,
   chatSummary: CHAT_SUMMARY_SCHEMA,
 
@@ -573,9 +590,35 @@ export const SCHEMAS: Record<string, string> = {
   prompting: PROMPTING_SCHEMA,
   ravenCatSoftAppLocks: RAVEN_CAT_SOFT_APP_LOCKS_SCHEMA,
   togetherListeningActivities: TOGETHER_LISTENING_ACTIVITIES_SCHEMA,
+  // 已发布版所需的当前表；升级历史不参与新建库。
+  agentRuns: AGENT_RUNS_SCHEMA,
+  agentSteps: AGENT_STEPS_SCHEMA,
+  agentToolReceipts: AGENT_TOOL_RECEIPTS_SCHEMA,
+  mcpServers: MCP_SERVERS_SCHEMA,
+  mcpToolGrants: MCP_TOOL_GRANTS_SCHEMA,
+  mcpServerAssistants: MCP_SERVER_ASSISTANTS_SCHEMA,
+  stickerEmbeddings: STICKER_EMBEDDINGS_SCHEMA,
+  stickerSystemConfig: STICKER_SYSTEM_CONFIG_SCHEMA,
+  chatTimelineRunAnchor: CHAT_TIMELINE_RUN_ANCHOR_SCHEMA,
 };
 
 export const INDEXES: Record<string, string> = {
+  idxStickerEmbeddingsModel: STICKER_EMBEDDINGS_MODEL_INDEX,
+  idx_sessions_canonical_ai: `CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_canonical_ai
+          ON sessions(ai_assistant_id);`,
+  idxMcpToolGrantsServer: MCP_TOOL_GRANTS_INDEXES[0],
+  idx_ai_assistants_single_host: `CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_assistants_single_host
+     ON ai_assistants(is_host_ai) WHERE is_host_ai = 1;`,
+  idx_agent_steps_run: `CREATE INDEX IF NOT EXISTS idx_agent_steps_run
+        ON agent_steps(run_id, step_index);`,
+  idx_agent_runs_status_updated: `CREATE INDEX IF NOT EXISTS idx_agent_runs_status_updated
+        ON agent_runs(status, updated_at DESC);`,
+  idx_agent_runs_assistant_updated: `CREATE INDEX IF NOT EXISTS idx_agent_runs_assistant_updated
+        ON agent_runs(assistant_id, updated_at DESC);`,
+  idx_agent_receipts_run_updated: `CREATE INDEX IF NOT EXISTS idx_agent_receipts_run_updated
+        ON agent_tool_receipts(run_id, updated_at DESC);`,
+  idx_agent_receipts_executing: `CREATE INDEX IF NOT EXISTS idx_agent_receipts_executing
+        ON agent_tool_receipts(status, idempotency, updated_at ASC);`,
   idxRavenCatAISchedulesOwnerStatusTime: RAVEN_CAT_AI_SCHEDULES_OWNER_STATUS_TIME_INDEX,
   idxRavenCatAISchedulesOwnerTime: RAVEN_CAT_AI_SCHEDULES_OWNER_TIME_INDEX,
   idxRavenCatAISchedulesConsumedHistory: RAVEN_CAT_AI_SCHEDULES_CONSUMED_HISTORY_INDEX,

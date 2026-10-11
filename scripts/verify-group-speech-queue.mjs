@@ -225,19 +225,6 @@ async function loadGroupChatRepository() {
   return import(transpileToModuleUrl(repositorySource));
 }
 
-async function loadMigration61() {
-  const source = read('src/platform/persistence/sqlite/migrations.ts');
-  const marker = '// 迁移61';
-  const markerIndex = source.indexOf(marker);
-  assert.ok(markerIndex >= 0, 'migrations.ts 必须包含迁移61');
-  const nextMigrationIndex = source.indexOf('// 迁移62', markerIndex);
-  assert.ok(nextMigrationIndex > markerIndex, '迁移61 必须位于迁移62之前');
-  const body = source.slice(markerIndex, nextMigrationIndex);
-  return import(transpileToModuleUrl(
-    `export async function runMigration61(db) {\n${body}\n}`,
-  ));
-}
-
 function loadGroupRuntimeStub() {
   return transpileToModuleUrl(`
     export function getChatGroupRuntimeDependencies() {
@@ -416,63 +403,6 @@ async function loadGroupTaskExecution(groupRuntimeUrl, turnCommitUrl) {
     )
     .replace(/from ['"]\.\/GroupParticipantDirectory['"]/g, `from '${directoryUrl}'`);
   return import(transpileToModuleUrl(source));
-}
-
-async function verifyMigration61(runMigration61) {
-  const db = new DatabaseSync(':memory:');
-  db.exec(`
-    CREATE TABLE group_speech_tasks (
-      id TEXT PRIMARY KEY,
-      plan_id TEXT NOT NULL,
-      group_id TEXT NOT NULL,
-      ai_assistant_id TEXT NOT NULL,
-      agent_id TEXT NOT NULL,
-      sequence_order INTEGER NOT NULL,
-      source TEXT NOT NULL,
-      status TEXT NOT NULL,
-      started_at TEXT,
-      completed_at TEXT,
-      error_message TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-  `);
-  insertTask(db, {
-    id: 't-old', planId: 'p1', groupId: 'g1', aiAssistantId: 'ai-A', agentId: 'agent-A',
-    sequenceOrder: 0, source: 'mention', createdAt: '2026-08-13T10:00:00.000Z',
-  });
-  insertTask(db, {
-    id: 't-admin', planId: 'p1', groupId: 'g1', aiAssistantId: 'ai-B', agentId: 'agent-B',
-    sequenceOrder: 1, source: 'admin', createdAt: '2026-08-13T10:00:00.000Z',
-  });
-  insertTask(db, {
-    id: 't-user', planId: 'p1', groupId: 'g1', aiAssistantId: 'ai-C', agentId: 'agent-C',
-    sequenceOrder: 2, source: 'user_mention', createdAt: '2026-08-13T10:00:00.000Z',
-  });
-
-  await runMigration61(createExecutor(db));
-  assert.equal(
-    db.prepare(`SELECT source FROM group_speech_tasks WHERE id = 't-old'`).get().source,
-    'user_mention',
-    '历史 mention 任务全部来自用户 @，必须升级为 user_mention',
-  );
-  assert.equal(
-    db.prepare(`SELECT source FROM group_speech_tasks WHERE id = 't-admin'`).get().source,
-    'admin',
-  );
-  assert.equal(
-    db.prepare(`SELECT source FROM group_speech_tasks WHERE id = 't-user'`).get().source,
-    'user_mention',
-  );
-
-  await runMigration61(createExecutor(db));
-  assert.equal(
-    db.prepare(`SELECT COUNT(*) AS count FROM group_speech_tasks WHERE source = 'mention'`)
-      .get().count,
-    0,
-    '迁移61 重复执行必须保持幂等',
-  );
-  db.close();
 }
 
 async function verifyPersistentQueueRepository(GroupChatRepository) {
@@ -992,7 +922,6 @@ async function verifyCommitFenceAndSkips(GroupChatRepository, executeGroupSpeech
 }
 
 const { GroupChatRepository } = await loadGroupChatRepository();
-const { runMigration61 } = await loadMigration61();
 const groupRuntimeUrl = loadGroupRuntimeStub();
 // 执行器与提交接缝必须共享同一个模块实例：执行器内部 import 的
 // GroupAssistantTurnCommit 与测试直接验证的接缝是同一个 URL。
@@ -1001,8 +930,6 @@ const { executeGroupSpeechTasks } = await loadGroupTaskExecution(
   groupRuntimeUrl,
   turnCommitUrl,
 );
-
-await verifyMigration61(runMigration61);
 await verifyPersistentQueueRepository(GroupChatRepository);
 await verifyDynamicQueueExecution(GroupChatRepository, executeGroupSpeechTasks);
 await verifyFutureCoverageConversation(GroupChatRepository, executeGroupSpeechTasks);

@@ -2159,10 +2159,7 @@ const realSqlite = new DatabaseSync(':memory:');
 const mcpSchema = loadTypeScriptModule('src/platform/persistence/sqlite/mcpSchema.ts');
 realSqlite.exec(`PRAGMA foreign_keys = ON; CREATE TABLE ai_assistants (id TEXT PRIMARY KEY);
   INSERT INTO ai_assistants VALUES ('assistant-1'), ('assistant-2');
-  ${mcpSchema.MCP_SERVERS_SCHEMA} ${mcpSchema.MCP_TOOL_GRANTS_SCHEMA} ${mcpSchema.MCP_SERVER_ASSISTANTS_SCHEMA}
-  ALTER TABLE mcp_servers ADD COLUMN endpoint_class TEXT;
-  ALTER TABLE mcp_servers ADD COLUMN last_protocol_family TEXT;
-  ALTER TABLE mcp_servers ADD COLUMN last_negotiated_protocol_version TEXT;`);
+  ${mcpSchema.MCP_SERVERS_SCHEMA} ${mcpSchema.MCP_TOOL_GRANTS_SCHEMA} ${mcpSchema.MCP_SERVER_ASSISTANTS_SCHEMA}`);
 const sqlExecutor = {
   runAsync: async (sql, params = []) => realSqlite.prepare(sql).run(...params),
   getFirstAsync: async (sql, params = []) => realSqlite.prepare(sql).get(...params) ?? null,

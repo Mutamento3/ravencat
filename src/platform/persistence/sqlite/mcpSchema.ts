@@ -22,7 +22,10 @@ export const MCP_SERVERS_SCHEMA = `
     last_error_code TEXT,
     tool_snapshot_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    last_negotiated_protocol_version TEXT,
+    last_protocol_family TEXT,
+    endpoint_class TEXT
   );
 `;
 
