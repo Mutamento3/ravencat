@@ -85,6 +85,9 @@ temp/
 local.properties
 credentials.json
 
+# 当前本地维护指南；由 AGENTS.md 引导读取，不随源码公开。
+/REPOSITORY_WORKFLOW.local.md
+
 # 本地历史文档、私人材料和开源准备备份，不随源码公开。
 .docs/
 .nest/
