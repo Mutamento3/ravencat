@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { createContext, useContext } from 'react';
 import { View } from 'react-native';
 import type { ViewProps } from 'react-native';
 import { useTheme } from '../useTheme';
@@ -19,6 +19,8 @@ export interface ThemedSurfaceProps extends ViewProps {
   backgroundColor?: string;
   children?: React.ReactNode;
   nativeGlass?: boolean;
+  /** 原生材质使用数值圆角，需与调用方的裁剪圆角一致。 */
+  cornerRadius?: number;
 }
 
 const NATIVE_GLASS_VARIANTS = new Set<SurfaceVariant>([
@@ -29,6 +31,8 @@ const NATIVE_GLASS_VARIANTS = new Set<SurfaceVariant>([
   'inputBar',
   'toast',
 ]);
+
+const GlassSurfaceContext = createContext(false);
 
 function getBackgroundColor(
   variant: SurfaceVariant,
@@ -77,31 +81,36 @@ function getNativeCornerRadius(
   }
 }
 
-/** 统一主题表面；只有白名单 variant 且调用方显式上线时才启用原生玻璃。 */
+/** 主要表面使用玻璃；同一表面内部的卡片只染色，独立弹窗重新拥有自己的材质。 */
 export const ThemedSurface: React.FC<ThemedSurfaceProps> = ({
   variant = 'card',
   backgroundColor: overrideBackgroundColor,
   children,
   nativeGlass = true,
+  cornerRadius,
   style,
   ...rest
 }) => {
   const theme = useTheme();
+  const insideGlassSurface = useContext(GlassSurfaceContext);
   const backgroundColor = overrideBackgroundColor ?? getBackgroundColor(variant, theme.colors);
   const shouldUseNativeGlass =
     theme.effects.glass.enabled &&
     nativeGlass &&
+    (!insideGlassSurface || variant === 'modal') &&
     NATIVE_GLASS_VARIANTS.has(variant);
 
   if (shouldUseNativeGlass) {
     // 原生玻璃表面统一使用材质底色，避免调用方的普通表面色盖住折射结果。
     return (
       <GlassSurface
-        material={{ cornerRadius: getNativeCornerRadius(variant, theme) }}
+        material={{ cornerRadius: cornerRadius ?? getNativeCornerRadius(variant, theme) }}
         style={[style, { backgroundColor: theme.effects.glass.backgroundColor }]}
         {...rest}
       >
-        {children}
+        <GlassSurfaceContext.Provider value={true}>
+          {children}
+        </GlassSurfaceContext.Provider>
       </GlassSurface>
     );
   }

@@ -8,7 +8,7 @@
 Calls Repository commit
 → Android CallExecutionService
 → Host CallExecutionHeadlessTask
-→ ensureCallHostReady（恢复门 + 普通 SQLite bootstrap）
+→ ensureHostDatabaseReady（恢复门 + 普通 SQLite bootstrap）
 → 唯一 CallMediaRuntime
 → ASR / AI 回复 / TTS / lookAtUser
 → Calls 终态 + 资源释放 + Headless completion

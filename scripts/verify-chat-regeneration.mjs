@@ -332,7 +332,10 @@ mocks['@features/chat'] = { getChatSummaryContext: async () => historySnapshot }
 const { PromptHistoryBuilder } = load('src/host/prompt/PromptHistoryBuilder.ts');
 const history = new PromptHistoryBuilder();
 historySnapshot = {
+  settings: { ...load('src/features/chat/summary/domain/ChatSummaryRepository.ts').DEFAULT_CHAT_SUMMARY_SETTINGS },
+  fixedStart: null,
   segments: [{ content: '旧摘要原样保留', sourceStartAt: time, sourceEndAt: time, timeZone: 'Asia/Shanghai' }],
+  contextSegments: [{ content: '旧摘要原样保留', sourceStartAt: time, sourceEndAt: time, timeZone: 'Asia/Shanghai' }],
   timeline: [
     { source: 'chat', kind: 'dialogue', speaker: 'assistant', messageId: 1, content: '之前的回复', logicalIdentity: null, timestamp: time },
     { source: 'call', kind: 'dialogue', speaker: 'user', eventId: 'earlier', callId: 'call-before', content: '此前通话', logicalIdentity: null, timestamp: '2026-10-09T09:00:00.000Z' },
@@ -350,6 +353,10 @@ assert.match(limited.messages[1].content, /此前通话/u);
 assert.match(limited.summaryContent, /旧摘要原样保留/u);
 const ordinary = await history.loadPrivateSummaryContext({ sessionId: 'first', runtimeContext: { batchedUserMessageIds: [9, 10] } });
 assert.equal(ordinary.messages.length, 5, '普通回复保留原有历史策略');
+historySnapshot.settings = { ...historySnapshot.settings, generationEnabled: false, fixedMessageId: 1 };
+const fixedLimited = await history.loadPrivateSummaryContext({ sessionId: 'first', recentWindowLimit: 1,
+  runtimeContext: { batchedUserMessageIds: [9,10],historyUpperBound: { messageId:10,createdAt:time } } });
+assert.equal(fixedLimited.messages.length,2,'固定范围也遵守重写历史上界，且不额外按近期 N 裁剪');
 
 // 真实页面 hook 在点击时隐藏整轮，失败恢复；不新增重写标记或另一个进度条。
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;

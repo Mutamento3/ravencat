@@ -1,4 +1,4 @@
-/** 对话展示信息自动保存，背景组件保持各自的提交流程。 */
+/** 对话资料、上下文与气泡设置自动保存，背景组件保持各自的提交流程。 */
 // 对话设置页面 - 主组件（组装层）
 
 import React from 'react';
@@ -10,17 +10,21 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import NavigationHeader from '@shared/ui/NavigationHeader';
-import { AIInfoCard, BackgroundPickerCard, InputField } from '@shared/ui';
+import { AIInfoCard, BackgroundPickerCard, InputField, ToggleField } from '@shared/ui';
 import { AutoSaveErrors } from '@shared/ui/AutoSaveErrors';
 import useChatSettings from './useChatSettings';
 import { createStyles } from './chatSettingsStyles';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { getChatInteractionProfile, useTheme, useThemedStyles } from '@shared/theme';
 import { createCommonStyles } from '@shared/ui/commonStyles';
 import type { AIProfile } from '@features/assistants';
 import ChatWallpaperSettings from '../messages/components/ChatWallpaperSettings';
+import ContextWindowSection from './ContextWindowSection';
+import FixedChatContextSection from './FixedChatContextSection';
 
 interface ChatSettingsProps {
   aiAssistant: AIProfile;
+  conversationId: string;
+  onChooseFixedStart(): void;
   chatBackgroundKey?: string | null;
   onBack?: (updatedAI?: Partial<AIProfile>) => void;
   onUpdated?: (updatedAI: Partial<AIProfile>) => void;
@@ -32,8 +36,12 @@ interface ChatSettingsProps {
  * @param onBack - 返回回调
  * @param onUpdated - 更新成功回调
  */
-export default function ChatSettings({ aiAssistant, chatBackgroundKey, onBack, onUpdated }: ChatSettingsProps) {
+export default function ChatSettings({ aiAssistant, conversationId, onChooseFixedStart, chatBackgroundKey, onBack, onUpdated }: ChatSettingsProps) {
+  const [fixed, setFixed] = React.useState(false);
   const theme = useTheme();
+  const interactionProfile = getChatInteractionProfile(theme);
+  const canUseMultipleBubbles = interactionProfile.enableAssistantMessageSegmentation;
+  const canShowTokenUsage = interactionProfile.showTokenUsage;
   const styles = useThemedStyles(createStyles);
   const commonStyles = React.useMemo(() => createCommonStyles(theme), [theme]);
 
@@ -43,6 +51,13 @@ export default function ChatSettings({ aiAssistant, chatBackgroundKey, onBack, o
     setName,
     systemPrompt,
     setSystemPrompt,
+    contextLimits,
+    handleContextLimitChange,
+    allowMultipleBubbles,
+    setAllowMultipleBubbles,
+    showTokenUsage,
+    setShowTokenUsage,
+    settingsErrors,
     avatarUrl,
     callBackgroundUri,
 
@@ -53,7 +68,7 @@ export default function ChatSettings({ aiAssistant, chatBackgroundKey, onBack, o
     handleAvatarPress,
     handlePickCallBackground,
     handleClearCallBackground,
-    nameError, infoSaveError, avatarError, blocked, flush, back, restoreInfo, restoreAvatar, retryAvatar,
+    nameError, infoSaveError, avatarError, blocked, flush, back, leave, restoreInfo, restoreAvatar, retryAvatar,
   } = useChatSettings({ aiAssistant, onBack, onUpdated });
 
   return (
@@ -102,10 +117,40 @@ export default function ChatSettings({ aiAssistant, chatBackgroundKey, onBack, o
             autoGrow
             textAlignVertical="top"
           />
-          <AutoSaveErrors error={infoSaveError} blocked={blocked && !!nameError}
-            retry={() => void flush()} restore={() => void restoreInfo()} />
-
         </View>
+
+        <ContextWindowSection
+          values={contextLimits}
+          onChange={handleContextLimitChange}
+          onBlur={() => void flush()}
+          errors={settingsErrors}
+          fixed={fixed}
+        />
+        <FixedChatContextSection conversationId={conversationId} onFixedChange={setFixed}
+          onChoose={() => { void leave(onChooseFixedStart); }} />
+
+        {/* 气泡数量只影响客户端自动分段，不改变聊天输出格式要求。 */}
+        <View style={styles.settingsSection}>
+          <ToggleField
+            label="允许多气泡回复"
+            hint={canUseMultipleBubbles
+              ? '开启后客户端会按空行和句长把回复自动拆成多个气泡；表达风格仍由人设和提示词决定。'
+              : '当前主题实际使用单气泡；你的多气泡原设置会保留，切回支持主题后恢复。'}
+            value={allowMultipleBubbles}
+            onValueChange={setAllowMultipleBubbles}
+          />
+          <ToggleField
+            label="显示 Token 用量"
+            hint={canShowTokenUsage
+              ? '在回复下方显示输入、输出、缓存命中数量与命中率；只影响当前对话的展示。'
+              : '当前主题固定不显示 Token 用量，开关不可修改；切回支持的主题后恢复原选择。'}
+            value={canShowTokenUsage && showTokenUsage}
+            onValueChange={setShowTokenUsage}
+            disabled={!canShowTokenUsage}
+          />
+        </View>
+        <AutoSaveErrors error={infoSaveError} blocked={blocked && Object.keys(settingsErrors).length > 0}
+          retry={() => void flush()} restore={() => void restoreInfo()} />
 
         <ChatWallpaperSettings chatKey={chatBackgroundKey} />
 

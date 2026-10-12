@@ -48,8 +48,11 @@ const styles = load(`${bubbleDir}styles.ts`, {
   './supplementStyles': load(`${bubbleDir}supplementStyles.ts`, base),
 });
 const frame = load(`${bubbleDir}PaperNoteMessageFrame.tsx`, { ...base, './styles': styles });
-const quote = load(`${bubbleDir}ReplyQuote.tsx`, { ...base, './styles': styles });
 const stub = (name) => ({ __esModule: true, default: name });
+const quote = load(`${bubbleDir}ReplyQuote.tsx`, {
+  ...base, './styles': styles, './AttachmentCard': stub('Attachment'),
+  './StickerMessageCard': stub('Sticker'), './VoiceMessageCard': stub('Voice'),
+});
 const contents = load(`${bubbleDir}MessageBubbleContent.tsx`, {
   ...base, './styles': styles, './AttachmentCard': stub('Attachment'),
   '@shopify/flash-list': { useMappingHelper: () => ({ getMappingKey: (id) => id }) },

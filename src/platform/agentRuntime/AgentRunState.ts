@@ -137,13 +137,15 @@ export function appendToolResultHistory(
   state: AgentRunState,
   toolCall: ModelToolCall,
   content: string,
-  now: number
+  now: number,
+  images?: { url: string }[],
 ): void {
   state.history.push({
     role: 'tool',
     toolCallId: toolCall.id,
     name: toolCall.name,
     content,
+    ...(images ? { images } : {}),
   });
   state.updatedAt = toIsoString(now);
 }

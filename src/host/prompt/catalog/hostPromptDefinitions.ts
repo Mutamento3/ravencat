@@ -32,7 +32,7 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
   define({
     id: 'foundation.default_core', name: '默认基础指令', owner: 'host',
     description: '上下文不足时禁止虚构，并说明语言与工具使用的默认行为。',
-    category: 'foundation', supportedScenarios: PACK_SCENARIOS, defaultSlot: 'foundation', placement: 'system',
+    category: 'foundation', supportedScenarios: [...PACK_SCENARIOS, 'chat.summary'], defaultSlot: 'foundation', placement: 'system',
     protection: 'locked', protectionReason: '基础真实性边界不能被普通预设删除。', contentKind: 'static',
     defaultContent: DEFAULT_CORE_SYSTEM_PROMPTS,
     contentDescription: '始终作为 foundation 注入；AI 角色设定在独立 persona Block 中追加。', sourcePath: FACTORY_SOURCE,
@@ -62,7 +62,7 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
   define({
     id: 'context.protocol_space', name: '协议空间常驻提示词', owner: 'host',
     description: '用户与 AI 均可管理的固定提示词和信息，全部持续注入当前 AI。', category: 'user_rules',
-    supportedScenarios: PACK_SCENARIOS, defaultSlot: 'user_rules', placement: 'system', protection: 'locked',
+    supportedScenarios: [...PACK_SCENARIOS, 'chat.summary'], defaultSlot: 'user_rules', placement: 'system', protection: 'locked',
     protectionReason: '正文在协议空间编辑；编排开关不能取消常驻注入。',
     contentKind: 'provider', providerId: 'protocol.prompt',
     contentDescription: '从 Protocol Repository 读取全部条目，无优先级或有效期筛选；目录页不会读取真实正文。', sourcePath: FACTORY_SOURCE,
@@ -119,7 +119,7 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
   define({
     id: 'context.tools_description', name: '可用工具说明', owner: 'host',
     description: '提供固定工具规则与已授权用途目录；展开状态位于本轮上下文，完整参数来自 function schema。', category: 'capability',
-    supportedScenarios: ['chat.private_reply', 'ledger.reply', 'raven_cat.ai_schedule_trigger'], defaultSlot: 'capabilities',
+    supportedScenarios: ['chat.private_reply', 'ledger.reply', 'raven_cat.ai_schedule_trigger', 'chat.summary'], defaultSlot: 'capabilities',
     placement: 'system', protection: 'locked', protectionReason: '工具说明必须与本轮真实能力边界一致。',
     contentKind: 'provider', providerId: 'tools.description',
     contentDescription: '由 Host 工具注册表按当前 AI 能力动态生成。', sourcePath: 'src/host/composition/agent/createAgentToolRegistry.ts',
@@ -133,7 +133,7 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
   }),
   define({
     id: 'context.user_identity', name: '对话者基础身份', owner: 'host',
-    description: '提供当前用户名及个人资料中的性别、年龄、身份、地区、其他设定与签名。', category: 'context', supportedScenarios: PACK_SCENARIOS,
+    description: '提供当前用户名及个人资料中的性别、年龄、身份、地区、其他设定与签名。', category: 'context', supportedScenarios: [...PACK_SCENARIOS, 'chat.summary'],
     defaultSlot: 'persona', placement: 'system', protection: 'overridable', contentKind: 'provider',
     providerId: 'profile.user_identity', contentDescription: '从 Profile Repository 读取同一份个人资料；只注入已填写的文字字段，保留完整其他设定。', sourcePath: FACTORY_SOURCE,
   }),
@@ -171,7 +171,7 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
     id: 'context.conversation_summary', name: '聊天摘要', owner: 'chat',
     description: '用户维护的历史记录，AI 只能追加；与尚未总结原文从同一事实快照读取。', category: 'context', supportedScenarios: ['chat.private_reply', 'call.live_reply', 'call.outgoing_decision'],
     defaultSlot: 'dynamic_context', placement: 'system', protection: 'locked', protectionReason: '处理游标与正文由 Chat 原子交接。',
-    contentKind: 'provider', providerId: 'chat.summary', contentDescription: '完整注入全部摘要，不因清消息删除，不裁剪正文。', sourcePath: 'src/host/prompt/PromptHistoryBuilder.ts',
+    contentKind: 'provider', providerId: 'chat.summary', contentDescription: '开启时注入二级摘要与尚未归纳一级摘要；关闭时不注入，原记录不因清消息删除。', sourcePath: 'src/host/prompt/PromptHistoryBuilder.ts',
   }),
   define({
     id: 'context.passive_memory', name: '自动带入的记忆', owner: 'host',

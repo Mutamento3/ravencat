@@ -1,4 +1,9 @@
 export {
+  getDeviceLocationAccessState,
+  getCurrentDeviceLocation,
+  openDeviceLocationSettings,
+  type DeviceLocationAccessState,
+  type DeviceLocationSnapshot,
   getInstalledApplicationInfo,
   type InstalledApplicationInfo,
   getDeviceBatterySnapshot,

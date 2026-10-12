@@ -28,7 +28,6 @@ function loadCommonJS(relativePath, mocks = {}, cache = new Map()) {
 }
 const { SCHEMAS } = loadCommonJS('src/platform/persistence/sqlite/schema.ts');
 const { runMigrations } = loadCommonJS('src/platform/persistence/sqlite/migrations.ts');
-const { migrateModelSelections } = loadCommonJS('src/platform/persistence/sqlite/modelSelectionSchema.ts');
 function executor(db) {
   const raw = {
     getFirstAsync: async (sql, params = []) => db.prepare(sql).get(...params) ?? null,
@@ -41,22 +40,15 @@ function executor(db) {
   };
   return raw;
 }
-function createDatabase() {
+async function createDatabase() {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON');
-  for (const sql of Object.values(SCHEMAS)) db.exec(sql);
+  await runMigrations(executor(db));
   return db;
 }
 function seedAssistants(db) {
   const insert = db.prepare(`INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at) VALUES (?, ?, ?, 'chat', '2026-10-05', '2026-10-05')`);
   for (const id of ['explicit', 'disabled', 'inherited', 'broken']) insert.run(id, `actor-${id}`, id);
-}
-function legacyBindings(db) {
-  db.exec(`CREATE TABLE capability_bindings (capability_kind TEXT PRIMARY KEY, model_source TEXT DEFAULT 'auxiliary_model', model_config_id TEXT, enabled INTEGER, updated_at TEXT);
-    CREATE TABLE assistant_capability_bindings (assistant_id TEXT, capability_kind TEXT, model_source TEXT DEFAULT 'auxiliary_model', model_config_id TEXT, enabled INTEGER, updated_at TEXT, PRIMARY KEY(assistant_id, capability_kind));
-    INSERT INTO capability_bindings VALUES ('embedding', 'auxiliary_model', 'embedding', 1, ''), ('ocr', 'auxiliary_model', 'vision', 1, ''), ('stt', 'auxiliary_model', 'stt', 1, ''), ('tts', 'auxiliary_model', 'voice-default', 1, ''), ('translate', 'auxiliary_model', 'retired', 1, '');
-    UPDATE ai_assistants SET image_processing_mode = 'vision_preprocess' WHERE id IN ('explicit', 'inherited');
-    INSERT INTO assistant_capability_bindings VALUES ('explicit', 'tts', 'auxiliary_model', 'voice-own', 1, ''), ('disabled', 'tts', 'auxiliary_model', 'voice-default', 0, ''), ('broken', 'tts', 'auxiliary_model', 'deleted', 1, '');`);
 }
 function selectionIds(db) {
   return [
@@ -136,7 +128,7 @@ function initialModelRuntime(db) {
 
 // 角色先于模型、模型先于角色，两种入口都固化选择；取消与手动改选不被其他资产覆盖。
 {
-  const db = createDatabase(); await runMigrations(executor(db));
+  const db = await createDatabase(); await runMigrations(executor(db));
   const runtime = initialModelRuntime(db);
   await runtime.createAssistant('before');
   assert.deepEqual(voices(db), []);
@@ -175,7 +167,7 @@ function initialModelRuntime(db) {
 
 // 首次资产未填完整或主动停用时先保存；修正后只初始化一次，不能被第二个模型抢占。
 {
-  const db = createDatabase(); await runMigrations(executor(db));
+  const db = await createDatabase(); await runMigrations(executor(db));
   const runtime = initialModelRuntime(db);
   await runtime.createAssistant('waiting');
   const vision = await runtime.create('ocr', { apiKey: null, enabled: false });
@@ -201,7 +193,7 @@ function initialModelRuntime(db) {
 
 // 创建失败回滚资产、默认 marker 与所有 owner；创建角色失败也不能留下半套选择。
 {
-  const db = createDatabase(); await runMigrations(executor(db));
+  const db = await createDatabase(); await runMigrations(executor(db));
   const runtime = initialModelRuntime(db);
   await runtime.createAssistant('existing');
   db.exec("CREATE TRIGGER reject_initial_moment BEFORE INSERT ON moment_settings BEGIN SELECT RAISE(ABORT, '模拟 owner 初始化失败'); END");
@@ -224,46 +216,9 @@ function initialModelRuntime(db) {
   db.close();
 }
 
-// 升级仅记录旧资产顺序，保留旧选择；重复启动和快照恢复不重放默认初始化。
-{
-  const db = createDatabase(); await runMigrations(executor(db)); seedAssistants(db);
-  db.exec(`DELETE FROM auxiliary_model_initial_defaults;
-    INSERT INTO auxiliary_model_configs (id, capability_kind, name, base_url, api_key, model, created_at, updated_at)
-    VALUES ('old-first', 'ocr', '首次', 'https://example.invalid', 'test', 'vision', '2026-01-01', '2026-10-07'),
-      ('old-second', 'ocr', '第二个', 'https://example.invalid', 'test', 'vision', '2026-02-01', '2026-10-08');
-    INSERT INTO chat_assistant_image_settings VALUES ('explicit', 'old-second'), ('disabled', NULL);
-    PRAGMA user_version = 107;`);
-  const { migrateAuxiliaryModelDefaults } = loadCommonJS('src/platform/persistence/sqlite/auxiliaryModelDefaultsSchema.ts');
-  db.exec("CREATE TRIGGER reject_default_marker BEFORE INSERT ON auxiliary_model_initial_defaults BEGIN SELECT RAISE(ABORT, '模拟默认迁移失败'); END");
-  await assert.rejects(migrateAuxiliaryModelDefaults(executor(db)), /默认迁移失败/);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 107);
-  db.exec('DROP TRIGGER reject_default_marker');
-  await migrateAuxiliaryModelDefaults(executor(db));
-  const runtime = initialModelRuntime(db);
-  await runtime.createAssistant('upgraded-new');
-  assert.equal(db.prepare("SELECT recognition_model_config_id AS id FROM chat_assistant_image_settings WHERE assistant_id = 'upgraded-new'").get().id, 'old-first');
-  await runtime.commands.updateAuxiliaryModelConfig({ id: 'old-first', settings: { name: '编辑旧模型' } });
-  assert.equal(db.prepare("SELECT recognition_model_config_id AS id FROM chat_assistant_image_settings WHERE assistant_id = 'explicit'").get().id, 'old-second');
-  assert.equal(db.prepare("SELECT recognition_model_config_id AS id FROM chat_assistant_image_settings WHERE assistant_id = 'disabled'").get().id, null);
-  assert.equal(db.prepare("SELECT assistant_id FROM chat_assistant_image_settings WHERE assistant_id = 'inherited'").get(), undefined);
-  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'initial-defaults-'));
-  const snapshot = path.join(folder, 'snapshot.db');
-  try {
-    await backup(db, snapshot);
-    const restored = new DatabaseSync(snapshot);
-    try {
-      await runMigrations(executor(restored));
-      assert.ok(restored.prepare('PRAGMA user_version').get().user_version >= 108);
-      assert.equal(restored.prepare("SELECT model_config_id AS id FROM auxiliary_model_initial_defaults WHERE capability_kind = 'ocr'").get().id, 'old-first');
-      assert.equal(restored.prepare("SELECT recognition_model_config_id AS id FROM chat_assistant_image_settings WHERE assistant_id = 'disabled'").get().id, null);
-    } finally { restored.close(); }
-  } finally { fs.unlinkSync(snapshot); fs.rmdirSync(folder); }
-  db.close();
-}
-
 // 当前选择保留、失效引用不复活、显式停用不继承；重启和备份恢复原样保留。
 {
-  const db = createDatabase();
+  const db = await createDatabase();
   seedAssistants(db);
   await runMigrations(executor(db));
   db.exec(`UPDATE memory_model_settings SET embedding_model_config_id='embedding';
@@ -277,7 +232,7 @@ function initialModelRuntime(db) {
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'external_service_configs'").get(), undefined);
   // 完整启动会继续执行后续迁移；这里只要求模型选择迁移已完成，不锁死全库终态版本。
   const completedVersion = db.prepare('PRAGMA user_version').get().user_version;
-  assert.ok(completedVersion >= 96, '完整升级必须完成角色视觉选择迁移');
+  assert.ok(completedVersion >= 96, '当前建库入口保留有效版本标记');
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'chat_image_settings'").get(), undefined);
   assert.deepEqual(
     db.prepare('SELECT assistant_id, recognition_model_config_id FROM chat_assistant_image_settings ORDER BY assistant_id').all().map((row) => [row.assistant_id, row.recognition_model_config_id]),
@@ -313,40 +268,15 @@ function initialModelRuntime(db) {
 }
 // 新安装没有任何自动选择。
 {
-  const db = createDatabase();
+  const db = await createDatabase();
   await runMigrations(executor(db));
   assert.deepEqual(selectionIds(db), [null, null, null]);
   assert.deepEqual(retiredTables(db), []);
   db.close();
 }
-// 迁移失败回滚 marker 与全部数据，修正失败原因后可完整重跑。
-{
-  const db = createDatabase(); seedAssistants(db); legacyBindings(db);
-  db.exec("CREATE TRIGGER reject_voice BEFORE INSERT ON assistant_voice_settings BEGIN SELECT RAISE(ABORT, '模拟写入失败'); END");
-  await assert.rejects(migrateModelSelections(executor(db)), /模拟写入失败/);
-  assert.deepEqual(selectionIds(db), [null, null, null]);
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 0);
-  assert.equal(retiredTables(db).length, 2);
-  db.exec('DROP TRIGGER reject_voice');
-  await migrateModelSelections(executor(db));
-  assert.deepEqual(selectionIds(db), ['embedding', 'vision', 'stt']);
-  assert.deepEqual(retiredTables(db), []);
-  db.close();
-}
-// 停用的全局能力不被启用，原有业务选择不受其他系统默认影响。
-{
-  const db = createDatabase(); seedAssistants(db); legacyBindings(db);
-  db.exec("UPDATE capability_bindings SET enabled = 0 WHERE capability_kind IN ('embedding', 'stt', 'tts')");
-  await migrateModelSelections(executor(db));
-  assert.deepEqual(selectionIds(db), [null, 'vision', null]);
-  assert.equal(voices(db).find(([id]) => id === 'inherited')[1], null);
-  assert.equal(voices(db).find(([id]) => id === 'explicit')[1], 'voice-own');
-  db.close();
-}
-
 // 真实仓储、公开命令与 Host：首次资产生效，后续选择仍归各业务 owner。
 {
-  const db = createDatabase(); await runMigrations(executor(db)); seedAssistants(db);
+  const db = await createDatabase(); await runMigrations(executor(db)); seedAssistants(db);
   const raw = executor(db);
   const persistence = { databaseCoordinator: { openTaskExecutor: () => ({
     ...raw,
@@ -428,7 +358,7 @@ function initialModelRuntime(db) {
   assert.equal((await chat.resolveChatRecognitionModel('explicit')).model.modelConfigId, vision.id);
   assert.equal((await chat.resolveChatRecognitionModel('inherited')).model.modelConfigId, otherVision.id);
   const imageRuntime = loadImageRuntime({
-    media: { readAsBase64: async () => 'AQID' },
+    media: { readVisionImage: async () => ({ base64: 'AQID', mimeType: 'image/jpeg' }) },
     vision: { resolveOCRModel: chat.resolveChatRecognitionModel },
     prompt: { assembleStandalone: async () => ({ systemPrompt: 'vision-system' }) },
   });
@@ -497,6 +427,7 @@ function loadImageRuntime(dependencies, aiClientOverrides = {}) {
   const module = loadCommonJS(
     'src/features/chat/reply/application/ResolveChatImageModelInput.ts',
     {
+      '@shared/runtime/abortSignal': loadCommonJS('src/shared/runtime/abortSignal.ts', {}),
       '@platform/ai': {
         createAIClient: (config) => {
           const client = {
@@ -517,7 +448,7 @@ function loadImageRuntime(dependencies, aiClientOverrides = {}) {
 
 const baseDeps = (vision) => ({
   assistantDirectory: { getBlockState: async () => ({ isBlocked: false }) },
-  media: { readAsBase64: async () => 'AQID' },
+  media: { readVisionImage: async () => ({ base64: 'AQID', mimeType: 'image/jpeg' }) },
   vision,
   agent: {},
   runPreparation: { prepare: async () => { throw new Error('不应执行'); } },
@@ -582,8 +513,8 @@ for (const temperature of [null, 0]) {
   assert.equal(result.route, 'direct_vision', '未选择视觉模型必须直接传图');
   assert.equal(result.ocrSucceeded, null);
   assert.deepEqual(result.parts.find((part) => part.type === 'image_url'), {
-    type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' },
-  });
+    type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AQID' },
+  }, '视觉输入类型以媒体读取契约返回的实际编码为准');
   assert.deepEqual(createdClients, []);
 }
 

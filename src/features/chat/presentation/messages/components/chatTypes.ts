@@ -1,5 +1,6 @@
 /** 定义聊天详情展示层的助手配置、回复引用类型及配置转换。 */
 
+import type { ChatReplyTarget } from '../../../messages/domain/chatMessageMetadata';
 import type { AIAssistantConfig } from '../../../messages/application/SendUserMessage';
 
 
@@ -30,15 +31,13 @@ export interface ChatDetailAIAssistantLike {
   systemPrompt?: string;
   enableTools?: boolean;
   allowMultipleBubbles?: boolean;
+  showTokenUsage?: boolean;
   enableStreamingReply?: boolean;
   isHostAI?: boolean;
   isBlocked?: boolean;
 }
 
-export interface ReplyTarget {
-  id: number;
-  text: string;
-}
+export type ReplyTarget = ChatReplyTarget;
 
 /**
  * Chat 用户语音录制的 presentation 状态机。

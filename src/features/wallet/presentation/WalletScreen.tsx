@@ -7,9 +7,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import { EmptyState, showAppDialog } from '@shared/ui';
-import { useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
 import type { AIProfile } from '@features/assistants';
-import type { QuickAction, WalletRecord } from '../domain/WalletRecord';
+import type { QuickAction, WalletCategories, WalletRecord } from '../domain/WalletRecord';
+import { DEFAULT_WALLET_CATEGORIES } from '../domain/WalletRecord';
 import type { UpdateWalletRecordInput } from '../domain/LedgerRepository';
 import type { LedgerAIReplyPayload } from '../application/TriggerLedgerAIReply';
 import { setLedgerAIAssistant } from '@features/assistants';
@@ -64,7 +65,7 @@ const createStyles = (theme: PresentationTheme) =>
       borderRadius: 24,
       alignItems: 'center',
     },
-    addBtnText: { color: theme.colors.background.app, fontSize: 16, fontWeight: '500' },
+    addBtnText: { color: theme.colors.text.inverse, fontSize: 16, fontWeight: '500' },
   });
 
 const WalletScreen: React.FC<WalletScreenProps> = ({ onOpenHistory, onLedgerAIReply }) => {
@@ -73,6 +74,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ onOpenHistory, onLedgerAIRe
 
   const [records, setRecords] = useState<WalletRecord[]>([]);
   const [quickActions, setQuickActions] = useState<QuickAction[]>([]);
+  const [categories, setCategories] = useState<WalletCategories>(DEFAULT_WALLET_CATEGORIES);
   const [monthlyStats, setMonthlyStats] = useState<MonthlyStats>({ expense: 0, income: 0 });
   const [aiList, setAiList] = useState<AIProfile[]>([]);
   const [ledgerAI, setLedgerAIState] = useState<AIProfile | null>(null);
@@ -97,6 +99,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ onOpenHistory, onLedgerAIRe
       const data = await getWalletScreenData(new Date());
       setRecords(data.records);
       setQuickActions(data.quickActions);
+      setCategories(data.categories);
       setMonthlyStats(data.monthlyStats);
       setAiList(data.aiList);
       setLedgerAIState(data.ledgerAI);
@@ -260,7 +263,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ onOpenHistory, onLedgerAIRe
         />
       </ScrollView>
 
-      <View style={styles.bottomBar}>
+      <ThemedSurface variant="inputBar" cornerRadius={0} style={styles.bottomBar}>
         <TouchableOpacity style={styles.settingBtn} onPress={() => setShowSettingsModal(true)}>
           <Text style={styles.settingText}>设置</Text>
         </TouchableOpacity>
@@ -273,16 +276,18 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ onOpenHistory, onLedgerAIRe
         >
           <Text style={styles.addBtnText}>收入 / 支出</Text>
         </TouchableOpacity>
-      </View>
+      </ThemedSurface>
 
       <AddRecordModal
         visible={showAddModal}
+        availableCategories={categories}
         onClose={() => setShowAddModal(false)}
         onSave={handleAddRecord}
         initialType={addType}
       />
       <AddRecordModal
         visible={recordActions.editingRecord !== null}
+        availableCategories={categories}
         initialRecord={recordActions.editingRecord}
         onClose={recordActions.closeEditor}
         onSave={recordActions.saveRecord}
@@ -291,6 +296,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ onOpenHistory, onLedgerAIRe
         visible={showQuickModal}
         onClose={() => setShowQuickModal(false)}
         quickActions={quickActions}
+        availableCategories={categories}
         onAdd={handleAddQuick}
         onDelete={handleDeleteQuick}
       />

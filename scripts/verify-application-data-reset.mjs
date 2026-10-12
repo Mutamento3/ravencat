@@ -635,32 +635,6 @@ assertContains(
   'Host reset 失败时必须在重挂后向调用方重新抛出原始错误',
 );
 
-const hostAgentRunAssembly = readSrc('src/host/composition/agent/HostAgentRunAssembly.ts');
-
-assertContains(
-  hostAgentRunAssembly,
-  'cancelActiveHostAgentRunsForReset',
-  'Host Agent Run assembly 必须导出恢复出厂取消能力',
-);
-
-assertContains(
-  hostAgentRunAssembly,
-  'active.runtime.cancel({ runId })',
-  '取消 Host Agent Runtime 必须调用 runtime.cancel({ runId })，不得只 clear Map',
-);
-
-assertContains(
-  hostAgentRunAssembly,
-  'activeHostAgentRuns.delete(runId)',
-  '取消成功后必须从 Map 删除对应运行',
-);
-
-assertContains(
-  hostAgentRunAssembly,
-  'AggregateError',
-  '取消 Host Agent Runtime 有失败时必须抛出 AggregateError',
-);
-
 const helpersAgain = readSrc('src/platform/persistence/helpers.ts');
 
 assertContains(

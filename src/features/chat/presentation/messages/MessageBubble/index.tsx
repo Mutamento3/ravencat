@@ -19,6 +19,7 @@ import type {
   ChatAttachment,
   StickerMessageSnapshot,
   ChatVoiceMessageMetadata,
+  ChatReplyQuote,
 } from '@features/chat/messages/domain';
 import type { MessageStatus, SenderType } from '@features/chat/messages/domain/ChatMessage';
 import type { MessageProcessCardState } from './messageBubbleTypes';
@@ -53,7 +54,11 @@ interface MessageBubbleProps {
   isMe: boolean;
   senderType: SenderType;
   tokensUsed?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedTokens?: number;
   replyToText?: string | null;
+  replyQuote?: ChatReplyQuote | null;
   avatar?: string | null;
   userAvatar?: string | null;
   aiId?: string | null;
@@ -76,7 +81,7 @@ interface MessageBubbleProps {
   canLongPressVoice?: boolean;
   onVoiceLongPress?: (position: { x: number; y: number }) => void;
   /** 图片卡片持有点击 responder，长按显式交回消息操作所有者。 */
-  onImageLongPress?: (position: { x: number; y: number }) => void;
+  onAttachmentLongPress?: (position: { x: number; y: number }) => void;
   translation?: BubbleTranslation | null;
   onHideTranslation?: () => void;
   renderState?: {
@@ -139,7 +144,11 @@ function MessageBubble({
   isMe,
   senderType,
   tokensUsed,
+  promptTokens,
+  completionTokens,
+  cachedTokens,
   replyToText,
+  replyQuote,
   avatar,
   userAvatar,
   aiId,
@@ -158,7 +167,7 @@ function MessageBubble({
   isVoiceTranscriptExpanded = false,
   canLongPressVoice = false,
   onVoiceLongPress,
-  onImageLongPress,
+  onAttachmentLongPress,
   translation,
   onHideTranslation,
   renderState,
@@ -216,11 +225,11 @@ function MessageBubble({
     !fallbackIsSystem &&
     !fallbackHasTextContent &&
     attachments.length === 1 &&
-    (attachments[0]?.type === 'image' || (!replyToText && attachments[0]?.type === 'file'));
+    !replyQuote && !replyToText;
   const fallbackIsStandaloneStickerMessage =
     !fallbackIsReasoning &&
     !fallbackIsSystem &&
-    !replyToText &&
+    !replyQuote && !replyToText &&
     !fallbackHasTextContent &&
     fallbackHasSticker;
   const variant = renderState?.variant || getBubbleVariant(isMe, senderType);
@@ -319,7 +328,7 @@ function MessageBubble({
     setReasoningContentHeight(height);
   }, [setReasoningContentHeight]);
 
-  const bubbleContent = sharedRecord ? <SharedChatRecordCard messageId={messageId} record={sharedRecord} comment={sharedComment} onPreviewFile={onPreviewFile} onLongPress={onImageLongPress} /> : (
+  const bubbleContent = sharedRecord ? <SharedChatRecordCard messageId={messageId} record={sharedRecord} comment={sharedComment} onPreviewFile={onPreviewFile} onLongPress={onAttachmentLongPress} /> : (
     <>
       {hasAttachments ? (
         <BubbleAttachmentList
@@ -327,7 +336,7 @@ function MessageBubble({
           hasTextContent={hasTextContent}
           isMe={isMe}
           onPreviewFile={onPreviewFile}
-          onImageLongPress={onImageLongPress}
+          onAttachmentLongPress={onAttachmentLongPress}
           styles={bubbleStyles}
         />
       ) : null}
@@ -336,7 +345,7 @@ function MessageBubble({
 
       {voice && messageId !== undefined ? (
         <VoiceMessageCard
-          messageId={messageId}
+          playbackTarget={{ kind: 'message', id: messageId, isIncoming: !isMe }}
           voice={voice}
           transcript={text}
           isTranscriptExpanded={isVoiceTranscriptExpanded}
@@ -385,7 +394,7 @@ function MessageBubble({
             {bubbleContent}
           </View>
         ) : null}
-        {!isSystem ? <TokenInfo tokensUsed={tokensUsed} isMe={isMe} /> : null}
+        {!isSystem ? <TokenInfo tokensUsed={tokensUsed} promptTokens={promptTokens} completionTokens={completionTokens} cachedTokens={cachedTokens} isMe={isMe} /> : null}
         {!isSystem && !isReasoning && translation ? (
           <TranslationBlock
             translation={translation}
@@ -394,8 +403,8 @@ function MessageBubble({
             styles={bubbleStyles}
           />
         ) : null}
-        {!isSystem && !isReasoning && replyToText ? (
-          <ReplyQuote replyToText={replyToText} isMe={isMe} />
+        {!isSystem && !isReasoning && (replyQuote || replyToText) ? (
+          <ReplyQuote replyToText={replyToText} quote={replyQuote} messageId={messageId} onPreviewFile={onPreviewFile} isMe={isMe} />
         ) : null}
       </PaperNoteMessageFrame>
     );
@@ -513,10 +522,10 @@ function MessageBubble({
         {!isSystem ? (
           layoutProbeHandlers?.tokenInfo ? (
             <View onLayout={layoutProbeHandlers.tokenInfo}>
-              <TokenInfo tokensUsed={tokensUsed} isMe={isMe} />
+              <TokenInfo tokensUsed={tokensUsed} promptTokens={promptTokens} completionTokens={completionTokens} cachedTokens={cachedTokens} isMe={isMe} />
             </View>
           ) : (
-            <TokenInfo tokensUsed={tokensUsed} isMe={isMe} />
+            <TokenInfo tokensUsed={tokensUsed} promptTokens={promptTokens} completionTokens={completionTokens} cachedTokens={cachedTokens} isMe={isMe} />
           )
         ) : null}
         {!isSystem && !isReasoning && translation ? (
@@ -527,8 +536,8 @@ function MessageBubble({
             styles={bubbleStyles}
           />
         ) : null}
-        {!isSystem && !isReasoning && replyToText ? (
-          <ReplyQuote replyToText={replyToText} isMe={isMe} />
+        {!isSystem && !isReasoning && (replyQuote || replyToText) ? (
+          <ReplyQuote replyToText={replyToText} quote={replyQuote} messageId={messageId} onPreviewFile={onPreviewFile} isMe={isMe} />
         ) : null}
       </View>
       
@@ -547,7 +556,11 @@ function areEqual(prevProps: MessageBubbleProps, nextProps: MessageBubbleProps):
     prevProps.isMe === nextProps.isMe &&
     prevProps.senderType === nextProps.senderType &&
     prevProps.tokensUsed === nextProps.tokensUsed &&
+    prevProps.promptTokens === nextProps.promptTokens &&
+    prevProps.completionTokens === nextProps.completionTokens &&
+    prevProps.cachedTokens === nextProps.cachedTokens &&
     prevProps.replyToText === nextProps.replyToText &&
+    prevProps.replyQuote === nextProps.replyQuote &&
     prevProps.avatar === nextProps.avatar &&
     prevProps.userAvatar === nextProps.userAvatar &&
     prevProps.aiId === nextProps.aiId &&
@@ -566,7 +579,7 @@ function areEqual(prevProps: MessageBubbleProps, nextProps: MessageBubbleProps):
     prevProps.isVoiceTranscriptExpanded === nextProps.isVoiceTranscriptExpanded &&
     prevProps.canLongPressVoice === nextProps.canLongPressVoice &&
     prevProps.onVoiceLongPress === nextProps.onVoiceLongPress &&
-    prevProps.onImageLongPress === nextProps.onImageLongPress &&
+    prevProps.onAttachmentLongPress === nextProps.onAttachmentLongPress &&
     prevProps.translation?.text === nextProps.translation?.text &&
     prevProps.translation?.sourceLabel === nextProps.translation?.sourceLabel &&
     prevProps.onHideTranslation === nextProps.onHideTranslation &&

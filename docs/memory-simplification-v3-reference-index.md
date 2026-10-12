@@ -2,7 +2,7 @@
 
 > 产品规则见 [当前契约](./memory-simplification-v3-implementation-spec.md)，入口与验证边界见 [Memory README](../src/features/memory/README.md)。
 >
-> 核对日期：2026-10-04。以下路径均为当前代码，不保留旧设计文件的待施工清单。
+> 核对日期：2026-10-11。以下路径均为当前代码，不保留旧设计文件的待施工清单。
 
 ## 1. Memory
 
@@ -20,6 +20,7 @@
 | infrastructure/SQLiteMemoryEntryRepository.ts | scoped SQL、收据、原子 claim／revision／模型 CAS |
 | aiTools/MemoryAgentTools.ts | remember／recall／update／forget 的 Agent-native 契约 |
 | presentation/MemoryScreen.tsx、memoryScreenStyles.ts | 新扁平 UI、500 字编辑、trigger 开关、数量及向量详情 |
+| presentation/MemorySpacePanel.tsx、MemoryTriggerScreen.tsx | 多词／多记忆关联组创建、词集合与组规则编辑、组内记忆开关 |
 | index.ts、composition.ts | 稳定 facade 与 Host-only 装配出口 |
 
 ## 2. Chat 与 Prompt
@@ -46,7 +47,7 @@
 | src/host/composition/agent/createAgentToolRegistry.ts、HostAgentRunAssembly.ts | 唯一工具注册、授权与 run 终态清理 |
 | src/host/runtime/MemoryEmbeddingQueueCoordinator.ts、ChatSummaryQueueCoordinator.ts | 前台空闲调度、取消、有限 retry 唤醒 |
 | src/host/KimiPhoneHost.tsx、composition/createBackupRuntime.ts | bootstrap 门与 reset／restore quiesce |
-| src/platform/persistence/sqlite/memoryV3Schema.ts、chatSummarySchema.ts、migrations.ts | 新物理表、排序锚点、尾部定向清旧、记忆独立摘要的数据保留型迁移 |
+| src/platform/persistence/sqlite/memoryV3Schema.ts、chatSummarySchema.ts、migrations.ts | 当前物理表、排序锚点、117 关联组迁移与版本事务；旧摘要迁移 helper 仅用于局部验证 |
 | src/features/memory/application/MemoryEmbeddingModels.ts、src/features/assistants/ResolveAuxiliaryModel.ts、AuxiliaryModelsChanged.ts | Memory 明确向量选择、模型资产解析与 commit 后变更信号 |
 | src/platform/ai/BaseAIClient.ts、types.ts | embedding 网络／响应错误分类与取消边界 |
 | src/app/memory/index.tsx、settings.tsx | 当前 Memory UI／全局 embedding 配置路由 |
@@ -55,7 +56,7 @@
 
 ## 4. 验证
 
-- scripts/verify-memory-v3.mjs：隔离 SQLite 的正文、权限、分页、CAS、失败预算、摘要交接与升级／快照行为。
+- scripts/verify-memory-v3.mjs：隔离 SQLite 的正文、权限、关联组多对多／同名词／独立开关、分页、CAS、失败预算、摘要交接与升级／快照行为。
 - scripts/verify-memory-v3-prompt.mjs：真实 Prompt 组装、旧预设、稳定前缀、完整原文／正文、Current Input 与 Calls。
 - scripts/chat-timeline-fixture.mjs：小型 Chat 仓储用例装配真实 canonical anchor schema。
 - npm run verify:memory：以上两组 V3 行为验证入口。

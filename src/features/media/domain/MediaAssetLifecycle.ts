@@ -15,10 +15,12 @@ export type MediaAssetReferenceKind =
   | 'group_avatar'
   | 'moment_media'
   | 'sticker'
+  | 'ai_download'
   | 'chat_attachment'
   | 'chat_thumbnail'
   | 'chat_voice'
-  | 'chat_sticker';
+  | 'chat_sticker'
+  | 'chat_favorite';
 
 /**
  * 一条真实业务引用。ownerId 只用于诊断，不承担级联删除语义。

@@ -212,7 +212,7 @@ const forwarded = makeSharedMessage(groupRecord);
 const context = load('src/features/chat/summary/domain/ChatContext.ts').projectChatContextMessage(forwarded, [time, 999, 0, 999]);
 assert.match(context.content, /A 的发言/); assert.match(context.content, /agent-a/);
 const timeline = load('src/features/chat/summary/domain/ChatSummaryTimeline.ts').buildConversationTimeline([context], []);
-snapshot = { timeline, segments: [] };
+snapshot = { timeline, segments: [], contextSegments: [], settings: { generationEnabled: true, fixedMessageId: null } };
 boundaries.set('@features/chat', { ...metadata, ...sharedDomain, ...inputBuilder, getChatSummaryContext: async () => snapshot });
 const history = load('src/host/prompt/PromptHistoryBuilder.ts').promptHistoryBuilder;
 for (const agentId of ['agent-a', 'agent-b']) {

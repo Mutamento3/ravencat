@@ -36,7 +36,7 @@ export const createAddRecordModalStyles = (theme: PresentationTheme) =>
     },
     typeSwitch: {
       flexDirection: 'row',
-      backgroundColor: theme.colors.background.screen,
+      backgroundColor: theme.colors.surface.muted,
       borderRadius: theme.radius.md,
       marginBottom: theme.spacing.xl,
     },
@@ -47,14 +47,14 @@ export const createAddRecordModalStyles = (theme: PresentationTheme) =>
       borderRadius: theme.radius.md,
     },
     typeBtnActive: {
-      backgroundColor: theme.colors.background.app,
+      backgroundColor: theme.colors.brand.primary,
     },
     typeBtnText: {
       fontSize: 15,
       color: theme.colors.text.secondary,
     },
     typeBtnTextActive: {
-      color: theme.colors.text.primary,
+      color: theme.colors.brand.onPrimary,
       fontWeight: '500',
     },
     amountWrap: {
@@ -94,7 +94,7 @@ export const createAddRecordModalStyles = (theme: PresentationTheme) =>
       paddingHorizontal: 14,
       paddingVertical: 8,
       margin: 4,
-      backgroundColor: theme.colors.background.screen,
+      backgroundColor: theme.colors.surface.muted,
       borderRadius: 16,
     },
     categoryBtnActive: {
@@ -110,7 +110,7 @@ export const createAddRecordModalStyles = (theme: PresentationTheme) =>
     detailInput: {
       height: 44,
       paddingHorizontal: 12,
-      backgroundColor: theme.colors.background.screen,
+      backgroundColor: theme.colors.surface.input,
       borderRadius: theme.radius.md,
       fontSize: 15,
       color: theme.colors.text.primary,
@@ -121,6 +121,7 @@ export const createAddRecordModalStyles = (theme: PresentationTheme) =>
 export const createQuickActionModalStyles = (theme: PresentationTheme) =>
   StyleSheet.create({
     content: {
+      flexShrink: 1,
       backgroundColor: theme.colors.background.app,
       padding: theme.spacing.xl,
     },
@@ -157,11 +158,12 @@ export const createQuickActionModalStyles = (theme: PresentationTheme) =>
     formInput: {
       flex: 1,
       height: 40,
-      backgroundColor: theme.colors.background.app,
+      backgroundColor: theme.colors.surface.input,
       borderRadius: theme.radius.md,
       paddingHorizontal: 12,
       marginRight: 8,
       fontSize: 15,
+      color: theme.colors.text.primary,
     },
     typeSwitch: {
       flexDirection: 'row',
@@ -171,7 +173,7 @@ export const createQuickActionModalStyles = (theme: PresentationTheme) =>
       flex: 1,
       paddingVertical: 8,
       alignItems: 'center',
-      backgroundColor: theme.colors.background.app,
+      backgroundColor: theme.colors.surface.muted,
       borderRadius: theme.radius.md,
       marginHorizontal: 4,
     },
@@ -195,18 +197,18 @@ export const createQuickActionModalStyles = (theme: PresentationTheme) =>
       paddingHorizontal: 12,
       paddingVertical: 6,
       margin: 4,
-      backgroundColor: theme.colors.background.app,
+      backgroundColor: theme.colors.surface.muted,
       borderRadius: 12,
     },
     catBtnActive: {
-      backgroundColor: theme.colors.surface.muted,
+      backgroundColor: theme.colors.brand.primary,
     },
     catText: {
       fontSize: 13,
       color: theme.colors.text.secondary,
     },
     catTextActive: {
-      color: theme.colors.text.link,
+      color: theme.colors.brand.onPrimary,
     },
     addBtn: {
       backgroundColor: theme.colors.brand.primary,
@@ -220,7 +222,7 @@ export const createQuickActionModalStyles = (theme: PresentationTheme) =>
       fontWeight: '500',
     },
     list: {
-      maxHeight: 300,
+      flexShrink: 1,
     },
     empty: {
       textAlign: 'center',

@@ -51,6 +51,8 @@ export type PromptBlockKey =
   | 'recent_moments_summary'
   | 'passive_memory'
   | 'conversation_summary'
+  | 'chat_summary_task'
+  | 'chat_secondary_summary_task'
   | 'recent_chat_window'
   | 'together_listening_runtime'
   | 'current_input';

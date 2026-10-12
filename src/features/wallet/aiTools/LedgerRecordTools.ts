@@ -4,7 +4,7 @@ import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { addWalletRecord } from '../application/AddRecord';
 import { deleteWalletRecord, updateWalletRecord } from '../application/WalletPresentation';
 import type { ILedgerRepository, UpdateWalletRecordInput } from '../domain/LedgerRepository';
-import type { WalletRecordType } from '../domain/WalletRecord';
+import { DEFAULT_WALLET_CATEGORIES, type WalletRecordType } from '../domain/WalletRecord';
 
 interface AddLedgerRecordArgs {
   type: WalletRecordType;
@@ -21,7 +21,10 @@ interface UpdateLedgerRecordArgs extends UpdateWalletRecordInput {
 // 「不能猜测金额」与「必须用真实账单 ID」由下面参数 schema 表达，工具 description 不再复述。
 const recordFields = {
   type: { type: 'string', enum: ['expense', 'income'], description: '支出或收入' },
-  category: { type: 'string', pattern: '\\S', description: '分类，如餐饮、交通、购物、工资' },
+  category: {
+    type: 'string', pattern: '\\S',
+    description: `分类标签。支出预设：${DEFAULT_WALLET_CATEGORIES.expense.join('、')}；收入预设：${DEFAULT_WALLET_CATEGORIES.income.join('、')}。优先复用预设或已有自定义分类的原名，不为同义概念另创名称；具体消费内容写入 detail。只有已有分类确实不适用或用户明确要求时才使用新分类。`,
+  },
   amount: { type: 'number', exclusiveMinimum: 0, description: '实际金额（元），必须来自用户提供的信息，不能猜测' },
   detail: { type: 'string', description: '备注，如午餐吃牛肉面；空字符串可清除备注' },
   recordDate: { type: 'string', format: 'date', description: '账单日期，YYYY-MM-DD；新增时省略表示用户当地今天' },
@@ -43,7 +46,7 @@ export const AddLedgerRecordTool: Tool<AddLedgerRecordArgs, ToolContext> = {
   name: 'addLedgerRecord',
   definition: {
     name: 'addLedgerRecord',
-    description: '把用户告知/要求的消费或收入记入羽库；已有账单不要重复新增。成功后返回账单 ID。',
+    description: '把用户告知/要求的消费或收入记入羽库；已有账单不要重复新增。记账前用 getLedgerContext 的 categories 模式查询已有分类，尽量复用，避免另创同义标签。成功后返回账单 ID。',
     parameters: {
       type: 'object', properties: recordFields,
       required: ['type', 'category', 'amount'], additionalProperties: false,
@@ -69,7 +72,7 @@ export const UpdateLedgerRecordTool: Tool<UpdateLedgerRecordArgs, ToolContext> =
   name: 'updateLedgerRecord',
   definition: {
     name: 'updateLedgerRecord',
-    description: '编辑账单；只传需要改的字段，其余保持原值。多条无法区分时先询问。',
+    description: '编辑账单；只传需要改的字段，其余保持原值。修改分类前用 getLedgerContext 的 categories 模式查询已有分类，尽量复用，避免另创同义标签。多条无法区分时先询问。',
     parameters: updateRecordParameters,
   },
   async execute({ recordId, ...updates }, context) {

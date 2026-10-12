@@ -1449,6 +1449,74 @@ assert.match(failedTool.text, /调用失败/);
   assert.deepEqual(committedParams.openedToolPackageIds, ['memory']);
 }
 
+// 工具直接结束的真实 Runtime → canonical projector 链路，不制造空 final step。
+for (const [toolName, data, expectedText] of [
+  ['select_sticker', {
+    discriminator: 'ravencat.sticker.send.v1',
+    sticker: JSON.parse(stickerItems[0].message.metadataJson).sticker,
+  }, ''],
+  ['send_voice_message', {
+    discriminator: 'ravencat.chat.voice_message.send.v1', transcript: '晚安，我陪着你',
+    mimeType: 'audio/wav', durationMs: 1200, preparedMedia: {},
+  }, '晚安，我陪着你'],
+]) {
+  const canonicalProjectorModule = loadTypeScriptModule('src/features/chat/reply/agent/ChatAgentRunProjector.ts', {
+    '../application/ChatReplyAbort': replyAbortMock,
+    './ChatAgentToolTimelineProjector': toolTimelineModule,
+    './ChatStreamingReplyProjector': {}, './ChatAgentTimeline': timelineModule,
+  });
+  const commits = [];
+  const runId = `finish-${toolName}`;
+  const projector = new canonicalProjectorModule.ChatAgentRunProjector({
+    sessionId: 'session-1', repository: {}, callbacks: {},
+    aiConfig: { id: 'assistant-1', agentId: 'agent-1', name: 'Kimi' },
+    runtimeContext: { replyRunId: runId }, policy: { bubbleDeliveryMode: 'multi-bubble' },
+    projection: { kind: 'canonical', commit: { commitAgentTimeline: async (params) => {
+      commits.push(params);
+      return { outcome: 'committed', messages: params.items.map(({ message }, index) => ({ ...message, id: index + 1 })) };
+    } } },
+    isTimelineHidden: () => true, stopRuntime: () => {}, replyRunId: runId,
+    finalAssistantPolicy: 'commit_as_reply',
+  });
+  const registry = new AgentToolRegistry();
+  registry.register(createTool(toolName, async () => ({
+    status: 'success', data, modelContent: '输出已准备',
+    metadata: { fulfillsUserVisibleOutput: true, completionIntent: 'finish' },
+  })));
+  let requests = 0;
+  const runtime = new AgentRuntime({
+    registry,
+    modelGateway: { runTurn: async () => {
+      requests += 1;
+      assert.equal(requests, 1, '发送工具 finish 后不得请求第二个模型回合');
+      const turn = createTimelineTurn({
+        toolCalls: [modelToolCall('output', toolName)], finishReason: 'tool_calls',
+      });
+      await projector.projectModelTurn(1, turn);
+      return turn;
+    } },
+  });
+  const result = await runtime.run({
+    runId,
+    task: chatTaskModule.createChatAgentTask({
+      runId, goal: '发送一条回复', assistantId: 'assistant-1', sessionId: 'session-1',
+      allowedToolNames: [toolName], modelTransport: 'complete', createdAt: new Date(0).toISOString(),
+    }),
+    initialHistory: [], eventSink: (event) => projector.handleEvent(event),
+  });
+  assert.equal(result.terminalCode, 'COMPLETED');
+  await projector.completeRun(result);
+  assert.equal(commits.length, 1, '工具结束仍进入唯一 canonical 提交出口');
+  assert.equal(commits[0].items.length, 1, '单独发送不产生多余文本或工具状态气泡');
+  assert.equal(commits[0].items[0].message.senderType, 'assistant');
+  assert.equal(commits[0].items[0].message.text, expectedText);
+  if (toolName === 'send_voice_message') {
+    assert.equal(typeof commits[0].items[0].materializeInTransaction, 'function', '语音仍由 T3 物化媒体');
+  } else {
+    assert.equal(JSON.parse(commits[0].items[0].message.metadataJson).sticker.stickerId, 'sticker-1');
+  }
+}
+
 // 自主执行即使不发消息，也保留结论；失败/取消保留此前已发生的模型与工具记录。
 for (const terminalCode of ['COMPLETED', 'MODEL_REQUEST_FAILED', 'CANCELLED_BY_USER']) {
   const activityProjectorModule = loadTypeScriptModule('src/features/chat/reply/agent/ChatAgentRunProjector.ts', {

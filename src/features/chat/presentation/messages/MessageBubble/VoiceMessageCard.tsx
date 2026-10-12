@@ -5,16 +5,19 @@ import { Pressable, StyleSheet, Text, View, type GestureResponderEvent } from 'r
 import type { ChatVoiceMessageMetadata } from '@features/chat/messages/domain';
 import {
   voiceMessagePlaybackCoordinator,
+  getVoicePlaybackKey,
+  type VoicePlaybackTarget,
   type VoiceMessagePlaybackViewState,
 } from '@features/chat/messages/application/VoiceMessagePlaybackCoordinator';
 import { useTheme } from '@shared/theme';
 
 interface VoiceMessageCardProps {
-  messageId: number;
+  playbackTarget: VoicePlaybackTarget;
   voice: ChatVoiceMessageMetadata['voice'];
   transcript: string;
   isTranscriptExpanded: boolean;
   isMe: boolean;
+  foregroundColor?: string;
   voicePlayedAt?: string | null;
   /** 是否允许长按打开消息 action menu（“转文字 / 收起文字”）。 */
   canLongPress?: boolean;
@@ -37,15 +40,16 @@ interface VoiceMessageCardProps {
  */
 export default function VoiceMessageCard(props: VoiceMessageCardProps) {
   const theme = useTheme();
-  const { canLongPress = false, onLongPress, messageId } = props;
+  const { canLongPress = false, onLongPress, playbackTarget } = props;
+  const playbackKey = getVoicePlaybackKey(playbackTarget);
   const [playback, setPlayback] = useState<VoiceMessagePlaybackViewState>({
     state: 'idle', positionMs: 0, durationMs: props.voice.durationMs,
   });
   useEffect(() => voiceMessagePlaybackCoordinator.subscribe(
-    props.messageId,
+    playbackKey,
     props.voice.durationMs,
     setPlayback,
-  ), [props.messageId, props.voice.durationMs]);
+  ), [playbackKey, props.voice.durationMs]);
 
   // 长按已触发时，随后的 press/onPress 必须被丢弃，避免长按后又播放一次。
   const longPressHandledRef = useRef(false);
@@ -76,12 +80,11 @@ export default function VoiceMessageCard(props: VoiceMessageCardProps) {
       return;
     }
     void voiceMessagePlaybackCoordinator.toggle(
-      messageId,
+      playbackTarget,
       props.voice.mediaAssetId,
       props.voice.durationMs,
-      !props.isMe,
     );
-  }, [messageId, props.isMe, props.voice.durationMs, props.voice.mediaAssetId]);
+  }, [playbackTarget, props.voice.durationMs, props.voice.mediaAssetId]);
 
   const progress = playback.durationMs > 0
     ? Math.min(1, playback.positionMs / playback.durationMs)
@@ -91,7 +94,7 @@ export default function VoiceMessageCard(props: VoiceMessageCardProps) {
   // 不能用 brand.onPrimary：它的语义是"品牌主色之上的前景色"，前提是内容坐在
   // brand.primary 底上。Paper Note 用户气泡是 transparent（直接坐在 background.app
   // 上），而该主题 brand.onPrimary 恰好等于 background.app，会把播放控件画成背景色。
-  const foregroundColor = props.isMe ? theme.colors.chat.userText : theme.colors.chat.aiText;
+  const foregroundColor = props.foregroundColor ?? (props.isMe ? theme.colors.chat.userText : theme.colors.chat.aiText);
   return (
     <View style={styles.container}>
       <Pressable
@@ -121,7 +124,7 @@ export default function VoiceMessageCard(props: VoiceMessageCardProps) {
             {formatDuration(playback.durationMs || props.voice.durationMs)}
           </Text>
         </View>
-        {!props.isMe && !props.voicePlayedAt ? (
+        {playbackTarget.kind === 'message' && !props.isMe && !props.voicePlayedAt ? (
           <View style={[styles.unplayedDot, { backgroundColor: theme.colors.feedback.error }]} />
         ) : null}
       </Pressable>

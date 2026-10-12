@@ -4,7 +4,7 @@ import {
   getTogetherListeningActivityById,
   leaveTogetherListeningByUser,
 } from '@features/togetherListening';
-import { completePendingBackupRestore } from '../composition/completePendingBackupRestore';
+import { ensureHostDatabaseReady } from '../composition/ensureHostDatabaseReady';
 
 interface TogetherListeningNotificationActionTaskData {
   notificationAction?: string;
@@ -27,7 +27,7 @@ export async function runTogetherListeningNotificationActionHeadlessTask(
     return;
   }
 
-  await completePendingBackupRestore();
+  await ensureHostDatabaseReady();
   const activity = await getTogetherListeningActivityById(activityId);
   if (
     !activity

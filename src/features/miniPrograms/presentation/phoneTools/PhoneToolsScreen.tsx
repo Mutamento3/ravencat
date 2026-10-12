@@ -1,9 +1,9 @@
 /** 手机工具小程序：Phone Tools 产品能力目录。 */
 
-import { showAppDialog } from '@shared/ui';
+import { Toggle } from '@shared/ui';
 import React from 'react';
 import { StyleSheet, ScrollView, Text, TouchableOpacity, View } from 'react-native';
-import { openUsageAccessSettings } from '@platform/device';
+import { MapPin } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -13,12 +13,13 @@ import {
 } from '@features/phoneTools';
 import type {
   PhoneToolCatalogItemId,
-  PhoneToolPackageStatus,
 } from '@features/phoneTools';
 import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import { buildPhoneToolsDirectory } from './PhoneToolsDirectoryModel';
+import { usePhoneToolSettings } from './usePhoneToolSettings';
+import { getToolPackageStatusLabel } from './ToolPackageDisplayModel';
 
 interface PhoneToolsScreenProps {
   onBack: () => void;
@@ -39,11 +40,7 @@ const PHONE_TOOL_ICONS = {
   appLaunch: 'open-outline',
   softAppLock: 'lock-closed-outline',
   softAppLockRelease: 'lock-open-outline',
-} as const satisfies Record<PhoneToolCatalogItemId, keyof typeof Ionicons.glyphMap>;
-
-function isPackageAvailable(status: PhoneToolPackageStatus): boolean {
-  return status === 'available';
-}
+} as const satisfies Record<Exclude<PhoneToolCatalogItemId, 'currentLocation'>, keyof typeof Ionicons.glyphMap>;
 
 const createStyles = (theme: PresentationTheme) =>
   StyleSheet.create({
@@ -61,6 +58,12 @@ const createStyles = (theme: PresentationTheme) =>
       marginHorizontal: theme.spacing.lg,
       color: theme.colors.text.secondary,
       fontSize: 12,
+    },
+    guidance: {
+      marginHorizontal: theme.spacing.lg,
+      color: theme.colors.text.secondary,
+      fontSize: 12,
+      lineHeight: 18,
     },
     card: {
       borderRadius: theme.radius.lg,
@@ -92,6 +95,8 @@ const createStyles = (theme: PresentationTheme) =>
     titleRow: {
       flexDirection: 'row',
       alignItems: 'center',
+      flexWrap: 'wrap',
+      rowGap: 4,
     },
     itemName: {
       flexShrink: 1,
@@ -131,13 +136,16 @@ export default function PhoneToolsScreen({
 }: PhoneToolsScreenProps) {
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
+  const settings = usePhoneToolSettings();
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <NavigationHeader title="手机工具" onGoBack={onBack} help={{ sections: [
-        { title: '能力目录', body: '主理 AI 当前可用与正在开发的手机能力。' },
+        { title: '调用权限', body: '开关与提示词中心共用主理 AI 的单项调用权限；授权系统权限不会自动打开调用开关。' },
+        { title: '系统状态', body: '权限就绪不保证每次调用成功，目标应用、当前页面和播放会话由工具执行时判断。返回页面后刷新系统权限状态。' },
       ] }} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        <Text style={styles.guidance}>{settings.description}</Text>
         {PHONE_TOOL_SECTIONS.map((section) => (
           <View key={section.id}>
             <Text style={styles.categoryTitle}>{section.title}</Text>
@@ -151,7 +159,7 @@ export default function PhoneToolsScreen({
                 const rowContent = (
                   <>
                     <View style={styles.iconContainer}>
-                      <Ionicons
+                      {tool.id === 'currentLocation' ? <MapPin size={20} color={theme.colors.brand.primary} /> : <Ionicons
                         name={PHONE_TOOL_ICONS[tool.id]}
                         size={20}
                         color={
@@ -159,7 +167,7 @@ export default function PhoneToolsScreen({
                             ? theme.colors.brand.primary
                             : theme.colors.text.tertiary
                         }
-                      />
+                      />}
                     </View>
                     <View style={styles.textContainer}>
                       <View style={styles.titleRow}>
@@ -168,40 +176,29 @@ export default function PhoneToolsScreen({
                           <Text
                             style={[
                               styles.statusText,
-                              tool.implementationStatus === 'available'
+                              tool.implementationStatus === 'available' && settings.statusLabel(tool.toolName) === '权限就绪'
                                 ? styles.statusAvailable
                                 : styles.statusPlanned,
                             ]}
                           >
-                            {tool.implementationStatus === 'available' ? '可使用' : '开发中'}
+                            {tool.implementationStatus === 'available' ? settings.statusLabel(tool.toolName) : '开发中'}
                           </Text>
                         </View>
                       </View>
                       <Text style={styles.itemDescription}>{tool.description}</Text>
                     </View>
-                    {tool.destination !== null && (
-                      <Ionicons
-                        name="chevron-forward-outline"
-                        size={16}
-                        color={theme.colors.text.tertiary}
-                        style={styles.chevron}
-                      />
-                    )}
                   </>
-                );
-
-                if (tool.destination === 'usageAccessSettings') return (
-                  <TouchableOpacity key={tool.id} style={rowStyle} activeOpacity={0.7}
-                    onPress={() => { void openUsageAccessSettings().catch((error: unknown) => {
-                      showAppDialog({ title: '无法打开设置', message: error instanceof Error ? error.message : '无法打开使用情况访问设置' });
-                    }); }} accessibilityRole="button" accessibilityHint="打开系统使用情况访问设置">
-                    {rowContent}
-                  </TouchableOpacity>
                 );
 
                 return (
                   <View key={tool.id} style={rowStyle}>
                     {rowContent}
+                    {tool.implementationStatus === 'available' && <Toggle
+                      accessibilityLabel={`允许调用${tool.title}`}
+                      disabled={settings.disabled}
+                      value={settings.isEnabled(tool.toolName)}
+                      onValueChange={(enabled) => { void settings.toggleTool(tool.toolName, enabled); }}
+                    />}
                   </View>
                 );
               })}
@@ -237,12 +234,10 @@ export default function PhoneToolsScreen({
                       <Text
                         style={[
                           styles.statusText,
-                          isPackageAvailable(toolPackage.implementationStatus)
-                            ? styles.statusAvailable
-                            : styles.statusPlanned,
+                          styles.statusPlanned,
                         ]}
                       >
-                        {isPackageAvailable(toolPackage.implementationStatus) ? '可使用' : '开发中'}
+                        {getToolPackageStatusLabel(toolPackage.implementationStatus)}
                       </Text>
                     </View>
                   </View>

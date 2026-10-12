@@ -182,6 +182,9 @@ export interface GroupChatMessageMetadata {
 }
 
 export interface ParsedChatMessageMetadata {
+  replyQuote?: ChatReplyQuote;
+  /** 与已有用量共同描述一次模型请求；缓存量是输入的子集。 */
+  cachedTokens?: number;
   sharedRecord?: SharedChatRecord;
   actorName?: string | null;
   kind?: ChatMessageAttachmentMetadata['kind'] | 'sticker' | string;
@@ -216,6 +219,62 @@ export interface ParsedChatMessageMetadata {
   phase?: 'reasoning' | 'assistant' | 'tool' | string;
   terminalCode?: string;
   groupChat?: GroupChatMessageMetadata;
+}
+
+/** 引用保存当时的内容和媒体身份，原消息改写或删除不改变已发送引用。 */
+export interface ChatReplyQuote {
+  text: string;
+  attachments: ChatAttachment[];
+  sticker: StickerMessageSnapshot | null;
+  voice: ChatVoiceMessageMetadata['voice'] | null;
+}
+
+export interface ChatReplyTarget {
+  id: number;
+  text: string;
+  quote: ChatReplyQuote;
+}
+
+export function createChatReplyTarget(message: ChatMessage): ChatReplyTarget {
+  const quote: ChatReplyQuote = {
+    text: message.text,
+    attachments: getMessageAttachments(message).map((attachment) => ({ ...attachment })),
+    sticker: getMessageSticker(message),
+    voice: getMessageVoice(message),
+  };
+  const labels = quote.attachments.map((attachment) => `[${attachment.type === 'image' ? '图片' : '文件'}：${attachment.fileName}]`);
+  if (quote.sticker) labels.push(buildStickerMessagePreviewText(quote.sticker));
+  if (quote.voice) labels.push('[语音消息]');
+  return { id: message.id, text: [labels.join(' '), quote.text].filter(Boolean).join('\n'), quote };
+}
+
+export function getMessageReplyQuote(message: Pick<ChatMessage, 'metadataJson'>): ChatReplyQuote | null {
+  return parseMessageMetadata(message)?.replyQuote ?? null;
+}
+
+/** 引用只告诉模型正在指向哪个媒体，原媒体内容由历史上下文提供。 */
+export function buildReplyQuoteModelText(message: Pick<ChatMessage, 'metadataJson' | 'replyToText'>): string | null {
+  const quote = getMessageReplyQuote(message);
+  if (!quote) return message.replyToText ? `[引用：${message.replyToText}]` : null;
+  const lines = [quote.voice ? `[语音消息；mediaAssetId=${quote.voice.mediaAssetId}]` : quote.text];
+  if (quote.sticker) lines.push(`[表情包：${quote.sticker.name}；mediaAssetId=${quote.sticker.mediaAssetId}]`);
+  for (const attachment of quote.attachments) {
+    lines.push(`[${attachment.type === 'image' ? '图片' : '文件'}：${attachment.fileName}${attachment.mediaAssetId ? `；mediaAssetId=${attachment.mediaAssetId}` : ''}]`);
+  }
+  return `[引用消息]\n${lines.filter(Boolean).join('\n')}\n[/引用消息]`;
+}
+
+function isChatReplyQuote(value: unknown): value is ChatReplyQuote {
+  if (!value || typeof value !== 'object') return false;
+  const quote = value as ChatReplyQuote;
+  return typeof quote.text === 'string'
+    && Array.isArray(quote.attachments) && quote.attachments.every((attachment) => attachment
+      && typeof attachment.id === 'string' && (attachment.type === 'image' || attachment.type === 'file')
+      && typeof attachment.fileName === 'string'
+      && (typeof attachment.mediaAssetId === 'string' || typeof attachment.localUri === 'string')
+      && (attachment.parsedText == null || typeof attachment.parsedText === 'string'))
+    && (quote.sticker === null || isStickerMessageMetadata({ kind: 'sticker', sticker: quote.sticker }))
+    && (quote.voice === null || isChatVoiceMessageMetadata({ kind: 'voice', voice: quote.voice }));
 }
 
 export function buildTogetherListeningMessageMetadata(
@@ -412,6 +471,13 @@ export function parseMessageMetadata(
     }
 
     const parsed = parsedValue as ParsedChatMessageMetadata;
+    if (parsed.replyQuote !== undefined && !isChatReplyQuote(parsed.replyQuote)) {
+      throw new Error('引用消息快照损坏');
+    }
+    if (parsed.cachedTokens !== undefined
+      && (!Number.isSafeInteger(parsed.cachedTokens) || parsed.cachedTokens < 0)) {
+      throw new Error('消息缓存 token 数损坏');
+    }
 
     // 分享记录也来自 SQLite；结构与媒体引用只在这个边界校验一次。
     if (parsed.kind === 'shared_record' && !isSharedChatRecord(parsed.sharedRecord)) {

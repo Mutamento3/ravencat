@@ -71,7 +71,7 @@ const messageTimelineModuleUrl = transpileToModuleUrl(
     .replace(/from ['"]\.\/UserMessageSubmission['"]/g,
       `from '${transpileToModuleUrl(read('src/features/chat/messages/application/UserMessageSubmission.ts'))}'`)
     .replace(/from\s*['"]\.\.\/domain\/ChatTimelineOrdering['"]/, `from '${timelineOrderingModuleUrl}'`)
-    .replace(/from\s*['"]\.\.\/domain\/chatMessageMetadata['"]/, `from '${timelineMetadataStubUrl}'`)
+    .replace(/from\s*['"]\.\.\/domain\/chatMessageMetadata['"]/g, `from '${timelineMetadataStubUrl}'`)
     .replace(/from\s*['"]\.\.\/domain\/ChatSticker['"]/, `from '${timelineMetadataStubUrl}'`)
     .replace(/from\s*['"]\.\/ChatMessageRuntime['"]/, `from '${timelineRuntimeStubUrl}'`)
     .replace(/from\s*['"]\.\.\/events\/ChatEvents['"]/, `from '${timelineEventsStubUrl}'`),

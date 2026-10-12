@@ -454,14 +454,14 @@ export const BubbleAttachmentList = memo(function BubbleAttachmentList({
   hasTextContent,
   isMe,
   onPreviewFile,
-  onImageLongPress,
+  onAttachmentLongPress,
   styles,
 }: {
   attachments: ChatAttachment[];
   hasTextContent: boolean;
   isMe: boolean;
   onPreviewFile: PreviewFileHandler;
-  onImageLongPress?: (position: { x: number; y: number }) => void;
+  onAttachmentLongPress?: (position: { x: number; y: number }) => void;
   styles: BubbleStyles;
 }) {
   const { getMappingKey } = useMappingHelper();
@@ -476,7 +476,7 @@ export const BubbleAttachmentList = memo(function BubbleAttachmentList({
           key={getMappingKey(attachment.id, index)}
           style={index > 0 ? styles.attachmentItemSpacing : undefined}
         >
-          <AttachmentCard attachment={attachment} isMe={isMe} onPreview={onPreviewFile} onImageLongPress={onImageLongPress} />
+          <AttachmentCard attachment={attachment} isMe={isMe} onPreview={onPreviewFile} onAttachmentLongPress={onAttachmentLongPress} />
         </View>
       ))}
     </View>
@@ -486,7 +486,7 @@ export const BubbleAttachmentList = memo(function BubbleAttachmentList({
   && previous.hasTextContent === next.hasTextContent
   && previous.isMe === next.isMe
   && previous.onPreviewFile === next.onPreviewFile
-  && previous.onImageLongPress === next.onImageLongPress
+  && previous.onAttachmentLongPress === next.onAttachmentLongPress
   && previous.styles === next.styles
 ));
 

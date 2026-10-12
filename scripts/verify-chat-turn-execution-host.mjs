@@ -23,17 +23,9 @@
  *    - 后台 → sendAIMessageNotification 被调且 eventId = logicalMessageId:segmentIndex；
  *    - userNotificationHandled=true → 不发系统通知。
  *
- * 静态断言：
- * 10. SendUserMessage.ts 不再引用 executeUserReplyTurn / launchTurn（页面不独占执行生命周期）；
- * 11. ConversationTurnCoordinator 的 onCommitted 路径以 [sessionId] 调 executionHost.start；
- *     recoverConversationTurns 路径不含 claimIfIdle / takeOverOrphan / executeRun；
- *     index.js 注册 registerHeadlessTask('ConversationTurnExecutionTask'；
- *     原生 service Kotlin 含 TASK_KEY = "ConversationTurnExecutionTask"；
- *     ConversationTurnHeadlessTask 任务数据为 sessionIds 数组并串行 executeTurnFromHost；
- * 12. FloatingMessageHeadlessTask 只负责调用 Floating Layer runtime 注入的消息执行入口；
- *     deliveryTiming: 'immediate' 与 await replyCompletion 仍由 RavenCat 的消息执行用例持有；
- * 13. KimiPhoneHost.tsx 不再引用 sendAIMessageNotification；
- *     configureCompanionHeadlessRuntime.ts 注册 configureAIMessageDeliveryCoordinator。
+ * 后台入口行为：无 restore action 仍等待普通 bootstrap；失败不开放 claim；
+ * 批量会话等待上一会话终态后再执行下一会话，后台交付使用 immediate。
+ * Android 服务注册、通知系统与执行保障需要原生测试/实机验收，不通过源码字符串推断。
  */
 
 import assert from 'node:assert/strict';
@@ -578,183 +570,70 @@ const awaitMessageArrival = async (...args) => { globalThis.__arrivalCalls.push(
 }
 
 // ============================================================================
-// 静态断言 10～13
+// 后台入口组合行为
 // ============================================================================
 
-// 10. 发送流程不再直接发起模型 run：执行生命周期由 execution host 承担。
-const sendUserMessageSource = read('src/features/chat/messages/application/SendUserMessage.ts');
-assert.doesNotMatch(
-  sendUserMessageSource,
-  /executeUserReplyTurn|launchTurn/,
-  'SendUserMessage 不得再引用 executeUserReplyTurn / launchTurn（页面不独占执行生命周期）',
-);
+// 真实后台入口与启动门组合；不以 helper 名称或源码循环写法代替业务行为。
+const runnerUrl = transpileToModuleUrl(read('src/host/composition/runPendingBackupRestoreCompletion.ts'));
+const { runPendingBackupRestoreCompletion } = await import(runnerUrl);
+const bootstrapState = { events: [], ready: false, bootstrapGate: null, firstSessionGate: null, fail: false, execution: [] };
+globalThis.__HEADLESS_BOOTSTRAP_TEST__ = bootstrapState;
+globalThis.__HEADLESS_RESTORE_RUNNER__ = runPendingBackupRestoreCompletion;
+const restoreStubUrl = transpileToModuleUrl(`
+  export async function completePendingBackupRestore() {
+    globalThis.__HEADLESS_BOOTSTRAP_TEST__.events.push('restore');
+    await globalThis.__HEADLESS_RESTORE_RUNNER__({ consumeRestoreFailure: async () => null, readPendingRestoreAction: async () => null });
+  }
+`);
+const databaseStubUrl = transpileToModuleUrl(`
+  export async function initDatabase() {
+    const state = globalThis.__HEADLESS_BOOTSTRAP_TEST__;
+    state.events.push('bootstrap');
+    if (state.bootstrapGate) await state.bootstrapGate.promise;
+    if (state.fail) throw new Error('bootstrap failed');
+    state.ready = true;
+  }
+`);
+const readyUrl = transpileToModuleUrl(read('src/host/composition/ensureHostDatabaseReady.ts')
+  .replace("from '@platform/persistence'", `from '${databaseStubUrl}'`)
+  .replace("from './completePendingBackupRestore'", `from '${restoreStubUrl}'`));
+const taskNativeUrl = transpileToModuleUrl(`export const AppState = { currentState: 'background' };`);
+const taskChatUrl = transpileToModuleUrl(`export function emitChatMessagesUpdated() {}`);
+const taskLogUrl = transpileToModuleUrl(`export function logTurnTimeline() {}`);
+const taskCoordinatorUrl = transpileToModuleUrl(`
+  export function getConversationTurnCoordinator() {
+    return { async executeTurnFromHost(id, options) {
+      const state = globalThis.__HEADLESS_BOOTSTRAP_TEST__;
+      if (!state.ready) throw new Error('query before bootstrap');
+      state.execution.push([id, options.deliveryTiming]);
+      if (id === 'first' && state.firstSessionGate) await state.firstSessionGate.promise;
+      return 'executed';
+    } };
+  }
+`);
+const taskUrl = transpileToModuleUrl(read('src/host/runtime/ConversationTurnHeadlessTask.ts')
+  .replace("from 'react-native'", `from '${taskNativeUrl}'`)
+  .replace("from '@features/chat/composition'", `from '${taskChatUrl}'`)
+  .replace("from '@shared/diagnostics/TurnTimelineLog'", `from '${taskLogUrl}'`)
+  .replace("from '../composition/ensureHostDatabaseReady'", `from '${readyUrl}'`)
+  .replace("from './ConversationTurnCoordinator'", `from '${taskCoordinatorUrl}'`));
+const { runConversationTurnHeadlessTask } = await import(taskUrl);
+bootstrapState.bootstrapGate = deferred();
+bootstrapState.firstSessionGate = deferred();
+const headless = runConversationTurnHeadlessTask({ sessionIds: ['first', 'second'], deliveryTiming: 'paced' });
+await flush();
+assert.deepEqual(bootstrapState.events, ['restore', 'bootstrap']);
+assert.deepEqual(bootstrapState.execution, [], 'bootstrap 完成前禁止 claim');
+bootstrapState.bootstrapGate.resolve();
+await flush();
+assert.deepEqual(bootstrapState.execution, [['first', 'immediate']], '首个会话未终态时不能执行下一会话');
+bootstrapState.firstSessionGate.resolve();
+await headless;
+assert.deepEqual(bootstrapState.execution, [['first', 'immediate'], ['second', 'immediate']]);
+bootstrapState.execution = []; bootstrapState.fail = true; bootstrapState.ready = false;
+await assert.rejects(runConversationTurnHeadlessTask({ sessionIds: ['fail'] }), /bootstrap failed/);
+assert.deepEqual(bootstrapState.execution, [], '初始化失败不开放业务读取');
+delete globalThis.__HEADLESS_BOOTSTRAP_TEST__; delete globalThis.__HEADLESS_RESTORE_RUNNER__;
 
-// 11. 协调器页面路径必须委派 execution host（会话数组首参）；recovery 路径只发现+委派；
-// 入口、原生 service 的 TASK_KEY 与 Headless 任务的 sessionIds 契约一致。
-assert.match(
-  coordinatorSource,
-  /deps\.executionHost\.start\(\[sessionId\], \{\s*correlationId: payload\.correlationId,\s*deliveryTiming: payload\.deliveryTiming,?\s*\}\)/,
-  'onCanonicalUserMessageCommitted 页面路径必须以 [sessionId] 调 executionHost.start 并透传 correlationId / deliveryTiming',
-);
-const recoverBody = coordinatorSource.match(
-  /async recoverConversationTurns\(\) \{[\s\S]*?\n    \},/,
-)?.[0] ?? '';
-assert.ok(recoverBody, '必须能提取 recoverConversationTurns 方法体');
-assert.doesNotMatch(
-  recoverBody,
-  /claimIfIdle|takeOverOrphan|executeRun/,
-  'recoverConversationTurns 不得在页面 runtime claim / 接管孤儿 / 执行 run（只发现并委派 execution host）',
-);
-assert.match(
-  recoverBody,
-  /deps\.executionHost\.start\(pendingSessionIds, \{\}\)/,
-  'recoverConversationTurns 必须以完整待恢复会话数组一次性启动 execution host',
-);
-const appEntrySource = read('index.js');
-assert.match(
-  appEntrySource,
-  /registerHeadlessTask\('ConversationTurnExecutionTask'/,
-  'index.js 必须注册 ConversationTurnExecutionTask Headless 任务',
-);
-const nativeServiceSource = read(
-  'modules/conversation-turn-runtime/android/src/main/java/expo/modules/conversationturnruntime/ConversationTurnHeadlessTaskService.kt',
-);
-assert.match(
-  nativeServiceSource,
-  /TASK_KEY = "ConversationTurnExecutionTask"/,
-  '原生 Headless service 的 TASK_KEY 必须是 ConversationTurnExecutionTask',
-);
-const executionHostSource = read('src/platform/device/ConversationTurnExecutionHost.ts');
-assert.match(
-  executionHostSource,
-  /startConversationTurnTask\(sessionIds, options\)/,
-  'platform execution host 必须把 sessionIds 数组传入 Expo Module',
-);
-const runtimeModuleSource = read(
-  'modules/conversation-turn-runtime/src/ConversationTurnRuntimeModule.ts',
-);
-assert.match(
-  runtimeModuleSource,
-  /nativeModule\.startConversationTurnTask\(\s*sessionIds,/,
-  'Expo Module TS 入口必须把 sessionIds 数组传给原生模块',
-);
-const nativeModuleSource = read(
-  'modules/conversation-turn-runtime/android/src/main/java/expo/modules/conversationturnruntime/ConversationTurnRuntimeModule.kt',
-);
-assert.match(
-  nativeModuleSource,
-  /sessionIds:\s*List<String>[\s\S]*?ConversationTurnHeadlessTaskService\.start\(reactContext, sessionIds,/,
-  'Kotlin Module 必须以 List<String> 接收并透传 sessionIds',
-);
-assert.match(
-  nativeServiceSource,
-  /putStringArrayListExtra\("sessionIds", ArrayList\(sessionIds\)\)/,
-  'Kotlin Service 必须以字符串数组 extra 传递 sessionIds',
-);
-const conversationTurnTaskSource = read('src/host/runtime/ConversationTurnHeadlessTask.ts');
-assert.match(
-  conversationTurnTaskSource,
-  /sessionIds\?: string\[\]/,
-  'ConversationTurnExecutionTask 任务数据必须携带 sessionIds 数组',
-);
-assert.match(
-  conversationTurnTaskSource,
-  /for \(const sessionId of sessionIds\)[\s\S]*?executeTurnFromHost\(sessionId/,
-  'ConversationTurnExecutionTask 必须对 sessionIds 串行 executeTurnFromHost（模型请求并发有界为 1）',
-);
-
-// 12. 悬浮消息 Headless 宿主属于 Floating Layer，只负责转发到 Host 注入的
-// 消息执行入口；消息执行用例仍由 RavenCat 持有，并通过窄 execution-host port
-// 使用受控 execution host，后台一律 immediate 且等待回复完成。Feature 不应重新
-// 取得 Chat internal 入口或让 Headless 宿主自行选择 mode。
-const floatingMessageExecutorSource = read('src/features/companion/application/ExecuteFloatingMessage.ts');
-assert.match(
-  floatingMessageExecutorSource,
-  /sendUserMessageFromExecutionHost/,
-  'RavenCat 悬浮消息执行用例必须通过窄 execution-host port 发送消息',
-);
-assert.doesNotMatch(
-  floatingMessageExecutorSource,
-  new RegExp(String.raw`executionMode:\s*['"]inline_current_host['"]|deliveryTiming:\s*['"]immediate['"]`),
-  'RavenCat 悬浮消息执行用例不得自行注入 Chat internal execution 选项',
-);
-const ravenCatRuntimeCompositionSource = read('src/host/composition/configureCompanionRuntime.ts');
-assert.match(
-  ravenCatRuntimeCompositionSource,
-  new RegExp(String.raw`executionMode:\s*['"]inline_current_host['"]`),
-  'Host RavenCat adapter 必须固定选择 inline_current_host',
-);
-assert.match(
-  ravenCatRuntimeCompositionSource,
-  new RegExp(String.raw`deliveryTiming:\s*['"]immediate['"]`),
-  'Host RavenCat adapter 必须固定 deliveryTiming: immediate（后台 setTimeout 被冻结）',
-);
-assert.match(
-  floatingMessageExecutorSource,
-  /await replyCompletion/,
-  'RavenCat 悬浮消息执行用例必须 await replyCompletion（任务活到回复完成）',
-);
-
-// 13. 交付判定已迁出 KimiPhoneHost；headless runtime 装配必须注册交付协调器。
-const hostSource = read('src/host/KimiPhoneHost.tsx');
-assert.doesNotMatch(
-  hostSource,
-  /sendAIMessageNotification/,
-  'KimiPhoneHost 不得再直接发送 AI 消息通知（判定统一在 AIMessageDeliveryCoordinator）',
-);
-const headlessRuntimeSource = read('src/host/composition/configureCompanionHeadlessRuntime.ts');
-assert.match(
-  headlessRuntimeSource,
-  /configureAIMessageDeliveryCoordinator\(\)/,
-  'configureCompanionHeadlessRuntime 必须注册 configureAIMessageDeliveryCoordinator',
-);
-const aiMessageEventsSource = read('src/features/chat/reply/delivery/AIMessageEvents.ts');
-assert.match(
-  aiMessageEventsSource,
-  /let aiMessageDeliveryHandler: AIMessageDeliveryHandler \| null = null/,
-  '系统交付必须使用唯一 handler，不能混入普通 UI subscriber',
-);
-assert.match(
-  aiMessageEventsSource,
-  /committedMessageId: number/,
-  'assistant commit 事件必须携带稳定数据库消息 ID',
-);
-const nativeNotificationPublisherSource = read(
-  'modules/kimiphone-notifications/android/src/main/java/expo/modules/kimiphonenotifications/NotificationPublisher.kt',
-);
-assert.match(
-  nativeNotificationPublisherSource,
-  /conversationPostMutexes = ConcurrentHashMap<String, Mutex>\(\)/,
-  '原生通知发布必须按 conversationKey 维护独立 Mutex',
-);
-assert.match(
-  nativeNotificationPublisherSource,
-  /conversationPostMutexes\.computeIfAbsent\(conversationKey\)/,
-  '每次发布必须只进入所属 conversationKey 的 Mutex',
-);
-assert.doesNotMatch(
-  nativeNotificationPublisherSource,
-  /conversationPostMutex\s*=\s*Mutex\(\)/,
-  '不同 conversationKey 不得共享全局发布 Mutex',
-);
-assert.match(
-  nativeNotificationPublisherSource,
-  /conversationOperationLocks = ConcurrentHashMap<String, Any>\(\)/,
-  '原生通知发布与 dismiss 必须按 conversationKey 协调同步操作',
-);
-assert.match(
-  nativeNotificationPublisherSource,
-  /conversationOperationGate = ReentrantReadWriteLock\(true\)/,
-  '全量 dismiss 必须在不串行不同会话发布的门闩下执行',
-);
-assert.doesNotMatch(
-  nativeNotificationPublisherSource,
-  /lastConversationAlertAtElapsedMs\s*=/,
-  '原生通知不得保留跨会话共享的提醒时间戳',
-);
-assert.match(nativeNotificationPublisherSource, /synchronized\(conversationStateLock\)/);
-assert.match(nativeNotificationPublisherSource, /setGroupAlertBehavior\(NotificationCompat\.GROUP_ALERT_ALL\)/);
-assert.match(nativeNotificationPublisherSource, /setOnlyAlertOnce\(true\)/);
-
-console.log('ConversationTurn execution host 契约验证通过：页面委派 / 就地执行 / host 等待 terminal / 孤儿接管 / recovery 委派 / 交付策略。');
+console.log('ConversationTurn execution host 契约验证通过：页面委派 / 就地执行 / host 等待 terminal / 孤儿接管 / recovery 委派 / 交付策略 / 冷启动 bootstrap。');
 console.log('真机后台链路（Headless service 启动与 XHR/SSE 消费）仍需 Android 验收。');

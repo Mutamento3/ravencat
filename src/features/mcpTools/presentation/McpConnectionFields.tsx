@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ModalSheet } from '@shared/ui';
 import { useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
 import type { McpServerAuthMode } from '../domain/McpServerConfig';
 import { parseMcpServerImport, type McpServerImportDraft } from '../application/ParseMcpServerImport';
@@ -28,8 +29,7 @@ const createStyles = (theme: PresentationTheme) => StyleSheet.create({
   selected: { borderWidth: 1, borderColor: theme.colors.brand.primary },
   buttonText: { color: theme.colors.brand.primary, fontSize: 14 },
   hint: { color: theme.colors.text.secondary, fontSize: 12, marginBottom: 16 },
-  shade: { flex: 1, justifyContent: 'center', backgroundColor: '#00000080', padding: 20 },
-  dialog: { backgroundColor: theme.colors.background.screen, borderRadius: theme.radius.lg, padding: 20, maxHeight: '85%' },
+  dialog: { padding: 20 },
   json: { minHeight: 160, textAlignVertical: 'top' },
   error: { color: theme.colors.feedback.error, marginBottom: 12 },
 });
@@ -76,9 +76,8 @@ export default function McpConnectionFields(props: Props) {
         autoCorrect={false} editable={!props.disabled} />
       <Text style={styles.hint}>Token 保存在设备安全存储中。恢复备份或换机后需要重新填写。</Text>
     </>}
-    <Modal visible={open} transparent animationType="fade" onRequestClose={close}>
-      <View style={styles.shade}><View style={styles.dialog}><ScrollView keyboardShouldPersistTaps="handled">
-        <Text style={styles.label}>粘贴官方 MCP 配置</Text>
+    <ModalSheet visible={open} onClose={close} title="粘贴官方 MCP 配置" avoidKeyboard>
+      <ScrollView contentContainerStyle={styles.dialog} keyboardShouldPersistTaps="handled">
         <TextInput style={[styles.input, styles.json]} value={json} onChangeText={(value) => { setJson(value); setDrafts([]); }}
           multiline autoCapitalize="none" autoCorrect={false} placeholder={'{"mcpServers": { ... }}'}
           placeholderTextColor={theme.colors.text.tertiary} />
@@ -91,7 +90,7 @@ export default function McpConnectionFields(props: Props) {
           <TouchableOpacity style={styles.button} onPress={parse}><Text style={styles.buttonText}>读取配置</Text></TouchableOpacity>
           <TouchableOpacity style={styles.button} onPress={close}><Text style={styles.buttonText}>取消</Text></TouchableOpacity>
         </View>
-      </ScrollView></View></View>
-    </Modal>
+      </ScrollView>
+    </ModalSheet>
   </>;
 }

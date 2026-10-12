@@ -25,10 +25,8 @@ export const createMemoryGalaxyStyles = (theme: PresentationTheme) => {
     subtitle: { color: starlight, opacity: 0.8, fontSize: 12, letterSpacing: 1 },
     empty: { color: starlight, lineHeight: 24, textAlign: 'center', padding: 32 },
     disabled: { opacity: 0.3 },
-    scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: theme.effects.overlay.dim },
-    modal: { flex: 1, justifyContent: 'flex-end' },
-    // 面板覆盖独立星空，使用弹窗底色保证空状态可读，不能沿用近乎透明的页面底色。
-    sheet: { height: '74%', backgroundColor: theme.components.modalSheet.backgroundColor, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 12, overflow: 'hidden' },
+    // 窗口、材质和键盘避让由通用弹窗拥有；这里只保留记忆面板的内容尺寸。
+    sheet: { height: '74%', paddingTop: 12 },
     handle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', backgroundColor: theme.colors.border.strong, marginBottom: 12 },
     sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, gap: 12, marginBottom: 16 },
     sheetName: { color: theme.colors.text.primary, fontSize: 19, fontWeight: '600' },
@@ -42,6 +40,7 @@ export const createMemoryGalaxyStyles = (theme: PresentationTheme) => {
     list: { padding: 20, gap: 12, paddingBottom: 40 },
     search: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 20, marginBottom: 6, paddingHorizontal: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.input },
     input: { flex: 1, paddingVertical: 14, color: theme.colors.text.primary, fontSize: 14 },
+    groupInput: { padding: 14, color: theme.colors.text.primary, fontSize: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.input },
     card: { padding: 18, gap: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.raised, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light },
     body: { fontSize: 15, lineHeight: 24, color: theme.colors.text.primary },
     meta: { color: theme.colors.text.secondary, fontSize: 12, lineHeight: 18 },

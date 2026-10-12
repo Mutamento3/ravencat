@@ -35,6 +35,8 @@ import {
 } from './togetherListeningSchema';
 import {
   STICKER_SYSTEM_CONFIG_SCHEMA,
+  AI_STICKER_TASKS_SCHEMA,
+  STICKER_OWNERSHIP_INDEXES,
   STICKER_EMBEDDINGS_SCHEMA,
   STICKER_EMBEDDINGS_MODEL_INDEX,
   STICKER_GROUPS_ORDER_INDEX,
@@ -44,6 +46,8 @@ import {
   STICKERS_GROUP_ORDER_INDEX,
   STICKERS_SCHEMA,
 } from './stickerSchema';
+import { AI_DOWNLOADED_IMAGES_SCHEMA } from './aiImageSchema';
+import { CHAT_FAVORITES_SCHEMA, CHAT_FAVORITES_INDEXES } from './chatFavoriteSchema';
 import {
   MOMENTS_SCHEMA,
   MOMENT_AUDIENCE_AI_SCHEMA,
@@ -69,6 +73,7 @@ import { CHAT_REGENERATION_REQUESTS_SCHEMA } from './chatRegenerationSchema';
 import { MCP_SERVERS_SCHEMA, MCP_TOOL_GRANTS_SCHEMA, MCP_SERVER_ASSISTANTS_SCHEMA, MCP_TOOL_GRANTS_INDEXES } from './mcpSchema';
 
 export const SCHEMAS: Record<string, string> = {
+  chatFavorites: CHAT_FAVORITES_SCHEMA,
   callBackgroundSelection: CALL_BACKGROUND_SELECTION_SCHEMA,
   wallpaperSelections: WALLPAPER_SELECTION_SCHEMA,
   // 1. ai_assistants 表 - AI助手列表
@@ -94,6 +99,7 @@ export const SCHEMAS: Record<string, string> = {
       enable_external_tool_map INTEGER DEFAULT 0,
       enable_short_text_protocol INTEGER DEFAULT 1,
       allow_multiple_bubbles INTEGER DEFAULT 1,
+      show_token_usage INTEGER NOT NULL DEFAULT 1,
       supports_vision INTEGER DEFAULT 0,
       -- 已发布版保留的物理列；当前运行时使用角色视觉模型选择。
       image_processing_mode TEXT NOT NULL DEFAULT 'direct',
@@ -599,10 +605,14 @@ export const SCHEMAS: Record<string, string> = {
   mcpServerAssistants: MCP_SERVER_ASSISTANTS_SCHEMA,
   stickerEmbeddings: STICKER_EMBEDDINGS_SCHEMA,
   stickerSystemConfig: STICKER_SYSTEM_CONFIG_SCHEMA,
+  aiStickerTasks: AI_STICKER_TASKS_SCHEMA,
+  aiDownloadedImages: AI_DOWNLOADED_IMAGES_SCHEMA,
   chatTimelineRunAnchor: CHAT_TIMELINE_RUN_ANCHOR_SCHEMA,
 };
 
 export const INDEXES: Record<string, string> = {
+  chatFavorites: CHAT_FAVORITES_INDEXES,
+  idxStickerOwnership: STICKER_OWNERSHIP_INDEXES,
   idxStickerEmbeddingsModel: STICKER_EMBEDDINGS_MODEL_INDEX,
   idx_sessions_canonical_ai: `CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_canonical_ai
           ON sessions(ai_assistant_id);`,

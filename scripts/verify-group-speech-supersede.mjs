@@ -2622,8 +2622,6 @@ async function verifyCurrentPreviewBinding(GroupChatRepository) {
     '当前群聊 preview 保存 last_message_id',
   );
 
-  assert.ok(true, '当前字段可重复读取');
-
   // 迁移后的库上验证单活动语义：preparing plan 存在时 tryClaim 不得再 claim。
   globalThis.__SUPERSEDE_COORDINATOR__ = createCoordinator(db);
   const repository = new GroupChatRepository();
@@ -2674,11 +2672,10 @@ async function verifyCurrentPreviewBinding(GroupChatRepository) {
     await repository.updatePreviewForCommittedMessage('g1', 101, '即将删除', NOW),
     true,
   );
-  db.prepare(`DELETE FROM messages WHERE id = 101`).run();
-  assert.equal(
-    await repository.updatePreview('g1', '删除后保留', NOW, 100),
-    true,
-  );
+  await globalThis.__SUPERSEDE_COORDINATOR__.transaction({}, async (transaction) => {
+    await transaction.runAsync('DELETE FROM messages WHERE id = 101');
+    await repository.updatePreviewInTransaction(transaction, 'g1', 100, '删除后保留', NOW);
+  });
   assert.equal(
     await repository.updatePreviewForCommittedMessage('g1', 101, '晚到复活文本', NOW),
     false,

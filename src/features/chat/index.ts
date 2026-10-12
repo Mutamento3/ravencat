@@ -208,6 +208,7 @@ export {
   isChatVoiceMessageMetadata,
   getMessageVoice,
   buildVoiceMessageModelText,
+  buildReplyQuoteModelText,
   buildChatSystemEventModelText,
   stringifyAttachmentSummary,
   formatFileSize,
@@ -291,6 +292,7 @@ export {
   ChatSummaryRouteScreen,
   ChatStatisticsRouteScreen,
   ChatSummaryEditorRouteScreen,
+  ChatSummarySettingsRouteScreen,
   CreateGroupRouteScreen,
   GroupAdminSettingsRouteScreen,
   GroupConversationRouteScreen,
@@ -298,11 +300,16 @@ export {
   GroupMenuRouteScreen,
 } from './presentation/shell/ChatRouteScreens';
 export { getChatSummaryContext, createChatSummary, editChatSummary, deleteChatSummary, clearChatSummary,
+  updateChatSummarySettings, searchChatSummaries, getChatSummarySettings, setFixedChatContextStart, retryChatSummaryTask,
 } from './summary/application/ChatSummary';
 export { subscribeChatSummaryChanged } from './summary/application/ChatSummaryRuntime';
-export type { ChatSummarySegment, ChatSummarySnapshot } from './summary/domain/ChatSummaryRepository';
+export type { ChatSummarySegment, ChatSummarySnapshot, ChatSummarySettings, ChatSummarySettingsPatch, ChatSummarySearchInput, ChatSummarySearchPage } from './summary/domain/ChatSummaryRepository';
+export type { ChatSummaryTask, ChatSummaryCallDiagnostics } from './summary/domain/ChatSummaryRepository';
+export { SearchChatSummariesTool } from './summary/aiTools/SearchChatSummariesTool';
+export { isChatReplyRunCurrentInTransaction } from './reply/application/ChatRunMutationFence';
 
 export { getChatImageModelSettings, selectChatImageModel, subscribeChatImageModelsChanged } from './reply/application/ChatImageModels';
+export { default as ChatFavoritesScreen } from './presentation/favorites/ChatFavoritesScreen';
 export {
   getAssistantMessageArrivalSnapshot,
   subscribeAssistantMessageArrival,

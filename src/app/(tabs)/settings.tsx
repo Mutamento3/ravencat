@@ -11,6 +11,7 @@ export default function SettingsRoute() {
   return (
     <ProfileTab
       onOpenProfile={() => router.push('/profile')}
+      onOpenFavorites={() => router.push('/favorites')}
       onOpenBackup={() => router.push('/backup' as Href)}
       onClearData={resetApplicationData}
       checkingUpdates={updates.checking || (updates.download !== null && updates.download.uri === null)}

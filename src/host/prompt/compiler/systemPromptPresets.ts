@@ -96,9 +96,13 @@ const SPECIALIZED_PRESET_ITEMS: Partial<Record<PromptPackScenario, PromptPresetI
     item('input.current', 'input', 40, 'locked', true),
   ],
   'chat.summary': [
-    item('internal.chat_summary', 'foundation', 10, 'locked', true),
-    item('persona.assistant', 'persona', 20, 'editable'),
-    item('input.current', 'input', 30, 'locked', true),
+    item('foundation.default_core', 'foundation', 20, 'locked', true),
+    item('persona.assistant', 'persona', 30, 'editable'),
+    item('context.user_identity', 'persona', 35),
+    item('context.protocol_space', 'user_rules', 60, 'locked'),
+    item('context.tools_description', 'capabilities', 100, 'locked'),
+    item('internal.chat_summary', 'output_contract', 210, 'locked', true),
+    item('input.current', 'input', 220, 'locked', true),
   ],
   'vision.ocr': [
     item('internal.vision_ocr', 'foundation', 10, 'overridable', true),

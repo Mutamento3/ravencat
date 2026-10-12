@@ -55,7 +55,7 @@ export function configurePromptingRuntime(): void {
     },
     tools: {
       async list() {
-        return getToolPermissionDescriptors().filter((tool) => !tool.managedInPhoneTools);
+        return getToolPermissionDescriptors();
       },
       async listOverrides(assistantId) {
         return (await assistantToolPermissionRepository.list(assistantId)).map((permission) => ({

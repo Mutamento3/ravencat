@@ -1,6 +1,6 @@
 /** Memory 持久化 port：pool 授权与向量任务的原子比较由 Repository 拥有。 */
 
-import type { MemoryEntry, MemoryRecallSettings, PassiveTriggerKeyword, PassiveTriggerMemory } from './Memory';
+import type { MemoryEntry, MemoryRecallSettings, MemoryTriggerKeyword, PassiveTriggerGroup, PassiveTriggerMemory } from './Memory';
 
 export interface MemoryEmbeddingModel {
   id: string;
@@ -49,8 +49,9 @@ export interface MemoryRepository {
   setPreferredAssistantId(assistantId: string): Promise<void>;
   getRecallSettings(poolId: string): Promise<MemoryRecallSettings>;
   setRecallSettings(poolId: string, settings: MemoryRecallSettings): Promise<void>;
-  listTriggers(poolId: string): Promise<PassiveTriggerKeyword[]>;
-  createTriggers(poolId: string, triggers: { id: string; keyword: string; normalizedKeyword: string }[], memoryId?: string): Promise<void>;
+  listTriggers(poolId: string): Promise<PassiveTriggerGroup[]>;
+  createTriggerGroup(poolId: string, groupId: string, keywords: MemoryTriggerKeyword[], memoryIds: string[], autoAssociate: boolean): Promise<void>;
+  updateTriggerGroup(poolId: string, groupId: string, keywords: MemoryTriggerKeyword[], autoAssociate: boolean): Promise<void>;
   deleteTrigger(poolId: string, triggerId: string): Promise<void>;
   listTriggerMemories(poolId: string, triggerId: string): Promise<PassiveTriggerMemory[]>;
   setAutoRecall(poolId: string, triggerId: string, memoryId: string, enabled: boolean): Promise<void>;

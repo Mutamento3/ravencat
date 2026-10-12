@@ -58,6 +58,7 @@ const groupRuntime = {
 };
 const boundaries = {
   '@features/media': {
+    mediaImageFailure: () => null,
     MEDIA_ASSET_STORAGE_BACKEND: { persistentMedia: 'persistent-media' },
     async prepareMediaAssetBatch(inputs) {
       const assets = inputs.map((input) => ({ id: `media-${input.fileName}` }));
@@ -124,6 +125,9 @@ const { sendGroupUserMessage } = load('src/features/chat/group/application/Group
 const timeline = load('src/features/chat/messages/application/MessageTimeline.ts');
 const { splitUserMessageSubmission } = load('src/features/chat/messages/application/UserMessageSubmission.ts');
 const { buildChatTurnAIInput } = load('src/features/chat/reply/application/BuildChatTurnAIInput.ts');
+const metadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts');
+const { buildChatUserMessageModelInput } = load('src/features/chat/reply/application/BuildChatBatchAIInput.ts');
+const { projectChatContextMessage } = load('src/features/chat/summary/domain/ChatContext.ts');
 const { fitPreviewImage, clampPreviewOffset } = load('src/features/chat/presentation/messages/MessageBubble/imagePreviewGeometry.ts');
 const image = { id: 'image-1', type: 'image', source: 'gallery', localUri: 'file:///cat.png', fileName: 'cat.png' };
 const anotherImage = { ...image, id: 'image-2' };
@@ -199,5 +203,49 @@ assert.equal(clampPreviewOffset(500, 400, 400, 1), 0);
 assert.equal(clampPreviewOffset(500, 400, 400, 3), 400);
 assert.equal(clampPreviewOffset(-500, 400, 400, 3), -400);
 assert.equal(clampPreviewOffset(500, 100, 400, 3), 0, '图片尚未填满轴向时保持居中');
+// 引用必须保存媒体本身；原文后来改写、列表卸载或重发不能退化为摘要标签。
+const sticker = { stickerId: 'sticker-1', mediaAssetId: 'sticker-media', name: '猫猫', description: '开心的猫',
+  tags: ['开心'], emotion: '开心', mimeType: 'image/png', width: 100, height: 100, isAnimated: false };
+const voice = { schemaVersion: 1, mediaAssetId: 'voice-media', mimeType: 'audio/mp4', durationMs: 1200, transcriptSource: 'assistant_source_text' };
+const sources = [
+  { kind: 'image', attachments: [image] },
+  { kind: 'file', attachments: [{ ...file, parsedText: '文件完整正文' }] },
+  { kind: 'mixed', attachments: [image, { ...file, parsedText: '混合文件正文' }] },
+  { kind: 'sticker', sticker },
+  { kind: 'voice', voice },
+];
+for (const source of sources) {
+  const original = { id: 700, text: source.kind === 'image' || source.kind === 'sticker' ? '' : '引用时的正文', metadataJson: JSON.stringify(source) };
+  const target = metadata.createChatReplyTarget(original);
+  assert.ok(target.text, '纯媒体引用草稿必须有可见摘要');
+  original.text = '后来改写的正文';
+  const send = { sessionId: 's1', text: '看看这个', replyToId: target.id, replyToText: target.text, replyQuote: target.quote,
+    attachments: [anotherImage], clientMessageId: `quote-${source.kind}` };
+  const preview = timeline.createOptimisticUserTimelineMessages(send);
+  assert.equal(metadata.getMessageReplyQuote(preview[0]), null, '图片拆分后引用只属于尾消息');
+  assert.deepEqual(metadata.getMessageReplyQuote(preview.at(-1)), target.quote);
+  const sent = await sendUserMessage(send, { id: 'ai-1' });
+  assert.equal(sent.success, true);
+  const snapshot = metadata.getMessageReplyQuote(sent.userMessage);
+  assert.equal(snapshot.text, target.quote.text, '已发送引用保留引用时的正文');
+  assert.deepEqual(snapshot.attachments, target.quote.attachments.map(canonical), '历史 URI 引用随发送事务物化为稳定资产');
+  assert.deepEqual(snapshot.sticker, target.quote.sticker);
+  assert.deepEqual(snapshot.voice, target.quote.voice);
+  const model = (await buildChatUserMessageModelInput(sent.userMessage, 'ai-1')).modelInput;
+  const modelText = typeof model === 'string' ? model : model.filter(part => part.type === 'text').map(part => part.text).join('\n');
+  assert.match(modelText, /引用消息/);
+  assert.match(modelText, /看看这个/);
+  assert.equal(typeof model, 'string', '引用媒体只传身份，不重复读取媒体内容');
+  const history = projectChatContextMessage(sent.userMessage, [sent.userMessage.createdAt, 0, sent.userMessage.id, 0]);
+  assert.ok(history.content.includes(metadata.buildReplyQuoteModelText(sent.userMessage)), '历史上下文保留相同引用身份');
+  for (const attachment of snapshot.attachments) assert.ok(modelText.includes(`mediaAssetId=${attachment.mediaAssetId}`));
+  if (source.kind === 'file') assert.doesNotMatch(modelText, /文件完整正文/);
+  if (source.kind === 'voice') assert.match(modelText, /mediaAssetId=voice-media/);
+  if (source.kind === 'sticker') assert.match(modelText, /mediaAssetId=sticker-media/);
+  const group = await sendGroupUserMessage({ groupId: 'g1', text: '群聊引用', replyToId: target.id, replyToText: target.text, replyQuote: snapshot });
+  assert.deepEqual(metadata.getMessageReplyQuote(group), snapshot, '群聊保存同样的媒体引用快照');
+}
+assert.equal(metadata.buildReplyQuoteModelText({ replyToText: '旧引用', metadataJson: null }), '[引用：旧引用]');
+
 db.close();
 console.log('图文原子发送、单次回复、独立重发、乐观替换、群聊整批提交与图片预览几何验证通过。');

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { StackActions, StackRouter } from '@react-navigation/routers';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,14 +25,6 @@ assert.match(ravenCatCompositionSource, /configureCompanionRuntimeDependencies/)
 const floatingLayerCompositionSource = read('src/features/floatingLayer/composition.ts');
 assert.match(floatingLayerCompositionSource, /configureFloatingLayerRuntimeDependencies/);
 assert.match(floatingLayerCompositionSource, /floatingLayerAdapter/);
-
-function between(source, start, end) {
-  const startAt = source.indexOf(start);
-  assert.ok(startAt >= 0, `缺少契约起点：${start}`);
-  const endAt = source.indexOf(end, startAt + start.length);
-  assert.ok(endAt > startAt, `缺少契约终点：${end}`);
-  return source.slice(startAt, endAt);
-}
 
 function listKotlinFiles(relativeDirectory) {
   const directory = path.join(repoRoot, relativeDirectory);
@@ -461,6 +454,7 @@ const { HostAuthorityCoordinator } = await importStandaloneTypeScript(
 const assistantManagement = loadTypeScriptModuleWithMocks(
   'src/features/assistants/AIAssistantManagement.ts',
   {
+    '@platform/device': {},
     '@features/media': {
       createMediaAssetWithReference: async () => {
         throw new Error('本 verifier 不应创建 MediaAsset');
@@ -891,16 +885,6 @@ assert.match(companionConversationTargetSource, /chat\.getCanonicalConversation\
 assert.doesNotMatch(companionConversationTargetSource, /create|insert|save/);
 
 // ---- 外部导航与通知点击（原 floating-layer-phase0）----
-// 单聊与群聊各一个可寻址导航出口，且都必须经过 getMessageNavigationHref 生成 href。
-const handleAINavigation = between(
-  hostSource,
-  'const handleAINavigation',
-  'const handleIncomingCallNotification',
-);
-assert.match(handleAINavigation, /getMessageNavigationHref/);
-assert.equal((handleAINavigation.match(/router\.navigate\(/g) || []).length, 2);
-assert.equal((handleAINavigation.match(/getMessageNavigationHref\(/g) || []).length, 2);
-assert.doesNotMatch(handleAINavigation, /router\.(?:push|replace)\(/);
 assert.match(
   nativeNotificationSource,
   /conversationResponseData\([\s\S]*?payload,[\s\S]*?displayId,[\s\S]*?state\.lastMessageAt,[\s\S]*?"ai-message",?[\s\S]*?\)/,
@@ -910,6 +894,63 @@ assert.match(nativeNotificationSource, /"sessionId" to payload\.optionalString\(
 // ---- 通知投递与导航目标（原 floating-layer-phase0）----
 // 通知点击只产生一个可寻址聊天页；同一通知的重复响应由稳定 key 去重。
 const externalNavigation = await importStandaloneTypeScript('src/host/navigation/externalNavigation.ts');
+
+// 通知打开埋在管理页下的会话时，只弹出上层路由，保留会话 key 与前缀顺序。
+// Android 原生 Screen 的重新排序会导致视图归属损坏，最终页面可见但无法交互。
+const messageStack = StackRouter({ initialRouteName: 'conversations' });
+const messageStackOptions = {
+  routeNames: ['conversations', 'chat/[aiId]/index', 'chat/groups/[groupId]', 'menu', 'summary'],
+  routeParamList: {},
+  routeGetIdList: {
+    'chat/[aiId]/index': ({ params }) => params.aiId,
+    'chat/groups/[groupId]': ({ params }) => params.groupId,
+  },
+};
+let messageStackState = messageStack.getInitialState(messageStackOptions);
+function dispatchMessageNavigation(action) {
+  messageStackState = messageStack.getStateForAction(messageStackState, action, messageStackOptions);
+  assert.ok(messageStackState);
+}
+const messageRouter = {
+  dismissTo(href) {
+    const url = new URL(href, 'https://ravencat.test');
+    const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+    const group = segments[1] === 'groups';
+    dispatchMessageNavigation(StackActions.popTo(
+      group ? 'chat/groups/[groupId]' : 'chat/[aiId]/index',
+      group ? { groupId: segments[2] } : { aiId: segments[1], ...Object.fromEntries(url.searchParams) },
+    ));
+  },
+};
+dispatchMessageNavigation(StackActions.push('chat/[aiId]/index', { aiId: 'ai / 1' }));
+const directPrefixKeys = messageStackState.routes.map(({ key }) => key);
+const directTarget = { type: 'ai-message', aiId: 'ai / 1', sessionId: 'session ? 1' };
+for (let visit = 0; visit < 3; visit++) {
+  dispatchMessageNavigation(StackActions.push('menu'));
+  dispatchMessageNavigation(StackActions.push('summary'));
+  externalNavigation.openMessageConversation(messageRouter, directTarget);
+  assert.deepEqual(messageStackState.routes.map(({ key }) => key), directPrefixKeys,
+    '摘要 → 通知 → 聊天后应关闭管理页，不能搬动已有聊天路由');
+  assert.equal(messageStackState.routes.at(-1).params.sessionId, 'session ? 1');
+}
+externalNavigation.openMessageConversation(messageRouter, { ...directTarget, type: 'ai-message-summary' });
+assert.deepEqual(messageStackState.routes.map(({ key }) => key), directPrefixKeys,
+  '重复点击或汇总通知不得制造重复会话');
+dispatchMessageNavigation(StackActions.push('summary'));
+dispatchMessageNavigation(StackActions.pop());
+assert.deepEqual(messageStackState.routes.map(({ key }) => key), directPrefixKeys,
+  '通知后重新打开摘要再返回，应回到同一个聊天页');
+dispatchMessageNavigation(StackActions.push('chat/groups/[groupId]', { groupId: 'group / 1' }));
+const groupPrefixKeys = messageStackState.routes.map(({ key }) => key);
+dispatchMessageNavigation(StackActions.push('menu'));
+externalNavigation.openMessageConversation(messageRouter, { type: 'group-message', groupId: 'group / 1' });
+assert.deepEqual(messageStackState.routes.map(({ key }) => key), groupPrefixKeys,
+  '群通知同样应退回原群聊，保留更早会话');
+externalNavigation.openMessageConversation(messageRouter, { ...directTarget, aiId: 'ai-2', sessionId: 'session-2' });
+assert.deepEqual(messageStackState.routes.slice(0, -1).map(({ key }) => key), directPrefixKeys,
+  '目标不在栈中时，替换当前页并保留前缀');
+assert.equal(messageStackState.routes.at(-1).params.aiId, 'ai-2');
+assert.equal(messageStackState.routes.at(-1).params.sessionId, 'session-2');
 const messageTarget = externalNavigation.createMessageNavigationTarget({
   type: 'ai-message',
   aiId: 'ai / 1',

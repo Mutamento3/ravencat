@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { EmptyState, ListItem, ModalSheet, NavigationHeader, showAppDialog } from '@shared/ui';
-import { useTheme } from '@shared/theme';
+import { ThemedSurface, useTheme } from '@shared/theme';
 import {
   getStickerSystemConfig,
   getStickerSystemModelSelection,
@@ -213,7 +213,7 @@ function StickerSystemHomeScreen({
       ) : (
         <ScrollView showsVerticalScrollIndicator={false}>
           <Text style={styles.sectionTitle}>模型配置</Text>
-          <View style={styles.card}>
+          <ThemedSurface variant="card" style={styles.card}>
             <ListItem
               title="视觉识别模型"
               subtitle={modelSelectionSubtitle(
@@ -232,10 +232,10 @@ function StickerSystemHomeScreen({
               rightContent={<Ionicons name="chevron-forward" size={16} color={theme.colors.text.secondary} />}
               onPress={() => void openPicker('embedding')}
             />
-          </View>
+          </ThemedSurface>
 
           <Text style={styles.sectionTitle}>语义索引</Text>
-          <View style={styles.card}>
+          <ThemedSurface variant="card" style={styles.card}>
             <View style={[styles.statRow, styles.rowLast]}>
               <Text style={styles.statLabel}>可用表情包</Text>
               <Text style={styles.statValue}>{status?.readyStickers ?? 0}</Text>
@@ -248,7 +248,7 @@ function StickerSystemHomeScreen({
               <Text style={styles.statLabel}>待建立</Text>
               <Text style={styles.statValue}>{status?.pendingEmbeddings ?? 0}</Text>
             </View>
-          </View>
+          </ThemedSurface>
 
           <View style={styles.actionRow}>
             <TouchableOpacity
@@ -268,7 +268,7 @@ function StickerSystemHomeScreen({
           </View>
 
           <Text style={styles.sectionTitle}>图库与分组</Text>
-          <View style={styles.card}>
+          <ThemedSurface variant="card" style={styles.card}>
             <ListItem
               title="全部表情包"
               rightContent={<Ionicons name="chevron-forward" size={16} color={theme.colors.text.secondary} />}
@@ -279,7 +279,7 @@ function StickerSystemHomeScreen({
               rightContent={<Ionicons name="chevron-forward" size={16} color={theme.colors.text.secondary} />}
               onPress={onOpenGroups}
             />
-          </View>
+          </ThemedSurface>
 
           <View style={{ height: 32 }} />
         </ScrollView>

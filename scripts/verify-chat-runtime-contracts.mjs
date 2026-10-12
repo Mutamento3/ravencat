@@ -474,7 +474,7 @@ assert.match(hostCompositionSource, /configureChatRuntimeDependencies/);
 assert.match(hostCompositionSource, /messages: messageRepository/);
 assert.match(hostCompositionSource, /sessions: sessionRepository/);
 assert.match(hostCompositionSource, /groups: groupChatRepository/);
-assert.match(hostCompositionSource, /readAsBase64/);
+assert.match(hostCompositionSource, /readVisionImage/);
 assert.match(hostCompositionSource, /resolveOCRModel/);
 assert.match(hostCompositionSource, /capabilityKind: 'ocr'/);
 assert.match(hostCompositionSource, /buildToolsDescription/);

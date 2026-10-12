@@ -1,5 +1,5 @@
 /** 设置悬浮球大小与两种形态；整页共用外层的纵向滚动。 */
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import { Button, ModalSheet, Slider, showAppDialog } from '@shared/ui';
 import * as DocumentPicker from 'expo-document-picker';
 import { Check, Minus, Pencil, Plus, Trash2, Upload } from 'lucide-react-native';
@@ -118,7 +118,7 @@ export function BubbleSkinSettings() {
   return (
     <>
       <Text style={styles.sectionTitle}>悬浮球外观</Text>
-      <View style={styles.card}>
+      <ThemedSurface variant="card" style={styles.card}>
         {loading ? <ActivityIndicator style={styles.loading} color={theme.colors.brand.primary} /> : (
           <>
             {selectedSkin ? <BubbleSizeEditor key={selectedSkin.id} skin={selectedSkin} disabled={busy} onSave={changeSize} /> : null}
@@ -154,7 +154,7 @@ export function BubbleSkinSettings() {
             </View>
           </>
         )}
-      </View>
+      </ThemedSurface>
       <ModalSheet visible={renamingSkin !== null} onClose={() => setRenamingSkin(null)} title="修改装扮名称">
         <View style={styles.renameSheet}>
           <TextInput style={styles.nameInput} value={nameDraft} onChangeText={setNameDraft} maxLength={30} autoFocus selectTextOnFocus placeholder="输入装扮名称" placeholderTextColor={theme.colors.text.tertiary} />

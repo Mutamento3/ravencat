@@ -14,14 +14,18 @@ export type VoiceMessagePlaybackViewState = LocalAudioPlaybackSnapshot | {
 };
 
 type Listener = (state: VoiceMessagePlaybackViewState) => void;
+export type VoicePlaybackTarget = { kind: 'message'; id: number; isIncoming: boolean } | { kind: 'favorite' | 'quote'; id: string };
+export function getVoicePlaybackKey(target: VoicePlaybackTarget): number | string {
+  return target.kind === 'message' ? target.id : `${target.kind}:${target.id}`;
+}
 
 class VoiceMessagePlaybackCoordinator {
   private requestVersion = 0;
-  private active: { messageId: number; session: LocalAudioPlaybackSession; unsubscribe: () => void } | null = null;
-  private readonly states = new Map<number, VoiceMessagePlaybackViewState>();
-  private readonly listeners = new Map<number, Set<Listener>>();
+  private active: { messageId: number | string; session: LocalAudioPlaybackSession; unsubscribe: () => void } | null = null;
+  private readonly states = new Map<number | string, VoiceMessagePlaybackViewState>();
+  private readonly listeners = new Map<number | string, Set<Listener>>();
 
-  subscribe(messageId: number, durationMs: number, listener: Listener): () => void {
+  subscribe(messageId: number | string, durationMs: number, listener: Listener): () => void {
     let messageListeners = this.listeners.get(messageId);
     if (!messageListeners) {
       messageListeners = new Set();
@@ -35,7 +39,8 @@ class VoiceMessagePlaybackCoordinator {
     };
   }
 
-  async toggle(messageId: number, mediaAssetId: string, durationMs: number, isIncoming: boolean): Promise<void> {
+  async toggle(target: VoicePlaybackTarget, mediaAssetId: string, durationMs: number): Promise<void> {
+    const messageId = getVoicePlaybackKey(target);
     if (this.active?.messageId === messageId) {
       const state = this.states.get(messageId);
       if (state?.state === 'playing') {
@@ -64,8 +69,8 @@ class VoiceMessagePlaybackCoordinator {
         }
       });
       this.active = { messageId, session, unsubscribe };
-      if (isIncoming) {
-        void markVoiceMessagePlayed(messageId).catch((error) => {
+      if (target.kind === 'message' && target.isIncoming) {
+        void markVoiceMessagePlayed(target.id).catch((error) => {
           console.warn('[VoiceMessagePlayback] 写入已播放状态失败', error);
         });
       }
@@ -98,7 +103,7 @@ class VoiceMessagePlaybackCoordinator {
     });
   }
 
-  private async releaseFinished(messageId: number): Promise<void> {
+  private async releaseFinished(messageId: number | string): Promise<void> {
     if (this.active?.messageId !== messageId) return;
     const active = this.active;
     this.active = null;
@@ -106,7 +111,7 @@ class VoiceMessagePlaybackCoordinator {
     await active.session.stop();
   }
 
-  private publish(messageId: number, state: VoiceMessagePlaybackViewState) {
+  private publish(messageId: number | string, state: VoiceMessagePlaybackViewState) {
     this.states.set(messageId, state);
     this.listeners.get(messageId)?.forEach((listener) => listener(state));
   }

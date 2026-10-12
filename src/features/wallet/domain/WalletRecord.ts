@@ -10,6 +10,14 @@
 export type WalletRecordType = 'income' | 'expense';
 export type CategoryType = 'income' | 'expense' | 'both';
 
+export type WalletCategories = Record<WalletRecordType, string[]>;
+
+// 预设只是分类建议；用户和 AI 已使用的自定义分类同样属于账本。
+export const DEFAULT_WALLET_CATEGORIES: WalletCategories = {
+  expense: ['餐饮', '交通', '购物', '娱乐', '医疗', '教育', '住房', '通讯', '其他'],
+  income: ['工资', '奖金', '投资', '兼职', '红包', '其他'],
+};
+
 export interface WalletRecord {
   id: string;
   type: WalletRecordType;

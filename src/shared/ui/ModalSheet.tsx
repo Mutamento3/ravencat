@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useTheme, useThemedStyles, ThemedSurface } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -58,6 +59,7 @@ const createStyles = (theme: PresentationTheme) =>
     },
     title: {
       ...theme.typography.title,
+      color: theme.colors.text.primary,
     },
     closeBtn: {
       padding: theme.spacing.sm,
@@ -83,6 +85,7 @@ export default function ModalSheet({
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (!avoidKeyboard || !internalVisible) return;
@@ -142,6 +145,8 @@ export default function ModalSheet({
     <Modal
       visible={internalVisible}
       transparent
+      statusBarTranslucent
+      navigationBarTranslucent
       animationType="none"
       onRequestClose={onClose}
     >
@@ -159,6 +164,7 @@ export default function ModalSheet({
           <Animated.View
             style={[
               styles.sheet,
+              { paddingBottom: Math.max(32, insets.bottom) },
               style,
               { transform: [{ translateY: slideAnim }] },
             ]}

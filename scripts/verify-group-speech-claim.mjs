@@ -1055,6 +1055,7 @@ async function loadGroupChatMessaging() {
       const state = globalThis.__GROUP_MESSAGING_STATE__;
       state.events.push('planning');
       state.plannerCalls += 1;
+      if (state.planningGate) { state.planningGate.started.resolve(); await state.planningGate.release.promise; }
       if (state.throwPlanning) {
         throw new Error('规划失败测试');
       }
@@ -1080,6 +1081,9 @@ async function loadGroupChatMessaging() {
     export function notifyGroupInvocationSettled(groupId) {
       globalThis.__GROUP_MESSAGING_STATE__.settled.push(groupId);
     }
+    export function cancelGroupAutoInvocation(groupId) {
+      (globalThis.__GROUP_MESSAGING_STATE__.cancelled ??= []).push(groupId);
+    }
   `);
   const source = read('src/features/chat/group/application/GroupChatMessaging.ts')
     .replace(/from ['"]\.\/GroupSpeechExecutionAbort['"]/g,
@@ -1090,10 +1094,17 @@ async function loadGroupChatMessaging() {
     .replace(/from ['"]\.\/GroupSpeakerPlanning['"]/g, `from '${planningUrl}'`)
     .replace(/from ['"]\.\/GroupSpeechTaskExecution['"]/g, `from '${executionUrl}'`)
     .replace(/from ['"]\.\/GroupAutoInvocationScheduler['"]/g, `from '${schedulerUrl}'`);
-  return import(transpileToModuleUrl(source));
+  const messaging = await import(transpileToModuleUrl(source));
+  const terminationSource = read('src/features/chat/group/application/GroupSpeechTermination.ts')
+    .replace(/from ['"]\.\/GroupSpeechExecutionAbort['"]/g,
+      `from '${transpileToModuleUrl(read('src/features/chat/group/application/GroupSpeechExecutionAbort.ts'))}'`)
+    .replace(/from ['"]\.\.\/\.\.\/messages\/events\/ChatEvents['"]/g, `from '${eventUrl}'`)
+    .replace(/from ['"]\.\/ChatGroupRuntime['"]/g, `from '${runtimeUrl}'`)
+    .replace(/from ['"]\.\/GroupAutoInvocationScheduler['"]/g, `from '${schedulerUrl}'`);
+  return { ...messaging, ...await import(transpileToModuleUrl(terminationSource)) };
 }
 
-async function verifyInvocationFlow(GroupChatRepository, invokeGroupChat) {
+async function verifyInvocationFlow(GroupChatRepository, invokeGroupChat, interruptAbandonedGroupSpeechPlans) {
   const db = createSpeechPlanDatabase();
   globalThis.__GROUP_CLAIM_COORDINATOR__ = createCoordinator(db);
   const repository = new GroupChatRepository();
@@ -1164,6 +1175,7 @@ async function verifyInvocationFlow(GroupChatRepository, invokeGroupChat) {
       },
       listSpeechPlanTasks: async (planId) => repository.listSpeechPlanTasks(planId),
       beginSpeechPlanPreparation: async (...args) => repository.beginSpeechPlanPreparation(...args),
+      interruptSpeechPlansWithoutOwner: (...args) => repository.interruptSpeechPlansWithoutOwner(...args),
       activateSpeechPlanWithTasks: async (planId, params) => {
         state.createTaskCalls += 1;
         state.activatedTaskInputs.push(params.tasks.map((task) => task.aiAssistantId));
@@ -1298,15 +1310,65 @@ async function verifyInvocationFlow(GroupChatRepository, invokeGroupChat) {
     'completed',
   );
 
+  state.throwPlanning = false;
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    return { promise, resolve };
+  };
+  state.planningGate = { started: deferred(), release: deferred() };
+  const liveInvocation = invokeGroupChat('g1');
+  await state.planningGate.started.promise;
+  const orphan = await repository.tryClaimGroupSpeechPlan('orphan');
+  await repository.beginSpeechPlanPreparation(orphan.plan.id);
+  await interruptAbandonedGroupSpeechPlans();
+  assert.equal((await repository.getRunningSpeechPlan('g1')).status, 'preparing', '同进程准备中的 owner 不得被冷启动恢复终止');
+  assert.equal((await repository.getLatestSpeechPlan('orphan')).status, 'failed');
+  state.planningGate.release.resolve();
+  assert.equal((await liveInvocation).success, true);
+  state.planningGate = null;
   db.close();
+}
+
+async function verifyInterruptedPlans(GroupChatRepository) {
+  const db = createSpeechPlanDatabase();
+  db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY, text TEXT); INSERT INTO messages VALUES ('kept', 'already sent');");
+  globalThis.__GROUP_CLAIM_COORDINATOR__ = createCoordinator(db);
+  const repository = new GroupChatRepository();
+  try {
+    for (const [groupId, status] of [['dead-preparing', 'preparing'], ['dead-running', 'running'], ['dead-pending', 'pending'], ['live', 'running']]) {
+      const { plan } = await repository.tryClaimGroupSpeechPlan(groupId);
+      db.prepare('UPDATE group_speech_plans SET status = ? WHERE id = ?').run(status, plan.id);
+      for (const taskStatus of ['completed', 'running', 'queued']) {
+        db.prepare(`INSERT INTO group_speech_tasks
+          (id, plan_id, group_id, ai_assistant_id, agent_id, sequence_order, source, status, created_at, updated_at)
+          VALUES (?, ?, ?, 'ai', 'agent', 1, 'admin', ?, '2026-10-12', '2026-10-12')`)
+          .run(`${groupId}-${taskStatus}`, plan.id, groupId, taskStatus);
+      }
+    }
+    const interrupted = await repository.interruptSpeechPlansWithoutOwner(['live']);
+    assert.equal(db.prepare("SELECT text FROM messages WHERE id = 'kept'").get().text, 'already sent');
+    assert.deepEqual(interrupted.sort(), ['dead-pending', 'dead-preparing', 'dead-running']);
+    for (const groupId of interrupted) {
+      assert.equal((await repository.getLatestSpeechPlan(groupId)).status, 'failed');
+      const statuses = db.prepare('SELECT id, status FROM group_speech_tasks WHERE group_id = ?').all(groupId);
+      assert.equal(statuses.find((item) => item.id.endsWith('-completed')).status, 'completed');
+      assert.ok(statuses.filter((item) => !item.id.endsWith('-completed')).every((item) => item.status === 'failed'));
+      assert.equal((await repository.tryClaimGroupSpeechPlan(groupId)).claimed, true, '中断后可显式再次召唤');
+    }
+    assert.equal((await repository.getRunningSpeechPlan('live')).status, 'running');
+    await repository.interruptSpeechPlansWithoutOwner(['live', ...interrupted]);
+    assert.equal((await repository.getRunningSpeechPlan('live')).status, 'running');
+  } finally { db.close(); }
 }
 
 const { GroupChatRepository } = await loadGroupChatRepository();
 const { updateGroupChatAdminConfig, updateGroupChatProfile } = await loadGroupChatManagement();
 const { getGroupParticipantDirectory } = await loadGroupParticipantDirectory();
 const { captureGroupInvocationContext, prepareGroupSpeechPlan } = await loadGroupSpeakerPlanning();
-const { invokeGroupChat } = await loadGroupChatMessaging();
+const { invokeGroupChat, interruptAbandonedGroupSpeechPlans } = await loadGroupChatMessaging();
 await verifyRepositoryClaim(GroupChatRepository);
+await verifyInterruptedPlans(GroupChatRepository);
 await verifyInvocationContextCapture(captureGroupInvocationContext);
 await verifyAdminConfigPersistence(GroupChatRepository);
 await verifyAdminConfigCommand(updateGroupChatAdminConfig);
@@ -1315,6 +1377,6 @@ await verifyGroupProfileValidation(updateGroupChatProfile);
 await verifyGroupParticipantDirectory(getGroupParticipantDirectory);
 await verifyAdminRecentContext(prepareGroupSpeechPlan);
 await verifyAdminSelectionSemantics(prepareGroupSpeechPlan);
-await verifyInvocationFlow(GroupChatRepository, invokeGroupChat);
+await verifyInvocationFlow(GroupChatRepository, invokeGroupChat, interruptAbandonedGroupSpeechPlans);
 
 console.log('群聊召唤 claim 与管理员上下文行为验证通过。');

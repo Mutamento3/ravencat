@@ -3,7 +3,7 @@
 import { Toggle, showAppDialog } from '@shared/ui';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useThemedStyles } from '@shared/theme';
 import type { PromptPack, PromptPackMessageContent, PromptScenarioId } from '@shared/prompt';
 import {
   getPromptManagementSnapshot, type PromptManagementSnapshot,
@@ -79,7 +79,7 @@ export default function PromptPackInspector() {
 function PreviewResult({ result, styles }: { result: PromptPackPreviewResult; styles: ReturnType<typeof createPromptPackInspectorStyles> }) {
   const { pack } = result;
   return <>
-    <View style={styles.section}><View style={styles.card}><Text style={styles.privacy}>{result.privacyNotice}</Text><Text style={styles.meta}>预设：{result.preset.name}</Text><Text style={styles.meta}>解析来源：{BINDING_SOURCE_LABELS[result.bindingSource]}</Text><View style={styles.metricRow}><Metric value={pack.blocks.length} label="编译块" styles={styles} /><Metric value={pack.estimatedTokenCount} label="估算 Token" styles={styles} /><Metric value={pack.modelMessages.length} label="模型消息" styles={styles} /></View>{pack.truncationLog?.map((entry, index) => <Text key={`${index}:${entry}`} style={styles.meta}>截断：{entry}</Text>)}</View></View>
+    <View style={styles.section}><ThemedSurface variant="card" style={styles.card}><Text style={styles.privacy}>{result.privacyNotice}</Text><Text style={styles.meta}>预设：{result.preset.name}</Text><Text style={styles.meta}>解析来源：{BINDING_SOURCE_LABELS[result.bindingSource]}</Text><View style={styles.metricRow}><Metric value={pack.blocks.length} label="编译块" styles={styles} /><Metric value={pack.estimatedTokenCount} label="估算 Token" styles={styles} /><Metric value={pack.modelMessages.length} label="模型消息" styles={styles} /></View>{pack.truncationLog?.map((entry, index) => <Text key={`${index}:${entry}`} style={styles.meta}>截断：{entry}</Text>)}</ThemedSurface></View>
     <View style={styles.section}><Text style={styles.title}>最终块顺序</Text>{pack.blocks.map((block) => <View key={block.instanceId || `${block.key}:${block.definitionId}`} style={styles.block}><Text style={styles.blockTitle}>{block.title}</Text><Text style={styles.blockMeta}>{block.definitionId || block.key} · {block.slot ? SLOT_LABELS[block.slot] : '未分槽'} · {block.status}</Text><Text style={styles.blockBody}>{block.content || '[空内容]'}</Text></View>)}</View>
     <PromptText title="最终 systemPrompt" text={pack.systemPrompt} styles={styles} />
     <PromptText title="最终模型消息" text={formatModelMessages(pack)} styles={styles} />

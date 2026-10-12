@@ -4,6 +4,7 @@ import type { ChatMessage } from '../domain/ChatMessage';
 import {
   sortChatTimelineMessages,
 } from '../domain/ChatTimelineOrdering';
+import type { ChatReplyQuote } from '../domain/chatMessageMetadata';
 import type { ChatAttachment } from '../domain/ChatAttachment';
 import {
   buildStickerMessageMetadata,
@@ -59,6 +60,7 @@ export interface CreateOptimisticUserTimelineMessageParams {
   text: string;
   replyToId?: number | null;
   replyToText?: string | null;
+  replyQuote?: ChatReplyQuote | null;
   clientMessageId?: string | null;
   attachments?: ChatAttachment[];
   sticker?: StickerMessageSnapshot | null;
@@ -173,7 +175,9 @@ export function createOptimisticUserTimelineMessage(
     tokensUsed: 0,
     promptTokens: 0,
     completionTokens: 0,
-    metadataJson: metadata ? JSON.stringify(metadata) : null,
+    metadataJson: metadata || params.replyQuote
+      ? JSON.stringify({ ...metadata, ...(params.replyQuote ? { replyQuote: params.replyQuote } : {}) })
+      : null,
   };
 }
 
@@ -195,6 +199,7 @@ export function createOptimisticUserTimelineMessages(
     showTimeSeparatorBefore: index === 0 && seed.showTimeSeparatorBefore,
     replyToId: index === parts.length - 1 ? params.replyToId : null,
     replyToText: index === parts.length - 1 ? params.replyToText : null,
+    replyQuote: index === parts.length - 1 ? params.replyQuote : null,
   }));
 }
 

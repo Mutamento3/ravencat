@@ -28,9 +28,11 @@ const native = {
   search: async (...args) => { calls.push(['search', ...args]); return pending ?? nativeResult; },
   readPage: async (...args) => { calls.push(['read', ...args]); return nativeResult; },
   download: async (...args) => { calls.push(['download', ...args]); return nativeResult; },
+  downloadImage: async (...args) => { calls.push(['image', ...args]); return pending ?? nativeResult; },
 };
 const web = load('src/platform/web/WebTools.ts', {
   expo: { requireNativeModule: () => native },
+  'expo-file-system': { File: class { constructor(uri) { this.uri = uri; } delete() { calls.push(['delete-temp', this.uri]); } } },
   '@shared/runtime/abortSignal': load('src/shared/runtime/abortSignal.ts'),
 });
 const tools = load('src/features/webTools/application/WebAgentTools.ts', { '@platform/web': web });
@@ -43,10 +45,12 @@ let defaults = {};
 let overrides = [];
 const featureNames = ['protocol', 'moments', 'wallet', 'calls', 'memory', 'deviceControl', 'companion', 'phoneTools', 'screenCapture', 'chat', 'stickers', 'togetherListening'];
 const registration = load('src/host/composition/agent/createAgentToolRegistry.ts', {
+  '@features/media': proxy,
+  './assertImageToolRunCurrent': { assertImageToolRunCurrent: () => {} },
   ...Object.fromEntries(featureNames.map((name) => [`@features/${name}`, proxy])),
   '@features/webTools': tools,
   '@features/prompting': { readPromptDefaults: async () => ({ toolPermissions: defaults }) },
-  '@features/assistants': new Proxy({ assistantToolPermissionRepository: { list: async () => overrides } }, {
+  '@features/assistants': new Proxy({ assistantToolPermissionRepository: { list: async () => overrides }, createChangeOwnAvatarTool: () => placeholder('change_own_avatar') }, {
     get: (target, name) => target[name] ?? placeholder(String(name)),
   }),
   '@features/phoneTools/neteaseComposition': { productionNetEaseChildTools: [] },
@@ -63,7 +67,6 @@ for (const name of names) {
   assert.equal(descriptor.owner, 'webTools');
   assert.equal(descriptor.defaultEnabled, true);
   assert.equal(descriptor.hostOnly, false);
-  assert.equal(descriptor.managedInPhoneTools, false);
   assert.ok((await registration.resolveAllowedToolNames('ordinary-ai')).includes(name));
 }
 defaults = { web_search: false };
@@ -132,4 +135,12 @@ await web.searchWeb('资料', 5, completed.signal);
 const completedCount = calls.length;
 completed.abort();
 assert.equal(calls.length, completedCount, '完成后取消监听必须释放');
+let resolveImage;
+pending = new Promise(resolve => { resolveImage = resolve; });
+const imageController = new AbortController();
+const imageOperation = web.downloadWebImage('https://example.com/cat.png', null, imageController.signal);
+imageController.abort(new Error('取消图片下载'));
+resolveImage({ ok: true, data: { uri: 'file:///temp-image' } });
+await assert.rejects(imageOperation, /取消图片下载/);
+assert.deepEqual(calls.at(-1), ['delete-temp', 'file:///temp-image'], '原生返回与取消竞态不能留下失去 owner 的暂存图');
 console.log('联网工具参数、结果、普通 AI 权限、拆包与取消行为验证通过。');

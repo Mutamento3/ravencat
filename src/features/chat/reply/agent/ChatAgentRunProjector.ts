@@ -413,6 +413,7 @@ function toAIResponse(turn: ChatAgentModelTurn): AIResponse {
     totalTokens: turn.usage.totalTokens,
     promptTokens: turn.usage.promptTokens,
     completionTokens: turn.usage.completionTokens,
+    cachedTokens: turn.usage.cachedTokens,
     isToolCall: turn.toolCalls.length > 0,
     toolCalls: turn.toolCalls.map((toolCall) => ({
       id: toolCall.id,

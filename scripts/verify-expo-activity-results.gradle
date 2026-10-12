@@ -1,0 +1,8 @@
+// 直接验证安装依赖中的 Expo 生命周期实现，不构建或安装 APK。
+gradle.afterProject { project ->
+  if (project.path == ':expo-modules-core') {
+    project.android.sourceSets.test.java.srcDir(new File(initscript.sourceFile.parentFile, 'android-tests/expo-activity-results'))
+    // 与项目其他原生回归测试共用 Android 13 的 Robolectric 运行环境。
+    project.dependencies.add('testImplementation', 'org.robolectric:robolectric:4.14.1')
+  }
+}

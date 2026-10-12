@@ -18,7 +18,7 @@ import type {
  * 工具定义参数类型
  */
 interface GetLedgerContextArgs {
-  mode: 'recent' | 'stats' | 'keyword';
+  mode: 'recent' | 'stats' | 'keyword' | 'categories';
   timeDescription?: string;
   keyword?: string;
   type?: WalletRecordType;
@@ -62,14 +62,14 @@ interface FilterOptions {
  */
 export const definition = {
   name: 'getLedgerContext',
-  description: '获取账本记录与统计信息；recent 或 keyword 模式会返回真实账单 ID。',
+  description: '获取账本记录、统计或已有分类；categories 模式返回预设及全部已使用的自定义分类，记账时优先复用这些名称，尽量不另创；recent 或 keyword 模式会返回真实账单 ID。',
   parameters: {
     type: 'object' as const,
     properties: {
       mode: {
         type: 'string' as const,
-        enum: ['recent', 'stats', 'keyword'] as const,
-        description: '查询模式：recent最近记录、stats统计、keyword关键词搜索',
+        enum: ['recent', 'stats', 'keyword', 'categories'] as const,
+        description: '查询模式：recent最近记录、stats统计、keyword关键词搜索、categories已有分类（仅 type 筛选生效）',
       },
       timeDescription: {
         type: 'string' as const,
@@ -110,6 +110,14 @@ export async function execute(
 
   try {
     const mode = args?.mode;
+    if (mode === 'categories') {
+      const categories = await ledgerRepo.getCategories(args.type);
+      return {
+        success: true,
+        message: `已有分类：${JSON.stringify(categories)}。请优先复用原名；具体消费内容写入备注，只有已有分类确实不适用或用户明确要求时才另创新分类。`,
+        data: { categories },
+      };
+    }
     const resolved = resolveTimeDescription(args.timeDescription);
 
     if (mode === 'keyword') {

@@ -55,9 +55,13 @@ export type ChatMediaReadInput =
   | { kind: 'media_asset'; assetId: string };
 
 export interface ChatReplyRuntimeDependencies {
+  mutations: {
+    isRunCurrent: (transaction: import('@platform/persistence').DatabaseTransactionExecutor, runId: string) => Promise<boolean>;
+  };
   assistantDirectory: Pick<ChatAssistantDirectory, 'getBlockState'>;
   media: {
-    readAsBase64: (input: ChatMediaReadInput) => Promise<string>;
+    /** 文件边界负责真实格式、尺寸与静态帧准备，调用方不再猜 MIME。 */
+    readVisionImage: (input: ChatMediaReadInput) => Promise<{ base64: string; mimeType: string }>;
   };
   vision: {
     /** 解析当前角色的图片识别选择；未选择表示直接向聊天模型传图。 */

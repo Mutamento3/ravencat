@@ -324,6 +324,7 @@ function ChatMessageList({
   const anchorPageAttemptsRef = useRef(0);
   const anchorFrameRef = useRef<number | null>(null);
   const previousSnapshotRef = useRef<MessageListSnapshot>({ keys: [] });
+  const committedTimelineRef = useRef<readonly ChatMessage[]>([]);
   const renderedItemCacheRef = useRef(new Map<string, RenderedMessageItem>());
   const [showNewMessagePrompt, setShowNewMessagePrompt] = useState(false);
   const [isListScrollEnabled, setIsListScrollEnabled] = useState(true);
@@ -409,6 +410,7 @@ function ChatMessageList({
     isFollowingBottomRef.current = true;
     isUserDraggingRef.current = false;
     previousSnapshotRef.current = { keys: [] };
+    committedTimelineRef.current = [];
     anchorConsumedRef.current = false;
     anchorPageAttemptsRef.current = 0;
     // 推进 generation 而不是复用同一个 idle gate：这样上一个会话在飞的请求
@@ -524,6 +526,7 @@ function ChatMessageList({
         isMe: msg.isMe,
         senderType: msg.senderType,
         replyToText: msg.replyToText,
+        hasReplyQuote: Boolean(metadata?.replyQuote),
         attachments,
         sticker,
         voice,
@@ -539,7 +542,7 @@ function ChatMessageList({
         showTimeSeparator: shouldShowTimeSeparator(msg, previousMessage),
         showSpeakerSeparator,
         timeText: formatMessageTime(msg.createdAt),
-        displayTokensUsed: msg.tokensUsed || 0,
+        displayTokensUsed: aiAssistant?.showTokenUsage === false ? 0 : msg.tokensUsed || 0,
         bubbleText,
         attachments,
         sticker,
@@ -575,9 +578,10 @@ function ChatMessageList({
     [renderedData]
   );
 
-  useEffect(() => {
+  const handleListLayoutCommit = useCallback(() => {
     if (!timelineMessages.length) {
       previousSnapshotRef.current = { keys: [] };
+      committedTimelineRef.current = timelineMessages;
       return;
     }
 
@@ -589,7 +593,12 @@ function ChatMessageList({
 
     if (mutation.type === 'initial' || (!bottomFollowPausedRef.current && isFollowingBottomRef.current)) {
       setShowNewMessagePrompt(false);
-      if (mutation.type === 'append') {
+      // 跟随只消费消息事实变化；展开思维链等局部布局变化应保留阅读位置。
+      // 在 FlashList 提交布局后再滚动，同一条消息的流式增长也走这个入口。
+      if (
+        committedTimelineRef.current !== timelineMessages
+        && (mutation.type === 'append' || mutation.type === 'unchanged')
+      ) {
         followBottomAfterLayout();
       }
     } else if (
@@ -600,7 +609,8 @@ function ChatMessageList({
     }
 
     previousSnapshotRef.current = { keys: renderedMessageKeys };
-  }, [followBottomAfterLayout, renderedData, renderedMessageKeys, timelineMessages.length]);
+    committedTimelineRef.current = timelineMessages;
+  }, [followBottomAfterLayout, renderedData, renderedMessageKeys, timelineMessages]);
 
   // 主动生活「查看当时的聊天」一次性定位：目标消息在当前窗口内则直接滚动过去；
   // 不在时有限追加历史分页再试，仍找不到就保持默认底部位置，不影响正常进入会话。
@@ -651,8 +661,6 @@ function ChatMessageList({
       isFollowingBottomRef.current = true;
       setShowNewMessagePrompt(false);
     }
-
-    viewportHeightRef.current = layoutMeasurement.height;
 
     const decision = resolveScrollDemandDecision({
       contentOffsetY: contentOffset.y,
@@ -831,18 +839,24 @@ function ChatMessageList({
       // 不再需要「紧随其后的第一次滚动视为修正」这类布尔标记——它会被 reasoning
       // 展开、图片尺寸完成等没有后续滚动的事件永久挂着，反过来吞掉真实上滑。
       contentHeightRef.current = height;
-      followBottomAfterLayout();
       requestBootstrapPageIfContentTooShort();
     },
-    [followBottomAfterLayout, requestBootstrapPageIfContentTooShort]
+    [requestBootstrapPageIfContentTooShort]
   );
 
   const handleListLayout = useCallback(
     (event: LayoutChangeEvent) => {
-      viewportHeightRef.current = event.nativeEvent.layout.height;
+      const previousHeight = viewportHeightRef.current;
+      const height = event.nativeEvent.layout.height;
+      viewportHeightRef.current = height;
+      // 视口高度由布局回调拥有；滚动事件可能先报告新高度，不能提前覆盖比较基准。
+      // 键盘或输入面板改变视口时保留贴底意图，消息自身展开不改变视口。
+      if (previousHeight > 0 && height !== previousHeight) {
+        followBottomAfterLayout();
+      }
       requestBootstrapPageIfContentTooShort();
     },
-    [requestBootstrapPageIfContentTooShort]
+    [followBottomAfterLayout, requestBootstrapPageIfContentTooShort]
   );
 
   if (!timelineMessages.length) {
@@ -884,8 +898,6 @@ function ChatMessageList({
         scrollEventThrottle={32}
         maintainVisibleContentPosition={{
           startRenderingFromBottom: true,
-          autoscrollToBottomThreshold: selection || pauseAutoScroll ? undefined : 0.2,
-          animateAutoScrollToBottom: false,
         }}
         onScroll={handleScroll}
         onScrollBeginDrag={handleScrollBeginDrag}
@@ -895,6 +907,7 @@ function ChatMessageList({
         }}
         onMomentumScrollEnd={updateFollowStateAtUserScrollEnd}
         onLayout={handleListLayout}
+        onCommitLayoutEffect={handleListLayoutCommit}
         onContentSizeChange={handleContentSizeChange}
       />
       {showNewMessagePrompt ? (

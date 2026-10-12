@@ -46,7 +46,8 @@
                 ├── statistics.tsx
                 └── summary
                     ├── edit.tsx
-                    └── index.tsx
+                    ├── index.tsx
+                    └── settings.tsx
             └── groups
                 ├── [groupId]
                     ├── admin-settings.tsx
@@ -54,6 +55,7 @@
                     └── menu.tsx
                 ├── [groupId].tsx
                 └── new.tsx
+        ├── favorites.tsx
         ├── index.tsx
         ├── mcp-tools
             ├── [serverId].tsx
@@ -105,6 +107,7 @@
             ├── AIAssistantManagement.ts
             ├── aiTools
                 ├── BlockAIAssistantTool.ts
+                ├── ChangeOwnAvatarTool.ts
                 └── UnblockAIAssistantTool.ts
             ├── application
                 ├── AIModelService.ts
@@ -151,7 +154,6 @@
                 └── management
                     ├── addAIFormHelpers.ts
                     ├── AIModelSettings
-                        ├── ContextWindowSection.tsx
                         ├── index.tsx
                         ├── MaxTokensSection.tsx
                         ├── ModelSection.tsx
@@ -295,6 +297,15 @@
                     └── SessionRepository.ts
                 └── infrastructure
                     └── SQLiteSessionRepository.ts
+            ├── favorites
+                ├── application
+                    ├── ChatFavoriteRuntime.ts
+                    └── ChatFavorites.ts
+                ├── domain
+                    ├── ChatFavorite.ts
+                    └── ChatFavoriteRepository.ts
+                └── infrastructure
+                    └── SQLiteChatFavoriteRepository.ts
             ├── group
                 ├── application
                     ├── ChatGroupRuntime.ts
@@ -358,6 +369,7 @@
                     ├── AgentTimelineIdentity.ts
                     ├── ChatAttachment.ts
                     ├── ChatMessage.ts
+                    ├── ChatMessageActions.ts
                     ├── ChatMessageEditing.ts
                     ├── chatMessageMetadata.ts
                     ├── ChatMessageSelection.ts
@@ -380,9 +392,15 @@
                     ├── AIOptionsParts.tsx
                     ├── ChatImageModelPicker.tsx
                     ├── ChatSettings.tsx
+                    ├── chatSettingsDraft.ts
                     ├── chatSettingsStyles.ts
                     ├── ChatStatisticsScreen.tsx
+                    ├── ContextWindowSection.tsx
+                    ├── FixedChatContextSection.tsx
                     └── useChatSettings.ts
+                ├── favorites
+                    ├── ChatFavoritesScreen.styles.ts
+                    └── ChatFavoritesScreen.tsx
                 ├── group
                     ├── CreateGroup.styles.ts
                     ├── CreateGroup.tsx
@@ -441,6 +459,7 @@
                         ├── useAgentTransientTimeline.ts
                         ├── useArrivedAssistantMessages.ts
                         ├── useChatComposerSurface.ts
+                        ├── useChatFavoriteAction.ts
                         ├── useChatMessageSelection.ts
                         ├── useChatMessageShare.ts
                         ├── useChatTimelineSync.ts
@@ -512,6 +531,7 @@
                     ├── ChatReplyRuntimeDependencies.ts
                     ├── ChatReplyTypes.ts
                     ├── ChatReplyUtils.ts
+                    ├── ChatRunMutationFence.ts
                     ├── CommittedAssistantSegmentDelivery.ts
                     ├── ExecuteUserReplyTurn.ts
                     ├── MemoryParticipationPolicy.ts
@@ -536,6 +556,8 @@
                     ├── SQLiteChatImageSettingsRepository.ts
                     └── SQLiteConversationTurnRepository.ts
             ├── summary
+                ├── aiTools
+                    └── SearchChatSummariesTool.ts
                 ├── application
                     ├── ChatSummary.ts
                     ├── ChatSummaryPrompt.ts
@@ -547,9 +569,15 @@
                 ├── infrastructure
                     └── SQLiteChatSummaryRepository.ts
                 └── presentation
+                    ├── ChatSecondarySummaryScreen.tsx
+                    ├── ChatSummaryDiagnostics.tsx
                     ├── ChatSummaryEditorScreen.tsx
                     ├── ChatSummaryScreen.tsx
-                    └── chatSummaryStyles.ts
+                    ├── ChatSummarySettingsPanel.tsx
+                    ├── ChatSummarySettingsScreen.tsx
+                    ├── chatSummaryStyles.ts
+                    ├── ChatSummaryTaskScreen.tsx
+                    └── useChatSummarySnapshot.ts
             └── typeAssertions.ts
         ├── companion
             ├── aiTools
@@ -721,15 +749,19 @@
         ├── media
             ├── application
                 ├── AdoptExistingMediaAssets.ts
+                ├── AIImageRuntime.ts
+                ├── AIImageTools.ts
                 ├── CreateMediaAsset.ts
                 ├── MediaAssetBacking.ts
                 ├── MediaAssetCatalog.ts
                 ├── MediaAssetLifecycle.ts
                 ├── MediaAssetResolver.ts
                 ├── MediaAssetRuntime.ts
+                ├── MediaImageToolResult.ts
                 └── PreparedMediaAssetBatch.ts
             ├── composition.ts
             ├── domain
+                ├── AIDownloadedImageRepository.ts
                 ├── MediaAsset.ts
                 ├── MediaAssetLifecycle.ts
                 └── MediaAssetRepository.ts
@@ -737,6 +769,7 @@
             └── infrastructure
                 ├── NativeBubbleSkinAssetBacking.ts
                 ├── PersistentMediaAssetBackings.ts
+                ├── SQLiteAIDownloadedImageRepository.ts
                 └── SQLiteMediaAssetRepository.ts
         ├── memory
             ├── aiTools
@@ -782,7 +815,8 @@
                     ├── PhoneToolsDirectoryModel.ts
                     ├── PhoneToolsScreen.tsx
                     ├── ToolPackageDisplayModel.ts
-                    └── ToolPackageScreen.tsx
+                    ├── ToolPackageScreen.tsx
+                    └── usePhoneToolSettings.ts
                 └── ThemePickerView.tsx
         ├── moments
             ├── aiTools
@@ -845,6 +879,7 @@
         ├── phoneTools
             ├── aiTools
                 ├── GetAppUsageTool.ts
+                ├── GetCurrentLocationTool.ts
                 ├── GetForegroundAppTool.ts
                 ├── NetEaseControlPlaybackTool.ts
                 ├── NetEaseGetPlaybackStateTool.ts
@@ -997,8 +1032,10 @@
             └── VoiceMessageTranscription.ts
         ├── stickers
             ├── aiTools
+                ├── AIStickerLibraryTools.ts
                 └── StickerAgentTools.ts
             ├── application
+                ├── AIStickerCommands.ts
                 ├── StickerAnnotationChangedSignal.ts
                 ├── StickerAnnotationPendingSignal.ts
                 ├── StickerCommands.ts
@@ -1010,6 +1047,7 @@
                 └── StickerSystemModels.ts
             ├── composition.ts
             ├── domain
+                ├── AIStickerProcessing.ts
                 ├── Sticker.ts
                 ├── StickerEmbedding.ts
                 ├── StickerRepository.ts
@@ -1017,6 +1055,7 @@
                 └── StickerSystemConfig.ts
             ├── index.ts
             ├── infrastructure
+                ├── SQLiteAIStickerProcessingRepository.ts
                 └── SQLiteStickerRepository.ts
             └── presentation
                 └── stickerSystem
@@ -1124,6 +1163,7 @@
             └── TransferProtocolToMemory.ts
         ├── composition
             ├── agent
+                ├── assertImageToolRunCurrent.ts
                 ├── createAgentToolRegistry.ts
                 ├── HostAgentRunAssembly.ts
                 ├── index.ts
@@ -1134,6 +1174,7 @@
                 ├── registerMcpToolsForHostRun.ts
                 └── ToolPackageExposure.ts
             ├── completePendingBackupRestore.ts
+            ├── configureAIImageTools.ts
             ├── configureAIRuntime.ts
             ├── configureAuxiliaryModelInitialization.ts
             ├── configureChatRuntime.ts
@@ -1154,7 +1195,7 @@
             ├── createBackupSourceGateway.ts
             ├── createChatTogetherListeningGateway.ts
             ├── createWalletChatReplyGateway.ts
-            ├── ensureCallHostReady.ts
+            ├── ensureHostDatabaseReady.ts
             ├── index.ts
             ├── migrateLegacyAvatarReferences.ts
             ├── MomentImageAnalysisModelGateway.ts
@@ -1257,11 +1298,13 @@
                 └── selectChatImage.ts
             ├── Clipboard.ts
             ├── ConversationTurnExecutionHost.ts
+            ├── DeviceLocation.ts
             ├── DeviceMediaService.ts
             ├── DeviceObserver.ts
             ├── DeviceStatus.ts
             ├── ImageAnimation.ts
             ├── index.ts
+            ├── InspectLocalImage.ts
             ├── LocalAudioMetadata.ts
             ├── LocalAudioPlayback.ts
             ├── MediaFileContent.ts
@@ -1271,6 +1314,7 @@
             ├── PersistentImageStore.ts
             ├── PersistentMediaStore.ts
             ├── pickCroppedImage.ts
+            ├── PrepareVisionImage.ts
             ├── randomUUID.ts
             ├── RealtimeSpeechAudioSource.ts
             ├── RebaseLegacyMediaReference.ts
@@ -1305,10 +1349,12 @@
                 └── index.ts
             ├── sqlite
                 ├── agentRuntimeSchema.ts
+                ├── aiImageSchema.ts
                 ├── assistantIdentityMigration.ts
                 ├── auxiliaryModelDefaultsSchema.ts
                 ├── backupSnapshot.ts
                 ├── callBackgroundSchema.ts
+                ├── chatFavoriteSchema.ts
                 ├── chatRegenerationSchema.ts
                 ├── chatSummarySchema.ts
                 ├── chatToolPackageSchema.ts
@@ -1332,6 +1378,7 @@
                 ├── ravenCatDeviceControlSchema.ts
                 ├── ravenCatFloatingInteractionSchema.ts
                 ├── schema.ts
+                ├── stickerOwnershipMigration.ts
                 ├── stickerSchema.ts
                 ├── togetherListeningSchema.ts
                 ├── translationModelSchema.ts
@@ -1645,6 +1692,7 @@
                                     ├── DeviceBatteryQuery.kt
                                     ├── DeviceCurrentWindowFence.kt
                                     ├── DeviceForegroundWindowResolver.kt
+                                    ├── DeviceLocationQuery.kt
                                     ├── DeviceObserverAccessibilityService.kt
                                     ├── DeviceObserverConnectionStore.kt
                                     ├── DeviceObserverModule.kt
@@ -1890,12 +1938,14 @@
                                     ├── WebContentParser.kt
                                     ├── WebDownloadStore.kt
                                     ├── WebHttpClient.kt
+                                    ├── WebPrivateImageStore.kt
                                     └── WebToolsModule.kt
                 └── test
                     └── java
                         └── expo
                             └── modules
                                 └── webtools
+                                    ├── WebPrivateImageStoreTest.kt
                                     ├── WebToolsRealNetworkTest.kt
                                     └── WebToolsTest.kt
 ```

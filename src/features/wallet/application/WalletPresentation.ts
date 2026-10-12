@@ -1,5 +1,5 @@
 import type { AIProfile, IAIAssistantRepository } from '@features/assistants';
-import type { QuickAction, WalletRecord } from '../domain/WalletRecord';
+import type { QuickAction, WalletCategories, WalletRecord } from '../domain/WalletRecord';
 import type { ILedgerRepository, UpdateWalletRecordInput } from '../domain/LedgerRepository';
 
 export interface WalletPresentationDeps {
@@ -10,6 +10,7 @@ export interface WalletPresentationDeps {
 export interface WalletScreenData {
   records: WalletRecord[];
   quickActions: QuickAction[];
+  categories: WalletCategories;
   monthlyStats: {
     expense: number;
     income: number;
@@ -23,7 +24,7 @@ export async function getWalletScreenData(
   deps: WalletPresentationDeps
 ): Promise<WalletScreenData> {
   const { assistantRepository, ledgerRepository } = deps;
-  const [records, quickActions, stats, aiList, ledgerAI] = await Promise.all([
+  const [records, quickActions, stats, aiList, ledgerAI, categories] = await Promise.all([
     ledgerRepository.getRecords({
       year: date.getFullYear(),
       month: date.getMonth() + 1,
@@ -33,11 +34,13 @@ export async function getWalletScreenData(
     ledgerRepository.getMonthlyStats(date.getFullYear(), date.getMonth() + 1),
     assistantRepository.getAll(),
     assistantRepository.getLedgerAI(),
+    getWalletCategories(deps),
   ]);
 
   return {
     records,
     quickActions,
+    categories,
     monthlyStats: {
       expense: stats.totalExpense,
       income: stats.totalIncome,
@@ -45,6 +48,16 @@ export async function getWalletScreenData(
     aiList,
     ledgerAI,
   };
+}
+
+export async function getWalletCategories(
+  deps: Pick<WalletPresentationDeps, 'ledgerRepository'>
+): Promise<WalletCategories> {
+  const [expense, income] = await Promise.all([
+    deps.ledgerRepository.getCategories('expense'),
+    deps.ledgerRepository.getCategories('income'),
+  ]);
+  return { expense, income };
 }
 
 export async function deleteWalletRecord(recordId: string, deps: Pick<WalletPresentationDeps, 'ledgerRepository'>): Promise<boolean> {

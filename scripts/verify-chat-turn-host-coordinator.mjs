@@ -385,5 +385,53 @@ const aiConfig = { id: 'ai1', agentId: 'agent1', name: 'AI' };
   assert.equal(fakes.executions.size, 0, 'recovery 不得在页面 runtime 执行 run');
 }
 
-console.log('ConversationTurnCoordinator 第三片：Host 内存协议 / supersede / recovery 行为验证通过。');
+// 恢复出厂覆盖 claim、准备及整轮执行；关闭期间不能新 claim，等待终态后才释放。
+{
+  const fakes = createFakes();
+  const coordinator = createConversationTurnCoordinator({ turns: fakes.turns, executeTurn: fakes.executeTurn, resolveAIConfig: async () => aiConfig });
+  await coordinator.launchTurn('reset', 'send_flow', 'claimIfIdle', { aiConfig });
+  const execution = fakes.executions.values().next().value;
+  let finished = false;
+  const closing = coordinator.cancelActiveTurnsForReset().then(() => { finished = true; });
+  await flush();
+  assert.equal(execution.signal.aborted, true);
+  assert.equal(finished, false, '整轮准备/执行尚未结束时不能完成 drain');
+  assert.equal(await coordinator.launchTurn('late', 'send_flow', 'claimIfIdle', { aiConfig }), false);
+  assert.equal(await coordinator.executeTurnFromHost('late'), 'skipped');
+  execution.gate.resolve('empty_reply');
+  await closing;
+  assert.equal(fakes.calls.revoke.at(-1).status, 'cancelled');
+  assert.equal(coordinator.hasActiveHandle('reset'), false);
+  coordinator.resumeTurnsAfterReset();
+  assert.equal(await coordinator.launchTurn('fresh', 'send_flow', 'claimIfIdle', { aiConfig }), true);
+  fakes.executions.get(fakes.calls.claimIfIdle.at(-1).runId).gate.resolve('empty_reply');
+  await flush();
+}
+for (const phase of ['claim', 'configuration']) {
+  const fakes = createFakes();
+  const started = deferred(), release = deferred();
+  if (phase === 'claim') {
+    const claim = fakes.turns.claimIfIdle;
+    fakes.turns.claimIfIdle = async (...args) => { started.resolve(); await release.promise; return claim(...args); };
+  }
+  const coordinator = createConversationTurnCoordinator({
+    turns: fakes.turns, executeTurn: fakes.executeTurn,
+    resolveAIConfig: async () => {
+      if (phase === 'configuration') { started.resolve(); await release.promise; }
+      return aiConfig;
+    },
+  });
+  const execution = coordinator.executeTurnFromHost('preparing');
+  await started.promise;
+  let drained = false;
+  const closing = coordinator.cancelActiveTurnsForReset().then(() => { drained = true; });
+  await flush();
+  assert.equal(drained, false);
+  release.resolve();
+  await Promise.all([execution, closing]);
+  assert.equal(fakes.executions.size, 0, 'claim/配置读取期间取消不能再进入模型执行');
+  assert.equal(fakes.calls.revoke.at(-1).status, 'cancelled');
+}
+
+console.log('ConversationTurnCoordinator 第三片：Host 内存协议 / supersede / recovery / reset drain 行为验证通过。');
 console.log('真实 SQLite 回合事务由前两片脚本覆盖；Host 装配与真机链路仍需 Android 验收。');

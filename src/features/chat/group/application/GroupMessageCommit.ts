@@ -16,6 +16,7 @@ import {
   buildAttachmentMessageMetadata,
   buildUserMessagePreviewText,
   type GroupMessageMention,
+  type ChatReplyQuote,
 } from '../../messages/domain/chatMessageMetadata';
 import { getChatMessageRuntimeDependencies } from '../../messages/application/ChatMessageRuntime';
 import { getChatGroupRuntimeDependencies } from './ChatGroupRuntime';
@@ -95,6 +96,7 @@ export async function commitGroupUserMessage(params: {
   mentions?: Extract<GroupMessageMention, { actorType: 'user' }>[];
   replyToId?: number | null;
   replyToText?: string | null;
+  replyQuote?: ChatReplyQuote | null;
   clientMessageId?: string | null;
 }): Promise<CommitGroupUserMessageResult> {
   const text = String(params.text || '').trim();
@@ -131,6 +133,7 @@ export async function commitGroupUserMessage(params: {
         completionTokens: 0,
         metadataJson: JSON.stringify({
           ...(messageMetadata || {}),
+          ...(isLast && params.replyQuote ? { replyQuote: params.replyQuote } : {}),
           groupChat: {
             kind: 'user_message',
             groupId: params.groupId,
@@ -148,7 +151,7 @@ export async function commitGroupUserMessage(params: {
     };
   });
   const previewText = inputs[inputs.length - 1].previewText;
-  const prepared = await prepareChatAttachments(params.sharedRecord ? params.sharedRecord.entries.flatMap((entry) => entry.attachments) : attachments);
+  const prepared = await prepareChatAttachments([...(params.sharedRecord ? params.sharedRecord.entries.flatMap((entry) => entry.attachments) : attachments), ...(params.replyQuote?.attachments ?? [])]);
   let result: CommitGroupUserMessageResult;
   try {
     result = await databaseCoordinator.transaction(

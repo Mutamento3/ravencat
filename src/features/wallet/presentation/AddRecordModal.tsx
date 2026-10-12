@@ -10,7 +10,7 @@ import React, {
 import { View, Text, TextInput, TouchableOpacity, ScrollView } from 'react-native';
 import { ModalSheet, showAppDialog } from '@shared/ui';
 import { useTheme, useThemedStyles } from '@shared/theme';
-import type { WalletRecord, WalletRecordType } from '../domain/WalletRecord';
+import type { WalletCategories, WalletRecord, WalletRecordType } from '../domain/WalletRecord';
 import { getWalletRecordDate } from '../domain/WalletRecord';
 import type { UpdateWalletRecordInput } from '../domain/LedgerRepository';
 import { createAddRecordModalStyles } from './styles';
@@ -22,33 +22,13 @@ const RECORD_TYPE: { EXPENSE: RecordType; INCOME: RecordType } = {
   INCOME: 'income',
 };
 
-const EXPENSE_CATEGORIES: string[] = [
-  '餐饮',
-  '交通',
-  '购物',
-  '娱乐',
-  '医疗',
-  '教育',
-  '住房',
-  '通讯',
-  '其他',
-];
-
-const INCOME_CATEGORIES: string[] = [
-  '工资',
-  '奖金',
-  '投资',
-  '兼职',
-  '红包',
-  '其他',
-];
-
 interface AddRecordModalProps {
   visible: boolean;
   onClose: () => void;
   onSave: (record: Required<UpdateWalletRecordInput>) => Promise<boolean | void>;
   initialType?: RecordType;
   initialRecord?: WalletRecord | null;
+  availableCategories: WalletCategories;
 }
 
 const AddRecordModal: React.FC<AddRecordModalProps> = ({
@@ -57,6 +37,7 @@ const AddRecordModal: React.FC<AddRecordModalProps> = ({
   onSave,
   initialType = RECORD_TYPE.EXPENSE,
   initialRecord = null,
+  availableCategories,
 }) => {
   const theme = useTheme();
   const styles = useThemedStyles(createAddRecordModalStyles);
@@ -87,13 +68,11 @@ const AddRecordModal: React.FC<AddRecordModalProps> = ({
 
   // 分类缓存
   const categories = useMemo(() => {
-    const options = type === RECORD_TYPE.EXPENSE
-      ? EXPENSE_CATEGORIES
-      : INCOME_CATEGORIES;
+    const options = availableCategories[type];
     return initialRecord && initialRecord.type === type && !options.includes(initialRecord.category)
       ? [...options, initialRecord.category]
       : options;
-  }, [type, initialRecord]);
+  }, [type, initialRecord, availableCategories]);
 
   // 金额过滤
   const handleAmountChange = useCallback((text: string) => {
@@ -134,7 +113,7 @@ const AddRecordModal: React.FC<AddRecordModalProps> = ({
       const success = await onSave({
         type,
         amount: parsed,
-        category,
+        category: category.trim(),
         detail,
         recordDate,
       });
@@ -225,7 +204,7 @@ const AddRecordModal: React.FC<AddRecordModalProps> = ({
             </View>
 
             {/* 分类 */}
-            <Text style={styles.label}>分类</Text>
+            <Text style={styles.label}>分类（选择已有或自定义）</Text>
             <View style={styles.categoryGrid}>
               {categories.map((cat) => (
                 <TouchableOpacity
@@ -247,6 +226,14 @@ const AddRecordModal: React.FC<AddRecordModalProps> = ({
                 </TouchableOpacity>
               ))}
             </View>
+
+            <TextInput
+              style={[styles.detailInput, { marginBottom: theme.spacing.lg }]}
+              value={category}
+              onChangeText={setCategory}
+              placeholder="输入自定义分类"
+              placeholderTextColor={theme.colors.text.tertiary}
+            />
 
             <Text style={styles.label}>日期（YYYY-MM-DD）</Text>
             <TextInput

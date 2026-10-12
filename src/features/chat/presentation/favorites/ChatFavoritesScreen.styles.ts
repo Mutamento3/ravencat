@@ -1,0 +1,24 @@
+import { StyleSheet } from 'react-native';
+import type { PresentationTheme } from '@shared/theme';
+
+export const createFavoriteStyles = (theme: PresentationTheme) => StyleSheet.create({
+  page: { flex: 1, backgroundColor: theme.colors.background.screen },
+  filters: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
+  filter: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: theme.radius.sm, backgroundColor: theme.colors.surface.muted },
+  activeFilter: { backgroundColor: theme.colors.brand.primary },
+  filterLabel: { fontSize: 13, color: theme.colors.text.primary },
+  activeFilterLabel: { color: theme.colors.brand.onPrimary },
+  list: { padding: 16, gap: 12, paddingBottom: 32 },
+  card: { padding: 16, gap: 10, borderRadius: theme.radius.sm },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  author: { flex: 1, fontSize: 14, color: theme.colors.text.primary, fontWeight: '600' },
+  remove: { padding: 6 },
+  text: { fontSize: 15, lineHeight: 23, color: theme.colors.text.primary },
+  meta: { fontSize: 12, lineHeight: 18, color: theme.colors.text.secondary },
+  quote: { borderLeftWidth: 3, borderLeftColor: theme.colors.border.default, paddingLeft: 10 },
+  empty: { textAlign: 'center', padding: 32, color: theme.colors.text.secondary },
+  error: { color: theme.colors.feedback.error, padding: 16, textAlign: 'center' },
+  details: { padding: 20, gap: 16, paddingBottom: 40 },
+  footer: { padding: 16, alignItems: 'center' },
+  link: { color: theme.colors.brand.primary },
+});

@@ -73,6 +73,7 @@ const sharedTheme = {
 const uiDependencies = {
   react, 'react-native': native, 'react/jsx-runtime': jsxRuntime,
   'expo-image-picker': imagePicker, '@platform/device/DeviceMediaService': cropping, '@shared/theme': sharedTheme,
+  '@shared/ui': { showAppDialog() {} },
 };
 function cards(node) {
   if (Array.isArray(node)) return node.flatMap(cards);

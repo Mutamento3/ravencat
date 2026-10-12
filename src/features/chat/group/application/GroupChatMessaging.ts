@@ -11,7 +11,7 @@ import {
   prepareGroupSpeechPlan,
 } from './GroupSpeakerPlanning';
 import { executeGroupSpeechTasks } from './GroupSpeechTaskExecution';
-import { registerGroupSpeechAbort } from './GroupSpeechExecutionAbort';
+import { registerGroupSpeechAbort, registerGroupSpeechInvocation } from './GroupSpeechExecutionAbort';
 import type { GroupSpeechPlan, GroupSpeechTask } from '../domain/GroupChat';
 import {
   acknowledgeGroupInvocationInput,
@@ -55,6 +55,15 @@ function lostActivation(planId: string): GroupInvocationResult {
 }
 
 export async function invokeGroupChat(groupId: string): Promise<GroupInvocationResult> {
+  const releaseOwner = registerGroupSpeechInvocation(groupId);
+  try {
+    return await executeGroupInvocation(groupId);
+  } finally {
+    releaseOwner();
+  }
+}
+
+async function executeGroupInvocation(groupId: string): Promise<GroupInvocationResult> {
   const groups = getChatGroupRuntimeDependencies().groups;
   const details = await groups.getById(groupId);
   if (!details) {

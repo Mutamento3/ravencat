@@ -71,6 +71,11 @@ Chat application 的专用用户消息事务必须同时：
 T1 只服务 canonical 用户消息。assistant 消息、Calls 状态消息和其他旁路 writer 不得
 借用它隐式取消 `user_reply`。事务 commit 后才更新投影并通知 Host 启动后续执行。
 
+AI 图片下载引用、自身头像和自身表情维护的业务提交，也在各自事务里读取同一
+`active_run_id + revision + run.status` fence。网络取消只负责节省资源；T1 已提交时，
+取消信号即使尚未送到模型请求，旧回合也不能再提交这些副作用。已经提交的收藏、头像
+或向量不因新消息回滚；未完成的 AI 处理 claim 被取消，失败/取消项只允许显式重试。
+
 ### T2：claim
 
 普通发送和重复触发使用 `claimIfIdle`：仅在不存在 active run 时建立新 run，不抢走

@@ -339,6 +339,7 @@ assert.deepEqual(
 const fakeToolModule = new Proxy({}, {
   get: (_target, property) => {
     if (typeof property !== 'string') return undefined;
+    if (property === 'createChangeOwnAvatarTool') return () => ({ name: 'change_own_avatar', definition: { name: 'change_own_avatar', description: '', parameters: {} } });
     return {
       name: property,
       definition: { name: property, description: '', parameters: {} },

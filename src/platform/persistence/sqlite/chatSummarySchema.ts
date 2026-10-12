@@ -1,6 +1,29 @@
 /** 摘要是用户记录，只有 conversation 删除级联；消息删除与可见边界不影响它。 */
 import type { DatabaseWriteExecutor } from '../runtime';
 export const CHAT_SUMMARY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS chat_summary_request_settings (
+  conversation_id TEXT PRIMARY KEY REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  timeout_seconds INTEGER NOT NULL DEFAULT 300,
+  max_output_tokens INTEGER
+);
+CREATE TABLE IF NOT EXISTS chat_summary_tasks (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  level TEXT NOT NULL CHECK(level IN ('primary','secondary')),
+  status TEXT NOT NULL CHECK(status IN ('running','waiting','failed','completed')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  automatic_failures INTEGER NOT NULL DEFAULT 0,
+  manual_retry INTEGER NOT NULL DEFAULT 0,
+  last_manual INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  error_json TEXT,
+  calls_json TEXT NOT NULL DEFAULT '[]',
+  segment_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_summary_pending_task ON chat_summary_tasks(conversation_id,level)
+  WHERE status <> 'completed';
 CREATE TABLE IF NOT EXISTS chat_timeline_run_anchors (
   session_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
   turn_run_id TEXT NOT NULL,
@@ -22,6 +45,9 @@ CREATE TABLE IF NOT EXISTS chat_summary_segments (
   conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
   sequence INTEGER NOT NULL,
   content TEXT NOT NULL,
+  level TEXT NOT NULL DEFAULT 'primary' CHECK(level IN ('primary', 'secondary')),
+  compaction_id TEXT,
+  context_sequence INTEGER,
   from_cursor TEXT,
   to_cursor TEXT,
   message_count INTEGER NOT NULL DEFAULT 0,
@@ -34,6 +60,14 @@ CREATE TABLE IF NOT EXISTS chat_summary_segments (
   UNIQUE(conversation_id, sequence)
 );
 CREATE INDEX IF NOT EXISTS idx_chat_summary_conversation_order ON chat_summary_segments(conversation_id, sequence);
+CREATE TABLE IF NOT EXISTS chat_summary_settings (
+  conversation_id TEXT PRIMARY KEY REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  inject_enabled INTEGER NOT NULL DEFAULT 1,
+  fixed_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  secondary_enabled INTEGER NOT NULL DEFAULT 1,
+  secondary_token_threshold INTEGER NOT NULL DEFAULT 8000
+);
 CREATE TABLE IF NOT EXISTS chat_summary_processed_calls (
   conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
   call_id TEXT NOT NULL,
@@ -44,6 +78,16 @@ CREATE TABLE IF NOT EXISTS chat_summary_call_boundary (
   cleared_at TEXT NOT NULL
 );
 `;
+/** 归纳标记是处理进度，不是外键：用户删除二级正文后，不能自动补回或重新注入其原摘要。 */
+export async function migrateSecondaryChatSummary(db: DatabaseWriteExecutor): Promise<void> {
+  await db.execAsync("ALTER TABLE chat_summary_segments ADD COLUMN level TEXT NOT NULL DEFAULT 'primary' CHECK(level IN ('primary', 'secondary')); ALTER TABLE chat_summary_segments ADD COLUMN compaction_id TEXT; ALTER TABLE chat_summary_segments ADD COLUMN context_sequence INTEGER;");
+}
+/** 旧总开关映射到生成与注入两个独立开关；起点删除仅清引用，不恢复生成。 */
+export async function migrateFixedChatContext(db: DatabaseWriteExecutor): Promise<void> {
+  await db.execAsync(`ALTER TABLE chat_summary_settings ADD COLUMN inject_enabled INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE chat_summary_settings ADD COLUMN fixed_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL;
+    UPDATE chat_summary_settings SET inject_enabled = enabled;`);
+}
 /** 消息插入时固化回合锚点，后续清除历史边界不影响摘要顺序。 */
 export const CHAT_TIMELINE_RUN_ANCHOR_SCHEMA = `
 CREATE TRIGGER IF NOT EXISTS capture_chat_timeline_run_anchor AFTER INSERT ON messages

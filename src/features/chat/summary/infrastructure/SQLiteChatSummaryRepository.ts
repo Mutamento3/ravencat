@@ -1,9 +1,10 @@
 /** 摘要与进度同事务交接；消息删除没有摘要副作用，清摘要独立递增 generation。 */
 import { databaseCoordinator, type DatabaseReadExecutor, type DatabaseTransactionExecutor } from '@platform/persistence';
+import { estimateTextTokens } from '@shared/prompt';
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import { timelineOrderedMessagesCte, timelineProjectionOrderBy, timelineCursorCondition } from '../../messages/infrastructure/ChatTimelineSql';
 import { parseChatContextCursor, projectChatContextMessage, type ChatCanonicalCursor, type ChatContextItem } from '../domain/ChatContext';
-import type { ChatSummaryAddition, ChatSummaryCallBoundary, ChatSummaryClaim, ChatSummaryRepository, ChatSummarySegment } from '../domain/ChatSummaryRepository';
+import { CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS, DEFAULT_CHAT_SUMMARY_SETTINGS, type ChatSummaryAddition, type ChatSummaryCallBoundary, type ChatSummaryClaim, type ChatSummaryRepository, type ChatSummarySegment, type ChatSummarySettings, type ChatSummarySettingsPatch, type SecondaryChatSummaryClaim, type ChatSummarySearchInput, type ChatSummaryTask, type ChatSummaryTaskClaim, type ChatSummaryFailure, type ChatSummaryCallDiagnostics, type ChatSummaryLevel } from '../domain/ChatSummaryRepository';
 import type { CallSummarySource } from '@features/calls';
 import { buildConversationTimeline, selectSummaryRange, type ConversationContextItem } from '../domain/ChatSummaryTimeline';
 
@@ -15,10 +16,39 @@ interface StateRow {
   generation: number; revision: number; processed_cursor: string | null;
   claim_id: string | null; claim_expires_at: string | null;
 }
+interface TaskRow {
+  id: string; conversation_id: string; level: ChatSummaryLevel; status: ChatSummaryTask['status'];
+  attempt_count: number; automatic_failures: number; manual_retry: number; last_manual: number;
+  next_attempt_at: string | null; error_json: string | null; calls_json: string; segment_ids_json: string;
+  created_at: string; updated_at: string;
+}
+function mapTask(row: TaskRow): ChatSummaryTask {
+  return { id: row.id, conversationId: row.conversation_id, level: row.level, status: row.status,
+    attemptCount: row.attempt_count, automaticFailures: row.automatic_failures, nextAttemptAt: row.next_attempt_at,
+    error: row.error_json === null ? null : JSON.parse(row.error_json), calls: JSON.parse(row.calls_json),
+    segmentIds: JSON.parse(row.segment_ids_json), createdAt: row.created_at, updatedAt: row.updated_at };
+}
+async function beginTask(tx: DatabaseTransactionExecutor, conversationId: string, level: ChatSummaryLevel, claimId: string, now: string) {
+  const row = await tx.getFirstAsync<TaskRow>(`SELECT * FROM chat_summary_tasks WHERE conversation_id = ? AND level = ?
+    AND status <> 'completed'`, [conversationId, level]);
+  if (row && row.manual_retry === 0 && (row.status === 'failed' || (row.next_attempt_at !== null && row.next_attempt_at > now))) return null;
+  const id = row?.id ?? claimId;
+  if (!row) await tx.runAsync(`INSERT INTO chat_summary_tasks (id,conversation_id,level,status,created_at,updated_at)
+    VALUES (?,?,?,'waiting',?,?)`, [id, conversationId, level, now, now]);
+  await tx.runAsync(`UPDATE chat_summary_tasks SET status = 'running', attempt_count = attempt_count + 1,
+    last_manual = CASE WHEN status = 'running' THEN last_manual ELSE manual_retry END,
+    manual_retry = 0, next_attempt_at = NULL, updated_at = ? WHERE id = ?`, [now, id]);
+  return id;
+}
+async function completeTask(tx: DatabaseTransactionExecutor, taskId: string, segmentIds: string[], now: string) {
+  await tx.runAsync(`UPDATE chat_summary_tasks SET status = 'completed',
+    next_attempt_at = NULL, segment_ids_json = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(segmentIds), now, taskId]);
+}
 interface SegmentRow {
   id: string; conversation_id: string; sequence: number; content: string;
   message_count: number; batch_size: number | null; source_start_at: string | null; source_end_at: string | null;
   time_zone: string; created_at: string; updated_at: string;
+  level: ChatSummarySegment['level']; compaction_id: string | null; context_sequence: number | null;
 }
 interface ContextRow {
   id: number; session_id: string; text: string; is_me: number; sender_type: ChatMessage['senderType'];
@@ -36,9 +66,28 @@ async function readState(db: DatabaseTransactionExecutor, conversationId: string
 }
 async function readSegments(db: DatabaseReadExecutor, conversationId: string): Promise<ChatSummarySegment[]> {
   const rows = await db.getAllAsync<SegmentRow>('SELECT * FROM chat_summary_segments WHERE conversation_id = ? ORDER BY sequence', [conversationId]);
-  return rows.map((row) => ({ id: row.id, conversationId: row.conversation_id, sequence: row.sequence, content: row.content,
+  return rows.map(mapSegment);
+}
+function mapSegment(row: SegmentRow): ChatSummarySegment {
+  return { id: row.id, conversationId: row.conversation_id, sequence: row.sequence, content: row.content,
+    level: row.level, compactionId: row.compaction_id, contextSequence: row.context_sequence ?? row.sequence,
     messageCount: row.message_count, batchSize: row.batch_size, sourceStartAt: row.source_start_at,
-    sourceEndAt: row.source_end_at, timeZone: row.time_zone, createdAt: row.created_at, updatedAt: row.updated_at }));
+    sourceEndAt: row.source_end_at, timeZone: row.time_zone, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+async function readSettings(db: DatabaseReadExecutor, conversationId: string): Promise<ChatSummarySettings> {
+  const row = await db.getFirstAsync<{ enabled: number; inject_enabled: number; fixed_message_id: number | null; secondary_enabled: number; secondary_token_threshold: number }>(
+    'SELECT * FROM chat_summary_settings WHERE conversation_id = ?', [conversationId]);
+  const request = await db.getFirstAsync<{ timeout_seconds: number; max_output_tokens: number | null }>(
+    'SELECT * FROM chat_summary_request_settings WHERE conversation_id = ?', [conversationId]);
+  return { ...DEFAULT_CHAT_SUMMARY_SETTINGS, ...(row ? { generationEnabled: row.enabled === 1, injectEnabled: row.inject_enabled === 1,
+    fixedMessageId: row.fixed_message_id, secondaryEnabled: row.secondary_enabled === 1, secondaryTokenThreshold: row.secondary_token_threshold } : {}),
+    ...(request ? { requestTimeoutSeconds: request.timeout_seconds, maxOutputTokens: request.max_output_tokens } : {}) };
+}
+function selectContextSegments(segments: ChatSummarySegment[], settings: ChatSummarySettings): ChatSummarySegment[] {
+  if (!settings.injectEnabled) return [];
+  return segments.filter((segment) => settings.secondaryEnabled
+    ? segment.level === 'secondary' || segment.compactionId === null : segment.level === 'primary')
+    .sort((left, right) => left.contextSequence - right.contextSequence);
 }
 async function readCallBoundary(db: DatabaseReadExecutor, conversationId: string): Promise<ChatSummaryCallBoundary> {
   const processed = await db.getAllAsync<{ call_id: string }>('SELECT call_id FROM chat_summary_processed_calls WHERE conversation_id = ?', [conversationId]);
@@ -53,7 +102,9 @@ function claimKey(claim: ChatSummaryClaim): string {
 async function readItems(
   db: DatabaseReadExecutor,
   conversationId: string,
-  { visibleOnly = true, after = null }: { visibleOnly?: boolean; after?: ChatCanonicalCursor | null } = {},
+  { visibleOnly = true, after = null, includeMessageId, messageId }: {
+    visibleOnly?: boolean; after?: ChatCanonicalCursor | null; includeMessageId?: number; messageId?: number;
+  } = {},
 ): Promise<ChatContextItem[]> {
   const condition = after ? timelineCursorCondition('ASC', {
     timeline_order_created_at: after[0], timeline_order_anchor_id: after[1],
@@ -61,6 +112,7 @@ async function readItems(
   }) : null;
   // 已处理历史在 SQL 边界排除，避免每次 claim 都在独占事务中解析、排序并传回整段历史。
   const rows = await db.getAllAsync<ContextRow>(`${timelineOrderedMessagesCte(`m.session_id = ?
+    ${messageId !== undefined ? 'AND m.id = ?' : ''}
     ${visibleOnly ? 'AND m.id > COALESCE((SELECT visible_after_message_id FROM sessions WHERE id = m.session_id), 0)' : ''}`)}
     SELECT o.*, EXISTS (
       SELECT 1 FROM messages s WHERE s.session_id = o.session_id AND s.turn_run_id = o.turn_run_id
@@ -71,8 +123,9 @@ async function readItems(
           AND json_extract(t.metadata_json, '$.phase') = 'terminal')
     ) AS agent_activity_pending
     FROM ordered_messages o
-    ${condition ? `WHERE ${condition.sql}` : ''}
-    ORDER BY ${timelineProjectionOrderBy('ASC')}`, [conversationId, ...(condition?.params ?? [])]);
+    ${condition ? `WHERE ${condition.sql}${includeMessageId !== undefined ? ' OR id = ?' : ''}` : ''}
+    ORDER BY ${timelineProjectionOrderBy('ASC')}`, [conversationId, ...(messageId !== undefined ? [messageId] : []),
+      ...(condition?.params ?? []), ...(condition && includeMessageId !== undefined ? [includeMessageId] : [])]);
   return rows.flatMap((row) => {
     const cursor: ChatCanonicalCursor = [row.timeline_order_created_at, row.timeline_order_anchor_id, row.timeline_order_item_index, row.id];
     const item = projectChatContextMessage({ id: row.id, sessionId: row.session_id, text: row.text,
@@ -82,6 +135,24 @@ async function readItems(
     // 整个自主 run 在终态前仍可追加条目，不能只保护当前正在流式写入的那一行。
     return item ? [{ ...item, ...(row.agent_activity_pending ? { pending: true as const } : {}) }] : [];
   });
+}
+async function saveSettings(tx: DatabaseTransactionExecutor, conversationId: string, settings: ChatSummarySettings) {
+  await readState(tx, conversationId);
+  await tx.runAsync(`INSERT INTO chat_summary_settings
+    (conversation_id, enabled, inject_enabled, fixed_message_id, secondary_enabled, secondary_token_threshold)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET enabled = excluded.enabled,
+    inject_enabled = excluded.inject_enabled, fixed_message_id = excluded.fixed_message_id,
+    secondary_enabled = excluded.secondary_enabled, secondary_token_threshold = excluded.secondary_token_threshold`,
+  [conversationId, Number(settings.generationEnabled), Number(settings.injectEnabled), settings.fixedMessageId,
+    Number(settings.secondaryEnabled), settings.secondaryTokenThreshold]);
+  await tx.runAsync(`INSERT INTO chat_summary_request_settings (conversation_id,timeout_seconds,max_output_tokens)
+    VALUES (?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET timeout_seconds = excluded.timeout_seconds,
+    max_output_tokens = excluded.max_output_tokens`, [conversationId, settings.requestTimeoutSeconds, settings.maxOutputTokens]);
+  await tx.runAsync(`UPDATE chat_summary_tasks SET status = 'waiting', manual_retry = last_manual, next_attempt_at = NULL, updated_at = ?
+    WHERE conversation_id = ? AND status = 'running'`, [new Date().toISOString(), conversationId]);
+  // 固定范围与摘要进度独立；设置提交后迟到的模型结果不能推进原游标。
+  await tx.runAsync(`UPDATE chat_summary_state SET generation = generation + 1, revision = revision + 1,
+    claim_id = NULL, claim_to_cursor = NULL, claim_expires_at = NULL WHERE conversation_id = ?`, [conversationId]);
 }
 async function insertSegment(tx: DatabaseTransactionExecutor, conversationId: string, id: string, content: string,
   now: string, timeZone: string, claim: ChatSummaryClaim | null, messages: readonly ConversationContextItem[],
@@ -107,21 +178,42 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
   async readContext(conversationId: string, protectedMessageIds: readonly number[]) {
     return executor('context').withExclusiveTransactionAsync(async (tx) => {
       const state = await readState(tx, conversationId);
-      const raw = await readItems(tx, conversationId, { after: parseChatContextCursor(state.processed_cursor) });
+      const settings = await readSettings(tx, conversationId);
+      const segments = await readSegments(tx, conversationId);
+      const fixed = settings.fixedMessageId === null ? null : (await readItems(tx, conversationId, { messageId: settings.fixedMessageId }))[0];
+      if (settings.fixedMessageId !== null && !fixed) throw new Error('固定起点不在当前可见的对话范围内');
+      const raw = await readItems(tx, conversationId, { after: fixed ? fixed.cursor
+        : settings.generationEnabled ? parseChatContextCursor(state.processed_cursor) : null,
+        ...(fixed ? { includeMessageId: fixed.messageId } : {}) });
       const protectedIds = new Set(protectedMessageIds);
       const visible = raw.filter((item) => !protectedIds.has(item.messageId));
-      const calls = await this.readCalls(tx, conversationId, await readCallBoundary(tx, conversationId));
-      return { segments: await readSegments(tx, conversationId), raw: visible,
-        pendingCalls: calls, timeline: buildConversationTimeline(visible, calls) };
+      const boundary = await readCallBoundary(tx, conversationId);
+      const calls = await this.readCalls(tx, conversationId, settings.generationEnabled ? boundary : { ...boundary, processedCallIds: [] });
+      const buildTimeline = (items: ChatContextItem[]) => buildConversationTimeline(items, calls)
+        .filter((item) => !fixed || item.source === 'chat' || item.timestamp >= fixed.cursor[0]);
+      const tasks = (await tx.getAllAsync<TaskRow>('SELECT * FROM chat_summary_tasks WHERE conversation_id = ? ORDER BY created_at,id', [conversationId])).map(mapTask);
+      return { tasks, segments, settings, contextSegments: selectContextSegments(segments, settings), raw: visible,
+        pendingCalls: calls, timeline: buildTimeline(visible), fixedStart: fixed ? { messageId: fixed.messageId,
+          content: fixed.content, messageCount: new Set(buildTimeline(raw).flatMap((item) => item.logicalIdentity === null ? [] : [item.logicalIdentity])).size } : null };
     });
   }
-  async listConversationIds() {
-    const rows = await executor('listConversations').getAllAsync<{ id: string }>('SELECT id FROM sessions ORDER BY updated_at DESC');
-    return rows.map((row) => row.id);
+  async prepareConversations(now: string) {
+    return executor('prepareConversations').withExclusiveTransactionAsync(async (tx) => {
+      // 旧版本可能还在等待第三次请求；扫描先按当前预算收口，保留手动意图与有效在途请求。
+      const exhausted = await tx.getAllAsync<{ id: string; conversation_id: string }>(`SELECT t.id,t.conversation_id FROM chat_summary_tasks t
+        WHERE t.automatic_failures >= ? AND t.manual_retry = 0 AND (t.status = 'waiting' OR (t.status = 'running' AND t.last_manual = 0
+          AND NOT EXISTS (SELECT 1 FROM chat_summary_state s WHERE s.conversation_id = t.conversation_id AND s.claim_id IS NOT NULL AND s.claim_expires_at > ?)))`,
+      [CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS, now]);
+      for (const task of exhausted) await tx.runAsync("UPDATE chat_summary_tasks SET status = 'failed', next_attempt_at = NULL, updated_at = ? WHERE id = ?", [now, task.id]);
+      const rows = await tx.getAllAsync<{ id: string }>('SELECT id FROM sessions ORDER BY updated_at DESC');
+      return { conversationIds: rows.map((row) => row.id), pausedConversationIds: [...new Set(exhausted.map((task) => task.conversation_id))] };
+    });
   }
   async claim(conversationId: string, batchSize: number, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<ChatSummaryClaim | null> {
     return executor('claim').withExclusiveTransactionAsync(async (tx) => {
       const state = await readState(tx, conversationId);
+      const settings = await readSettings(tx, conversationId);
+      if (!settings.generationEnabled) return null;
       if (state.claim_id !== null && state.claim_expires_at! > now) return null;
       if (state.claim_id !== null) await tx.runAsync('UPDATE chat_summary_state SET claim_id = NULL, claim_to_cursor = NULL, claim_expires_at = NULL WHERE conversation_id = ?', [conversationId]);
       const calls = await this.readCalls(tx, conversationId, await readCallBoundary(tx, conversationId));
@@ -143,9 +235,12 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
       const selectedChat = available.filter((item) => messageIds.has(item.messageId));
       const toCursor = selectedChat.length ? selectedChat[selectedChat.length - 1].cursor : fromCursor;
       const callIds = new Set(messages.map((message) => message.callId));
+      const taskId = await beginTask(tx, conversationId, 'primary', claimId, now);
+      if (taskId === null) return null;
       const claim: ChatSummaryClaim = { conversationId, claimId, generation: state.generation, revision: state.revision,
+        taskId,
         fromCursor, toCursor, batchSize, messages, calls: calls.filter((call) => callIds.has(call.info.callId)),
-        previous: await readSegments(tx, conversationId), timeZone };
+        previous: selectContextSegments(await readSegments(tx, conversationId), { ...settings, injectEnabled: true }), timeZone };
       await tx.runAsync('UPDATE chat_summary_state SET claim_id = ?, claim_to_cursor = ?, claim_expires_at = ? WHERE conversation_id = ?',
         [claimId, claimKey(claim), expiresAt, conversationId]);
       return claim;
@@ -171,12 +266,143 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
         now, claim.timeZone, claim, addition.messages, seen);
       for (const call of claim.calls) await tx.runAsync('INSERT INTO chat_summary_processed_calls (conversation_id, call_id) VALUES (?, ?)',
         [claim.conversationId, call.info.callId]);
+      await completeTask(tx, claim.taskId, additions.map((addition) => addition.id), now);
       return true;
     });
   }
   async releaseClaim(claim: ChatSummaryClaim) {
-    await executor('release').runAsync('UPDATE chat_summary_state SET claim_id = NULL, claim_to_cursor = NULL, claim_expires_at = NULL WHERE conversation_id = ? AND generation = ? AND claim_id = ?',
-      [claim.conversationId, claim.generation, claim.claimId]);
+    await this.releaseTaskClaim(claim);
+  }
+  readSettings(conversationId: string) { return readSettings(executor('settings'), conversationId); }
+  async updateSettings(conversationId: string, patch: ChatSummarySettingsPatch) {
+    await executor('settings').withExclusiveTransactionAsync(async (tx) => {
+      const settings = { ...await readSettings(tx, conversationId), ...patch };
+      if (settings.fixedMessageId !== null && settings.generationEnabled) throw new Error('请先取消固定消息起点，再开启自动生成摘要');
+      await saveSettings(tx, conversationId, settings);
+      if (patch.requestTimeoutSeconds !== undefined || patch.maxOutputTokens !== undefined) {
+        await tx.runAsync(`UPDATE chat_summary_tasks SET status = 'waiting', manual_retry = 0, automatic_failures = 0, next_attempt_at = NULL
+          WHERE conversation_id = ? AND status IN ('failed','waiting')`, [conversationId]);
+      }
+    });
+  }
+  async setFixedStart(conversationId: string, messageId: number | null) {
+    await executor('fixedStart').withExclusiveTransactionAsync(async (tx) => {
+      if (messageId !== null) {
+        const item = (await readItems(tx, conversationId, { messageId }))[0];
+        if (!item || item.kind !== 'dialogue' || item.pending === true) throw new Error('只能固定当前会话已发送的对话消息');
+      }
+      const settings = await readSettings(tx, conversationId);
+      await saveSettings(tx, conversationId, { ...settings, fixedMessageId: messageId,
+        ...(messageId !== null ? { generationEnabled: false } : {}) });
+    });
+  }
+  async claimSecondary(conversationId: string, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<SecondaryChatSummaryClaim | null> {
+    return executor('secondaryClaim').withExclusiveTransactionAsync(async (tx) => {
+      const settings = await readSettings(tx, conversationId);
+      if (!settings.generationEnabled || !settings.secondaryEnabled) return null;
+      const state = await readState(tx, conversationId);
+      if (state.claim_id !== null && state.claim_expires_at! > now) return null;
+      const segments = (await readSegments(tx, conversationId)).filter((segment) => segment.level === 'primary' && segment.compactionId === null);
+      if (!segments.length) return null;
+      const task = await tx.getFirstAsync<Pick<TaskRow, 'manual_retry' | 'last_manual' | 'status'>>(`SELECT manual_retry, last_manual, status FROM chat_summary_tasks
+        WHERE conversation_id = ? AND level = 'secondary' AND status <> 'completed'`, [conversationId]);
+      const manual = task && (task.manual_retry === 1 || (task.status === 'running' && task.last_manual === 1));
+      if (!manual && segments.reduce((sum, segment) => sum + estimateTextTokens(segment.content), 0) < settings.secondaryTokenThreshold) return null;
+      const claim = { conversationId, claimId, generation: state.generation, segments, timeZone };
+      const taskId = await beginTask(tx, conversationId, 'secondary', claimId, now);
+      if (taskId === null) return null;
+      await tx.runAsync('UPDATE chat_summary_state SET claim_id = ?, claim_to_cursor = ?, claim_expires_at = ? WHERE conversation_id = ?',
+        [claimId, 'secondary', expiresAt, conversationId]);
+      return { ...claim, taskId };
+    });
+  }
+  async appendSecondary(claim: SecondaryChatSummaryClaim, segmentId: string, content: string, now: string) {
+    return executor('secondaryAppend').withExclusiveTransactionAsync(async (tx) => {
+      const current = new Map((await readSegments(tx, claim.conversationId)).map((segment) => [segment.id, segment]));
+      // 只比较领取的来源，生成期间新增的第七批不会使前六批失效；编辑、删除来源则拒绝旧结果。
+      if (!claim.segments.every((source) => {
+        const segment = current.get(source.id);
+        return segment !== undefined && segment.level === 'primary' && segment.compactionId === null
+          && segment.content === source.content && segment.updatedAt === source.updatedAt;
+      })) return false;
+      const result = await tx.runAsync(`UPDATE chat_summary_state SET revision = revision + 1,
+        claim_id = NULL, claim_to_cursor = NULL, claim_expires_at = NULL
+        WHERE conversation_id = ? AND generation = ? AND claim_id = ? AND claim_to_cursor = 'secondary' AND claim_expires_at > ?`,
+      [claim.conversationId, claim.generation, claim.claimId, now]);
+      if (!result.changes) return false;
+      await insertSegment(tx, claim.conversationId, segmentId, content, now, claim.timeZone, null, [], new Set());
+      const starts = claim.segments.flatMap((segment) => segment.sourceStartAt === null ? [] : [segment.sourceStartAt]);
+      const ends = claim.segments.flatMap((segment) => segment.sourceEndAt === null ? [] : [segment.sourceEndAt]);
+      await tx.runAsync(`UPDATE chat_summary_segments SET level = 'secondary', context_sequence = ?, source_start_at = ?, source_end_at = ? WHERE id = ?`,
+        [claim.segments[0].sequence, starts.length ? starts.sort()[0] : null, ends.length ? ends.sort().at(-1)! : null, segmentId]);
+      for (const source of claim.segments) await tx.runAsync('UPDATE chat_summary_segments SET compaction_id = ? WHERE id = ?', [segmentId, source.id]);
+      await completeTask(tx, claim.taskId, [segmentId], now);
+      return true;
+    });
+  }
+  async releaseSecondaryClaim(claim: SecondaryChatSummaryClaim) {
+    await this.releaseTaskClaim(claim);
+  }
+  private async releaseTaskClaim(claim: ChatSummaryTaskClaim) {
+    await executor('release').withExclusiveTransactionAsync(async (tx) => {
+      const released = await tx.runAsync(`UPDATE chat_summary_state SET claim_id = NULL, claim_to_cursor = NULL, claim_expires_at = NULL
+        WHERE conversation_id = ? AND generation = ? AND claim_id = ?`, [claim.conversationId, claim.generation, claim.claimId]);
+      if (released.changes) await tx.runAsync(`UPDATE chat_summary_tasks SET status = 'waiting', manual_retry = last_manual
+        WHERE id = ? AND status = 'running'`, [claim.taskId]);
+    });
+  }
+  async recordInvocation(claim: ChatSummaryTaskClaim, diagnostics: ChatSummaryCallDiagnostics, now: string) {
+    await executor('diagnostics').withExclusiveTransactionAsync(async (tx) => {
+      const state = await readState(tx, claim.conversationId);
+      if (state.generation !== claim.generation || state.claim_id !== claim.claimId) return;
+      const task = (await tx.getFirstAsync<TaskRow>('SELECT * FROM chat_summary_tasks WHERE id = ?', [claim.taskId]))!;
+      const calls = JSON.parse(task.calls_json) as ChatSummaryCallDiagnostics[];
+      calls.push(diagnostics);
+      await tx.runAsync('UPDATE chat_summary_tasks SET calls_json = ?, updated_at = ? WHERE id = ?', [JSON.stringify(calls), now, claim.taskId]);
+    });
+  }
+  async failTask(claim: ChatSummaryTaskClaim, failure: ChatSummaryFailure, now: string) {
+    return executor('failure').withExclusiveTransactionAsync(async (tx) => {
+      const state = await readState(tx, claim.conversationId);
+      if (state.generation !== claim.generation || state.claim_id !== claim.claimId) return false;
+      const task = (await tx.getFirstAsync<TaskRow>('SELECT * FROM chat_summary_tasks WHERE id = ?', [claim.taskId]))!;
+      const failures = task.automatic_failures + (task.last_manual === 0 ? 1 : 0);
+      const retry = task.last_manual === 0 && failure.retryable && failures < CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS;
+      const nextAt = retry ? new Date(Date.parse(now) + 120_000).toISOString() : null;
+      await tx.runAsync(`UPDATE chat_summary_tasks SET status = ?, automatic_failures = ?, next_attempt_at = ?, error_json = ?, updated_at = ? WHERE id = ?`,
+        [retry ? 'waiting' : 'failed', failures, nextAt, JSON.stringify({ ...failure, occurredAt: now }), now, claim.taskId]);
+      return true;
+    });
+  }
+  async retryTask(conversationId: string, taskId: string, now: string) {
+    await executor('manualRetry').withExclusiveTransactionAsync(async (tx) => {
+      const settings = await readSettings(tx, conversationId);
+      const task = await tx.getFirstAsync<TaskRow>('SELECT * FROM chat_summary_tasks WHERE id = ? AND conversation_id = ?', [taskId, conversationId]);
+      if (!task || !['failed','waiting'].includes(task.status)) throw new Error('这个任务当前不能重试');
+      if (!settings.generationEnabled || (task.level === 'secondary' && !settings.secondaryEnabled)) throw new Error('请先开启对应摘要的自动生成');
+      if (task.level === 'secondary') {
+        const source = await tx.getFirstAsync<{ id: string }>(`SELECT id FROM chat_summary_segments
+          WHERE conversation_id = ? AND level = 'primary' AND compaction_id IS NULL LIMIT 1`, [conversationId]);
+        if (!source) throw new Error('待归纳的一级摘要已不存在，无法重试');
+      }
+      await tx.runAsync(`UPDATE chat_summary_tasks SET manual_retry = 1, status = 'waiting', next_attempt_at = NULL, updated_at = ? WHERE id = ?`, [now, taskId]);
+    });
+  }
+  async search(assistantId: string, input: ChatSummarySearchInput) {
+    const conditions = ['s.ai_assistant_id = ?'];
+    const params: (string | number)[] = [assistantId];
+    if (input.from !== undefined) { conditions.push('COALESCE(c.source_end_at, c.created_at) >= ?'); params.push(input.from); }
+    if (input.to !== undefined) { conditions.push('COALESCE(c.source_start_at, c.created_at) <= ?'); params.push(input.to); }
+    if (input.keywords?.length) {
+      conditions.push('(' + input.keywords.map(() => 'instr(lower(c.content), lower(?)) > 0').join(' OR ') + ')');
+      params.push(...input.keywords);
+    }
+    const offset = input.offset ?? 0;
+    const rows = await executor('search').getAllAsync<SegmentRow>(`SELECT c.* FROM chat_summary_segments c
+      JOIN sessions s ON s.id = c.conversation_id WHERE ${conditions.join(' AND ')}
+      ORDER BY COALESCE(c.source_start_at, c.created_at) DESC, c.id LIMIT 21 OFFSET ?`, [...params, offset]);
+    // 每次分页读当前事实，不缓存正文，用户删除的摘要不会从旧的运行快照再次返回。
+    return { entries: rows.slice(0, 20).map(mapSegment), nextOffset: rows.length > 20 ? offset + 20 : null };
   }
   async create(conversationId: string, segmentId: string, content: string, now: string, timeZone: string) {
     await executor('create').withExclusiveTransactionAsync(async (tx) => {
@@ -198,12 +424,40 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
       await tx.runAsync('UPDATE chat_summary_state SET revision = revision + 1 WHERE conversation_id = ?', [conversationId]);
     });
   }
+  async replaceSecondary(conversationId: string, expected: readonly ChatSummarySegment[], content: string | null, now: string) {
+    await executor('replaceSecondary').withExclusiveTransactionAsync(async (tx) => {
+      const current = (await readSegments(tx, conversationId)).filter((segment) => segment.level === 'secondary');
+      const originals = new Map(expected.map((segment) => [segment.id, segment]));
+      // 编辑期间新归纳或其他编辑已提交时，保留用户草稿并拒绝覆盖未读到的内容。
+      if (!current.length || current.length !== expected.length || !current.every((segment) => {
+        const original = originals.get(segment.id);
+        return original && segment.content === original.content && segment.updatedAt === original.updatedAt;
+      })) throw new Error('二级摘要已更新，请重新打开后再编辑；当前修改未保存。');
+      if (content === null) {
+        await tx.runAsync("DELETE FROM chat_summary_segments WHERE conversation_id = ? AND level = 'secondary'", [conversationId]);
+      } else {
+        current.sort((a, b) => a.contextSequence - b.contextSequence || a.sequence - b.sequence);
+        const anchor = current[0];
+        const starts = current.flatMap((segment) => segment.sourceStartAt === null ? [] : [segment.sourceStartAt]).sort();
+        const ends = current.flatMap((segment) => segment.sourceEndAt === null ? [] : [segment.sourceEndAt]).sort();
+        await tx.runAsync(`UPDATE chat_summary_segments SET content = ?, source_start_at = ?, source_end_at = ?, updated_at = ?
+          WHERE conversation_id = ? AND id = ?`, [content, starts[0] ?? null, ends.at(-1) ?? null, now, conversationId, anchor.id]);
+        for (const segment of current.slice(1)) {
+          await tx.runAsync('UPDATE chat_summary_segments SET compaction_id = ? WHERE conversation_id = ? AND compaction_id = ?', [anchor.id, conversationId, segment.id]);
+          await tx.runAsync('DELETE FROM chat_summary_segments WHERE conversation_id = ? AND id = ?', [conversationId, segment.id]);
+        }
+      }
+      // 来源正文、处理游标与调用事实不变；删除二级也不解除一级的已归纳状态。
+      await tx.runAsync('UPDATE chat_summary_state SET revision = revision + 1 WHERE conversation_id = ?', [conversationId]);
+    });
+  }
   async clear(conversationId: string) {
     await executor('clear').withExclusiveTransactionAsync(async (tx) => {
       await readState(tx, conversationId);
       const items = await readItems(tx, conversationId, { visibleOnly: false });
       const cursor = items.length ? JSON.stringify(items[items.length - 1].cursor) : null;
       await tx.runAsync('DELETE FROM chat_summary_segments WHERE conversation_id = ?', [conversationId]);
+      await tx.runAsync('DELETE FROM chat_summary_tasks WHERE conversation_id = ?', [conversationId]);
       await tx.runAsync(`INSERT INTO chat_summary_call_boundary (conversation_id, cleared_at) VALUES (?, ?)
         ON CONFLICT(conversation_id) DO UPDATE SET cleared_at = excluded.cleared_at`, [conversationId, new Date().toISOString()]);
       await tx.runAsync(`UPDATE chat_summary_state SET generation = generation + 1, revision = revision + 1,
@@ -211,8 +465,13 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
     });
   }
   async getNextWakeAt() {
+    // 已到期但暂不可领取的任务等待业务事件唤醒，避免缺配置／通话未结束时形成零延时轮询。
     const row = await executor('nextWake').getFirstAsync<{ wake_at: string | null }>(
-      'SELECT MIN(claim_expires_at) AS wake_at FROM chat_summary_state WHERE claim_id IS NOT NULL');
+      `SELECT MIN(wake_at) AS wake_at FROM (
+        SELECT claim_expires_at AS wake_at FROM chat_summary_state WHERE claim_id IS NOT NULL
+        UNION ALL SELECT t.next_attempt_at FROM chat_summary_tasks t LEFT JOIN chat_summary_settings s ON s.conversation_id = t.conversation_id
+        WHERE t.status = 'waiting' AND COALESCE(s.enabled,1) = 1 AND (t.level = 'primary' OR COALESCE(s.secondary_enabled,1) = 1))
+        WHERE wake_at > ?`, [new Date().toISOString()]);
     return row!.wake_at;
   }
 }

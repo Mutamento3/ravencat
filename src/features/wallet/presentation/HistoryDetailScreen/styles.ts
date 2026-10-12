@@ -18,6 +18,9 @@ const createStyles = (theme: PresentationTheme) =>
     },
     // Header 样式
     header: {
+      marginHorizontal: theme.spacing.lg,
+      marginTop: theme.spacing.lg,
+      borderRadius: theme.radius.lg,
       padding: 20,
       alignItems: 'center',
     },
@@ -57,6 +60,8 @@ const createStyles = (theme: PresentationTheme) =>
     },
     // 饼图区域
     chartSection: {
+      marginHorizontal: theme.spacing.lg,
+      borderRadius: theme.radius.lg,
       alignItems: 'center',
       paddingVertical: 20,
     },
@@ -104,9 +109,7 @@ const createStyles = (theme: PresentationTheme) =>
     },
     // 分割线
     divider: {
-      height: 8,
-      backgroundColor: theme.colors.surface.muted,
-      marginVertical: 16,
+      height: theme.spacing.lg,
     },
     // 分类列表
     listSection: {
@@ -121,6 +124,11 @@ const createStyles = (theme: PresentationTheme) =>
     // 分类组
     categoryGroup: {
       marginBottom: 16,
+      paddingHorizontal: theme.spacing.lg,
+      backgroundColor: theme.colors.surface.default,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border.default,
+      borderRadius: theme.radius.lg,
     },
     categoryHeader: {
       flexDirection: 'row',
@@ -131,14 +139,23 @@ const createStyles = (theme: PresentationTheme) =>
       borderBottomColor: theme.colors.border.light,
     },
     categoryTag: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
       paddingHorizontal: 12,
       paddingVertical: 4,
       borderRadius: theme.radius.round,
+      backgroundColor: theme.colors.surface.muted,
+    },
+    categoryDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
     },
     categoryTagText: {
       fontSize: 14,
       fontWeight: '500',
-      color: theme.colors.brand.onPrimary,
+      color: theme.colors.text.primary,
     },
     categoryTotal: {
       fontSize: 16,

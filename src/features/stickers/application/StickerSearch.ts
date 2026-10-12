@@ -51,7 +51,7 @@ async function lexicalFallback(
   limit: number,
 ): Promise<Sticker[]> {
   const runtime = getStickersRuntimeDependencies();
-  return runtime.repository.searchStickers({ ...input, readyOnly: true, limit });
+  return runtime.repository.searchStickers({ ...input, readyOnly: true, includeOwnUnannotated: true, limit });
 }
 
 export async function searchStickersForAI(
@@ -89,6 +89,7 @@ export async function searchStickersForAI(
     // 是 UI / 普通列表分页上限，用它截断语义召回会让排在后面的有效向量永远参与不到
     // 排序。候选全量只发生在本地检索内部，不会进入模型上下文。
     const pool = await runtime.repository.listReadyStickersForSemanticSearch({
+      assistantId: input.assistantId,
       groupId: input.groupId,
       tags: input.tags,
       emotion: input.emotion,
@@ -140,10 +141,19 @@ export async function searchStickersForAI(
     // hybrid rerank，partial-index 情况的行为保持不变。
     if (validEmbeddingCount === 0) return lexical.slice(0, limit);
 
+    // 自己的识别失败项也参与词面排名，避免已标注池填满结果后将它们永久排除。
+    const readyIds = new Set(pool.map(sticker => sticker.id));
+    for (const [rank, sticker] of lexical.entries()) {
+      if (readyIds.has(sticker.id)) continue;
+      candidates.push({ stickerId: sticker.id, lexicalScore: lexicalScoreByRank(rank, lexical.length),
+        isFavorite: sticker.isFavorite, useCount: sticker.useCount });
+    }
+
     const ranked = rankStickerSearchCandidates(candidates, limit);
     if (ranked.length === 0) return lexical.slice(0, limit);
 
-    const stickersById = new Map(pool.map((sticker) => [sticker.id, sticker]));
+    // 自己尚未识别的收藏只通过词面召回，用于修正失败项，不参与语义池。
+    const stickersById = new Map([...pool, ...lexical].map((sticker) => [sticker.id, sticker]));
     const results: Sticker[] = [];
     for (const { stickerId } of ranked) {
       const sticker = stickersById.get(stickerId);

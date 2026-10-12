@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
-import { ArchiveRestore, RefreshCw, Trash2, UserRound, type LucideIcon } from 'lucide-react-native';
+import { ArchiveRestore, RefreshCw, Star, Trash2, UserRound, type LucideIcon } from 'lucide-react-native';
 import type { UserProfile } from '../domain/UserProfile';
 import { UserAvatar } from '@shared/ui';
 import { ThemedSurface, useTheme } from '@shared/theme';
@@ -25,10 +25,10 @@ function ProfileSettingsMenuItem({ title, onPress, danger = false, icon: Icon,
   </TouchableOpacity>;
 }
 
-export function ProfileContent({ profile, hasLoadedProfile, onOpenProfile, onBackupPress, onClearAllData,
+export function ProfileContent({ profile, hasLoadedProfile, onOpenProfile, onOpenFavorites, onBackupPress, onClearAllData,
   checkingUpdates, availableUpdateVersion, updateProgress, updateDownloaded, onCheckUpdates }: {
   profile: UserProfile; hasLoadedProfile: boolean;
-  onOpenProfile(): void; onBackupPress(): void; onClearAllData(): void;
+  onOpenProfile(): void; onOpenFavorites(): void; onBackupPress(): void; onClearAllData(): void;
   checkingUpdates: boolean; availableUpdateVersion: string | null; onCheckUpdates(): void;
   updateProgress: number | null; updateDownloaded: boolean;
 }) {
@@ -47,6 +47,7 @@ export function ProfileContent({ profile, hasLoadedProfile, onOpenProfile, onBac
     </ThemedSurface>
     <ThemedSurface nativeGlass variant="card" style={styles.menuSection}>
       <ProfileSettingsMenuItem title="个人" icon={UserRound} onPress={onOpenProfile} />
+      <ProfileSettingsMenuItem title="收藏" icon={Star} onPress={onOpenFavorites} />
     </ThemedSurface>
     <ThemedSurface nativeGlass variant="card" style={styles.menuSection}>
       <ProfileSettingsMenuItem title="备份与恢复" icon={ArchiveRestore} onPress={onBackupPress} />

@@ -129,6 +129,7 @@ export interface AIResponse {
   totalTokens?: number;
   promptTokens?: number;
   completionTokens?: number;
+  cachedTokens?: number;
   isToolCall?: boolean;
   toolCalls?: ToolCall[] | null;
 }

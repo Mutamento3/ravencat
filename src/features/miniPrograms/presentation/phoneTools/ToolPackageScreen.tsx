@@ -1,4 +1,4 @@
-/** 通用 Phone Tool Package 只读详情页。 */
+/** 通用 Phone Tool Package 详情页，调用权限与提示词中心同步。 */
 
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -8,6 +8,8 @@ import { ThemedSurface, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import { buildToolPackageDisplayModel } from './ToolPackageDisplayModel';
+import { usePhoneToolSettings } from './usePhoneToolSettings';
+import { Toggle } from '@shared/ui';
 
 interface ToolPackageScreenProps {
   packageId?: string;
@@ -91,6 +93,7 @@ const createStyles = (theme: PresentationTheme) =>
 
 export default function ToolPackageScreen({ packageId, onBack }: ToolPackageScreenProps) {
   const styles = useThemedStyles(createStyles);
+  const settings = usePhoneToolSettings();
   const toolPackage = packageId ? getPhoneToolPackageById(packageId) : undefined;
 
   if (!toolPackage) {
@@ -111,6 +114,7 @@ export default function ToolPackageScreen({ packageId, onBack }: ToolPackageScre
       <NavigationHeader title={displayModel.title} onGoBack={onBack} />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.description}>{displayModel.description}</Text>
+        <Text style={styles.toolDescription}>{settings.description}</Text>
         <Text style={styles.sectionTitle}>工具</Text>
         <ThemedSurface nativeGlass variant="card" style={styles.card}>
           {displayModel.tools.length === 0 ? (
@@ -135,12 +139,18 @@ export default function ToolPackageScreen({ packageId, onBack }: ToolPackageScre
                     <Text
                       style={[
                         styles.statusText,
-                        tool.implementationStatus === 'available' && styles.statusAvailable,
+                        tool.implementationStatus === 'available' && settings.statusLabel(tool.toolName) === '权限就绪' && styles.statusAvailable,
                       ]}
                     >
-                      {tool.statusLabel}
+                      {tool.implementationStatus === 'available' ? settings.statusLabel(tool.toolName) : tool.statusLabel}
                     </Text>
                   </View>
+                  {tool.implementationStatus === 'available' && <Toggle
+                    accessibilityLabel={`允许调用${tool.title}`}
+                    disabled={settings.disabled}
+                    value={settings.isEnabled(tool.toolName)}
+                    onValueChange={(enabled) => { void settings.toggleTool(tool.toolName, enabled); }}
+                  />}
                 </View>
                 <Text style={styles.toolDescription}>{tool.description}</Text>
               </View>

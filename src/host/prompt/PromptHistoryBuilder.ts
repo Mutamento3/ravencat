@@ -7,6 +7,7 @@ import {
   buildStickerModelText,
   buildSessionPreviewTextFromMessage,
   buildVoiceMessageModelText,
+  buildReplyQuoteModelText,
   buildChatSystemEventModelText,
   getMessageAttachments,
   getMessageSticker,
@@ -55,6 +56,18 @@ export class PromptHistoryBuilder {
       && last?.source === 'chat' && last.kind === 'dialogue' && last.speaker === 'user') {
       timeline = timeline.slice(0, -1);
     }
+    if (!snapshot.settings.generationEnabled && snapshot.settings.fixedMessageId === null) {
+      const limit = params.runtimeContext?.recentWindowLimit ?? params.recentWindowLimit ?? DEFAULT_RECENT_WINDOW_LIMIT;
+      const identities = new Set<string>();
+      let start = 0;
+      for (let index = timeline.length - 1; index >= 0; index -= 1) {
+        const identity = timeline[index].logicalIdentity;
+        if (identity === null) continue;
+        if (!identities.has(identity) && identities.size === limit) { start = index + 1; break; }
+        identities.add(identity);
+      }
+      timeline = timeline.slice(start);
+    }
     const messages: PromptPackMessage[] = timeline.map((item) => ({
       role: item.speaker === 'assistant' ? 'assistant' : 'user',
       content: item.source === 'call' && item.callBoundary === undefined
@@ -64,8 +77,8 @@ export class PromptHistoryBuilder {
       ...(item.eventId !== undefined ? { sourceCallEventId: item.eventId } : {}),
       ...(item.logicalIdentity !== null ? { logicalMessageId: item.logicalIdentity } : {}),
     }));
-    const summaryContent = snapshot.segments.length ? SUMMARY_HISTORY_NOTICE
-      + snapshot.segments.map((segment) => JSON.stringify({ content: segment.content,
+    const summaryContent = snapshot.contextSegments.length ? SUMMARY_HISTORY_NOTICE
+      + snapshot.contextSegments.map((segment) => JSON.stringify({ content: segment.content,
         discussionStart: segment.sourceStartAt, discussionEnd: segment.sourceEndAt, timeZone: segment.timeZone })).join('\n') : '';
     return { messages, summaryContent };
   }
@@ -396,9 +409,8 @@ export class PromptHistoryBuilder {
       if (!text) {
         return '';
       }
-      if (message.replyToText) {
-        return `[引用：${message.replyToText}]\n${text}`;
-      }
+      const quoteText = buildReplyQuoteModelText(message);
+      if (quoteText) return `${quoteText}\n${text}`;
       return text;
     }
 
@@ -457,9 +469,8 @@ export class PromptHistoryBuilder {
 
   private buildHistoricalGroupUserText(message: ChatMessage): string {
     const lines: string[] = [];
-    if (message.replyToText) {
-      lines.push(`[引用：${message.replyToText}]`);
-    }
+    const quoteText = buildReplyQuoteModelText(message);
+    if (quoteText) lines.push(quoteText);
 
     const sticker = getMessageSticker(message);
     const attachments = getMessageAttachments(message);

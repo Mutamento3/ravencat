@@ -52,6 +52,7 @@ export class CompleteModelTurnAdapter {
         promptTokens: response.promptTokens,
         completionTokens: response.completionTokens,
         totalTokens: response.totalTokens,
+        cachedTokens: response.cachedTokens,
       },
       finishReason,
     });

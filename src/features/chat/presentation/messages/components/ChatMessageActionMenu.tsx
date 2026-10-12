@@ -8,12 +8,11 @@ import {
   TouchableOpacity,
   TouchableWithoutFeedback,
   StyleSheet,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Pin, PinOff, Star } from 'lucide-react-native';
 import { useTheme } from '@shared/theme';
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface ChatMessageActionMenuProps {
   visible: boolean;
@@ -27,8 +26,11 @@ interface ChatMessageActionMenuProps {
   onMultiSelect?: () => void;
   onQuote?: () => void;
   onTranslate?: () => void;
+  onFavorite?: () => void;
   onToggleVoiceTranscript?: () => void;
   isVoiceTranscriptExpanded?: boolean;
+  onFixedStart?: () => void;
+  isFixedStart?: boolean;
 }
 
 type ActionItem = {
@@ -54,10 +56,14 @@ function ChatMessageActionMenu({
   onMultiSelect,
   onQuote,
   onTranslate,
+  onFavorite,
   onToggleVoiceTranscript,
   isVoiceTranscriptExpanded = false,
+  onFixedStart,
+  isFixedStart = false,
 }: ChatMessageActionMenuProps) {
   const theme = useTheme();
+  const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
 
   const topRow = ([
     { key: 'copy', label: '复制', icon: 'copy-outline', onPress: onCopy },
@@ -70,6 +76,7 @@ function ChatMessageActionMenu({
   );
 
   const bottomRow = ([
+    { key: 'fixedStart', label: isFixedStart ? '取消固定' : '固定', icon: 'pin-outline', onPress: onFixedStart },
     ...(onToggleVoiceTranscript ? [{
       key: 'voiceTranscript',
       label: isVoiceTranscriptExpanded ? '收起文字' : '转文字',
@@ -79,13 +86,17 @@ function ChatMessageActionMenu({
     { key: 'quote', label: '引用', icon: 'return-up-back-outline', onPress: onQuote },
     { key: 'translate', label: '翻译', icon: 'language-outline', onPress: onTranslate },
     { key: 'forward', label: '分享', icon: 'arrow-redo-outline', onPress: onForward },
+    { key: 'favorite', label: '收藏', icon: 'star-outline', onPress: onFavorite },
   ] satisfies ActionItem[]).filter(
     (item) => item.key === 'forward' || Boolean(item.onPress),
   );
 
-  const menuWidth = Math.max(topRow.length, bottomRow.length) * BUTTON_WIDTH;
-  const menuHeight = BUTTON_HEIGHT * (Number(topRow.length > 0) + Number(bottomRow.length > 0))
-    + Number(topRow.length > 0 && bottomRow.length > 0) + MENU_PADDING_VERTICAL * 2;
+  const actions = [...topRow, ...bottomRow];
+  const columns = Math.max(1, Math.min(5, Math.floor((SCREEN_WIDTH - 24) / BUTTON_WIDTH), actions.length));
+  const rows: ActionItem[][] = [];
+  for (let index = 0; index < actions.length; index += columns) rows.push(actions.slice(index, index + columns));
+  const menuWidth = columns * BUTTON_WIDTH;
+  const menuHeight = BUTTON_HEIGHT * rows.length + rows.length - 1 + MENU_PADDING_VERTICAL * 2;
 
   const computePosition = () => {
     if (!position) {
@@ -130,7 +141,9 @@ function ChatMessageActionMenu({
         disabled={!action}
         onPress={action ? () => { action(); onClose(); } : undefined}
       >
-        <Ionicons name={item.icon} size={22} color={theme.colors.brand.onPrimary} />
+        {item.key === 'favorite' ? <Star size={22} color={theme.colors.brand.onPrimary} /> : item.key === 'fixedStart'
+          ? (isFixedStart ? <PinOff size={22} color={theme.colors.brand.onPrimary} /> : <Pin size={22} color={theme.colors.brand.onPrimary} />)
+          : <Ionicons name={item.icon} size={22} color={theme.colors.brand.onPrimary} />}
         <Text style={[styles.actionLabel, { color: theme.colors.brand.onPrimary }]}>{item.label}</Text>
       </TouchableOpacity>
     );
@@ -153,9 +166,10 @@ function ChatMessageActionMenu({
         <View style={styles.overlay}>
           <TouchableWithoutFeedback>
             <View style={[styles.menuContainer, { top, left, width: menuWidth, backgroundColor: menuBackground }]}>
-              {topRow.length > 0 && <View style={styles.row}>{topRow.map(renderActionButton)}</View>}
-              {topRow.length > 0 && bottomRow.length > 0 && <View style={[styles.horizontalDivider, { backgroundColor: theme.colors.border.strong }]} />}
-              {bottomRow.length > 0 && <View style={styles.row}>{bottomRow.map(renderActionButton)}</View>}
+              {rows.map((row, index) => <React.Fragment key={index}>
+                {index > 0 ? <View style={[styles.horizontalDivider, { backgroundColor: theme.colors.border.strong }]} /> : null}
+                <View style={styles.row}>{row.map(renderActionButton)}</View>
+              </React.Fragment>)}
             </View>
           </TouchableWithoutFeedback>
         </View>

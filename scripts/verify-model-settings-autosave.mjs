@@ -56,8 +56,7 @@ for (const sampling of [{ temperature: null, topP: null }, { temperature: 0, top
   assert.equal(form.temperature, sampling.temperature);
   assert.equal(form.topP, sampling.topP);
   form.handleReset();
-  assert.equal(resetDraft.tempInput, '');
-  assert.equal(resetDraft.topPInput, '');
+  assert.deepEqual(resetDraft, { tempInput: '', topPInput: '', maxTokens: '2000' }, '模型重置只提交模型参数，不修改对话的上下文或气泡设置');
 }
 const tick = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };

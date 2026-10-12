@@ -21,11 +21,16 @@ import type {
   ToolCall,
   ConnectionTestResult,
   OpenAIChatCompletionResponse,
+  OpenAIChatUsage,
   OpenAIEmbeddingResponse,
   EmbeddingResponse,
 } from './types';
 
 const maxTokensFieldCache = new Map<string, string>();
+/** HTTP 状态保留给调用方分类失败，不要求业务层猜测服务端错误文案。 */
+class AIHttpError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
 
 export class BaseAIClient {
   config: Required<AIClientConfig> & { temperature: number | null; maxTokens: number | null; topP: number | null };
@@ -85,6 +90,10 @@ export class BaseAIClient {
       stream,
     };
 
+    if (stream) {
+      requestBody.stream_options = { include_usage: true };
+    }
+
     if (tools) {
       requestBody.tools = tools;
       requestBody.tool_choice = toolChoice;
@@ -133,11 +142,20 @@ export class BaseAIClient {
     requestBody: Record<string, unknown>,
     options: {
       signal?: AbortSignal;
+      allowImageContentFallback?: boolean;
       onDelta?: (delta: ChatStreamDelta) => void | Promise<void>;
     } = {}
   ): Promise<ChatResponse> {
-    const response = await this.sendStreamingRequestOnce(requestBody, options);
-    return response;
+    try {
+      return await this.sendStreamingRequestOnce(requestBody, options);
+    } catch (error) {
+      // HTTP 拒绝发生在模型输出前；这里只对明确的图片参数错误做一次文字降级。
+      const fallback = options.allowImageContentFallback === false || !(error instanceof AIHttpError)
+        || (error.status !== 400 && error.status !== 422) ? null
+        : this.buildImageContentFallbackRequestBody(requestBody, error.message);
+      if (!fallback) throw error;
+      return this.sendStreamingRequestOnce(fallback, options);
+    }
   }
 
   private async sendStreamingRequestOnce(
@@ -178,12 +196,6 @@ export class BaseAIClient {
         return data;
       }
 
-      const imageFallbackRequestBody = this.buildImageContentFallbackRequestBody(requestBody, errorMessage);
-
-      if (imageFallbackRequestBody) {
-        return this.sendStreamingRequestOnce(imageFallbackRequestBody, options);
-      }
-
       const responseFormatFallbackRequestBody = this.buildResponseFormatFallbackRequestBody(
         requestBody,
         errorMessage
@@ -193,7 +205,7 @@ export class BaseAIClient {
         return this.sendStreamingRequestOnce(responseFormatFallbackRequestBody, options);
       }
 
-      throw new Error(errorMessage);
+      throw new AIHttpError(response.status, errorMessage);
     }
 
     this.rememberMaxTokensFieldName(getRequestBodyMaxTokensFieldName(requestBody) || 'max_tokens');
@@ -233,7 +245,7 @@ export class BaseAIClient {
         return data;
       }
 
-      const imageFallbackRequestBody = options.allowImageContentFallback === false
+      const imageFallbackRequestBody = options.allowImageContentFallback === false || (response.status !== 400 && response.status !== 422)
         ? null
         : this.buildImageContentFallbackRequestBody(requestBody, errorMessage);
 
@@ -260,7 +272,7 @@ export class BaseAIClient {
         return this.sendRequestOnce(responseFormatFallbackRequestBody, options);
       }
 
-      throw new Error(errorMessage);
+      throw new AIHttpError(response.status, errorMessage);
     }
 
     this.rememberMaxTokensFieldName(getRequestBodyMaxTokensFieldName(requestBody) || 'max_tokens');
@@ -379,10 +391,12 @@ export class BaseAIClient {
       text: extraction.text,
       reasoningText: extraction.reasoningText || '',
       finishReason: finishReason ?? null,
+      usageReported: data.usage != null,
       messageId: data.id || null,
       promptTokens: data.usage?.prompt_tokens || 0,
       completionTokens: data.usage?.completion_tokens || 0,
       totalTokens: data.usage?.total_tokens || 0,
+      cachedTokens: readCachedTokens(data.usage),
       success: true,
       error: null,
       toolCalls: isToolCall ? toolCalls : null,
@@ -390,8 +404,9 @@ export class BaseAIClient {
     };
   }
 
-  private createErrorResponse(errorMessage: string): ChatResponse {
+  private createErrorResponse(errorMessage: string, httpStatus: number | null = null): ChatResponse {
     return {
+      httpStatus,
       text: '',
       messageId: null,
       promptTokens: 0,
@@ -566,7 +581,7 @@ export class BaseAIClient {
         });
       }
 
-      return this.createErrorResponse(errorMessage);
+      return this.createErrorResponse(errorMessage, error instanceof AIHttpError ? error.status : null);
     }
   }
 
@@ -577,6 +592,7 @@ export class BaseAIClient {
     const {
       includeSystemPrompt = true,
       enforceReasoningContent = false,
+      allowImageContentFallback = true,
       signal,
       onDelta,
     } = options;
@@ -592,7 +608,7 @@ export class BaseAIClient {
         stream: true,
       });
 
-      return await this.sendStreamingRequest(requestBody, { signal, onDelta });
+      return await this.sendStreamingRequest(requestBody, { signal, onDelta, allowImageContentFallback });
     } catch (error) {
       if (isAbortLikeError(error)) {
         throw error;
@@ -603,6 +619,7 @@ export class BaseAIClient {
         return this.chatStream(messages, {
           includeSystemPrompt,
           enforceReasoningContent: true,
+          allowImageContentFallback,
           signal,
           onDelta,
         });
@@ -624,6 +641,7 @@ export class BaseAIClient {
       toolChoice = 'auto',
       includeSystemPrompt = true,
       enforceReasoningContent = false,
+      allowImageContentFallback = true,
       signal,
       onDelta,
     } = options;
@@ -650,6 +668,7 @@ export class BaseAIClient {
 
       const response = await this.sendStreamingRequest(requestBody, {
         signal,
+        allowImageContentFallback,
         onDelta: forwardDelta,
       });
       return response;
@@ -664,6 +683,7 @@ export class BaseAIClient {
           toolChoice,
           includeSystemPrompt,
           enforceReasoningContent: true,
+          allowImageContentFallback,
           signal,
           onDelta,
         });
@@ -691,6 +711,7 @@ export class BaseAIClient {
       includeSystemPrompt = true,
       enforceReasoningContent = false,
       allowReasoningLengthRetry = true,
+      allowImageContentFallback = true,
       signal,
     } = options;
 
@@ -702,7 +723,7 @@ export class BaseAIClient {
         toolChoice,
       });
 
-      const data = await this.sendRequest(requestBody, { signal });
+      const data = await this.sendRequest(requestBody, { signal, allowImageContentFallback });
 
       const choice = data.choices?.[0];
       if (!choice) {
@@ -725,6 +746,7 @@ export class BaseAIClient {
           includeSystemPrompt,
           enforceReasoningContent,
           allowReasoningLengthRetry: false,
+          allowImageContentFallback,
           signal,
         }));
       }
@@ -774,6 +796,7 @@ export class BaseAIClient {
           includeSystemPrompt,
           enforceReasoningContent: true,
           allowReasoningLengthRetry,
+          allowImageContentFallback,
           signal,
         });
       }
@@ -1124,7 +1147,7 @@ function sendStreamingRequestWithXMLHttpRequest(params: {
       progressChain
         .then(() => {
           if (xhr.status < 200 || xhr.status >= 300) {
-            settleReject(new Error(extractXHRStreamingError(xhr)));
+            settleReject(new AIHttpError(xhr.status, extractXHRStreamingError(xhr)));
             return;
           }
 
@@ -1161,6 +1184,7 @@ function createOpenAICompatibleSSEParser(
   let promptTokens = 0;
   let completionTokens = 0;
   let totalTokens = 0;
+  let cachedTokens: number | undefined;
   let finishReason: string | null = null;
   let isToolCall = false;
   const toolCallAccumulator = createStreamingToolCallAccumulator(onDelta);
@@ -1193,11 +1217,7 @@ function createOpenAICompatibleSSEParser(
         };
         finish_reason?: string | null;
       }[];
-      usage?: {
-        prompt_tokens?: number;
-        completion_tokens?: number;
-        total_tokens?: number;
-      } | null;
+      usage?: OpenAIChatUsage | null;
     };
 
     messageId = payload.id || messageId;
@@ -1205,6 +1225,7 @@ function createOpenAICompatibleSSEParser(
       promptTokens = payload.usage.prompt_tokens || promptTokens;
       completionTokens = payload.usage.completion_tokens || completionTokens;
       totalTokens = payload.usage.total_tokens || totalTokens;
+      cachedTokens = readCachedTokens(payload.usage) ?? cachedTokens;
     }
 
     const choice = payload.choices?.[0];
@@ -1310,6 +1331,7 @@ function createOpenAICompatibleSSEParser(
       promptTokens,
       completionTokens,
       totalTokens,
+      cachedTokens,
       success: true,
       error: null,
       toolCalls: isToolCall ? toolCalls : null,
@@ -1340,6 +1362,7 @@ async function readOpenAICompatibleSSE(
   let promptTokens = 0;
   let completionTokens = 0;
   let totalTokens = 0;
+  let cachedTokens: number | undefined;
   let finishReason: string | null = null;
   let isToolCall = false;
   const toolCallAccumulator = createStreamingToolCallAccumulator(onDelta);
@@ -1372,11 +1395,7 @@ async function readOpenAICompatibleSSE(
         };
         finish_reason?: string | null;
       }[];
-      usage?: {
-        prompt_tokens?: number;
-        completion_tokens?: number;
-        total_tokens?: number;
-      } | null;
+      usage?: OpenAIChatUsage | null;
     };
 
     messageId = payload.id || messageId;
@@ -1384,6 +1403,7 @@ async function readOpenAICompatibleSSE(
       promptTokens = payload.usage.prompt_tokens || promptTokens;
       completionTokens = payload.usage.completion_tokens || completionTokens;
       totalTokens = payload.usage.total_tokens || totalTokens;
+      cachedTokens = readCachedTokens(payload.usage) ?? cachedTokens;
     }
 
     const choice = payload.choices?.[0];
@@ -1501,11 +1521,22 @@ async function readOpenAICompatibleSSE(
     promptTokens,
     completionTokens,
     totalTokens,
+    cachedTokens,
     success: true,
     error: null,
     toolCalls: isToolCall ? toolCalls : null,
     isToolCall: isToolCall && toolCalls.length > 0,
   };
+}
+
+/** 缓存统计只在 Provider 边界归一化；0 与未提供数据保持不同语义。 */
+function readCachedTokens(usage?: OpenAIChatUsage | null): number | undefined {
+  const value = usage?.prompt_tokens_details?.cached_tokens ?? usage?.prompt_cache_hit_tokens;
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error('服务商返回的缓存 token 数无效');
+  }
+  return value;
 }
 
 function isAbortLikeError(error: unknown): boolean {
@@ -1751,7 +1782,8 @@ function stripImagePartsFromMessages(messages: ChatMessage[]): ChatMessage[] | n
       }
 
       if (part?.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
-        nextTextParts.push(part.text.trim());
+        // 旧的直接视觉标记不能在文字降级后继续声称原图已交付。
+        nextTextParts.push(part.text.split('\n[视觉输入状态：原图已直接提供]')[0].trim());
       }
     });
 
@@ -1775,7 +1807,7 @@ function stripImagePartsFromMessages(messages: ChatMessage[]): ChatMessage[] | n
 function buildImageFallbackPrompt(imageCount = 1): string {
   const imageText = imageCount > 1 ? `${imageCount}张图片` : '一张图片';
   return [
-    `系统说明：当前模型接口暂不支持直接查看${imageText}内容。`,
+    `[视觉输入状态：图片输入被接口拒绝，未收到原图] 本次${imageText}没有成功提供给模型，这不代表模型永久不支持视觉。`,
     '请基于已有文字上下文先自然回应，并明确告诉用户你暂时无法直接看图；如果用户希望你继续分析，请提醒用户补充图片中的关键信息或文字描述。',
   ].join('\n');
 }
@@ -1862,8 +1894,10 @@ function shouldRetryWithoutImageParts(message: string): boolean {
     || normalized.includes('expected `text`')
     || normalized.includes('expected "text"')
     || normalized.includes('does not support image')
-    || normalized.includes('multimodal')
-    || normalized.includes('vision')
+    || normalized.includes('unsupported image')
+    || normalized.includes('invalid image')
+    || normalized.includes('image dimensions')
+    || normalized.includes('image size')
   );
 }
 

@@ -20,6 +20,7 @@ export const createPromptCenterStyles = (theme: PresentationTheme) => StyleSheet
   card: { padding: 18, gap: 12, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.default, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light },
   cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   collapsibleHeader: { minHeight: 44 },
+  actionButton: { minHeight: 44, paddingHorizontal: 8, justifyContent: 'center' },
   starButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   body: { color: theme.colors.text.secondary, fontSize: 13, lineHeight: 21 },
   action: { color: theme.colors.brand.primary, fontSize: 14, fontWeight: '600' },

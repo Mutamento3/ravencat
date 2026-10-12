@@ -121,7 +121,7 @@ try {
 
 APK 位于 `android/app/build/outputs/apk/release/app-release.apk`。上述命令会实际构建；只检查签名配置时，将 Gradle 任务换成 `:app:validateSigningRelease :app:signingReport`，不会打包 APK。已有原生工程也要先执行一次 prebuild，让签名插件生效。
 
-Android 自适应图标使用透明的 `assets/adaptive-icon.png` 作为前景，development 配置为白底，preview／发布版为黑底；通用图标仍为 `assets/icon.png`。启动屏由 `expo-splash-screen` 插件配置为黑底，居中显示 `assets/icon.png`，图像宽度为 200；实际效果以 release 构建为准。修改图标或 Expo 原生配置后，先运行不带 `--clean` 的 prebuild，将配置同步到 `android/`；仅修改业务 TypeScript / JavaScript 时，可以直接执行 Gradle 构建。保留 `android/` 和 Gradle 缓存时，未变化的任务可以复用上次输出，通常显示 `UP-TO-DATE`；不需要每次重新生成原生工程或执行 `clean`。详见 [Gradle 增量构建说明](https://docs.gradle.org/current/userguide/incremental_build.html)。
+Android 自适应图标在 development 使用透明的 `assets/adaptive-icon.png` 作为前景并配白底，preview／发布版使用 `assets/icon.png` 作为前景并配黑底；通用图标仍为 `assets/icon.png`。启动屏由 `expo-splash-screen` 插件配置为黑底，居中显示 `assets/icon.png`，图像宽度为 200；实际效果以 release 构建为准。修改图标或 Expo 原生配置后，先运行不带 `--clean` 的 prebuild，将配置同步到 `android/`；仅修改业务 TypeScript / JavaScript 时，可以直接执行 Gradle 构建。保留 `android/` 和 Gradle 缓存时，未变化的任务可以复用上次输出，通常显示 `UP-TO-DATE`；不需要每次重新生成原生工程或执行 `clean`。详见 [Gradle 增量构建说明](https://docs.gradle.org/current/userguide/incremental_build.html)。
 
 确认新包与手机上已安装应用的签名相同后，可以直接覆盖安装并保留应用数据。若当前安装的是旧的本地 debug 签名版，则需要先导出备份，再手动卸载旧版、安装统一签名的新包并导入备份；Android 权限需重新授权。切换完成后，本地与云端 preview 就可继续覆盖更新。Android 更新规则见 [官方说明](https://developer.android.com/google/play/app-updates)。
 

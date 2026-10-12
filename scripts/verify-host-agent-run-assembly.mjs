@@ -59,28 +59,6 @@ assert.equal(
   'Host Agent Run assembly 不得依赖任何 Feature',
 );
 
-const chatCompositionAst = parse('src/host/composition/configureChatRuntime.ts');
-let agentRunInitializer = null;
-let agentCancelInitializer = null;
-function visit(node) {
-  if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)) {
-    if (node.name.text === 'run') agentRunInitializer = node.initializer;
-    if (node.name.text === 'cancel') agentCancelInitializer = node.initializer;
-  }
-  ts.forEachChild(node, visit);
-}
-visit(chatCompositionAst);
-assert.ok(
-  agentRunInitializer && ts.isIdentifier(agentRunInitializer)
-    && agentRunInitializer.text === 'runHostAgent',
-  'Chat composition 必须直接复用 runHostAgent',
-);
-assert.ok(
-  agentCancelInitializer && ts.isIdentifier(agentCancelInitializer)
-    && agentCancelInitializer.text === 'cancelHostAgentRun',
-  'Chat composition 必须直接复用 cancelHostAgentRun',
-);
-
 let registryCreations = 0;
 let registeredAllowedNames = null;
 let registeredPackageAllowedNames = null;
@@ -90,6 +68,18 @@ const releasedToolRuns = [];
 let capturedRuntimeRequest = null;
 let capturedModelInstructions = null;
 let pendingRuntime = null;
+let preparationGate = null;
+let directGate = null;
+let mcpGate = null;
+let disposeGate = null;
+let disposeFailure = null;
+let modelCalls = 0;
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+const flush = () => new Promise(done => setImmediate(done));
 
 class TestAgentRuntime {
   constructor(dependencies) {
@@ -98,6 +88,7 @@ class TestAgentRuntime {
 
   async run(request) {
     capturedRuntimeRequest = request;
+    modelCalls += 1;
     await this.dependencies.modelGateway.runTurn({});
     if (request.task.goal === 'fail') {
       throw new Error('synthetic failure');
@@ -106,6 +97,9 @@ class TestAgentRuntime {
       pendingRuntime = this;
       return await new Promise((resolve) => {
         this.resolvePending = resolve;
+        const cancel = () => resolve({ terminalCode: 'CANCELLED_BY_USER', runId: request.runId });
+        if (request.signal.aborted) cancel();
+        else request.signal.addEventListener('abort', cancel, { once: true });
       });
     }
     return { terminalCode: 'COMPLETED', runId: request.runId };
@@ -123,12 +117,14 @@ const assembly = loadTypeScriptModule(assemblyPath, {
   './createAgentToolRegistry': {
     readDirectToolNamesForHostRun: async (id) => {
       assert.equal(id, 'test-assistant');
+      if (directGate) { directGate.started.resolve(); await directGate.release.promise; }
       return ['package_child'];
     },
     releaseAgentToolRunScope: (runId) => { releasedToolRuns.push(runId); },
-    prepareAgentToolRegistry: (createLegacyContext) => {
+    prepareAgentToolRegistry: async (createLegacyContext) => {
       registryCreations += 1;
       assert.equal(typeof createLegacyContext, 'function');
+      if (preparationGate) { preparationGate.started.resolve(); await preparationGate.release.promise; }
       return { registryId: registryCreations };
     },
     getToolPackageRuntimeBindings: (registry) => [{
@@ -158,12 +154,17 @@ const assembly = loadTypeScriptModule(assemblyPath, {
       assert.equal(assistantId, 'test-assistant', 'Host 执行冻结必须传入 task 的 Assistant 实体 ID');
       assert.equal(registry.registryId, registryCreations, 'MCP 必须注册到本次唯一 Built-in Registry');
       registeredAllowedNames = [...allowedToolNames];
+      if (mcpGate) { mcpGate.started.resolve(); await mcpGate.release.promise; }
       return {
         allowlistMcpToolNames: allowedToolNames.filter((name) => name.startsWith('mcp.')),
         metaToolNames: allowedToolNames.some((name) => name.startsWith('mcp.'))
           ? ['mcp_list_tools', 'mcp_call_tool']
           : [],
-        dispose: async () => { disposeCount += 1; },
+        dispose: async () => {
+          disposeCount += 1;
+          if (disposeGate) { disposeGate.started.resolve(); await disposeGate.release.promise; }
+          if (disposeFailure) throw disposeFailure;
+        },
       };
     },
   },
@@ -235,4 +236,49 @@ await assert.rejects(
 );
 
 assert.equal(registryCreations, 3, '每次 Host run 必须且只能创建一个 Built-in Registry');
+for (const stage of ['registry', 'direct', 'mcp']) {
+  const gate = { started: deferred(), release: deferred() };
+  preparationGate = stage === 'registry' ? gate : null;
+  directGate = stage === 'direct' ? gate : null;
+  mcpGate = stage === 'mcp' ? gate : null;
+  const modelCallsBefore = modelCalls;
+  const runId = `reset-${stage}`;
+  const execution = assembly.runHostAgent(createSyntheticRequest(runId));
+  await gate.started.promise;
+  await assert.rejects(assembly.runHostAgent(createSyntheticRequest(runId)), /already registered/);
+  let resetFinished = false;
+  const reset = assembly.cancelActiveHostAgentRunsForReset().then(() => { resetFinished = true; });
+  await flush();
+  assert.equal(resetFinished, false, 'reset 必须等待尚未完成的准备阶段');
+  const declined = await assembly.runHostAgent(createSyntheticRequest(`late-${stage}`));
+  assert.equal(declined.terminalCode, 'CANCELLED_BY_USER', 'reset 期间不接纳迟到请求');
+  gate.release.resolve();
+  assert.equal((await execution).terminalCode, 'CANCELLED_BY_USER');
+  await reset;
+  assert.equal(modelCalls, modelCallsBefore, '取消后的准备结果不得启动模型');
+  preparationGate = null; directGate = null; mcpGate = null;
+  assembly.resumeHostAgentRunsAfterReset();
+}
+disposeGate = { started: deferred(), release: deferred() };
+const disposing = assembly.runHostAgent(createSyntheticRequest('disposing'));
+await disposeGate.started.promise;
+let disposedResetFinished = false;
+const disposedReset = assembly.cancelActiveHostAgentRunsForReset().then(() => { disposedResetFinished = true; });
+await flush();
+assert.equal(disposedResetFinished, false, 'reset 必须等待连接释放');
+disposeGate.release.resolve();
+await Promise.all([disposing, disposedReset]);
+disposeGate = null;
+assembly.resumeHostAgentRunsAfterReset();
+assert.equal((await assembly.runHostAgent(createSyntheticRequest('after-reset'))).terminalCode, 'COMPLETED');
+pendingRuntime = null;
+disposeFailure = new Error('cleanup failed');
+const cleanupFailureRun = assembly.runHostAgent(createSyntheticRequest('cleanup-failure', 'pending'));
+const observedFailure = assert.rejects(cleanupFailureRun, /cleanup failed/);
+while (pendingRuntime === null) await Promise.resolve();
+await assert.rejects(assembly.cancelActiveHostAgentRunsForReset(), error => error instanceof AggregateError
+  && error.errors[0].cause.message === 'cleanup failed');
+await observedFailure;
+disposeFailure = null;
+assembly.resumeHostAgentRunsAfterReset();
 console.log('Host Agent Run assembly 的 Feature 边界、Package/MCP 冻结及 lifecycle 已验证。');

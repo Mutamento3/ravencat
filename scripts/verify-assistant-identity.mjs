@@ -256,10 +256,11 @@ const { migrateAssistantIdentityContract } = migrationModule;
 {
   const db = new DatabaseSync(':memory:');
   for (const sql of Object.values(schemas)) db.exec(sql);
-  // 模拟升级前数据库，旧角色保持默认行为，重复初始化不能覆盖已经保存的选择。
+  // 当前 schema 的版本也必须匹配；重复初始化不能覆盖已经保存的选择。
   db.exec(`INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at)
     VALUES ('existing-role', 'existing-actor', '旧角色', 'model-a', 'created', 'old-time')`);
-  const { runMigrations } = loadTypeScriptModuleWithMocks('src/platform/persistence/sqlite/migrations.ts');
+  const { runMigrations, DATABASE_SCHEMA_VERSION } = loadTypeScriptModuleWithMocks('src/platform/persistence/sqlite/migrations.ts');
+  db.exec(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION}`);
   await runMigrations(createExecutor(db));
   assert.equal(db.prepare("SELECT disable_thinking FROM ai_assistants WHERE id = 'existing-role'").get().disable_thinking, 0);
   db.exec("UPDATE ai_assistants SET disable_thinking = 1 WHERE id = 'existing-role'");
@@ -316,6 +317,7 @@ const { migrateAssistantIdentityContract } = migrationModule;
     systemPrompt: '',
   });
   await repository.insert(newProfile);
+  assert.equal((await repository.getById(newProfile.id)).showTokenUsage, true, '新增角色默认保存为显示 Token');
   assert.deepEqual(
     {
       ...db.prepare(`
@@ -341,6 +343,11 @@ const { migrateAssistantIdentityContract } = migrationModule;
 
   // 已有数字不自动改写；明确清空必须在真实 SQLite 与领域读取后仍保持 null。
   const existing = await repository.getById('assistant-a');
+  assert.equal(existing.showTokenUsage, true, '旧角色迁移后的展示默认值保持开启');
+  await repository.updateSettings('assistant-a', { showTokenUsage: false });
+  assert.equal((await new assistantRepositoryModule.AIAssistantRepository().getById('assistant-a')).showTokenUsage, false,
+    '关闭 Token 展示经过真实 SQLite 写入与重读后保留');
+  assert.equal((await repository.getById(newProfile.id)).showTokenUsage, true, '展示开关不影响其他角色');
   assert.equal(existing.temperature, 0.7);
   assert.equal(existing.topP, 1);
   await repository.updateModelSettings('assistant-a', { temperature: 0, topP: 0 });
@@ -358,8 +365,23 @@ const { migrateAssistantIdentityContract } = migrationModule;
   );
 
   await repository.updateSettings('assistant-a', { name: '新名称', systemPrompt: '新的人设' });
+  await repository.updateSettings('assistant-a', {
+    privateContextPrimaryLimit: 48, privateContextSecondaryLimit: 12,
+    groupContextPrimaryLimit: 60, groupContextSecondaryLimit: 8, allowMultipleBubbles: false,
+  });
+  const conversationSettings = await repository.getById('assistant-a');
+  assert.deepEqual({
+    privatePrimary: conversationSettings.privateContextPrimaryLimit,
+    privateSecondary: conversationSettings.privateContextSecondaryLimit,
+    groupPrimary: conversationSettings.groupContextPrimaryLimit,
+    groupSecondary: conversationSettings.groupContextSecondaryLimit,
+    allowMultipleBubbles: conversationSettings.allowMultipleBubbles,
+  }, { privatePrimary: 48, privateSecondary: 12, groupPrimary: 60, groupSecondary: 8, allowMultipleBubbles: false }, '对话设置命令持久保存四项上下文与气泡选择');
   await repository.updateModelSettings('assistant-a', { model: 'model-b', temperature: 1.2, disableThinking: true });
   assert.equal((await repository.getById('assistant-a')).disableThinking, true, '关闭思考选择必须经过 SQLite 增量写入并在重新读取后保留');
+  assert.equal((await repository.getById('assistant-a')).privateContextPrimaryLimit, 48, '模型更新保留对话上下文设置');
+  assert.equal((await repository.getById('assistant-a')).allowMultipleBubbles, false, '模型更新保留对话气泡设置');
+  assert.equal((await repository.getById('assistant-a')).showTokenUsage, false, '模型更新保留 Token 展示选择');
   assert.equal((await repository.getById(newProfile.id)).disableThinking, false, '新增角色保留服务商默认思考行为');
   assert.deepEqual(
     { ...db.prepare("SELECT agent_id, name, system_prompt, model, temperature FROM ai_assistants WHERE id = 'assistant-a'").get() },

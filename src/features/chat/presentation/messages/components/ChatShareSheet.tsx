@@ -39,6 +39,7 @@ export default function ChatShareSheet({ share, onPreviewFile }: { share: Return
           <Text style={styles.hint}>来源：{share.record.sourceName} · {share.record.selectionCount} 条消息</Text>
           <SharedChatRecordEntries record={share.record} onPreviewFile={onPreviewFile} />
         </ScrollView>
+        <Text style={styles.hint}>语音消息将以转写文本分享，不包含可播放音频。</Text>
         <TextInput ref={commentInput} editable={!share.sending} accessibilityLabel="分享附言" placeholder="附言（可选，作为单独消息发送）" placeholderTextColor={theme.colors.text.secondary} multiline value={share.comment} onChangeText={share.setComment} style={styles.input} />
         <TouchableOpacity accessibilityRole="button" disabled={share.sending} accessibilityState={{ disabled: share.sending }} onPress={() => { void share.send(); }} style={[styles.send, share.sending && styles.disabled]}><Text style={styles.sendText}>{share.sending ? '分享中…' : '确认分享'}</Text></TouchableOpacity>
       </> : null}

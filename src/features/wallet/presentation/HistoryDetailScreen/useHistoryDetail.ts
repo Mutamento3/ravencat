@@ -4,7 +4,8 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { getLedgerRangeSummary } from '../../composition';
+import { getLedgerRangeSummary, getWalletCategories } from '../../composition';
+import { DEFAULT_WALLET_CATEGORIES, type WalletCategories } from '../../domain/WalletRecord';
 import type { TimeRange, SummaryData, CategoryGroupData } from './types';
 
 interface UseHistoryDetailOptions {
@@ -15,13 +16,15 @@ interface UseHistoryDetailOptions {
 export function useHistoryDetail({ timeRange, initialData }: UseHistoryDetailOptions) {
   const [loading, setLoading] = useState(!initialData);
   const [summary, setSummary] = useState<SummaryData | undefined>(initialData);
+  const [categories, setCategories] = useState<WalletCategories>(DEFAULT_WALLET_CATEGORIES);
 
   const loadData = useCallback(async () => {
     try {
-      const data = await getLedgerRangeSummary(
-        timeRange.startDate,
-        timeRange.endDate
-      );
+      const [data, availableCategories] = await Promise.all([
+        getLedgerRangeSummary(timeRange.startDate, timeRange.endDate),
+        getWalletCategories(),
+      ]);
+      setCategories(availableCategories);
       setSummary({
         timeRange,
         ...data,
@@ -95,6 +98,7 @@ export function useHistoryDetail({ timeRange, initialData }: UseHistoryDetailOpt
 
   return {
     loading,
+    categories,
     summary,
     categoryGroups,
     expenseGroups,

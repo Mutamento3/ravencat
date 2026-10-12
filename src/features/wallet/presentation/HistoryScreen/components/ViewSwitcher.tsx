@@ -3,7 +3,8 @@
  */
 
 import React from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import { Text, TouchableOpacity } from 'react-native';
+import { ThemedSurface } from '@shared/theme';
 import { useHistoryStyles } from '../styles';
 import type { ViewType } from '../types';
 
@@ -22,7 +23,7 @@ export function ViewSwitcher({ currentView, onChange }: ViewSwitcherProps) {
   const styles = useHistoryStyles();
 
   return (
-    <View style={styles.switcherContainer}>
+    <ThemedSurface variant="card" style={styles.switcherContainer}>
       {VIEW_OPTIONS.map((option) => (
         <TouchableOpacity
           key={option.value}
@@ -31,6 +32,8 @@ export function ViewSwitcher({ currentView, onChange }: ViewSwitcherProps) {
             currentView === option.value && styles.switcherButtonActive,
           ]}
           onPress={() => onChange(option.value)}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: currentView === option.value }}
         >
           <Text
             style={[
@@ -42,6 +45,6 @@ export function ViewSwitcher({ currentView, onChange }: ViewSwitcherProps) {
           </Text>
         </TouchableOpacity>
       ))}
-    </View>
+    </ThemedSurface>
   );
 }

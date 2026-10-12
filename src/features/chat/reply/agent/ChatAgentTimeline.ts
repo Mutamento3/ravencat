@@ -656,6 +656,7 @@ export class ChatAgentTimeline {
       completionTokens: item.turn?.usage.completionTokens ?? 0,
       metadataJson: JSON.stringify({
         ...metadata,
+        cachedTokens: item.turn?.usage.cachedTokens,
         transientIdentity: item.clientMessageId,
         timelineSequence: item.sequence,
         timelineKind: item.kind,
@@ -816,6 +817,7 @@ function toAIResponseForStep(step: TimelineStep): AIResponse {
     totalTokens: turn?.usage.totalTokens ?? 0,
     promptTokens: turn?.usage.promptTokens ?? 0,
     completionTokens: turn?.usage.completionTokens ?? 0,
+    cachedTokens: turn?.usage.cachedTokens,
     isToolCall: Boolean(turn && turn.toolCalls.length > 0),
     toolCalls: turn?.toolCalls.map((toolCall) => ({
       id: toolCall.id,

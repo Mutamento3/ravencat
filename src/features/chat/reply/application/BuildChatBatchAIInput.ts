@@ -14,6 +14,7 @@ import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import {
   buildStickerMessagePreviewText,
   buildVoiceMessageModelText,
+  buildReplyQuoteModelText,
   getMessageAttachments,
   getMessageSticker,
   getMessageSharedRecord,
@@ -22,6 +23,7 @@ import {
 import { buildStickerModelText } from '../../messages/domain/ChatSticker';
 import { resolveChatImageModelInput } from './ResolveChatImageModelInput';
 import { buildSharedChatRecordText, sharedRecordAuthorLabel } from '../../messages/domain/SharedChatRecord';
+import { mediaImageFailure } from '@features/media';
 
 export type ModelInputContentPart =
   | { type: 'text'; text: string }
@@ -46,9 +48,10 @@ function buildFileFallbackPrompt(fileName: string): string {
   ].join('\n');
 }
 
-function buildImageFallbackPrompt(fileName: string, authorLabel = '用户'): string {
+function buildImageFallbackPrompt(contextText: string, reason: string): string {
   return [
-    `${authorLabel}发送了一张图片：${fileName || '未命名图片'}。`,
+    `${contextText}。`,
+    `图片读取结果：${reason}`,
     '当前系统暂时无法读取这张图片的实际内容，请你基于当前上下文先自然回应，并提醒用户重新发送图片或补充文字描述。',
   ].join('\n');
 }
@@ -68,12 +71,13 @@ async function appendAttachmentParts(
 ): Promise<void> {
   if (attachment.type === 'image') {
     const imageName = attachment.fileName || '未命名图片';
+    // 素材身份不依赖读取成功；失败提示仍允许模型引用同一张图片。
+    const contextText = `${authorLabel}发送了一张图片：${imageName}${attachment.mediaAssetId ? `；mediaAssetId=${attachment.mediaAssetId}` : ''}`;
 
     try {
       const commonInput = {
         assistantId,
-        mimeType: attachment.mimeType,
-        contextText: `${authorLabel}发送了一张图片：${imageName}`,
+        contextText,
       };
       const imageInput = await resolveChatImageModelInput(
         typeof attachment.mediaAssetId === 'string'
@@ -82,11 +86,13 @@ async function appendAttachmentParts(
       );
       parts.push(...imageInput.parts);
     } catch (error) {
+      const failure = mediaImageFailure(error);
+      if (!failure) throw error;
       console.warn(
         '[buildChatUserMessageModelInput] Failed to read image attachment as base64, fallback to text prompt:',
         error
       );
-      parts.push({ type: 'text', text: buildImageFallbackPrompt(imageName, authorLabel) });
+      parts.push({ type: 'text', text: buildImageFallbackPrompt(contextText, failure.modelContent) });
     }
 
     if (messageText) {
@@ -188,8 +194,9 @@ export async function buildChatUserMessageModelInput(
   const attachments = getMessageAttachments(message);
   const text = String(message.text || '').trim();
 
-  if (message.replyToText) {
-    parts.push({ type: 'text', text: `[引用：${message.replyToText}]` });
+  const quoteText = buildReplyQuoteModelText(message);
+  if (quoteText) {
+    parts.push({ type: 'text', text: quoteText });
   }
 
   const voiceText = buildVoiceMessageModelText(message);

@@ -1,10 +1,11 @@
-/** 解析聊天文本附件并生成受长度限制的 AI 上下文与预览。 */
+/** 新上传文件必须完整读取；长度超限明确拒绝，预览摘要独立截短。 */
 import { persistentMediaStore } from '@platform/device';
+import { isChatTextDocumentFileName } from '../domain/ChatAttachment';
 
 const MAX_PARSED_TEXT_LENGTH = 6000;
 const MAX_PREVIEW_LENGTH = 240;
-const SUPPORTED_TEXT_FILE_EXTENSIONS = new Set(['txt', 'md', 'json', 'csv']);
-const SUPPORTED_TEXT_FILE_LABEL = 'TXT、MD、JSON 和 CSV';
+const PREVIEWABLE_TEXT_FILE_EXTENSIONS = new Set(['txt', 'md', 'json', 'csv']);
+const SUPPORTED_TEXT_FILE_LABEL = 'TXT 和 MD';
 
 export interface ParseAttachmentResult {
   parseStatus: 'success' | 'failed' | 'skipped';
@@ -25,7 +26,7 @@ export interface AttachmentParserService {
 export function isChatAttachmentFileSupported(input: {
   fileName: string;
 }): boolean {
-  return SUPPORTED_TEXT_FILE_EXTENSIONS.has(getExtension(input.fileName));
+  return isChatTextDocumentFileName(input.fileName);
 }
 
 export function assertChatAttachmentFileSupported(input: {
@@ -34,6 +35,11 @@ export function assertChatAttachmentFileSupported(input: {
   if (!isChatAttachmentFileSupported(input)) {
     throw new Error(`此文件无法解析，无法发送。当前支持 ${SUPPORTED_TEXT_FILE_LABEL} 文件`);
   }
+}
+
+/** 已发送文件仍可查看，不因新上传策略收紧而丢失历史预览能力。 */
+export function isChatAttachmentFilePreviewable(input: { fileName: string }): boolean {
+  return PREVIEWABLE_TEXT_FILE_EXTENSIONS.has(getExtension(input.fileName));
 }
 
 function truncateText(text: string, maxLength: number): string {
@@ -51,7 +57,6 @@ function getExtension(fileName: string): string {
 function normalizeTextContent(text: string): string {
   return String(text || '')
     .replace(/\r\n/g, '\n')
-    .replace(/\u0000/g, '')
     .trim();
 }
 
@@ -64,36 +69,14 @@ class AttachmentParser implements AttachmentParserService {
     const extension = getExtension(input.fileName);
     const parserName = extension || input.mimeType || 'unknown';
 
-    if (!isChatAttachmentFileSupported(input)) {
-      return {
-        parseStatus: 'skipped',
-        parsedText: null,
-        previewText: null,
-        parserName: null,
-        parseError: null,
-      };
-    }
-
+    // 选择边界已确认 TXT/MD；这里只负责读取文件字节与完整正文，不重复验证类型。
     try {
       const rawText = await persistentMediaStore.readAsText(input.localUri);
-      let normalized = normalizeTextContent(rawText);
-
-      if (extension === 'json') {
-        try {
-          normalized = JSON.stringify(JSON.parse(normalized), null, 2);
-        } catch {
-          // 保持原文本
-        }
+      if (rawText.includes('\u0000')) throw new Error('文件包含无法读取的内容，请使用 UTF-8 编码的 TXT/MD 文件');
+      const parsedText = normalizeTextContent(rawText);
+      if (Array.from(parsedText).length > MAX_PARSED_TEXT_LENGTH) {
+        throw new Error(`文件正文不能超过 ${MAX_PARSED_TEXT_LENGTH} 个字符，请拆分后发送`);
       }
-
-      if (extension === 'csv') {
-        normalized = normalized
-          .split('\n')
-          .slice(0, 12)
-          .join('\n');
-      }
-
-      const parsedText = truncateText(normalized, MAX_PARSED_TEXT_LENGTH);
       return {
         parseStatus: 'success',
         parsedText,

@@ -1,4 +1,6 @@
 /** 在宿主边界规范化设备通知目标，再交给内部路由处理。 */
+import type { Href, Router } from 'expo-router';
+
 export type ExternalNavigationTarget =
   | {
       type: 'ai-message' | 'ai-message-summary';
@@ -174,4 +176,12 @@ export function getMessageNavigationHref(
     ? `?sessionId=${encodeURIComponent(target.sessionId)}`
     : '';
   return `/chat/${encodeURIComponent(target.aiId)}${query}`;
+}
+
+/** 返回已有会话并关闭其上层页面；重排原生 Screen 会破坏 Android 的视图归属。 */
+export function openMessageConversation(
+  router: Pick<Router, 'dismissTo'>,
+  target: Extract<ExternalNavigationTarget, { type: 'ai-message' | 'ai-message-summary' | 'group-message' }>,
+): void {
+  router.dismissTo(getMessageNavigationHref(target) as Href);
 }

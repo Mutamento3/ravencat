@@ -2,7 +2,7 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import { getDeviceObserverConnectionState } from '@features/deviceControl';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import { ToggleField } from '@shared/ui';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import React, { useCallback, useEffect, useState } from 'react';
@@ -127,7 +127,7 @@ export default function FloatingInteractionScreen({
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh(true)} />}
       >
         <Text style={styles.sectionTitle}>悬浮显示</Text>
-        <View style={styles.card}>
+        <ThemedSurface variant="card" style={styles.card}>
           <View style={styles.cardContent}>
             <ToggleField
               label="开启悬浮交互"
@@ -137,7 +137,7 @@ export default function FloatingInteractionScreen({
               disabled={busy}
             />
           </View>
-        </View>
+        </ThemedSurface>
 
         {errorMessage ? (
           <View style={styles.errorCard}><Text style={styles.errorText}>{errorMessage}</Text></View>
@@ -146,12 +146,12 @@ export default function FloatingInteractionScreen({
         <BubbleSkinSettings />
 
         <Text style={styles.sectionTitle}>系统访问</Text>
-        <View style={styles.card}>
+        <ThemedSurface variant="card" style={styles.card}>
           <View style={styles.cardContent}>
             <AccessSummaryRow label="悬浮显示" granted={overlayGranted} styles={styles} />
             <AccessSummaryRow label="屏幕内容读取" granted={screenReadingAvailable} styles={styles} last />
           </View>
-        </View>
+        </ThemedSurface>
         <TouchableOpacity
           style={styles.entryCard}
           onPress={onOpenSystemAccess}

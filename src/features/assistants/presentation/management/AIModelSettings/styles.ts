@@ -100,32 +100,6 @@ export function createModelSettingsStyles(theme: PresentationTheme) {
       marginBottom: theme.spacing.md,
     },
 
-    contextLimitField: {
-      marginBottom: theme.spacing.md,
-    },
-    contextLimitRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: theme.spacing.md,
-    },
-    contextLimitLabel: {
-      flex: 1,
-      minWidth: 0,
-      fontSize: 15,
-      color: theme.colors.text.primary,
-    },
-    contextLimitInput: {
-      width: 80,
-      flexShrink: 0,
-      minHeight: 44,
-      textAlignVertical: 'center',
-    },
-    contextLimitError: {
-      color: theme.colors.feedback.error,
-      fontSize: 13,
-      marginTop: theme.spacing.xs,
-    },
-
     presetContainer: {
       flexDirection: 'row',
       gap: 10,

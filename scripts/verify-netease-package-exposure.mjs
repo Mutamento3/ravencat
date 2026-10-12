@@ -169,14 +169,29 @@ const placeholderTool = (name) => ({
 const featureProxy = new Proxy({}, {
   get: (_target, property) => placeholderTool(String(property)),
 });
+let defaultToolPermissions = {};
+let toolPermissionOverrides = [];
+const permissionWrites = [];
+const assistantToolPermissionRepository = {
+  list: async () => toolPermissionOverrides,
+  set: async (permission) => {
+    permissionWrites.push(permission);
+    toolPermissionOverrides = [...toolPermissionOverrides.filter(({ toolName }) => toolName !== permission.toolName), permission];
+  },
+};
+const aiAssistantRepository = { listSummaries: async () => [{ id: 'host-ai', name: '主理', isHostAI: true }, { id: 'ordinary-ai', name: '普通', isHostAI: false }] };
 const registration = loadTypeScriptModule(
   'src/host/composition/agent/createAgentToolRegistry.ts',
   {
-    '@features/prompting': { readPromptDefaults: async () => ({ toolPermissions: {} }) },
+    '@features/prompting': { readPromptDefaults: async () => ({ toolPermissions: defaultToolPermissions }) },
     '@features/webTools': featureProxy,
+    '@features/media': featureProxy,
+    './assertImageToolRunCurrent': {},
     '@shared/aiTools': {},
     '@features/assistants': new Proxy({
-      assistantToolPermissionRepository: { list: async () => [] },
+      assistantToolPermissionRepository,
+      aiAssistantRepository,
+      createChangeOwnAvatarTool: () => placeholderTool('change_own_avatar'),
     }, {
       get: (target, property) => target[property] ?? placeholderTool(String(property)),
     }),
@@ -250,6 +265,56 @@ assert.ok(
 );
 const resolvedHostNames = await registration.resolveAllowedToolNames('host-ai');
 assert.ok(expectedNames.every((name) => resolvedHostNames.includes(name)));
+
+// 手机工具共用持久权限；AI 覆盖优先于全局默认，身份与拆包不能复活关闭项。
+const phoneNames = registration.getToolPermissionDescriptors()
+  .filter((tool) => ['deviceControl', 'phoneTools', 'screenCapture'].includes(tool.owner)).map((tool) => tool.name);
+defaultToolPermissions = Object.fromEntries(phoneNames.map((name) => [name, false]));
+const disabledNames = await registration.resolveAllowedToolNames('host-ai');
+assert.ok(phoneNames.every((name) => !disabledNames.includes(name)), '全局关闭必须覆盖全部手机工具和网易云 child');
+toolPermissionOverrides = [{ toolName: 'netease_search_songs', enabled: true }];
+const overrideNames = await registration.resolveAllowedToolNames('host-ai');
+assert.ok(overrideNames.includes('netease_search_songs'));
+assert.ok(phoneNames.filter((name) => name !== 'netease_search_songs').every((name) => !overrideNames.includes(name)));
+defaultToolPermissions = {};
+toolPermissionOverrides = phoneNames.map((toolName) => ({ toolName, enabled: false }));
+const closedConfig = { ...hostConfig, allowedToolNames: await registration.resolveAllowedToolNames('host-ai') };
+assert.equal(registration.getRuntimeAllowedToolNamesForAI(closedConfig).some((name) => phoneNames.includes(name)), false);
+assert.equal(registration.getAuthorizedToolDefinitionsForAI(closedConfig).some(({ function: tool }) => phoneNames.includes(tool.name)), false);
+toolPermissionOverrides = [];
+
+// 真实 Host 装配和 Prompting 用例共用权限目录，页面写入必须被下一次授权冻结消费。
+let promptingDependencies;
+const { configurePromptingRuntime } = loadTypeScriptModule('src/host/composition/configurePromptingRuntime.ts', {
+  '@features/prompting/composition': {
+    configurePromptingRuntimeDependencies: (dependencies) => { promptingDependencies = dependencies; },
+    sqlitePromptingRepository: {},
+    sqlitePromptDefaultsRepository: { read: async () => ({ toolPermissions: defaultToolPermissions }) },
+  },
+  '@features/assistants': {
+    assistantToolPermissionRepository,
+    aiAssistantRepository,
+  },
+  '@features/mcpTools': {},
+  '@features/chat/composition': {},
+  '../prompt': { validateBuiltInPromptArchitecture: () => {} },
+  '../prompt/preview': {},
+  './agent': registration,
+});
+configurePromptingRuntime();
+const managementTools = await promptingDependencies.tools.list();
+assert.ok(phoneNames.every((name) => managementTools.some((tool) => tool.name === name)), '提示词中心不能过滤掉手机工具');
+const { getAssistantToolPermissions, setAssistantToolPermission } = loadTypeScriptModule('src/features/prompting/application/ManageAssistantPrompts.ts', {
+  './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => promptingDependencies },
+});
+await setAssistantToolPermission('host-ai', 'netease_search_songs', false);
+assert.equal((await getAssistantToolPermissions('host-ai')).find(({ name }) => name === 'netease_search_songs').enabled, false);
+assert.equal((await registration.resolveAllowedToolNames('host-ai')).includes('netease_search_songs'), false);
+await assert.rejects(() => setAssistantToolPermission('ordinary-ai', 'netease_search_songs', true), /只有主理 AI/);
+assert.equal(permissionWrites.length, 1, '非主理设置不能写入');
+await setAssistantToolPermission('host-ai', 'netease_search_songs', true);
+assert.equal((await registration.resolveAllowedToolNames('host-ai')).includes('netease_search_songs'), true);
+toolPermissionOverrides = [];
 
 const prompt = registration.buildToolsDescription(hostConfig);
 assert.match(prompt, /open_tool_package/u);

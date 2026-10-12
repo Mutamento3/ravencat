@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { FlatList, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '@shared/theme';
+import { ThemedSurface, useTheme } from '@shared/theme';
 import { EmptyState, ModalSheet, showAppDialog } from '@shared/ui';
 import {
   deleteStickerFromLibrary,
@@ -131,7 +131,7 @@ export default function StickerSystemLibraryScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ paddingHorizontal: theme.spacing.lg, paddingTop: theme.spacing.sm }}
           renderItem={({ item }) => (
-            <View style={[styles.card, { marginHorizontal: 0, marginBottom: theme.spacing.sm }]}>
+            <ThemedSurface variant="card" nativeGlass={false} style={[styles.card, { marginHorizontal: 0, marginBottom: theme.spacing.sm }]}>
               <View style={[styles.row, { borderBottomWidth: 0 }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle} numberOfLines={1}>
@@ -178,7 +178,7 @@ export default function StickerSystemLibraryScreen() {
                   </TouchableOpacity>
                 </View>
               </View>
-            </View>
+            </ThemedSurface>
           )}
         />
       )}

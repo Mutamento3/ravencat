@@ -2,7 +2,7 @@ import React, { useEffect, useSyncExternalStore } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Check, CircleAlert, Info, TriangleAlert } from 'lucide-react-native';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import {
   clearAppDialogs,
@@ -100,7 +100,7 @@ export default function AppDialogHost() {
         accessibilityLabel="关闭提示"
         onPress={close}
       />
-      <View style={styles.card} accessibilityViewIsModal>
+      <ThemedSurface variant="modal" backgroundColor={theme.colors.surface.raised} style={styles.card} accessibilityViewIsModal>
         <View style={styles.header}>
           <View style={styles.icon} accessible={false}>
             <Icon size={20} strokeWidth={1.75} color={accent} />
@@ -135,7 +135,7 @@ export default function AppDialogHost() {
             </Pressable>;
           })}
         </View>
-      </View>
+      </ThemedSurface>
     </View>
   </Modal>;
 }

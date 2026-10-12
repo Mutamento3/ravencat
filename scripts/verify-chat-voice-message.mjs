@@ -1452,17 +1452,38 @@ await scenario('markVoiceMessagePlayed 幂等：已写入后不再重复更新',
   );
 });
 
-await scenario('只有真正 started 后才写 playedAt：coordinator 在 play() 解析成功后调用', () => {
-  const source = read(
-    'src/features/chat/messages/application/VoiceMessagePlaybackCoordinator.ts',
-  );
-  const playIndex = source.indexOf('await localAudioPlaybackPort.play(');
-  const markIndex = source.indexOf('markVoiceMessagePlayed(messageId)');
-  assert.ok(playIndex >= 0, 'coordinator 必须调用 playback port');
-  assert.ok(
-    markIndex > playIndex,
-    'markVoiceMessagePlayed 必须发生在 playback port 成功之后',
-  );
+await scenario('只有原生播放器确认开始后才标记原消息已播放', async () => {
+  let started;
+  const pending = new Promise(resolve => { started = resolve; });
+  const marked = [];
+  const { voiceMessagePlaybackCoordinator: coordinator } = loadTypeScriptModule('src/features/chat/messages/application/VoiceMessagePlaybackCoordinator.ts', {
+    '@features/media': { resolveMediaAsset: async () => ({ localUri: 'file:///audio.wav' }) },
+    '@platform/device': { localAudioPlaybackPort: { play: () => pending } },
+    './MarkVoiceMessagePlayed': { markVoiceMessagePlayed: async id => { marked.push(id); } },
+  });
+  const playback = coordinator.toggle({ kind: 'message', id: 42, isIncoming: true }, 'audio', 1000);
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(marked, []);
+  started({ subscribe: () => () => {}, stop: async () => {} });
+  await playback;
+  assert.deepEqual(marked, [42]);
+  await coordinator.stop();
+});
+
+await scenario('引用语音使用独立播放身份，不改写原消息已播放状态', async () => {
+  const marked = [], played = [];
+  const { voiceMessagePlaybackCoordinator: coordinator, getVoicePlaybackKey } = loadTypeScriptModule('src/features/chat/messages/application/VoiceMessagePlaybackCoordinator.ts', {
+    '@features/media': { resolveMediaAsset: async id => { assert.equal(id, 'quoted-audio'); return { localUri: 'file:///quoted.wav' }; } },
+    '@platform/device': { localAudioPlaybackPort: { play: async uri => { played.push(uri); return { subscribe: () => () => {}, stop: async () => {} }; } } },
+    './MarkVoiceMessagePlayed': { markVoiceMessagePlayed: async id => { marked.push(id); } },
+  });
+  const target = { kind: 'quote', id: '42' };
+  assert.notEqual(getVoicePlaybackKey(target), getVoicePlaybackKey({ kind: 'message', id: 42, isIncoming: true }));
+  assert.notEqual(getVoicePlaybackKey(target), getVoicePlaybackKey({ kind: 'favorite', id: '42' }));
+  await coordinator.toggle(target, 'quoted-audio', 1000);
+  assert.deepEqual(played, ['file:///quoted.wav']);
+  assert.deepEqual(marked, []);
+  await coordinator.stop();
 });
 
 await scenario('MarkVoiceMessagePlayed SQL 幂等：只在 voice_played_at IS NULL 时更新', () => {
@@ -1473,17 +1494,20 @@ await scenario('MarkVoiceMessagePlayed SQL 幂等：只在 voice_played_at IS NU
   );
 });
 
-await scenario('播放解析失败（resolveMediaAsset / play 抛错）不得清除红点', () => {
-  const source = read(
-    'src/features/chat/messages/application/VoiceMessagePlaybackCoordinator.ts',
-  );
-  const tryIndex = source.indexOf('try {');
-  const catchIndex = source.indexOf('} catch (error)');
-  const markIndex = source.indexOf('markVoiceMessagePlayed(messageId)');
-  assert.ok(
-    markIndex > tryIndex && markIndex < catchIndex,
-    'markVoiceMessagePlayed 必须在 try 内、失败不会被误调用',
-  );
+await scenario('媒体解析或播放失败时保持原消息未播放状态', async () => {
+  for (const failResolve of [true, false]) {
+    const marked = [], states = [];
+    const { voiceMessagePlaybackCoordinator: coordinator } = loadTypeScriptModule('src/features/chat/messages/application/VoiceMessagePlaybackCoordinator.ts', {
+      '@features/media': { resolveMediaAsset: async () => { if (failResolve) throw new Error('媒体缺失'); return { localUri: 'file:///audio.wav' }; } },
+      '@platform/device': { localAudioPlaybackPort: { play: async () => { throw new Error('播放失败'); } } },
+      './MarkVoiceMessagePlayed': { markVoiceMessagePlayed: async id => { marked.push(id); } },
+    });
+    const unsubscribe = coordinator.subscribe(42, 1000, state => states.push(state));
+    await coordinator.toggle({ kind: 'message', id: 42, isIncoming: true }, 'audio', 1000);
+    assert.deepEqual(marked, []);
+    assert.equal(states.at(-1).state, 'error');
+    unsubscribe(); await coordinator.stop();
+  }
 });
 
 // ============================================================================
@@ -1833,7 +1857,7 @@ await scenario('send_voice_message 工具为 hidden presentation，且空文本�
   });
   assert.equal(SendVoiceMessageTool.presentation, 'hidden');
   for (const text of ['', ' \t\n ']) {
-    const result = await SendVoiceMessageTool.execute({ text }, {
+    const result = await SendVoiceMessageTool.execute({ text, on_success: 'finish' }, {
       task: { assistantId: 'assistant-1' },
       abortSignal: new AbortController().signal,
     });
@@ -1842,6 +1866,46 @@ await scenario('send_voice_message 工具为 hidden presentation，且空文本�
   }
   assert.equal(ttsCalls, 0, '空文本不得进行语音合成');
   assert.equal(mediaMock.__batches.length, 0, '空文本不得准备媒体资产');
+});
+
+await scenario('AI 语音成功转交 finish / continue 意图，合成失败不声明完成', async () => {
+  let failTTS = false;
+  const deletedAudio = [];
+  const mediaMock = createMediaMock();
+  const { createConfiguredVoiceMessageTool } = loadTypeScriptModule('src/features/chat/reply/agent/SendVoiceMessageTool.ts', {
+    '@features/media': mediaMock,
+    '@features/speech': {
+      resolveTextToSpeechModel: async () => null,
+      synthesizeTextToSpeech: async () => failTTS
+        ? { success: false, rawError: '未配置语音模型' }
+        : { success: true, audioUri: 'file://test-voice.wav', mimeType: 'audio/wav' },
+    },
+    '@platform/device': {
+      readLocalAudioMetadata: async () => ({ durationMs: 1200 }),
+      temporarySpeechAudioStore: { deleteIfExists: async (uri) => deletedAudio.push(uri) },
+    },
+    '@shared/runtime/abortSignal': loadTypeScriptModule('src/shared/runtime/abortSignal.ts'),
+  });
+  const tool = await createConfiguredVoiceMessageTool('assistant-1');
+  assert.ok(tool.definition.parameters.required.includes('on_success'), '动态语音 schema 也必须要求明确意图');
+  const context = {
+    toolCallId: 'voice-test', task: { assistantId: 'assistant-1' },
+    abortSignal: new AbortController().signal,
+  };
+  for (const on_success of ['finish', 'continue']) {
+    const result = await tool.execute({ text: '我陪着你', on_success }, context);
+    assert.equal(result.status, 'success');
+    assert.equal(result.metadata.completionIntent, on_success);
+    assert.equal(result.metadata.fulfillsUserVisibleOutput, true);
+    assert.equal(result.data.transcript, '我陪着你');
+    assert.equal(result.data.preparedMedia.state, 'open', '工具成功仍只准备媒体，不提前提交');
+  }
+  assert.equal(deletedAudio.length, 2, '两种成功意图都释放临时合成音频');
+  failTTS = true;
+  const failed = await tool.execute({ text: '我陪着你', on_success: 'finish' }, context);
+  assert.equal(failed.status, 'error');
+  assert.equal(failed.code, 'VOICE_TTS_NOT_CONFIGURED');
+  assert.equal(failed.metadata, undefined, '失败不携带成功完成意图');
 });
 
 // ============================================================================
@@ -1864,12 +1928,12 @@ await scenario('default theme：普通消息与语音消息都可以长按打开
   assert.equal(profile.enableVoiceMessageLongPressMenu, true, 'default 语音长按必须开启');
 });
 
-await scenario('Moon Kimi：普通文本仍保持 inline-actions profile，不被语音需求改坏', () => {
+await scenario('Moon Kimi：保留内联操作，同时普通消息可长按收藏', () => {
   const variants = loadThemeVariantsModule();
   const profile = variants.getChatInteractionProfile(THEME_MOON_KIMI);
   assert.equal(
-    profile.enableMessageLongPressMenu, false,
-    'Moon Kimi 的普通消息必须继续不使用通用长按菜单（保持 inline-actions 产品设计）',
+    profile.enableMessageLongPressMenu, true,
+    '收藏和消息管理在 Moon Kimi 下同样可达',
   );
   assert.equal(profile.messageActionSurface, 'inline-assistant-actions');
   assert.equal(profile.showAssistantInlineActions, true);
@@ -1882,13 +1946,6 @@ await scenario('Moon Kimi：语音消息有独立可达的 transcript action cap
     profile.enableVoiceMessageLongPressMenu, true,
     'Moon Kimi 下语音消息必须仍能长按展开 transcript，且不复用通用长按开关',
   );
-  // 两个 capability 必须彼此独立，才能避免“为了语音把普通消息长按一起打开”。
-  assert.notEqual(
-    profile.enableMessageLongPressMenu,
-    profile.enableVoiceMessageLongPressMenu,
-    '语音 capability 必须是更细粒度、独立于通用长按菜单的开关',
-  );
-
   const paperNote = variants.getChatInteractionProfile(THEME_PAPER_NOTE);
   assert.equal(paperNote.enableVoiceMessageLongPressMenu, true, 'paper-note 语音长按同样可达');
 });

@@ -8,6 +8,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import ChatHeader from '../messages/components/ChatHeader';
 import { useChatMessageSelection } from '../messages/components/useChatMessageSelection';
 import { useChatMessageShare } from '../messages/components/useChatMessageShare';
+import { useChatFavoriteAction } from '../messages/components/useChatFavoriteAction';
+import { getChatMessageActions } from '../../messages/domain/ChatMessageActions';
 import ChatShareSheet from '../messages/components/ChatShareSheet';
 import { ChatSelectionHeader, ChatSelectionFooter } from '../messages/components/ChatSelectionBars';
 import ChatMessageList from '../messages/components/ChatMessageList';
@@ -35,6 +37,7 @@ import type {
 } from '../../group/domain/GroupParticipantDirectory';
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import type { StickerMessageSnapshot } from '../../messages/domain/ChatSticker';
+import { createChatReplyTarget, type ChatReplyTarget } from '../../messages/domain/chatMessageMetadata';
 import type { ChatDetailAIAssistantLike } from '../messages/components/chatTypes';
 import type { UserProfile } from '@features/profile';
 import ChatMessageActionMenu from '../messages/components/ChatMessageActionMenu';
@@ -219,7 +222,7 @@ export default function GroupChatDetail({
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [isTranslatingMessage, setIsTranslatingMessage] = useState(false);
   const [messageTranslations, setMessageTranslations] = useState<Record<number, MessageTranslationBlock>>({});
-  const [replyTo, setReplyTo] = useState<{ id: number; text: string } | null>(null);
+  const [replyTo, setReplyTo] = useState<ChatReplyTarget | null>(null);
   const {
     draftAttachment,
     readyAttachments,
@@ -260,6 +263,8 @@ export default function GroupChatDetail({
     onDeleted: handleSelectionDeleted,
   });
   const share = useChatMessageShare({ sessionId, sourceName: group.name, isActive, onShared: selection.exit });
+  const favoriteMessage = useChatFavoriteAction(selectedMessage, group.name);
+  const messageActions = selectedMessage ? getChatMessageActions(selectedMessage) : null;
   const handleShareMessage = useCallback(() => {
     dismissInputSurface();
     void voiceMessagePlaybackCoordinator.stop();
@@ -448,6 +453,7 @@ export default function GroupChatDetail({
         })),
         replyToId: currentReplyTo?.id || null,
         replyToText: currentReplyTo?.text || null,
+        replyQuote: currentReplyTo?.quote,
       }), () => true);
       setSelectedMentions([]);
     } catch (error) {
@@ -553,7 +559,7 @@ export default function GroupChatDetail({
       delete next[edited.id];
       return next;
     });
-    setReplyTo((previous) => previous?.id === edited.id ? { id: edited.id, text: edited.text } : previous);
+    setReplyTo((previous) => previous?.id === edited.id ? createChatReplyTarget(edited) : previous);
   }, [setMessages]);
 
   const handleDeleteMessage = useCallback(() => {
@@ -582,10 +588,7 @@ export default function GroupChatDetail({
 
   const handleQuoteMessage = useCallback(() => {
     if (!selectedMessage) return;
-    setReplyTo({
-      id: selectedMessage.id,
-      text: selectedMessage.text,
-    });
+    setReplyTo(createChatReplyTarget(selectedMessage));
   }, [selectedMessage]);
 
   const handleTranslateMessage = useCallback(async () => {
@@ -819,8 +822,9 @@ export default function GroupChatDetail({
         onDelete={handleDeleteMessage}
         onMultiSelect={selectedMessage && selection.availableKeys.has(getChatSelectionKey(selectedMessage)) ? handleEnterSelection : undefined}
         onForward={selectedMessage && selection.availableKeys.has(getChatSelectionKey(selectedMessage)) ? handleShareMessage : undefined}
-        onQuote={handleQuoteMessage}
-        onTranslate={handleTranslateMessage}
+        onQuote={messageActions?.quote ? handleQuoteMessage : undefined}
+        onTranslate={messageActions?.translate ? handleTranslateMessage : undefined}
+        onFavorite={messageActions?.favorite ? favoriteMessage : undefined}
       />
       <ChatShareSheet share={share} onPreviewFile={(params) => { share.close(); onOpenFilePreview(params); }} />
 

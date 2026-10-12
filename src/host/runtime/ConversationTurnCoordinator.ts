@@ -128,6 +128,8 @@ export interface ConversationTurnCoordinator {
   recoverConversationTurns(): Promise<void>;
   /** 当前进程内存注册表中是否存在该会话的活动 run 句柄（诊断/测试）。 */
   hasActiveHandle(sessionId: string): boolean;
+  cancelActiveTurnsForReset(): Promise<void>;
+  resumeTurnsAfterReset(): void;
   requestRegenerationFromHost(sessionId: string): Promise<boolean>;
   abortRegeneration(sessionId: string): Promise<void>;
 }
@@ -136,6 +138,7 @@ interface ActiveHandle {
   kind: ConversationTurnRun['kind'];
   runId: string;
   abort: AbortController;
+  completion: Promise<void>;
 }
 
 function defaultYieldControl(): Promise<void> {
@@ -152,6 +155,7 @@ export function createConversationTurnCoordinator(
   deps: ConversationTurnCoordinatorDeps,
 ): ConversationTurnCoordinator {
   const activeHandles = new Map<string, ActiveHandle>();
+  let acceptingTurns = true;
   const sessionFlights = new Map<string, Promise<unknown>>();
   const yieldControl = deps.yieldControl ?? defaultYieldControl;
   const recoveryBatchSize = deps.recoveryBatchSize ?? 50;
@@ -164,7 +168,15 @@ export function createConversationTurnCoordinator(
   ): Promise<void> {
     let regenerationError: string | undefined;
     try {
+      if (abort.signal.aborted) {
+        await deps.turns.revoke(run, 'cancelled', 'cancelled_before_execution');
+        return;
+      }
       const aiConfig = context.aiConfig ?? await deps.resolveAIConfig(sessionId);
+      if (abort.signal.aborted) {
+        await deps.turns.revoke(run, 'cancelled', 'cancelled_during_preparation');
+        return;
+      }
       if (!aiConfig) {
         if (!abort.signal.aborted) regenerationError = '当前 AI 无法回复';
         await deps.turns.revoke(run, 'failed', 'assistant_unavailable');
@@ -188,7 +200,7 @@ export function createConversationTurnCoordinator(
       // run 仍 active 但无任何提交：revoke 收尾，不得留 active 悬挂。
       if (outcome === 'empty_reply') {
         if (!abort.signal.aborted) regenerationError = '未生成新回复，已恢复原消息';
-        await deps.turns.revoke(run, 'failed', 'empty_reply');
+        await deps.turns.revoke(run, abort.signal.aborted ? 'cancelled' : 'failed', 'empty_reply');
       }
       // fence_failed：本 run 已失去所有权，安静结束（用户消息事务已触发新一轮 claim）。
     } catch (error) {
@@ -214,14 +226,17 @@ export function createConversationTurnCoordinator(
     }
   }
 
-  function registerClaimedRun(
+  function executeClaimedRun(
     sessionId: string,
     run: ConversationTurnRun,
-  ): AbortController {
+    context: ConversationTurnRunContext,
+  ): Promise<void> {
     const abort = new AbortController();
-    activeHandles.set(sessionId, { runId: run.runId, kind: run.kind, abort });
+    if (!acceptingTurns) abort.abort('CANCELLED_BY_USER');
+    const completion = Promise.resolve().then(() => executeRun(sessionId, run, abort, context));
+    activeHandles.set(sessionId, { runId: run.runId, kind: run.kind, abort, completion });
     logTurnTimeline('turn_claimed', { sessionId, runId: run.runId });
-    return abort;
+    return completion;
   }
 
   async function tryLaunch(
@@ -229,7 +244,7 @@ export function createConversationTurnCoordinator(
     mode: ConversationTurnClaimMode,
     context: ConversationTurnRunContext,
   ): Promise<boolean> {
-    if (activeHandles.has(sessionId)) {
+    if (!acceptingTurns || activeHandles.has(sessionId)) {
       return false;
     }
     const run = mode === 'claimIfIdle'
@@ -238,9 +253,8 @@ export function createConversationTurnCoordinator(
     if (!run) {
       return false;
     }
-    const abort = registerClaimedRun(sessionId, run);
     // 启动与完成分离：此处不 await，执行由 finally 自清。
-    void executeRun(sessionId, run, abort, context);
+    void executeClaimedRun(sessionId, run, context);
     return true;
   }
 
@@ -253,6 +267,7 @@ export function createConversationTurnCoordinator(
     sessionId: string,
     context: ConversationTurnRunContext,
   ): Promise<ConversationTurnHostExecutionResult> {
+    if (!acceptingTurns) return 'skipped';
     if (activeHandles.has(sessionId)) {
       return 'already_active';
     }
@@ -271,9 +286,8 @@ export function createConversationTurnCoordinator(
         return 'skipped';
       }
     }
-    const abort = registerClaimedRun(sessionId, run);
     // execution host 必须活到 run terminal：此处等待执行完整结束。
-    await executeRun(sessionId, run, abort, context);
+    await executeClaimedRun(sessionId, run, context);
     return 'executed';
   }
 
@@ -301,6 +315,7 @@ export function createConversationTurnCoordinator(
     },
 
     async onCanonicalUserMessageCommitted(payload) {
+      if (!acceptingTurns) return;
       const { sessionId, supersededRunId } = payload;
       if (supersededRunId) {
         const handle = activeHandles.get(sessionId);
@@ -356,6 +371,7 @@ export function createConversationTurnCoordinator(
     },
 
     async recoverConversationTurns() {
+      if (!acceptingTurns) return;
       // 页面 runtime 只负责发现待恢复会话；claim/执行全部委派 execution host，
       // 多个会话在 Headless 任务内串行完成（模型请求并发有界为 1）。
       if (!deps.executionHost) {
@@ -399,6 +415,7 @@ export function createConversationTurnCoordinator(
     },
 
     async requestRegenerationFromHost(sessionId) {
+      if (!acceptingTurns) return false;
       if (!deps.executionHost) throw new Error('聊天执行宿主尚未装配');
       return deps.executionHost.start([sessionId], {});
     },
@@ -416,6 +433,20 @@ export function createConversationTurnCoordinator(
 
     hasActiveHandle(sessionId) {
       return activeHandles.has(sessionId);
+    },
+
+    async cancelActiveTurnsForReset() {
+      acceptingTurns = false;
+      const handles = [...activeHandles.values()];
+      for (const handle of handles) handle.abort.abort('CANCELLED_BY_USER');
+      // claim 中的 flight 也要排空：它返回后登记的句柄会立即取消，不进入模型准备。
+      const results = await Promise.allSettled([...sessionFlights.values(), ...handles.map((handle) => handle.completion)]);
+      const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+      if (errors.length > 0) throw new AggregateError(errors, '恢复出厂回合关闭失败');
+    },
+
+    resumeTurnsAfterReset() {
+      acceptingTurns = true;
     },
   };
 }

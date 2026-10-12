@@ -43,7 +43,7 @@ export async function execute(args: Args, context: ToolContext): Promise<ToolExe
     throwIfAbortSignalAborted(context.abortSignal);
     if (snapshot.status === 'permission_not_granted') return {
       success: false,
-      error: 'usage_access_not_granted: 请用户在手机工具的“读取应用使用时长”或“权限与后台运行”的“使用情况访问”中打开系统设置并授权。',
+      error: 'usage_access_not_granted: 请用户在“权限与后台运行”的“使用情况访问”中打开系统设置并授权。',
     };
     if (snapshot.status === 'device_locked') return {
       success: false, error: 'device_locked: 系统用户尚未解锁，当前无法读取应用使用统计。',

@@ -7,6 +7,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import ChatHeader from '../components/ChatHeader';
 import { useChatMessageSelection } from '../components/useChatMessageSelection';
 import { useChatMessageShare } from '../components/useChatMessageShare';
+import { useChatFavoriteAction } from '../components/useChatFavoriteAction';
+import { getChatMessageActions } from '../../../messages/domain/ChatMessageActions';
 import ChatShareSheet from '../components/ChatShareSheet';
 import { ChatSelectionHeader, ChatSelectionFooter } from '../components/ChatSelectionBars';
 import ChatMessageList from '../components/ChatMessageList';
@@ -25,8 +27,9 @@ import { deleteChatMessage } from '../../../messages/application/DeleteChatMessa
 import { isAgentTransientTimelineMessage } from '../../../messages/application/AgentTransientTimeline';
 import { voiceMessagePlaybackCoordinator } from '../../../messages/application/VoiceMessagePlaybackCoordinator';
 import {
-  buildSessionPreviewTextFromMessage,
   getMessageVoice,
+  createChatReplyTarget,
+  type ChatReplyTarget,
 } from '../../../messages/domain/chatMessageMetadata';
 import type { ChatMessage } from '../../../messages/domain/ChatMessage';
 import type { StickerMessageSnapshot } from '../../../messages/domain/ChatSticker';
@@ -39,6 +42,11 @@ import type { UserProfile } from '@features/profile';
 import { createChatDetailStyles } from '../components/chatStyles';
 import { useTheme } from '@shared/theme';
 import { useChatComposerSurface } from '../components/useChatComposerSurface';
+import { getChatSummarySettings, setFixedChatContextStart } from '../../../summary/application/ChatSummary';
+import { subscribeChatSummaryChanged } from '../../../summary/application/ChatSummaryRuntime';
+import { setChatEventBus } from '../../../messages/events/ChatEvents';
+import { projectChatContextMessage } from '../../../summary/domain/ChatContext';
+import type { ChatSummarySettings } from '../../../summary/domain/ChatSummaryRepository';
 
 type ChatDetailCurrentUser = Pick<UserProfile, 'name' | 'avatar'>;
 
@@ -98,9 +106,29 @@ export default function ChatDetailModule({
   const headerPaddingTop = Math.max(insets.top, 8);
   const headerTitle = aiAssistant?.name || 'AI助手';
   const [inputText, setInputText] = useState('');
-  const [replyTo, setReplyTo] = useState<{ id: number; text: string } | null>(null);
+  const [replyTo, setReplyTo] = useState<ChatReplyTarget | null>(null);
   const [actionMenuVisible, setActionMenuVisible] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
+  const [summarySettings, setSummarySettings] = useState<ChatSummarySettings | null>(null);
+  useEffect(() => {
+    setSummarySettings(null);
+    if (!sessionId || !isActive) return;
+    let active = true;
+    let revision = 0;
+    const load = async () => {
+      const current = ++revision;
+      try {
+        const settings = await getChatSummarySettings(sessionId);
+        if (active && current === revision) setSummarySettings(settings);
+      } catch (error) { console.error('[ChatDetail] 读取固定起点失败', error); }
+    };
+    void load();
+    const unsubscribe = subscribeChatSummaryChanged((id) => { if (id === sessionId) void load(); });
+    const unsubscribeMessages = setChatEventBus({ emit(name, payload) {
+      if (payload.sessionId === sessionId && ['messagesReloadRequested', 'messagesPatched', 'regenerationChanged'].includes(name)) void load();
+    } });
+    return () => { active = false; unsubscribe(); unsubscribeMessages(); };
+  }, [sessionId, isActive]);
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [isTranslatingMessage, setIsTranslatingMessage] = useState(false);
@@ -211,6 +239,8 @@ export default function ChatDetailModule({
     onDeleted: handleSelectionDeleted,
   });
   const share = useChatMessageShare({ sessionId, sourceName: headerTitle, assistantId: aiAssistant?.id, isActive, onShared: selection.exit });
+  const favoriteMessage = useChatFavoriteAction(selectedMessage, headerTitle, aiAssistant?.id);
+  const messageActions = selectedMessage ? getChatMessageActions(selectedMessage) : null;
   const handleShareMessage = useCallback(() => {
     dismissInputSurface();
     void voiceMessagePlaybackCoordinator.stop();
@@ -286,6 +316,15 @@ export default function ChatDetailModule({
       showAppDialog({ title: '复制失败', message: error instanceof Error ? error.message : '无法写入剪贴板', tone: 'error' });
     }
   }, [selectedMessage]);
+  const handleFixedStart = useCallback(() => {
+    if (!selectedMessage || !sessionId || !summarySettings) return;
+    const cancelling = summarySettings.fixedMessageId === selectedMessage.id;
+    void setFixedChatContextStart(sessionId, cancelling ? null : selectedMessage.id).then(() => {
+      ToastAndroid.show(cancelling ? '已取消固定，自动生成摘要仍保持关闭' : '已固定上下文起点，自动生成摘要已暂停', ToastAndroid.LONG);
+    }).catch((error: unknown) => {
+      showAppDialog({ title: '设置固定起点失败', message: error instanceof Error ? error.message : '请稍后再试', tone: 'error' });
+    });
+  }, [selectedMessage, sessionId, summarySettings]);
 
   const handleRewriteMessage = useCallback(() => {
     dismissInputSurface();
@@ -299,7 +338,7 @@ export default function ChatDetailModule({
       delete next[edited.id];
       return next;
     });
-    setReplyTo((previous) => previous?.id === edited.id ? { id: edited.id, text: edited.text } : previous);
+    setReplyTo((previous) => previous?.id === edited.id ? createChatReplyTarget(edited) : previous);
   }, [setMessages]);
 
   const handleDeleteMessage = useCallback(() => {
@@ -328,12 +367,7 @@ export default function ChatDetailModule({
 
   const handleQuoteMessage = useCallback(() => {
     if (!selectedMessage) return;
-    setReplyTo({
-      id: selectedMessage.id,
-      text: getMessageVoice(selectedMessage)
-        ? '[语音消息]'
-        : buildSessionPreviewTextFromMessage(selectedMessage),
-    });
+    setReplyTo(createChatReplyTarget(selectedMessage));
   }, [selectedMessage]);
 
   const handleToggleVoiceTranscript = useCallback(() => {
@@ -546,10 +580,14 @@ export default function ChatDetailModule({
           && selectedMessage.turnRunId === regeneration.eligibleRunId
           && !isTyping && !isChatSendBlockedByActiveCall ? handleRegenerateMessage : undefined}
         onDelete={handleDeleteMessage}
+        onFixedStart={summarySettings && selectedMessage && projectChatContextMessage(selectedMessage,
+          [selectedMessage.createdAt, selectedMessage.id, 0, selectedMessage.id])?.kind === 'dialogue' ? handleFixedStart : undefined}
+        isFixedStart={selectedMessage?.id === summarySettings?.fixedMessageId}
         onMultiSelect={selectedMessage && selection.availableKeys.has(getChatSelectionKey(selectedMessage)) && voiceRecordingState === 'idle' ? handleEnterSelection : undefined}
         onForward={selectedMessage && selection.availableKeys.has(getChatSelectionKey(selectedMessage)) && voiceRecordingState === 'idle' ? handleShareMessage : undefined}
-        onQuote={handleQuoteMessage}
-        onTranslate={handleTranslateMessage}
+        onQuote={messageActions?.quote ? handleQuoteMessage : undefined}
+        onTranslate={messageActions?.translate ? handleTranslateMessage : undefined}
+        onFavorite={messageActions?.favorite ? favoriteMessage : undefined}
         onToggleVoiceTranscript={getMessageVoice(selectedMessage)
           ? handleToggleVoiceTranscript
           : undefined}

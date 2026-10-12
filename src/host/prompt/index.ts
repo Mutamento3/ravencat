@@ -3,6 +3,7 @@ export {
   assembleResolvedChatPromptPack,
   assembleResolvedLedgerPromptPack,
   assembleResolvedStandalonePromptPack,
+  assembleResolvedSummaryPromptPack,
 } from './ResolvedPromptPackAssembler';
 export { PromptCatalog, promptCatalog } from './catalog';
 export {

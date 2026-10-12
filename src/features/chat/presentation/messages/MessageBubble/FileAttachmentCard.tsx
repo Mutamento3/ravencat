@@ -18,6 +18,7 @@ import type { PresentationTheme } from '@shared/theme';
 interface FileAttachmentCardProps {
   attachment: ChatAttachment;
   isMe: boolean;
+  onLongPress?: (position: { x: number; y: number }) => void;
   onPreview: (params: { fileUri: string; fileName: string; mimeType?: string | null }) => void;
 }
 
@@ -25,6 +26,7 @@ export default function FileAttachmentCard({
   attachment,
   isMe,
   onPreview,
+  onLongPress,
 }: FileAttachmentCardProps) {
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -77,7 +79,8 @@ export default function FileAttachmentCard({
         !canOpen ? styles.cardUnavailable : null,
       ]}
       onPress={handlePress}
-      disabled={!canOpen}
+      onLongPress={onLongPress ? event => onLongPress({ x: event.nativeEvent.pageX, y: event.nativeEvent.pageY }) : undefined}
+      disabled={!canOpen && !onLongPress}
     >
       <View style={[styles.iconWrap, isMe ? styles.iconWrapMe : null]}>
         <Ionicons

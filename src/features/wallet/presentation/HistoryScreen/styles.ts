@@ -19,8 +19,10 @@ const createStyles = (theme: PresentationTheme) =>
     // ViewSwitcher 样式
     switcherContainer: {
       flexDirection: 'row',
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: 12,
+      marginHorizontal: theme.spacing.lg,
+      marginVertical: 12,
+      padding: 6,
+      borderRadius: theme.radius.lg,
       gap: 8,
     },
     switcherButton: {
@@ -40,7 +42,7 @@ const createStyles = (theme: PresentationTheme) =>
       fontWeight: '500',
     },
     switcherTextActive: {
-      color: theme.colors.background.screen,
+      color: theme.colors.text.inverse,
     },
     // CardList 样式
     listContainer: {
@@ -50,10 +52,11 @@ const createStyles = (theme: PresentationTheme) =>
     // 卡片通用样式
     card: {
       backgroundColor: theme.colors.surface.default,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border.default,
       borderRadius: theme.radius.lg,
       padding: theme.spacing.lg,
       marginBottom: 10,
-      ...theme.shadow.sm,
     },
     cardHeader: {
       flexDirection: 'row',

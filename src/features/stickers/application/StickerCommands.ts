@@ -124,6 +124,7 @@ export async function importSticker(input: ImportStickerInput): Promise<ImportSt
 
       const now = runtime.now();
       const sticker: Sticker = {
+        ownerAssistantId: null,
         id: runtime.generateId(),
         mediaAssetId: asset.id,
         groupId,

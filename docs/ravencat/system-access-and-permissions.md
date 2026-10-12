@@ -16,7 +16,9 @@
 | 使用情况访问 | `platform/device` 的 Usage Access 查询/设置 | AppOps 对应状态；未授权不关闭无需它的电量读取或独立前台窗口观察 |
 | 电池优化 | Floating Layer 的电池优化状态/设置/申请 | 后台可靠性条件，不保证免于强制停止或厂商清理 |
 | 全屏来电 | Calls 诊断/设置 | Android 14+ 单独读取和设置；Android 13 无此单独授权 |
-| 来电通知 | Calls channel 诊断/设置 | 与普通消息通知分开，保留 importance、锁屏可见性和上次发布诊断 |
+| 来电通知 | Calls channel 状态/设置 | 与普通消息通知分开，页面保留授权入口，不展示来电诊断区 |
+| 定位权限 | `platform/device` 的定位状态/申请与应用设置 | 明确显示未授权、大致位置或精确位置；仅用户点击时申请使用期间权限 |
+| 系统定位 | `platform/device` 的系统定位状态/设置 | 独立于应用授权的系统总开关，不代表本应用已获得位置 |
 | 厂商后台弹出、锁屏显示 | 当前应用系统设置 | 由用户人工确认，不能可靠检测，不能因 Settings 打开成功说已授权 |
 
 当前页面没有 Camera、Microphone 或自动启动的通用 capability 列表。相机和麦克风仍由录音、通话等真实业务入口按需请求，不在首次进入页面时批量索取。
@@ -32,6 +34,8 @@
 ## 3. 原生与导航所有权
 
 Device Observer 拥有 Accessibility 状态与设置能力，Floating Layer 提供 Overlay 和电池访问，Calls 提供来电系统访问，platform 提供 Usage Access 等 Android 底座。统一页面复用已有事实源，不在一个巨大 permissions module 重做它们。
+
+定位状态与单次采样由 Device Observer 原生模块的独立 `DeviceLocationQuery` 提供，不依赖无障碍连接。`platform/device` 持有用户触发的定位权限申请入口；Phone Tools 持有主理 AI 工具授权与输出。权限页面只读取状态，不采样位置，也不在进入页面时弹授权。
 
 具体页面地址与路由栈操作属于 App/Host。Feature 表达导航意图，页面的返回使用注入回调。当前没有自动聚焦 `focus=capability`、高亮、`returnIntent` 或权限补全后自动返回原 Feature 的通用协议，不把这些旧提议写成已实现行为。
 

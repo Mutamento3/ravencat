@@ -46,6 +46,8 @@ export interface PromptBindingRepository {
 export interface AssistantPromptConfigurationRepository {
   listDirectToolNames(assistantId: string): Promise<string[]>;
   setDirectToolExposure(assistantId: string, toolName: string, exposed: boolean): Promise<void>;
+  /** 原子替换指定 AI 在工具范围内的星标，范围之外的偏好保持不变。 */
+  applyDirectToolSnapshot(assistantIds: readonly string[], toolNames: readonly string[], exposedToolNames: readonly string[]): Promise<void>;
   getAssistantSettings(assistantId: string): Promise<AssistantPromptSettings | null>;
   saveAssistantLanguageMode(assistantId: string, languageMode: PromptLanguageMode): Promise<AssistantPromptSettings>;
   listDefinitionStates(assistantId: string): Promise<AssistantPromptDefinitionState[]>;

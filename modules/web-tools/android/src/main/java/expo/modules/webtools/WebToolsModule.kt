@@ -50,6 +50,14 @@ class WebToolsModule : Module() {
         }
       }
     }
+    AsyncFunction("downloadImage") { id: String, url: String, fileName: String? ->
+      perform(id) { request ->
+        val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+        client.get(url, request, download = true) { response ->
+          WebPrivateImageStore(context.cacheDir).save(response, fileName, request)
+        }
+      }
+    }
     OnDestroy {
       requests.values.forEach(WebRequest::cancel)
       requests.clear()

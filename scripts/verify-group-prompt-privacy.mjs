@@ -92,6 +92,7 @@ const { PromptHistoryBuilder } = loadTypeScriptModule(
     '@features/chat': {
       getMessageSharedRecord: chatMetadata.getMessageSharedRecord,
       buildChatSystemEventModelText: chatMetadata.buildChatSystemEventModelText,
+      buildReplyQuoteModelText: chatMetadata.buildReplyQuoteModelText,
       buildChatUserMessageModelInput: async (message) => {
         const attachment = JSON.parse(message.metadataJson || '{}').attachments?.[0];
         if (attachment?.type === 'image') {

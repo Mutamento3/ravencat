@@ -144,3 +144,4 @@ export type {
   StickerModelSelectionStatus,
 } from './domain/StickerSystemConfig';
 export { StickerSystemScreen } from './presentation/stickerSystem';
+export { AddOwnStickerTool, MaintainOwnStickerTool } from './aiTools/AIStickerLibraryTools';

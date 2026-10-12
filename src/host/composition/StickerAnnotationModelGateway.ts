@@ -1,10 +1,9 @@
 /** Host 对全局表情包识别模型与 MediaAsset resolver 的唯一装配。 */
 
-import * as FileSystem from 'expo-file-system/legacy';
 import { resolveMediaAsset } from '@features/media';
 import { resolveStickerRecognitionModel } from '@features/stickers';
 import type { Sticker, StickerAnnotationMetadata } from '@features/stickers';
-import { persistentMediaStore } from '@platform/device';
+import { prepareVisionImage, readLocalImageAsBase64 } from '@platform/device';
 import { createAIClient } from '@platform/ai';
 
 export type StickerAnnotationExecutor = (
@@ -12,10 +11,11 @@ export type StickerAnnotationExecutor = (
   signal: AbortSignal,
 ) => Promise<StickerAnnotationMetadata>;
 
-interface PreparedModelImage {
-  uri: string;
-  mimeType: string;
-  temporaryUri: string | null;
+/** AI 工具与前台队列共用同一识别模型和结构化结果契约。 */
+export async function recognizeSticker(sticker: Sticker, signal: AbortSignal): Promise<StickerAnnotationMetadata> {
+  const execute = await createStickerAnnotationExecutor();
+  if (!execute) throw new Error('表情包识别模型未配置或不可用，请先修正表情系统的模型选择');
+  return execute(sticker, signal);
 }
 
 function requireBoundedText(
@@ -69,21 +69,6 @@ function parseAnnotationResult(text: string): StickerAnnotationMetadata {
   };
 }
 
-async function prepareModelImage(
-  uri: string,
-  mimeType: string,
-): Promise<PreparedModelImage> {
-  if (mimeType.trim().toLowerCase() !== 'image/webp') {
-    return { uri, mimeType, temporaryUri: null };
-  }
-
-  // 多模态 Provider 对 WebP 的支持不一致；动画已在导入边界排除，此处只把静态帧转成 PNG。
-  const { ImageManipulator, SaveFormat } = await import('expo-image-manipulator');
-  const image = await ImageManipulator.manipulate(uri).renderAsync();
-  const png = await image.saveAsync({ format: SaveFormat.PNG });
-  return { uri: png.uri, mimeType: 'image/png', temporaryUri: png.uri };
-}
-
 /**
  * 没有有效的 Sticker 业务级识别模型配置时返回 null，调用方因此不会领取
  * pending 任务。模型配置在每个任务前重新解析，删除或切换模型不会污染下一次领取。
@@ -115,9 +100,9 @@ export async function createStickerAnnotationExecutor(): Promise<StickerAnnotati
     }
 
     const media = await resolveMediaAsset(sticker.mediaAssetId);
-    const prepared = await prepareModelImage(media.localUri, sticker.mimeType);
+    const prepared = await prepareVisionImage(media.localUri, sticker.mimeType);
     try {
-      const base64 = await persistentMediaStore.readAsBase64(prepared.uri);
+      const base64 = await readLocalImageAsBase64(prepared.uri);
       const response = await client.chat([
         {
           role: 'user',
@@ -144,11 +129,7 @@ export async function createStickerAnnotationExecutor(): Promise<StickerAnnotati
       }
       return parseAnnotationResult(response.text);
     } finally {
-      if (prepared.temporaryUri) {
-        await FileSystem.deleteAsync(prepared.temporaryUri, { idempotent: true }).catch((error) => {
-          console.warn('[Sticker] 静态 WebP 标注临时文件清理失败：', error);
-        });
-      }
+      prepared.dispose();
     }
   };
 }

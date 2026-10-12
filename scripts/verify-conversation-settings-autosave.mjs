@@ -1,4 +1,4 @@
-/** 对话设置真实交互：名称与人设自动保存、头像独立提交、错误草稿和离开拦截。 */
+/** 对话设置真实交互：字段自动保存、头像独立提交、错误草稿和离开拦截。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +9,7 @@ import ts from 'typescript';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function load(file, dependencies = {}) {
   const compiled = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React },
   }).outputText;
   const module = { exports: {} };
   new Function('require', 'module', 'exports', compiled)((name) => {
@@ -19,6 +19,9 @@ function load(file, dependencies = {}) {
   return module.exports;
 }
 const { AutoSaveDraftEditor } = load('src/shared/ui/AutoSaveDraftEditor.ts');
+const chatSettingsDraft = load('src/features/chat/presentation/conversation/chatSettingsDraft.ts', {
+  '@shared/ui/draftValidation': load('src/shared/ui/draftValidation.ts'),
+});
 const tick = async () => { for (let count = 0; count < 30; count++) await Promise.resolve(); };
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 
@@ -41,7 +44,9 @@ function screen() {
     'react-native': { Dimensions: { get: () => ({ width: 360, height: 800, scale: 3 }) } },
     'expo-image-picker': imagePicker,
   });
-  const persisted = { id: 'ai', name: '旧名称', systemPrompt: '原始人设', avatar: 'old.jpg', avatarMediaAssetId: 'old-asset', model: 'chat', updatedAt: 'old' };
+  const persisted = { id: 'ai', name: '旧名称', systemPrompt: '原始人设', avatar: 'old.jpg', avatarMediaAssetId: 'old-asset', model: 'chat', updatedAt: 'old',
+    privateContextPrimaryLimit: 30, privateContextSecondaryLimit: 10, groupContextPrimaryLimit: 40, groupContextSecondaryLimit: 5,
+    allowMultipleBubbles: true, showTokenUsage: true };
   let uri = persisted.avatar; let draft = null; let committedUri = uri;
   const react = {
     useState(initial) {
@@ -65,6 +70,8 @@ function screen() {
   };
   const { default: renderHook } = load('src/features/chat/presentation/conversation/useChatSettings.ts', {
     react,
+    './chatSettingsDraft': chatSettingsDraft,
+    '@shared/ui': { showAppDialog: ({ title, buttons }) => alerts.push({ title, buttons }) },
     'react-native': { Alert: { alert: (title, _message, buttons) => alerts.push({ title, buttons }) } },
     'expo-image-picker': imagePicker,
     '@features/calls': {
@@ -106,7 +113,10 @@ function screen() {
         else editor.rebase(options.initial);
         return { ...editor.getSnapshot(), change: editor.change, flush: editor.flush, restore: editor.restore };
       },
-      useAutoSaveNavigation: (flush, back, blocked) => ({ back: async () => { if (await flush()) back(); else blocked(); } }),
+      useAutoSaveNavigation: (flush, back, blocked) => {
+        const leave = async (action) => { if (await flush()) action(); else blocked(); };
+        return {leave,back:()=>leave(back)};
+      },
     },
   });
   const render = () => {
@@ -129,6 +139,102 @@ function screen() {
 
 mock.timers.enable({ apis: ['setTimeout'] });
 try {
+  const context = screen();
+  assert.deepEqual(context.render().contextLimits, { privatePrimary: '30', privateSecondary: '10', groupPrimary: '40', groupSecondary: '5' });
+  context.render().handleContextLimitChange('privatePrimary', '48');
+  mock.timers.tick(999); await tick();
+  assert.deepEqual(context.writes, []);
+  mock.timers.tick(1); await tick();
+  assert.deepEqual(context.writes, [{ privateContextPrimaryLimit: 48 }]);
+  assert.equal(context.persisted.privateContextPrimaryLimit, 48);
+  context.render().handleContextLimitChange('privateSecondary', '12');
+  context.render().handleContextLimitChange('groupPrimary', '60');
+  context.render().handleContextLimitChange('groupSecondary', '8');
+  await context.render().flush();
+  assert.deepEqual(context.writes.at(-1), { privateContextSecondaryLimit: 12, groupContextPrimaryLimit: 60, groupContextSecondaryLimit: 8 });
+  context.render().setAllowMultipleBubbles(false); await tick();
+  assert.deepEqual(context.writes.at(-1), { allowMultipleBubbles: false }, '开关立即提交且不覆盖模型配置');
+  assert.equal(context.render().allowMultipleBubbles, false);
+  assert.equal(chatSettingsDraft.getChatSettingsDraft(context.persisted).allowMultipleBubbles, false, '重新进入保留已保存的开关');
+  context.render().setShowTokenUsage(false); await tick();
+  assert.deepEqual(context.writes.at(-1), { showTokenUsage: false }, 'Token 开关立即保存且不覆盖模型或气泡设置');
+  assert.equal(chatSettingsDraft.getChatSettingsDraft(context.persisted).showTokenUsage, false, '重新进入保留 Token 显示选择');
+
+  // 主题冻结发生在设置 UI，不能把暂时禁用误写为用户的新选择。
+  const tokenPage = screen();
+  const variants = load('src/shared/theme/themeVariants.ts');
+  let theme = { id: 'daylight', colors: { chat: { screen: '#fff' } } };
+  const react = { createElement: (type, props, ...children) => ({ type, props, children }),
+    useState: (initial) => [initial, () => {}], useMemo: (factory) => factory() };
+  const { default: Settings } = load('src/features/chat/presentation/conversation/ChatSettings.tsx', {
+    react: { ...react, default: react },
+    'react-native': { View: 'View', Text: 'Text', ScrollView: 'ScrollView' },
+    'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
+    '@shared/ui/NavigationHeader': { default: 'NavigationHeader' },
+    '@shared/ui': { AIInfoCard: 'AIInfoCard', BackgroundPickerCard: 'BackgroundPickerCard', InputField: 'InputField', ToggleField: 'ToggleField' },
+    '@shared/ui/AutoSaveErrors': { AutoSaveErrors: 'AutoSaveErrors' },
+    './useChatSettings': { default: () => tokenPage.render() },
+    './chatSettingsStyles': { createStyles: () => ({}) },
+    '@shared/theme': { ...variants, useTheme: () => theme, useThemedStyles: () => ({}) },
+    '@shared/ui/commonStyles': { createCommonStyles: () => ({}) },
+    '../messages/components/ChatWallpaperSettings': { default: 'ChatWallpaperSettings' },
+    './ContextWindowSection': { default: 'ContextWindowSection' },
+    './FixedChatContextSection': { default: 'FixedChatContextSection' },
+  });
+  const findToggle = (node) => {
+    if (node?.props?.label === '显示 Token 用量') return node;
+    for (const child of node?.children ?? []) { const found = findToggle(child); if (found) return found; }
+    return null;
+  };
+  const tokenToggle = () => findToggle(Settings({ aiAssistant: tokenPage.persisted, conversationId: 'direct-ai', onChooseFixedStart() {} }));
+  assert.equal(tokenToggle().props.value, true, '支持主题默认显示 Token');
+  tokenToggle().props.onValueChange(false); await tick();
+  assert.equal(tokenToggle().props.value, false);
+  tokenToggle().props.onValueChange(true); await tick();
+  const writesBeforeFreeze = tokenPage.writes.length;
+  for (const id of ['paper-note', 'moon-kimi']) {
+    theme = { ...theme, id };
+    assert.equal(tokenToggle().props.value, false, '冻结主题的开关始终显示关闭');
+    assert.equal(tokenToggle().props.disabled, true, '冻结主题不允许操作开关');
+    assert.equal(tokenPage.persisted.showTokenUsage, true, '切换主题不覆盖原来的用户选择');
+  }
+  assert.equal(tokenPage.writes.length, writesBeforeFreeze, '冻结主题不产生配置写入');
+  theme = { ...theme, id: 'daylight' };
+  assert.equal(tokenToggle().props.value, true, '切回支持主题恢复原选择');
+  assert.equal(tokenToggle().props.disabled, false);
+  for (const invalid of ['', '0', '1.5']) {
+    context.render().handleContextLimitChange('privatePrimary', invalid);
+    assert.equal(await context.render().flush(), false);
+    assert.equal(context.render().contextLimits.privatePrimary, invalid);
+    assert.ok(context.render().settingsErrors.privatePrimary);
+  }
+  context.render().setAllowMultipleBubbles(true); await tick();
+  assert.deepEqual(context.writes.at(-1), { allowMultipleBubbles: true }, '无效上下文不阻止合法开关保存');
+  await context.render().back(); assert.equal(context.returned(), 0, '无效上下文阻止返回');
+  await context.render().restoreInfo();
+  assert.equal(context.render().contextLimits.privatePrimary, '48', '恢复使用最后保存的条数');
+  await context.render().back(); assert.equal(context.returned(), 1);
+
+  const choosingFixedStart = screen();
+  let openedMessages = 0;
+  choosingFixedStart.render().handleContextLimitChange('privatePrimary','0');
+  await choosingFixedStart.render().leave(()=>openedMessages++);
+  assert.equal(openedMessages,0,'去设置固定起点也需处理无效草稿');
+  await choosingFixedStart.render().restoreInfo();
+  choosingFixedStart.render().handleContextLimitChange('privatePrimary','47');
+  await choosingFixedStart.render().leave(()=>openedMessages++);
+  assert.equal(openedMessages,1);
+  assert.equal(choosingFixedStart.persisted.privateContextPrimaryLimit,47,'跳转消息列表前保存近期参数');
+
+  const contextFailure = screen(); contextFailure.failInfo(true);
+  contextFailure.render().handleContextLimitChange('privatePrimary', '50');
+  await contextFailure.render().back();
+  assert.equal(contextFailure.returned(), 0);
+  assert.equal(contextFailure.render().contextLimits.privatePrimary, '50');
+  assert.ok(contextFailure.render().infoSaveError);
+  contextFailure.failInfo(false); await contextFailure.render().flush();
+  assert.equal(contextFailure.persisted.privateContextPrimaryLimit, 50);
+
   const roleBackground = screen();
   roleBackground.render(); await tick();
   assert.deepEqual(roleBackground.backgroundReads, ['ai']);
@@ -222,4 +328,4 @@ try {
   assert.deepEqual(reset.writes, [{ avatar: null, avatarMediaAssetId: null }]);
   assert.equal(reset.persisted.name, '旧名称');
 } finally { mock.timers.reset(); }
-console.log('对话设置：名称与人设自动保存、字段独立提交、错误保留与返回等待验证通过。');
+console.log('对话设置：上下文与气泡迁移、名称与人设自动保存、字段独立提交、错误保留与返回等待验证通过。');

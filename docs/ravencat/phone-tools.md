@@ -6,7 +6,7 @@ Phone Tools 是主理 AI 的手机能力产品面。产品目录、工具执行�
 
 | 能力 | 工具/入口 | 所有者 |
 | --- | --- | --- |
-| 环境感知 | search_installed_apps、get_foreground_app、get_app_usage | Device Observer / Phone Tools 的窄契约 |
+| 环境感知 | search_installed_apps、get_foreground_app、get_app_usage、get_current_location | Device Observer / Phone Tools 的窄契约 |
 | 屏幕读取 | read_screen_accessibility、read_screen_ocr | Screen Observation（screenCapture） |
 | 应用动作 | open_app、soft_lock_app、release_soft_lock | Device Control |
 | App-specific 数据与媒体 | 网易云八工具 | neteaseMusic 工具包及各底层 owner |
@@ -21,6 +21,10 @@ AI 日程只提供自主执行机会，复用正常 Registry 与工具授权，�
 `PHONE_TOOL_CATALOG` 提供直接工具的分类、标题、说明和实现状态；`PHONE_TOOL_PACKAGE_CATALOG` 提供 App-specific 分组。它们不复制 Registry 的 schema、owner、risk、hostOnly、幂等或执行实现。
 
 工具包是 discovery/grouping/presentation，不是代理执行工具。目录 available/planned 表示能力状态，不自动决定授权或详情是否能打开。页面只展示真实配置入口，App/Host 持有具体路由，Feature 表达导航意图。
+
+手机工具与网易云八工具的单项调用权限由 Prompting 统一保存，提示词中心、手机目录及工具包详情共用同一份 AI 覆盖；Host 冻结授权时与其他内置工具使用相同解析链路。手机页面仅编辑当前主理 AI，未设置主理 AI 时不能修改调用权限；提示词中心的星标只控制已授权 schema 的直接暴露。
+
+静态目录状态在页面表达为“已接入 / 开发中”，不再把实现完成显示为“可使用”。单项工具读取无障碍连接、页面读取/截图能力、使用情况访问、悬浮显示、通知使用权及定位授权/系统定位开关，显示当前缺失项或“权限就绪”；页面获得焦点及从系统设置返回时刷新。这个状态仅表达调用授权和系统前提，不预判目标 App 是否存在、Protected Apps、窗口可靠性、当前媒体会话或网络结果，也不成为新的执行门禁。
 
 ## 3. 受保护应用
 
@@ -42,6 +46,8 @@ search_installed_apps 从本机真实可启动列表解析 exact package，避�
 get_foreground_app 只消费 Device Observer 的 canonical 窗口事实；detectionReliable 且 package 存在才返回 identity/protected，否则 `foreground_app_unavailable`。它不读取标题、节点或页面内容，也不进入 Screen Observation 内容准入。
 
 get_app_usage 按需读取今天、昨天或含今天的最近7天前台使用时长，可按 exact package 过滤，时长降序，默认最多20项、上限100项。未授权明确失败，不返回假零值；Android bucket 的真实起止时间随结果返回，不承诺精确切片，也不把后台音乐算作前台使用。没有持续监控或第二套唤醒。
+
+get_current_location 按需请求一次 Android 系统融合定位，最多等待 15 秒，返回 WGS84 经纬度、精度（米）、实际测量时间、位置年龄、大致/精确授权及模拟位置标记。系统可能提供近期 fix，不能忽略时间或把大致位置说成精确位置。没有地址解析、持续追踪或位置存储；授权、定位总开关与 provider 在原生边界裁决，失败明确返回，工具不重复预检或回退到历史位置。用户从手机目录或权限页面主动申请使用期间的定位权限，不索取后台定位；后台调用仍受 Android 限制，权限就绪不承诺后台成功。该工具沿用主理身份、单项调用开关与星标，属于“手机环境感知”工具包。
 
 ## 5. 安全屏幕快照
 

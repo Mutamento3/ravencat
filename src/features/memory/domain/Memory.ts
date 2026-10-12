@@ -38,11 +38,16 @@ export interface MemoryRecallSettings {
   activePageSize: number;
 }
 
-export interface PassiveTriggerKeyword {
-  id: string;
-  poolId: string;
+export interface MemoryTriggerKeyword {
   keyword: string;
   normalizedKeyword: string;
+}
+
+export interface PassiveTriggerGroup {
+  id: string;
+  poolId: string;
+  keywords: MemoryTriggerKeyword[];
+  autoAssociate: boolean;
   associatedCount: number;
   enabledCount: number;
 }
@@ -72,6 +77,21 @@ export class MemoryVectorDimensionError extends Error {
 }
 export class MemoryNotFoundError extends Error {
   constructor() { super('当前记忆空间中不存在这条记忆'); }
+}
+export class MemoryTriggerNotFoundError extends Error {
+  constructor() { super('当前记忆空间中不存在这个关联组'); }
+}
+
+/** 一次输入属于一个组；只在组内去重，跨组同名词保留各自的规则。 */
+export function requireMemoryTriggerKeywords(value: string): MemoryTriggerKeyword[] {
+  const keywords = new Map<string, string>();
+  for (const item of value.split(/[,，、;；\r\n]+/)) {
+    const keyword = item.trim();
+    const normalized = normalizeMemoryText(keyword);
+    if (normalized && !keywords.has(normalized)) keywords.set(normalized, keyword);
+  }
+  if (keywords.size === 0) throw new MemoryInputError('触发词不能为空');
+  return Array.from(keywords, ([normalizedKeyword, keyword]) => ({ keyword, normalizedKeyword }));
 }
 
 /** 正文唯一输入边界；检索 normalization 不能改写用户保存的内容。 */

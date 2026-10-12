@@ -73,6 +73,8 @@ const bubbleContent = loadTypeScriptModule(
         };
       case 'react-native-markdown-renderer':
         return { default: noopComponent, MarkdownIt: () => ({}) };
+      case '@shopify/flash-list':
+        return { useMappingHelper: () => ({ getMappingKey: (id) => id }) };
       case '@shared/theme':
         return themeVariants;
       case './AttachmentCard':

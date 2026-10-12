@@ -64,7 +64,7 @@ Host 先完成数据库与待处理恢复事务，再开放依赖它的 Feature�
 → 前台空闲维护
 ```
 
-原生装配不能把“恢复流程已经返回”当作“普通数据库已初始化”：没有 restore action 的路径也必须等待当前 generation 的 bootstrap。Calls 当前通过 `ensureCallHostReady()` 共用该门；普通 Chat 与 Together 通知动作仍只等待恢复门，其 action-null 路径缺普通 bootstrap，属于 Host 尚未修复的独立缺口。
+原生装配不能把“恢复流程已经返回”当作“普通数据库已初始化”：没有 restore action 的路径也必须等待当前 generation 的 bootstrap。普通 Chat、Calls 与 Together 通知动作通过 Host 的 `ensureHostDatabaseReady()` 共用“恢复门 → 普通 bootstrap”，Repository 不重复建立启动门。
 
 恢复门拥有数据库 generation、文件激活与 stable settings 的事务终态，详见[备份恢复契约](backup-and-restore-implementation-plan.md)。reset/restore 前 Host 取消并等待旧 worker，开放新 generation 前重新 bootstrap 固定默认记录。Repository 信任已建立的默认记录，不在读取侧创建第二套初始化。
 

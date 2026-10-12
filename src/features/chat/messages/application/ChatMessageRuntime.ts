@@ -68,16 +68,6 @@ export interface ChatMessageRuntimeDependencies {
   turns: IConversationTurnRepository;
   /** M3a legacy Chat attachment migration 的 Media/Host 窄端口。 */
   legacyChatAttachments?: ChatAttachmentMediaAssetPort;
-  /** 删除消息后同步群聊预览所需的窄写端口。 */
-  groupPreview: {
-    updatePreview(
-      groupId: string,
-      lastMessage: string,
-      /** 当前可见时间线为空时传 null，排序时间不得引用被隐藏的旧消息。 */
-      lastTime: string | null,
-      lastMessageId: number | null,
-    ): Promise<boolean>;
-  };
   /** canonical 用户消息 commit 后通知 Host 启动受控执行宿主。 */
   canonicalUserMessage?: {
     onCommitted: (payload: CanonicalUserMessageCommittedPayload) => void | Promise<void>;

@@ -132,7 +132,7 @@ export class AICallRuntimeService {
     // 与 missed timeout 收口，避免留下半成品生命周期。
     throwIfAbortSignalAborted(params.abortSignal);
     const now = new Date().toISOString();
-    const call = await this.getCallRepository().createSession({
+    const call = await this.getCallRepository().createSessionIfIdle({
       id: createCallId(),
       chatSessionId: params.chatSessionId,
       aiAssistantId: params.aiConfig.id,
@@ -147,6 +147,10 @@ export class AICallRuntimeService {
       reason: params.payload.reason,
       startedAt: now,
     });
+
+    if (!call) {
+      return { status: 'failed', call: null, errorMessage: '当前已有通话正在进行', visibleMessages: [] };
+    }
 
     await this.getCallRepository().appendEvent({
       callId: call.id,
@@ -394,7 +398,7 @@ export class AICallRuntimeService {
       };
     }
 
-    let call = await this.getCallRepository().createSession({
+    const claimedCall = await this.getCallRepository().createSessionIfIdle({
       id: createCallId(),
       chatSessionId,
       aiAssistantId: aiConfig.id,
@@ -406,6 +410,11 @@ export class AICallRuntimeService {
       source: 'user',
       startedAt: new Date().toISOString(),
     });
+
+    if (!claimedCall) {
+      return { status: 'failed', call: null, errorMessage: '当前已有通话正在进行', visibleMessages };
+    }
+    let call = claimedCall;
 
     await this.getCallRepository().appendEvent({
       callId: call.id,

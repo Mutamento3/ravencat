@@ -11,7 +11,7 @@
 用户输入在表单边界转换为增量命令，保存确认不回填正在编辑的草稿。
 校验与写入错误在页面内展示；返回先提交，未保存错误可修正或恢复已保存值。新建辅助模型仍需明确点击「创建」。
 输入、提交及页面生命周期契约见 [模型设置自动保存](../../../docs/architecture/model-settings-autosave.md)，行为验证为 `verify:model-settings-autosave`。
-单聊对话设置的名称、人设与头像独立自动保存，助手头像命令只更新头像；通用草稿确认复用 shared/ui，展示信息契约见 [对话展示信息自动保存](../../../docs/architecture/conversation-settings-autosave.md)。
+单聊对话设置维护名称、人设、头像、上下文可见条数与多气泡回复，沿用助手已有字段并独立自动保存；模型页只编辑调用配置，重置不影响对话上下文。助手头像命令只更新头像；通用草稿确认复用 shared/ui，契约见 [对话设置自动保存](../../../docs/architecture/conversation-settings-autosave.md)。
 
 角色模型设置可弹窗选择角色 TTS，选择持久化于 `assistant_voice_settings`，用于该角色的语音消息和通话。新增角色在创建事务中初始化当前可用的首次 OCR 与 TTS 配置，之后独立更换或取消；任务解析不继承默认。
 

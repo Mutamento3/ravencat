@@ -6,8 +6,8 @@
 
 | 文件 | 当前用途 | 来源 | 许可 |
 |---|---|---|---|
-| `assets/icon.png` | 应用图标、启动图、Android 自适应图标前景和默认群头像 | 枫渡原创，替换了同名 Expo 图片 | 项目 MIT |
-| `assets/adaptive-icon.png` | 保留的另一版图标，当前配置未引用 | 枫渡原创，替换了同名 Expo 图片 | 项目 MIT |
+| `assets/icon.png` | 通用应用图标、启动图、预览版／发布版 Android 自适应图标前景和默认群头像 | 枫渡原创，替换了同名 Expo 图片 | 项目 MIT |
+| `assets/adaptive-icon.png` | 开发版 Android 自适应图标前景 | 枫渡原创，替换了同名 Expo 图片 | 项目 MIT |
 | `assets/fengdu.png` | 默认用户头像 | 枫渡原创 | 项目 MIT |
 | `assets/raven.png` | 默认 AI 头像 | 枫渡原创 | 项目 MIT |
 | `assets/yaya.png` | 内置鸦鸦悬浮皮肤，供原生模块生成资源 | 枫渡原创 | 项目 MIT |

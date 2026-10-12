@@ -115,6 +115,8 @@ export interface CallSnapshotWriteResult {
 
 export interface ICallRepository {
   createSession(input: CreateCallSessionInput): Promise<CallSession>;
+  /** 创建非终态通话并原子取得全局占用；已有通话时返回 null，不产生第二个会话。 */
+  createSessionIfIdle(input: CreateCallSessionInput): Promise<CallSession | null>;
   updateSession(id: string, patch: UpdateCallSessionInput): Promise<CallSession>;
   updateSessionIfState(
     id: string,

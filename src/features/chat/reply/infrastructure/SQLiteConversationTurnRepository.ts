@@ -76,6 +76,14 @@ function mapRowToRun(row: TurnRunRow): ConversationTurnRun {
 }
 
 export class ConversationTurnRepository implements IConversationTurnRepository {
+  /** 工具自身的业务提交也必须服从新用户消息已经撤销的回合资格。 */
+  async isRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, runId: string): Promise<boolean> {
+    const row = await transaction.getFirstAsync<{ current: number }>(`SELECT 1 AS current
+      FROM conversation_turn_runs r JOIN conversation_turn_state s ON s.session_id = r.session_id
+      WHERE r.run_id = ? AND r.status = 'active' AND s.active_run_id = r.run_id
+      AND s.revision = r.revision_at_claim`, [runId]);
+    return row !== null;
+  }
   /** 资格读取和请求事务共用同一判据，不按分页列表猜测最新回复。 */
   private async eligibleRegenerationSource(db: DatabaseReadExecutor, sessionId: string): Promise<TurnRunRow | null> {
     return db.getFirstAsync<TurnRunRow>(

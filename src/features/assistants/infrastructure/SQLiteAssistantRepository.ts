@@ -73,6 +73,7 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       groupContextSecondaryLimit: row.group_context_secondary_limit as number,
       enableTools: row.enable_tools === 1,
       disableThinking: row.disable_thinking === 1,
+      showTokenUsage: row.show_token_usage === 1,
       // 2.x 读取旧列仅用于覆盖未完成迁移的数据库；3.0 删除旧列和该回退。
       allowMultipleBubbles: row.allow_multiple_bubbles === undefined || row.allow_multiple_bubbles === null
         ? row.enable_short_text_protocol !== 0
@@ -317,8 +318,8 @@ export class AIAssistantRepository implements IAIAssistantRepository {
     await database.withExclusiveTransactionAsync(async (transaction) => {
       await transaction.runAsync(
         `INSERT INTO ai_assistants
-         (id, agent_id, name, avatar, avatar_media_asset_id, model, api_key, api_base_url, system_prompt, temperature, top_p, max_tokens, private_context_primary_limit, private_context_secondary_limit, group_context_primary_limit, group_context_secondary_limit, enable_tools, disable_thinking, enable_short_text_protocol, allow_multiple_bubbles, supports_vision, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,      [
+         (id, agent_id, name, avatar, avatar_media_asset_id, model, api_key, api_base_url, system_prompt, temperature, top_p, max_tokens, private_context_primary_limit, private_context_secondary_limit, group_context_primary_limit, group_context_secondary_limit, enable_tools, disable_thinking, enable_short_text_protocol, allow_multiple_bubbles, show_token_usage, supports_vision, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,      [
           ai.id,
           ai.agentId,
           ai.name,
@@ -341,6 +342,7 @@ export class AIAssistantRepository implements IAIAssistantRepository {
           ai.allowMultipleBubbles === false ? 0 : 1,
           // 2.x 双写旧列供降级安装读取；3.0 删除旧列和这一次写入。
           ai.allowMultipleBubbles === false ? 0 : 1,
+          ai.showTokenUsage ? 1 : 0,
           ai.supportsVision ? 1 : 0,
           now,
           now
@@ -367,11 +369,7 @@ export class AIAssistantRepository implements IAIAssistantRepository {
     const columns: Record<keyof AIModelSettingsUpdate, string> = {
       model: 'model', apiKey: 'api_key', apiBaseUrl: 'api_base_url',
       temperature: 'temperature', topP: 'top_p', maxTokens: 'max_tokens',
-      privateContextPrimaryLimit: 'private_context_primary_limit',
-      privateContextSecondaryLimit: 'private_context_secondary_limit',
-      groupContextPrimaryLimit: 'group_context_primary_limit',
-      groupContextSecondaryLimit: 'group_context_secondary_limit',
-      enableTools: 'enable_tools', allowMultipleBubbles: 'allow_multiple_bubbles', disableThinking: 'disable_thinking',
+      enableTools: 'enable_tools', disableThinking: 'disable_thinking',
     };
     const fields: string[] = [];
     const values: (string | number | null)[] = [];
@@ -439,6 +437,22 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       // 2.x 双写旧列供降级安装读取；3.0 只更新 allow_multiple_bubbles。
       fields.push('allow_multiple_bubbles = ?', 'enable_short_text_protocol = ?');
       values.push(settings.allowMultipleBubbles ? 1 : 0, settings.allowMultipleBubbles ? 1 : 0);
+    }
+    if (settings.showTokenUsage !== undefined) {
+      fields.push('show_token_usage = ?');
+      values.push(settings.showTokenUsage ? 1 : 0);
+    }
+    const contextColumns = {
+      privateContextPrimaryLimit: 'private_context_primary_limit',
+      privateContextSecondaryLimit: 'private_context_secondary_limit',
+      groupContextPrimaryLimit: 'group_context_primary_limit',
+      groupContextSecondaryLimit: 'group_context_secondary_limit',
+    } as const;
+    for (const key of Object.keys(contextColumns) as (keyof typeof contextColumns)[]) {
+      if (settings[key] !== undefined) {
+        fields.push(`${contextColumns[key]} = ?`);
+        values.push(settings[key]);
+      }
     }
 
     fields.push('updated_at = ?');
@@ -623,6 +637,19 @@ export class AIAssistantRepository implements IAIAssistantRepository {
     if (!input.mediaAssetId.trim()) {
       throw new Error('AI 头像 MediaAsset 引用不能为空');
     }
+    const changed = await this.tryCommitAvatarMediaAssetReferenceInTransaction(transaction, input);
+    if (!changed) throw new Error(`AI 头像 MediaAsset CAS 未影响一行：${input.ownerId}`);
+  }
+
+  async replaceAvatarMediaAssetReference(input: CommitAIAvatarMediaAssetReferenceInput, guard: (transaction: DatabaseTransactionExecutor) => Promise<void>): Promise<boolean> {
+    const database = databaseCoordinator.openTaskExecutor({ name: 'assistants.changeOwnAvatar', feature: 'assistants', priority: 'runtime' });
+    return database.withExclusiveTransactionAsync(async transaction => {
+      await guard(transaction);
+      return this.tryCommitAvatarMediaAssetReferenceInTransaction(transaction, input);
+    });
+  }
+
+  private async tryCommitAvatarMediaAssetReferenceInTransaction(transaction: DatabaseTransactionExecutor, input: CommitAIAvatarMediaAssetReferenceInput): Promise<boolean> {
     const result = await transaction.runAsync(
       `UPDATE ai_assistants
        SET avatar = NULL,
@@ -644,11 +671,7 @@ export class AIAssistantRepository implements IAIAssistantRepository {
         input.expectedAvatarMediaAssetId,
       ],
     );
-    if (result.changes !== 1) {
-      throw new Error(
-        `AI 头像 MediaAsset CAS 必须恰好影响一行，实际影响 ${result.changes} 行：${input.ownerId}`,
-      );
-    }
+    return result.changes === 1;
   }
 
   /**

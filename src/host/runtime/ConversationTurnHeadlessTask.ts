@@ -10,7 +10,7 @@
 import { AppState } from 'react-native';
 import { emitChatMessagesUpdated } from '@features/chat/composition';
 import { logTurnTimeline } from '@shared/diagnostics/TurnTimelineLog';
-import { completePendingBackupRestore } from '../composition/completePendingBackupRestore';
+import { ensureHostDatabaseReady } from '../composition/ensureHostDatabaseReady';
 import { getConversationTurnCoordinator } from './ConversationTurnCoordinator';
 
 interface ConversationTurnTaskData {
@@ -31,7 +31,7 @@ export async function runConversationTurnHeadlessTask(
   }
   const correlationId = data.correlationId?.trim() || undefined;
 
-  await completePendingBackupRestore();
+  await ensureHostDatabaseReady();
 
   // 后台 runtime 的 setTimeout 会被冻结：后台执行一律 immediate，跳过 paced 分段定时器。
   const deliveryTiming = AppState.currentState === 'active'

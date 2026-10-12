@@ -3,7 +3,7 @@
 > Architecture Invariant
 > Protected Contract
 
-`ConversationTurnHeadlessTask` 当前等待恢复门；无恢复动作时普通数据库初始化 barrier 仍需在 Host 组合边界补齐。设备固定回归需要独立证据，不能通过页面执行兜底解决。
+`ConversationTurnHeadlessTask` 通过 Host 的 `ensureHostDatabaseReady()` 顺序等待恢复门与普通数据库初始化。设备固定回归需要独立证据，不能通过页面执行兜底解决。
 
 
 本文是普通 Chat AI 回复后台执行的永久架构约束。它保护的是执行生命周期的所有权，

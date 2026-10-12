@@ -1,15 +1,11 @@
-/** Modal for creating and managing Wallet quick actions. */
-// 快捷记账管理弹窗
+/** 快捷记账管理表单，与普通记账复用账本已有分类。 */
 
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView } from 'react-native';
 import { ModalSheet, showAppDialog } from '@shared/ui';
 import { useTheme, useThemedStyles } from '@shared/theme';
-import type { QuickAction, WalletRecordType } from '../domain/WalletRecord';
+import type { QuickAction, WalletCategories, WalletRecordType } from '../domain/WalletRecord';
 import { createQuickActionModalStyles } from './styles';
-
-const EXPENSE_CATEGORIES: string[] = ['餐饮', '交通', '购物', '娱乐', '医疗', '教育', '住房', '通讯', '其他'];
-const INCOME_CATEGORIES: string[] = ['工资', '奖金', '投资', '兼职', '红包', '其他'];
 
 const formatAmount = (amount: number): string => amount.toFixed(2);
 
@@ -17,6 +13,7 @@ interface QuickActionModalProps {
   visible: boolean;
   onClose: () => void;
   quickActions: QuickAction[];
+  availableCategories: WalletCategories;
   onAdd: (action: Omit<QuickAction, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onDelete: (id: string) => void;
 }
@@ -25,6 +22,7 @@ const QuickActionModal: React.FC<QuickActionModalProps> = ({
   visible,
   onClose,
   quickActions,
+  availableCategories,
   onAdd,
   onDelete,
 }) => {
@@ -46,14 +44,14 @@ const QuickActionModal: React.FC<QuickActionModalProps> = ({
 
   const handleAdd = () => {
     const parsedAmount = parseFloat(amount);
-    if (!name || !amount || parsedAmount <= 0 || !category) {
+    if (!name || !amount || parsedAmount <= 0 || !category.trim()) {
       showAppDialog({ title: '提示', message: '请填写完整信息' });
       return;
     }
     onAdd({
       name,
       amount: parsedAmount,
-      category,
+      category: category.trim(),
       detail: '',
       type,
       sortOrder: quickActions.length,
@@ -62,10 +60,10 @@ const QuickActionModal: React.FC<QuickActionModalProps> = ({
     setShowAddForm(false);
   };
 
-  const categories = type === 'expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
+  const categories = availableCategories[type];
 
   return (
-    <ModalSheet visible={visible} onClose={onClose}>
+    <ModalSheet visible={visible} onClose={onClose} avoidKeyboard>
       <View style={styles.content}>
           <View style={styles.header}>
             <TouchableOpacity onPress={onClose}>
@@ -77,66 +75,82 @@ const QuickActionModal: React.FC<QuickActionModalProps> = ({
             </TouchableOpacity>
           </View>
 
-          {showAddForm && (
-            <View style={styles.form}>
-              <View style={styles.formRow}>
-                <TextInput
-                  style={styles.formInput}
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="名称"
-                  placeholderTextColor={theme.colors.text.tertiary}
-                />
-                <TextInput
-                  style={[styles.formInput, { flex: 0.6 }]}
-                  value={amount}
-                  onChangeText={setAmount}
-                  keyboardType="decimal-pad"
-                  placeholder="金额"
-                  placeholderTextColor={theme.colors.text.tertiary}
-                />
-              </View>
+          <ScrollView style={styles.list} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+            {showAddForm && (
+              <View style={styles.form}>
+                <View style={styles.formRow}>
+                  <TextInput
+                    style={styles.formInput}
+                    value={name}
+                    onChangeText={setName}
+                    placeholder="名称"
+                    placeholderTextColor={theme.colors.text.tertiary}
+                  />
+                  <TextInput
+                    style={[styles.formInput, { flex: 0.6 }]}
+                    value={amount}
+                    onChangeText={setAmount}
+                    keyboardType="decimal-pad"
+                    placeholder="金额"
+                    placeholderTextColor={theme.colors.text.tertiary}
+                  />
+                </View>
 
-              <View style={styles.typeSwitch}>
-                <TouchableOpacity
-                  style={[styles.typeBtn, type === 'expense' && styles.typeBtnActive]}
-                  onPress={() => setType('expense')}
-                >
-                  <Text style={type === 'expense' ? styles.typeTextActive : styles.typeText}>
-                    支出
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.typeBtn, type === 'income' && styles.typeBtnActive]}
-                  onPress={() => setType('income')}
-                >
-                  <Text style={type === 'income' ? styles.typeTextActive : styles.typeText}>
-                    收入
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.categoryGrid}>
-                {categories.map((cat) => (
+                <View style={styles.typeSwitch}>
                   <TouchableOpacity
-                    key={cat}
-                    style={[styles.catBtn, category === cat && styles.catBtnActive]}
-                    onPress={() => setCategory(cat)}
+                    style={[styles.typeBtn, type === 'expense' && styles.typeBtnActive]}
+                    onPress={() => {
+                      setType('expense');
+                      if (type !== 'expense') setCategory('');
+                    }}
                   >
-                    <Text style={[styles.catText, category === cat && styles.catTextActive]}>
-                      {cat}
+                    <Text style={type === 'expense' ? styles.typeTextActive : styles.typeText}>
+                      支出
                     </Text>
                   </TouchableOpacity>
-                ))}
+                  <TouchableOpacity
+                    style={[styles.typeBtn, type === 'income' && styles.typeBtnActive]}
+                    onPress={() => {
+                      setType('income');
+                      if (type !== 'income') setCategory('');
+                    }}
+                  >
+                    <Text style={type === 'income' ? styles.typeTextActive : styles.typeText}>
+                      收入
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.categoryGrid}>
+                  {categories.map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[styles.catBtn, category === cat && styles.catBtnActive]}
+                      onPress={() => setCategory(cat)}
+                    >
+                      <Text style={[styles.catText, category === cat && styles.catTextActive]}>
+                        {cat}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <View style={styles.formRow}>
+                  <TextInput
+                    style={styles.formInput}
+                    value={category}
+                    onChangeText={setCategory}
+                    placeholder="输入自定义分类"
+                    placeholderTextColor={theme.colors.text.tertiary}
+                  />
+                </View>
+
+                <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
+                  <Text style={styles.addBtnText}>添加</Text>
+                </TouchableOpacity>
               </View>
+            )}
 
-              <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
-                <Text style={styles.addBtnText}>添加</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          <ScrollView style={styles.list}>
             {quickActions.length === 0 ? (
               <Text style={styles.empty}>暂无快捷记账，点击右上角添加</Text>
             ) : (

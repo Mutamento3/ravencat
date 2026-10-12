@@ -59,6 +59,7 @@ export class StreamingModelTurnAdapter {
         promptTokens: response.promptTokens,
         completionTokens: response.completionTokens,
         totalTokens: response.totalTokens,
+        cachedTokens: response.cachedTokens,
       },
       finishReason,
     });

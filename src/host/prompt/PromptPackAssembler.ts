@@ -11,6 +11,7 @@ import { promptHistoryBuilder } from './PromptHistoryBuilder';
 import { promptPackCompiler } from './compiler/PromptPackCompiler';
 import { getSystemPromptPreset } from './compiler/systemPromptPresets';
 import { renderHostPromptProviderBlock } from './providers';
+import { resolvePromptBlockMetadata } from './compiler/promptBlockMetadata';
 
 const AI_CREATE_MOMENT_TOOL_NAME = 'aiCreateMoment';
 const MOMENT_AUDIENCE_CANDIDATES_PRESET_ITEM = {
@@ -31,6 +32,21 @@ const MOMENTS_SOCIAL_INBOX_PRESET_ITEM = {
 };
 
 export class PromptPackAssembler {
+  /** 摘要复用聊天稳定前缀；只读取本次固定来源，动态 provider 与历史查询根本不执行。 */
+  async assembleSummaryPromptPack(params: AssemblePromptPackParams, task: PromptPackBlock): Promise<PromptPack> {
+    const userIdentity = await promptPackBlockFactory.resolveUserIdentity(params.toolContext);
+    const blocks = await this.createStableScenarioBlocks('chat.private_reply', params, userIdentity);
+    blocks.push(...(params.additionalBlocks ?? []), task);
+    const preset = this.withRuntimeCapabilityPreset(params.preset!, params.allowedToolNames, 'chat.private_reply');
+    const currentInput = { role: 'user' as const, content: params.currentInput };
+    blocks.push({ key: 'current_input', title: '摘要来源', content: params.currentInput, required: true,
+      status: 'ready', truncatable: false, placement: 'input' });
+    const includedIds = new Set(blocks.map((block) => resolvePromptBlockMetadata(block, 'chat.summary').definitionId));
+    return promptPackCompiler.compile({ scenario: 'chat.summary', blocks, recentMessages: [], currentInput,
+      preset: { ...preset, scenarioId: 'chat.summary', items: [...preset.items.filter((item) => includedIds.has(item.definitionId)), {
+        definitionId: task.definitionId!, slot: task.slot!, sortOrder: 210, enabled: true, required: true, protection: 'locked',
+      }] } });
+  }
   async assembleChatPromptPack(params: AssemblePromptPackParams): Promise<PromptPack> {
     return this.assemblePromptPack(this.resolveChatScenario(params), params);
   }
@@ -114,11 +130,7 @@ export class PromptPackAssembler {
     params: AssemblePromptPackParams,
     userIdentity: ResolvedUserIdentity,
   ): Promise<PromptPackBlock[]> {
-    const blocks: PromptPackBlock[] = [
-      promptPackBlockFactory.createFoundationBlock(params.aiConfig, userIdentity.displayName),
-      promptPackBlockFactory.createPersonaBlock(params.aiConfig),
-      await renderHostPromptProviderBlock('context.protocol_space', { scenario, params }),
-    ];
+    const blocks = await this.createStableScenarioBlocks(scenario, params, userIdentity);
 
     if (this.hasCurrentTurnVisualContext(params)) {
       blocks.push(promptPackBlockFactory.createVisualGroundingRulesBlock(params.aiConfig));
@@ -131,31 +143,33 @@ export class PromptPackAssembler {
     blocks.push(await renderHostPromptProviderBlock('context.agent_registry', { scenario, params }));
 
     if (this.hasMomentCreateTool(params.allowedToolNames)) {
-      blocks.push(await renderHostPromptProviderBlock(
-        'context.moment_audience_candidates',
-        { scenario, params },
-      ));
+      blocks.push(await renderHostPromptProviderBlock('context.moment_audience_candidates', { scenario, params }));
     }
 
     if (scenario === 'chat.private_reply') {
-      blocks.push(await renderHostPromptProviderBlock(
-        'context.moments_social_inbox',
-        { scenario, params },
-      ));
+      blocks.push(await renderHostPromptProviderBlock('context.moments_social_inbox', { scenario, params }));
     }
 
+    const scenarioContextBlock = promptPackBlockFactory.createScenarioContextBlock(scenario);
+    if (scenarioContextBlock) blocks.push(scenarioContextBlock);
+    blocks.push(promptPackBlockFactory.createTimeAwarenessBlock());
+    if (this.isPrivateConversationScenario(scenario)) blocks.push(await renderHostPromptProviderBlock('context.passive_memory', { scenario, params }));
+    return blocks;
+  }
+
+  private async createStableScenarioBlocks(
+    scenario: PromptPackScenario, params: AssemblePromptPackParams, userIdentity: ResolvedUserIdentity,
+  ): Promise<PromptPackBlock[]> {
+    const blocks: PromptPackBlock[] = [
+      promptPackBlockFactory.createFoundationBlock(params.aiConfig, userIdentity.displayName),
+      promptPackBlockFactory.createPersonaBlock(params.aiConfig),
+      await renderHostPromptProviderBlock('context.protocol_space', { scenario, params }),
+      promptPackBlockFactory.createUserIdentityBlock(userIdentity),
+    ];
     if (params.toolsDescription?.trim()) {
       blocks.push(await renderHostPromptProviderBlock('context.tools_description', { scenario, params }));
     }
 
-    const scenarioContextBlock = promptPackBlockFactory.createScenarioContextBlock(scenario);
-    if (scenarioContextBlock) {
-      blocks.push(scenarioContextBlock);
-    }
-
-    blocks.push(promptPackBlockFactory.createTimeAwarenessBlock());
-    blocks.push(promptPackBlockFactory.createUserIdentityBlock(userIdentity));
-    if (this.isPrivateConversationScenario(scenario)) blocks.push(await renderHostPromptProviderBlock('context.passive_memory', { scenario, params }));
     return blocks;
   }
 

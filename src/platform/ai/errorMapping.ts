@@ -9,6 +9,11 @@
 
 import type { ParamErrorInfo, QuotaErrorInfo, ServiceBusyErrorInfo, ErrorDisplayInfo } from './types';
 
+/** 请求 ID 和 messages[403] 之类的参数路径不是状态码，不能按数字子串判错。 */
+function hasErrorCode(message: string, code: number): boolean {
+  return new RegExp(`(?:^\\s*|\\bhttp\\s+|\\b(?:status|code)\\s*[:=]\\s*)${code}(?=\\s|$|[:,;)])`, 'i').test(message);
+}
+
 /**
  * 检测错误是否为参数相关错误（temperature/topP/maxTokens）
  * @param message - 错误消息
@@ -100,7 +105,7 @@ export function detectQuotaError(message: string): QuotaErrorInfo {
   const lowerMsg = rawMessage.toLowerCase();
 
   if (
-    rawMessage.includes('402')
+    hasErrorCode(rawMessage, 402)
     || lowerMsg.includes('insufficient balance')
     || lowerMsg.includes('balance is insufficient')
     || lowerMsg.includes('insufficient_quota')
@@ -133,7 +138,7 @@ export function detectServiceBusyError(message: string): ServiceBusyErrorInfo {
   const lowerMsg = rawMessage.toLowerCase();
 
   if (
-    rawMessage.includes('429')
+    hasErrorCode(rawMessage, 429)
     || lowerMsg.includes('overloaded')
     || lowerMsg.includes('engine is currently overloaded')
     || lowerMsg.includes('server is busy')
@@ -166,6 +171,31 @@ export function getErrorDisplayInfo(error: Error | string): ErrorDisplayInfo {
   const quotaErrorInfo = detectQuotaError(message);
   const serviceBusyErrorInfo = detectServiceBusyError(message);
 
+  // 明确的认证与权限错误优先，图片错误中的 request_id 不参与分类。
+  if (
+    hasErrorCode(message, 401) || hasErrorCode(message, 2049)
+    || normalizedMessage.includes('unauthorized')
+    || normalizedMessage.includes('authentication fails')
+    || normalizedMessage.includes('authentication failed')
+    || normalizedMessage.includes('api key') && normalizedMessage.includes('invalid')
+  ) return { title: '认证失败', message: 'API Key 无效或已过期，请检查您的 API Key', type: 'auth' };
+
+  if (hasErrorCode(message, 403) || normalizedMessage.includes('forbidden')) {
+    return { title: '权限不足', message: '没有权限访问该 API，请检查您的账户权限', type: 'permission' };
+  }
+
+  if (hasErrorCode(message, 404) || normalizedMessage.includes('not found')) {
+    return { title: '服务未找到', message: 'API 地址错误或该服务暂不可用', type: 'not_found' };
+  }
+
+  if (quotaErrorInfo.isQuotaError) return { title: '余额或配额不足', message: quotaErrorInfo.message, type: 'quota' };
+  if (serviceBusyErrorInfo.isServiceBusyError) return { title: '服务繁忙', message: serviceBusyErrorInfo.message, type: 'service_busy' };
+
+  // 只表达接口拒图，不从笼统错误猜测尺寸、比例或文件损坏。原始文案留在请求错误与日志。
+  if (/unsupported image|invalid image|image_url|image dimensions|image size|image[^\n]*(?:not supported|failed to decode)|图片[^\n]*(?:不支持|解码失败)/i.test(message)) {
+    return { title: '图片处理失败', message: '接口未能处理这张图片，请换一张或稍后再试。', type: 'request' };
+  }
+
   if (paramErrorInfo.isParamError) {
     const paramDisplayName = paramErrorInfo.paramName === 'topP'
       ? 'Top P'
@@ -188,54 +218,6 @@ export function getErrorDisplayInfo(error: Error | string): ErrorDisplayInfo {
     };
   }
 
-  if (quotaErrorInfo.isQuotaError) {
-    return {
-      title: '余额或配额不足',
-      message: quotaErrorInfo.message,
-      type: 'quota',
-    };
-  }
-
-  if (serviceBusyErrorInfo.isServiceBusyError) {
-    return {
-      title: '服务繁忙',
-      message: serviceBusyErrorInfo.message,
-      type: 'service_busy',
-    };
-  }
-
-  if (
-    message.includes('401') ||
-    message.includes('2049') ||
-    message.includes('Unauthorized') ||
-    normalizedMessage.includes('authentication fails') ||
-    normalizedMessage.includes('authentication failed') ||
-    normalizedMessage.includes('api key') && normalizedMessage.includes('invalid') ||
-    normalizedMessage.includes('invalid api key')
-  ) {
-    return {
-      title: '认证失败',
-      message: 'API Key 无效或已过期，请检查您的 API Key',
-      type: 'auth',
-    };
-  }
-
-  if (message.includes('403') || message.includes('Forbidden')) {
-    return {
-      title: '权限不足',
-      message: '没有权限访问该 API，请检查您的账户权限',
-      type: 'permission',
-    };
-  }
-
-  if (message.includes('404') || message.includes('Not Found')) {
-    return {
-      title: '服务未找到',
-      message: 'API 地址错误或该服务暂不可用',
-      type: 'not_found',
-    };
-  }
-
   if (message.includes('Network') || message.includes('fetch')) {
     return {
       title: '网络错误',
@@ -254,7 +236,7 @@ export function getErrorDisplayInfo(error: Error | string): ErrorDisplayInfo {
 
   return {
     title: '请求失败',
-    message: message || '未知错误',
+    message: '模型服务暂时无法完成回复，请稍后再试。',
     type: 'request',
   };
 }

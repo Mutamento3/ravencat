@@ -1,4 +1,4 @@
-/** 装配并管理一次正常 Host Agent Run，不拥有任何 Feature 业务生命周期。 */
+/** 装配并管理一次正常 Host Agent Run，登记范围覆盖准备、执行与连接释放。 */
 import {
   AgentRuntime,
   type AgentRunModelGateway,
@@ -25,28 +25,63 @@ export interface HostAgentRunRequest extends AgentRuntimeRequest {
 }
 
 interface ActiveHostAgentRun {
-  runtime: AgentRuntime;
+  controller: AbortController;
   completion: Promise<AgentRunResult>;
 }
 
 const activeHostAgentRuns = new Map<string, ActiveHostAgentRun>();
+let acceptingRuns = true;
 
-/** 使用唯一 Built-in Registry、run-scoped MCP 能力和 AgentRuntime 执行一次 Host run。 */
-export async function runHostAgent(
-  request: HostAgentRunRequest,
-): Promise<AgentRunResult> {
+function cancelledBeforeExecution(request: HostAgentRunRequest, signal: AbortSignal): AgentRunResult {
+  return {
+    runId: request.runId,
+    taskId: request.task.id,
+    status: 'cancelled',
+    terminalCode: signal.reason === 'SUPERSEDED' ? 'SUPERSEDED' : 'CANCELLED_BY_USER',
+    finalText: '',
+    history: request.initialHistory,
+    steps: [],
+    stepCount: 0,
+    toolCallCount: 0,
+  };
+}
+
+/** 同步登记后才开始准备；reset 与重复 runId 在第一个 await 之前取得裁决。 */
+export async function runHostAgent(request: HostAgentRunRequest): Promise<AgentRunResult> {
+  const controller = new AbortController();
+  if (!acceptingRuns) {
+    controller.abort('CANCELLED_BY_USER');
+    return cancelledBeforeExecution(request, controller.signal);
+  }
   if (activeHostAgentRuns.has(request.runId)) {
     throw new Error(`Host Agent run ${request.runId} is already registered`);
   }
+  const forwardAbort = () => controller.abort(request.signal!.reason);
+  request.signal?.addEventListener('abort', forwardAbort, { once: true });
+  if (request.signal?.aborted) forwardAbort();
 
+  const completion = Promise.resolve().then(() => executeHostRun(request, controller.signal)).finally(() => {
+    request.signal?.removeEventListener('abort', forwardAbort);
+    releaseAgentToolRunScope(request.runId);
+    activeHostAgentRuns.delete(request.runId);
+  });
+  activeHostAgentRuns.set(request.runId, { controller, completion });
+  return completion;
+}
+
+async function executeHostRun(request: HostAgentRunRequest, signal: AbortSignal): Promise<AgentRunResult> {
   const { modelGateway, createLegacyContext, openToolPackageIds = [], ...runtimeRequest } = request;
+  if (signal.aborted) return cancelledBeforeExecution(request, signal);
   const registry = await prepareAgentToolRegistry(createLegacyContext, runtimeRequest.task);
+  if (signal.aborted) return cancelledBeforeExecution(request, signal);
+  const directToolNames = await readDirectToolNamesForHostRun(runtimeRequest.task.assistantId);
+  if (signal.aborted) return cancelledBeforeExecution(request, signal);
   const toolPackages = registerToolPackagesForHostRun({
     registry,
     allowedToolNames: runtimeRequest.task.allowedToolNames,
     bindings: getToolPackageRuntimeBindings(registry),
     openPackageIds: openToolPackageIds,
-    directToolNames: await readDirectToolNamesForHostRun(runtimeRequest.task.assistantId),
+    directToolNames,
   });
   const mcpTools = await registerMcpToolsForHostRun({
     assistantId: runtimeRequest.task.assistantId,
@@ -54,25 +89,13 @@ export async function runHostAgent(
     allowedToolNames: runtimeRequest.task.allowedToolNames,
   });
 
-  let tracked = false;
   try {
-    // 内置工具保留原始授权，仅动态收窄可见集合；MCP 仍使用自己的 meta-tools。
-    // 未被任一 run-scoped owner 消费的未知名称继续交给 Runtime 暴露错误。
-    const consumedNames = new Set([
-      ...mcpTools.allowlistMcpToolNames,
-    ]);
-    const baseNames = runtimeRequest.task.allowedToolNames.filter(
-      (name) => !consumedNames.has(name),
-    );
-    const metaToolNames = [
-      ...toolPackages.metaToolNames,
-      ...mcpTools.metaToolNames,
-    ];
+    if (signal.aborted) return cancelledBeforeExecution(request, signal);
+    const consumedNames = new Set(mcpTools.allowlistMcpToolNames);
+    const baseNames = runtimeRequest.task.allowedToolNames.filter((name) => !consumedNames.has(name));
+    const metaToolNames = [...toolPackages.metaToolNames, ...mcpTools.metaToolNames];
     const task = consumedNames.size > 0 || metaToolNames.length > 0
-      ? {
-          ...runtimeRequest.task,
-          allowedToolNames: [...baseNames, ...metaToolNames],
-        }
+      ? { ...runtimeRequest.task, allowedToolNames: [...baseNames, ...metaToolNames] }
       : runtimeRequest.task;
     const runtime = new AgentRuntime({
       registry,
@@ -85,89 +108,37 @@ export async function runHostAgent(
     });
     const packagedNames = new Set(toolPackages.packageToolNames);
     const alwaysVisibleNames = task.allowedToolNames.filter((name) => !packagedNames.has(name));
-    const completion = trackHostAgentRun(
-      runtimeRequest.runId,
-      runtime.run({
-        ...runtimeRequest, task,
-        resolveVisibleToolNames: () => [...alwaysVisibleNames, ...toolPackages.visibleToolNames()],
-      }),
-      mcpTools.dispose,
-    );
-    activeHostAgentRuns.set(runtimeRequest.runId, { runtime, completion });
-    tracked = true;
-    return await completion;
-  } catch (error) {
-    if (!tracked) {
-      await mcpTools.dispose();
-    }
-    throw error;
-  }
-}
-
-/** 取消当前宿主进程中由 runId 标识的正常 Agent run。 */
-export async function cancelHostAgentRun(
-  request: AgentRuntimeCancelRequest,
-): Promise<AgentRunTerminalResult> {
-  const active = requireActiveHostAgentRun(request.runId);
-  const result = await active.runtime.cancel(request);
-  await active.completion;
-  return result;
-}
-
-function requireActiveHostAgentRun(runId: string): ActiveHostAgentRun {
-  const active = activeHostAgentRuns.get(runId);
-  if (!active) {
-    throw new Error(`Host Agent run ${runId} is not active in this host`);
-  }
-  return active;
-}
-
-async function trackHostAgentRun(
-  runId: string,
-  execution: Promise<AgentRunResult>,
-  dispose: () => Promise<void>,
-): Promise<AgentRunResult> {
-  try {
-    return await execution;
+    return await runtime.run({
+      ...runtimeRequest,
+      task,
+      signal,
+      resolveVisibleToolNames: () => [...alwaysVisibleNames, ...toolPackages.visibleToolNames()],
+    });
   } finally {
-    releaseAgentToolRunScope(runId);
-    activeHostAgentRuns.delete(runId);
-    await dispose();
+    // 连接释放仍在登记范围内，reset 不能在 dispose 尚未结束时开放清库。
+    await mcpTools.dispose();
   }
 }
 
-/** 恢复出厂前终止当前宿主进程中的全部正常 Agent run。 */
+export async function cancelHostAgentRun(request: AgentRuntimeCancelRequest): Promise<AgentRunTerminalResult> {
+  const active = activeHostAgentRuns.get(request.runId);
+  if (!active) throw new Error(`Host Agent run ${request.runId} is not active in this host`);
+  active.controller.abort('CANCELLED_BY_USER');
+  return active.completion;
+}
+
+/** 新 Host 完成数据库启动后开放新请求，清库期间不接纳旧调用方迟到的 run。 */
+export function resumeHostAgentRunsAfterReset(): void {
+  acceptingRuns = true;
+}
+
 export async function cancelActiveHostAgentRunsForReset(): Promise<void> {
+  acceptingRuns = false;
   const entries = [...activeHostAgentRuns.entries()];
-  if (entries.length === 0) {
-    return;
-  }
-
-  const rejected: { runId: string; error: unknown }[] = [];
-  await Promise.all(
-    entries.map(async ([runId, active]) => {
-      try {
-        await active.runtime.cancel({ runId });
-        await active.completion;
-      } catch (error) {
-        // 取消失败的运行继续留在 Map，避免清库后失去诊断与再次终止的句柄。
-        rejected.push({ runId, error });
-      }
-    }),
-  );
-
-  if (rejected.length === 0) {
-    return;
-  }
-
-  const detail = rejected
-    .map((item) => `${item.runId}: ${item.error instanceof Error ? item.error.message : String(item.error)}`)
-    .join('; ');
-  throw new AggregateError(
-    rejected.map((item) => new Error(
-      `Host Agent run ${item.runId} cancel failed for factory reset`,
-      { cause: item.error },
-    )),
-    `恢复出厂取消 Host Agent Runtime 失败: ${detail}`,
-  );
+  for (const [, active] of entries) active.controller.abort('CANCELLED_BY_USER');
+  const results = await Promise.allSettled(entries.map(([, active]) => active.completion));
+  const errors = results.flatMap((result, index) => result.status === 'rejected'
+    ? [new Error(`Host Agent run ${entries[index][0]} 取消或释放失败`, { cause: result.reason })]
+    : []);
+  if (errors.length > 0) throw new AggregateError(errors, '恢复出厂取消 Host Agent Runtime 失败');
 }

@@ -7,10 +7,15 @@ import { createMessageBubbleStyles } from './styles';
 
 interface TokenInfoProps {
   tokensUsed?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedTokens?: number;
   isMe: boolean;
 }
 
-export const TokenInfo = memo(function TokenInfo({ tokensUsed, isMe }: TokenInfoProps) {
+export const TokenInfo = memo(function TokenInfo({
+  tokensUsed, promptTokens, completionTokens, cachedTokens, isMe,
+}: TokenInfoProps) {
   const theme = useTheme();
   const styles = useThemedStyles(createMessageBubbleStyles);
   const interactionProfile = getChatInteractionProfile(theme);
@@ -20,6 +25,13 @@ export const TokenInfo = memo(function TokenInfo({ tokensUsed, isMe }: TokenInfo
   return (
     <Text style={[styles.tokenInfo, isMe ? styles.myTokenInfo : styles.aiTokenInfo]}>
       {tokensUsed} tokens
+      {!isMe && promptTokens !== undefined && completionTokens !== undefined
+        && (promptTokens > 0 || completionTokens > 0)
+        ? ` · 输入 ${promptTokens} / 输出 ${completionTokens}` : ''}
+      {!isMe ? `\n缓存命中 ${cachedTokens === undefined ? '未提供' : `${cachedTokens} tokens`}${
+        cachedTokens !== undefined && promptTokens !== undefined && promptTokens > 0
+          ? `（${(cachedTokens / promptTokens * 100).toFixed(1)}%）` : ''
+      }` : ''}
     </Text>
   );
 });

@@ -29,6 +29,7 @@ import {
   updateWalletRecord as updateWalletRecordUseCase,
   getLedgerRangeSummary as getLedgerRangeSummaryUseCase,
   getWalletScreenData as getWalletScreenDataUseCase,
+  getWalletCategories as getWalletCategoriesUseCase,
 } from './application/WalletPresentation';
 import type { CreateWalletRecordInput, UpdateWalletRecordInput } from './domain/LedgerRepository';
 import type { QuickAction } from './domain/WalletRecord';
@@ -81,6 +82,8 @@ export const applyQuickActionAndReply = (
 
 export const getWalletScreenData = (date = new Date()) =>
   getWalletScreenDataUseCase(date, presentationDeps);
+
+export const getWalletCategories = () => getWalletCategoriesUseCase(presentationDeps);
 
 export const deleteWalletRecord = (recordId: string) =>
   deleteWalletRecordUseCase(recordId, presentationDeps);

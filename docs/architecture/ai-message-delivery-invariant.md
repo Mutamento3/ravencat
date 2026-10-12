@@ -1,6 +1,6 @@
 # AI 回复执行宿主与消息交付
 
-Host 在业务查询前负责普通数据库 bootstrap 与恢复事务门。Calls 的执行与拒接入口已共用 `ensureCallHostReady()`；普通 Chat 与 Together 通知动作当前只等待恢复门，无恢复动作时尚缺普通初始化 barrier。这是 Host 的独立缺口，不改变下述执行与交付契约，也不应在 Repository 添加重复初始化或页面 fallback。
+Host 在业务查询前通过 `ensureHostDatabaseReady()` 完成恢复事务门与普通数据库 bootstrap。普通 Chat、Calls 执行/拒接与 Together 通知动作共用该门；没有恢复任务也必须等待初始化。Repository 信任 Host 启动契约，不自行重复初始化。
 
 
 执行生命周期与展示生命周期解耦：

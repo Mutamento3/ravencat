@@ -1,6 +1,6 @@
 # 上下文主客配置与摘要门槛
 
-本文定义现有四项上下文配置的归属与适用范围。普通单聊、通话实时回复和去电决策使用全部已有摘要与未总结原文；不是最近 N 条硬截断。摘要的生成、处理游标与原文交接统一见 [Memory V3 §18～22](../memory-simplification-v3-implementation-spec.md#18-聊天摘要的产品契约)。
+本文定义现有四项上下文配置的归属与适用范围。普通单聊、通话实时回复和去电决策共用消息范围：自动生成时读取未总结原文，暂停生成时读取最近 N 条逻辑对话，固定起点时读取从选中消息到最新的完整范围。两级旧摘要按独立注入开关决定。当前契约见[对话两级摘要](../architecture/chat-summary.md)。
 
 ## 1. 当前范围
 
@@ -32,7 +32,7 @@ Assistants 的 AIProfile/ai_assistants 持有四个模型行为设置；不保�
 
 ## 4. 普通单聊、通话与自主执行
 
-Chat 拥有摘要处理状态与 canonical 投影，Host 经 `PromptHistoryBuilder` 装配全部摘要和未处理原文。通话是当前一对一来源的延续，转写与普通消息共用同一摘要计数，不再使用通话事件 over-fetch 或“最后 N 条”覆盖未处理原文。
+Chat 拥有摘要处理状态、固定起点与 canonical 投影，Host 经 `PromptHistoryBuilder` 按同一事务快照装配。生成开启时转写与普通消息共用摘要计数，未处理原文不被窗口裁剪；暂停且无固定时按 N 读取最近逻辑对话，绕过摘要游标和已处理通话标记。固定时停止生成，从所选消息到最新全部注入，不改原摘要进度，已有摘要注入独立控制。
 
 AI 日程只有一次正常自主执行，没有独立的先客后主决策模型或 `raven_cat.proactive_decision` 链。自主执行按当前任务与会话边界读取上下文，不额外开放群聊客注入。
 
@@ -50,9 +50,11 @@ AI 日程只有一次正常自主执行，没有独立的先客后主决策模�
 
 ## 7. 设置 UI
 
-`src/features/assistants/presentation/management/AIModelSettings/ContextWindowSection.tsx` 展示单聊·主、单聊·客、群聊·主、群聊·客四个正整数输入，走现有表单和模型设置命令保存。
+`src/features/chat/presentation/conversation/ContextWindowSection.tsx` 在对话设置页展示单聊·主、单聊·客、群聊·主、群聊·客四个正整数输入，通过对话表单与助手设置命令保存，沿用现有助手字段。
 
-群聊两个字段标注“暂未生效”，允许编辑、保存，不禁用。页面草稿边界验证输入；Repository 和下游信任保存契约，不重复补值。自动保存行为见[模型设置契约](../architecture/model-settings-autosave.md)。
+群聊两个字段标注“暂未生效”，允许编辑、保存，不禁用。页面草稿边界验证输入；Repository 和下游信任保存契约，不重复补值。自动保存行为见[对话设置契约](../architecture/conversation-settings-autosave.md)。
+
+条数区下方的固定起点入口返回消息列表，由长按菜单选择。固定期间仅“单聊·主”暂时禁用，保存值不改；入口显示当前起点内容与逻辑对话数。取消／删除起点后恢复输入，摘要注入选择不变，生成仍暂停直到手动开启。
 
 ## 8. 验证与范围边界
 

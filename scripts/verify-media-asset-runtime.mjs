@@ -639,9 +639,9 @@ function asset(overrides = {}) {
   const readInputs = [];
   const dependencies = {
     media: {
-      readAsBase64: async (input) => {
+      readVisionImage: async (input) => {
         readInputs.push(input);
-        return 'AQID';
+        return { base64: 'AQID', mimeType: 'image/png' };
       },
     },
     vision: {
@@ -652,6 +652,7 @@ function asset(overrides = {}) {
   const { resolveChatImageModelInput } = loadTypeScriptModuleWithMocks(
     'src/features/chat/reply/application/ResolveChatImageModelInput.ts',
     {
+      '@shared/runtime/abortSignal': loadTypeScriptModuleWithMocks('src/shared/runtime/abortSignal.ts', {}),
       '@platform/ai': { createAIClient: () => assert.fail('direct vision 不应创建 OCR client') },
       '@shared/prompt': { readAuxiliaryTaskPromptOverride: () => null },
       './ChatReplyRuntimeDependencies': {

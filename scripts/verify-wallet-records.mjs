@@ -12,6 +12,10 @@ const db = new DatabaseSync(':memory:');
 db.exec(`CREATE TABLE ledger_records (
   id TEXT PRIMARY KEY, type TEXT NOT NULL, category TEXT NOT NULL, detail TEXT,
   amount REAL NOT NULL, record_date TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE ledger_quick_actions (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, category TEXT NOT NULL, detail TEXT,
+  amount REAL NOT NULL, sort_order INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 )`);
 const executor = {
   runAsync: async (sql, params = []) => db.prepare(sql).run(...params),
@@ -57,7 +61,8 @@ const { GetLedgerContextTool: query } = load(`${wallet}aiTools/GetLedgerContextT
 const { SearchLedgerTool: search } = load(`${wallet}aiTools/SearchLedgerTool.ts`);
 const { LegacyAgentToolAdapter } = load('src/host/composition/agent/LegacyAgentToolAdapter.ts');
 const { matchesAgentToolInputSchema } = load('src/shared/aiTools/AgentToolInputSchema.ts');
-const { getWalletRecordDate, createWalletRecord } = load(`${wallet}domain/WalletRecord.ts`);
+const { getWalletRecordDate, createWalletRecord, DEFAULT_WALLET_CATEGORIES } = load(`${wallet}domain/WalletRecord.ts`);
+const { getWalletCategories, getWalletScreenData } = load(`${wallet}application/WalletPresentation.ts`);
 const context = { repositories: { ledger: repository } };
 function adapter(tool) {
   return new LegacyAgentToolAdapter(tool, { owner: 'wallet', risk: 'reversible_write', idempotency: 'not_idempotent' }, () => context);
@@ -140,6 +145,38 @@ const manual = await addWalletRecord(lunch, {}, { repository, queueAIReply: asyn
 assert.equal(manual.queuedAIReply, true);
 assert.equal(queued, 1);
 
+// 分类查询包含预设、历史自定义和仅在快捷记账中使用的分类，并按收支类型去重。
+assert.deepEqual(await repository.getCategories('income'), DEFAULT_WALLET_CATEGORIES.income);
+const custom = (await invoke(add, { ...lunch, category: '宠物', recordDate: '2020-01-01' })).data.record;
+const refund = (await invoke(add, { type: 'income', category: '退款', amount: 15 })).data.record;
+const quick = await repository.insertQuickAction({ id: 'quick-pet', name: '猫粮', type: 'expense', category: '宠物', amount: 20 });
+const quickOnly = await repository.insertQuickAction({ id: 'quick-garden', name: '养花', type: 'expense', category: '园艺', amount: 10 });
+const expenseCategories = await invoke(query, { mode: 'categories', type: 'expense', timeDescription: '本月' });
+assert.equal(expenseCategories.status, 'success');
+assert.ok(DEFAULT_WALLET_CATEGORIES.expense.every((category) => expenseCategories.data.categories.includes(category)));
+assert.equal(expenseCategories.data.categories.filter((category) => category === '宠物').length, 1);
+assert.ok(expenseCategories.data.categories.includes('园艺'));
+assert.equal(expenseCategories.data.categories.includes('退款'), false);
+assert.ok(expenseCategories.modelContent.includes('宠物'), 'AI 必须能看到旧账单中的自定义分类');
+assert.ok(expenseCategories.modelContent.includes('园艺'), 'AI 必须能看到仅存在于快捷记账的分类');
+const incomeCategories = await invoke(query, { mode: 'categories', type: 'income' });
+assert.ok(incomeCategories.data.categories.includes('退款'));
+assert.equal(incomeCategories.data.categories.includes('宠物'), false);
+const allCategories = await invoke(query, { mode: 'categories' });
+assert.ok(allCategories.data.categories.includes('宠物') && allCategories.data.categories.includes('退款'));
+assert.equal(allCategories.data.categories.filter((category) => category === '其他').length, 1);
+const presentationDeps = {
+  ledgerRepository: repository,
+  assistantRepository: { getAll: async () => [], getLedgerAI: async () => null },
+};
+const availableCategories = await getWalletCategories(presentationDeps);
+assert.deepEqual((await getWalletScreenData(new Date(), presentationDeps)).categories, availableCategories);
+assert.equal((await repository.getRangeSummary('2020-01-01', '2020-01-01')).categoryStats[0].category, '宠物');
+await repository.deleteRecord(custom.id);
+await repository.deleteRecord(refund.id);
+await repository.deleteQuickAction(quick.id);
+await repository.deleteQuickAction(quickOnly.id);
+
 // 用户编辑保留原数据，支持自定义分类和日期，保存失败时保留表单。
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const React = require('react');
@@ -152,7 +189,7 @@ let closed = 0;
 let succeeds = false;
 let renderer;
 await act(async () => { renderer = create(React.createElement(Modal, {
-  visible: true, initialRecord, onSave: async (draft) => { saved = draft; return succeeds; }, onClose: () => { closed += 1; },
+  visible: true, initialRecord, availableCategories, onSave: async (draft) => { saved = draft; return succeeds; }, onClose: () => { closed += 1; },
 })); });
 function saveButton() {
   return renderer.root.findAllByType('TouchableOpacity').find((node) => node.findAllByType('Text').some((text) => text.props.children === '保存'));
@@ -173,6 +210,63 @@ succeeds = true;
 await act(async () => { await saveButton().props.onPress(); });
 assert.equal(saved.recordDate, '2026-09-29');
 assert.equal(closed, 1);
+await act(async () => { renderer.unmount(); });
+
+// 手动新增可复用历史分类，也可输入新分类；空白不能保存，首尾空格在用户输入边界清除。
+await act(async () => { renderer = create(React.createElement(Modal, {
+  visible: true, availableCategories,
+  onSave: async (draft) => { saved = await repository.insertRecord(draft); return true; },
+  onClose: () => {},
+})); });
+const categoryButton = renderer.root.findAllByType('TouchableOpacity').find((node) => node.findAllByType('Text').some((text) => text.props.children === '宠物'));
+await act(async () => { categoryButton.props.onPress(); });
+const categoryInput = renderer.root.findAllByType('TextInput').find((node) => node.props.placeholder === '输入自定义分类');
+assert.equal(categoryInput.props.value, '宠物');
+await act(async () => {
+  renderer.root.findAllByType('TextInput').find((node) => node.props.placeholder === '0.00').props.onChangeText('30');
+  categoryInput.props.onChangeText('   ');
+});
+assert.equal(saveButton().props.disabled, true);
+await act(async () => { categoryInput.props.onChangeText('  健身  '); });
+assert.equal(saveButton().props.disabled, false);
+await act(async () => { await saveButton().props.onPress(); });
+assert.equal(saved.category, '健身');
+assert.ok((await repository.getCategories('expense')).includes('健身'));
+await repository.deleteRecord(saved.id);
+await act(async () => { renderer.unmount(); });
+
+// 快捷记账支持同一份已有分类和自定义输入，切换收支类型清除旧选择。
+const QuickModal = load(`${wallet}presentation/QuickActionModal.tsx`).default;
+let quickDraft;
+await act(async () => { renderer = create(React.createElement(QuickModal, {
+  visible: true, availableCategories, quickActions: [], onClose: () => {},
+  onAdd: (draft) => { quickDraft = draft; }, onDelete: () => {},
+})); });
+function buttonWithText(text) {
+  return renderer.root.findAllByType('TouchableOpacity').find((node) => node.findAllByType('Text').some((item) => item.props.children === text));
+}
+await act(async () => { buttonWithText('添加').props.onPress(); });
+await act(async () => { buttonWithText('园艺').props.onPress(); });
+function quickCategoryInput() {
+  return renderer.root.findAllByType('TextInput').find((node) => node.props.placeholder === '输入自定义分类');
+}
+assert.equal(quickCategoryInput().props.value, '园艺');
+await act(async () => { buttonWithText('收入').props.onPress(); });
+assert.equal(quickCategoryInput().props.value, '');
+await act(async () => { buttonWithText('支出').props.onPress(); });
+await act(async () => {
+  renderer.root.findAllByType('TextInput').find((node) => node.props.placeholder === '名称').props.onChangeText('健身课');
+  renderer.root.findAllByType('TextInput').find((node) => node.props.placeholder === '金额').props.onChangeText('30');
+  quickCategoryInput().props.onChangeText('   ');
+});
+await act(async () => { buttonWithText('添加').props.onPress(); });
+assert.equal(quickDraft, undefined);
+await act(async () => { quickCategoryInput().props.onChangeText('  健身  '); });
+await act(async () => { buttonWithText('添加').props.onPress(); });
+assert.equal(quickDraft.category, '健身');
+const customQuick = await repository.insertQuickAction(quickDraft);
+assert.ok((await repository.getCategories('expense')).includes('健身'));
+await repository.deleteQuickAction(customQuick.id);
 await act(async () => { renderer.unmount(); });
 
 // 长按只展示菜单，选择编辑或确认删除后才写入；取消不会删除。
@@ -221,7 +315,10 @@ await act(async () => { renderer.unmount(); });
 
 // 初始详情快照不能阻止修改后重新读取真实统计。
 mocks['@react-navigation/native'] = { useFocusEffect: (callback) => React.useEffect(callback, [callback]) };
-mocks['../../composition'] = { getLedgerRangeSummary: (start, end) => repository.getRangeSummary(start, end) };
+mocks['../../composition'] = {
+  getLedgerRangeSummary: (start, end) => repository.getRangeSummary(start, end),
+  getWalletCategories: () => getWalletCategories(presentationDeps),
+};
 const { useHistoryDetail } = load(`${wallet}presentation/HistoryDetailScreen/useHistoryDetail.ts`);
 const historic = await repository.insertRecord({ ...lunch, recordDate: '2026-09-28' });
 const timeRange = { startDate: '2026-09-28', endDate: '2026-09-28', label: '历史账单' };
@@ -230,6 +327,7 @@ let history;
 function HistoryHarness() { history = useHistoryDetail({ timeRange, initialData }); return null; }
 await act(async () => { renderer = create(React.createElement(HistoryHarness)); });
 assert.equal(history.summary.totalExpense, 25);
+assert.deepEqual(history.categories, await getWalletCategories(presentationDeps));
 await repository.updateRecord(historic.id, { amount: 30 });
 await act(async () => { await history.reload(); });
 assert.equal(history.summary.totalExpense, 30);
@@ -240,4 +338,4 @@ assert.equal(history.summary.totalExpense, 0);
 assert.deepEqual(history.summary.records, []);
 await act(async () => { renderer.unmount(); });
 db.close();
-console.log('Wallet 账单新增、ID observation、编辑、删除、统计与表单行为验证通过');
+console.log('Wallet 账单新增、ID observation、编辑、删除、统计、自定义分类查询与表单行为验证通过');

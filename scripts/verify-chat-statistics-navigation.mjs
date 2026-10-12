@@ -28,12 +28,13 @@ function load(relativePath, dependencies = {}) {
 const theme = {
   colors: { background: { screen: 'white', app: 'white' }, surface: { default: 'white', muted: 'gray' }, text: { primary: 'black', secondary: 'gray' }, brand: { primary: 'blue' }, border: { light: 'gray' }, feedback: { error: 'red' } },
   spacing: { xs: 4, sm: 8, md: 16, lg: 24 },
+  radius: { lg: 16 },
 };
 const shared = {
   react: React,
   'react-native': { ActivityIndicator: 'ActivityIndicator', Alert: {}, Pressable: 'Pressable', ScrollView: 'ScrollView', Text: 'Text', TouchableOpacity: 'TouchableOpacity', View: 'View', StyleSheet: { create: (styles) => styles } },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
-  '@shared/theme': { useTheme: () => theme, useThemedStyles: (factory) => factory(theme) },
+  '@shared/theme': { ThemedSurface: 'ThemedSurface', useTheme: () => theme, useThemedStyles: (factory) => factory(theme) },
   '@shared/ui': { NavigationHeader: 'NavigationHeader', AIInfoCard: 'AIInfoCard' },
   '@shared/ui/NavigationHeader': { __esModule: true, default: 'NavigationHeader' },
   'lucide-react-native': { HeartHandshake: 'HeartHandshake', BookOpen: 'BookOpen' },
@@ -79,6 +80,7 @@ const routeDependencies = Object.fromEntries([
   '../conversation/ChatImageModelPicker', '../group/CreateGroup', '../group/GroupAdminSettings',
   '../group/GroupChatDetail', '../group/GroupOptions', '../conversation/ChatSettings',
   '../../summary/presentation/ChatSummaryScreen', '../../summary/presentation/ChatSummaryEditorScreen',
+  '../../summary/presentation/ChatSummarySettingsScreen', '../../summary/presentation/ChatSummaryTaskScreen', '../../summary/presentation/ChatSecondarySummaryScreen',
   '../messages/ChatDetail', '../messages/FilePreview', '../messages/components/ChatBackground',
   '../../group/application', '../../conversation/application/ChatPresentation', '../messages/components/sessionTimelineCache',
 ].map((id) => [id, defaults]));
@@ -101,7 +103,8 @@ try {
   assert.equal(queryCount, 0, '更多页面只展示入口，不读取统计或内嵌统计正文');
   const menuTitles = menuRenderer.root.findAllByType('TouchableOpacity').map((item) =>
     item.findAllByType('Text').map((text) => text.children.join('')).join(''));
-  assert.deepEqual(menuTitles, ['模型设置', '协议空间', '聊天摘要', '对话设置', '相遇痕迹', '清除聊天记录', '删除当前 AI']);
+  // 菜单顺序可随页面调整；导航契约要求入口完整，不冻结当前排列。
+  assert.deepEqual(menuTitles.sort(), ['模型设置', '协议空间', '聊天摘要', '对话设置', '相遇痕迹', '清除聊天记录', '删除当前 AI'].sort());
   const entry = menuRenderer.root.findAllByType('TouchableOpacity').find((item) =>
     item.findAllByType('Text').some((text) => text.children.join('') === '相遇痕迹'));
   assert.ok(entry, '更多中应有与其他功能相同的可点击菜单入口');

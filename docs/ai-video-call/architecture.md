@@ -88,7 +88,7 @@ ProcessCallAIReply 使用当前角色主模型与 resolved Chat Pack；流式文
 
 ```text
 Calls commit → CallExecutionService → CallExecutionHeadlessTask
-→ ensureCallHostReady → 唯一 CallMediaRuntime
+→ ensureHostDatabaseReady → 唯一 CallMediaRuntime
 → 终态 → ASR/相机/TTS/窗口/通知释放 → Headless completion
 ```
 

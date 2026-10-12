@@ -25,6 +25,9 @@ export async function assembleResolvedChatPromptPack(
   const scenario = resolveChatScenario(params);
   return promptPackAssembler.assembleChatPromptPack(await resolveParams(scenario, params));
 }
+export async function assembleResolvedSummaryPromptPack(params: AssemblePromptPackParams, task: PromptPackBlock): Promise<PromptPack> {
+  return promptPackAssembler.assembleSummaryPromptPack(await resolveParams('chat.private_reply', params, false), task);
+}
 
 export async function assembleResolvedLedgerPromptPack(
   params: AssemblePromptPackParams
@@ -70,7 +73,8 @@ export async function assembleResolvedStandalonePromptPack(
 
 async function resolveParams(
   scenarioId: PromptPackScenario,
-  params: AssemblePromptPackParams
+  params: AssemblePromptPackParams,
+  includeDynamicContext = true
 ): Promise<AssemblePromptPackParams> {
   const resolved = await resolveLegacyPromptPreset({
     scenarioId,
@@ -128,7 +132,7 @@ async function resolveParams(
     },
     additionalBlocks: [
       ...(params.additionalBlocks || []),
-      ...await createDeviceBatteryPromptBlocks(assistantConfiguration.batteryEnabled, scenarioId),
+      ...(includeDynamicContext ? await createDeviceBatteryPromptBlocks(assistantConfiguration.batteryEnabled, scenarioId) : []),
       ...customBlocks,
     ],
   };

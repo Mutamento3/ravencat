@@ -2,21 +2,67 @@
 import type { ChatCanonicalCursor, ChatContextItem } from './ChatContext';
 import type { CallSummarySource } from '@features/calls';
 import type { ConversationContextItem } from './ChatSummaryTimeline';
-/** 仅约束模型自动追加的正文，用户维护已有摘要不受此限制。 */
-export const CHAT_SUMMARY_ADDITION_MAX_CHARACTERS = 500;
+/** 包含首次请求，真正失败后只允许一次自动重试；取消不消耗失败预算。 */
+export const CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS = 2;
 export const CHAT_SUMMARY_INPUT_MAX_CHARACTERS = 5000;
 export interface ChatSummarySegment {
   id: string; conversationId: string; sequence: number; content: string;
+  level: 'primary' | 'secondary'; compactionId: string | null; contextSequence: number;
   messageCount: number; batchSize: number | null; sourceStartAt: string | null; sourceEndAt: string | null;
   timeZone: string; createdAt: string; updatedAt: string;
 }
 export interface ChatSummaryCallBoundary { processedCallIds: string[]; historyStartsAfter: string | null }
 export interface ChatSummarySnapshot {
+  tasks: ChatSummaryTask[];
   segments: ChatSummarySegment[]; raw: ChatContextItem[];
+  settings: ChatSummarySettings; contextSegments: ChatSummarySegment[];
   pendingCalls: CallSummarySource[];
   timeline: ConversationContextItem[];
+  fixedStart: { messageId: number; content: string; messageCount: number } | null;
+}
+export interface ChatSummarySettings {
+  generationEnabled: boolean; injectEnabled: boolean;
+  secondaryEnabled: boolean; secondaryTokenThreshold: number; fixedMessageId: number | null;
+  requestTimeoutSeconds: number; maxOutputTokens: number | null;
+}
+export type ChatSummarySettingsPatch = Partial<Omit<ChatSummarySettings, 'fixedMessageId'>>;
+export const DEFAULT_CHAT_SUMMARY_SETTINGS: ChatSummarySettings = {
+  generationEnabled: true, injectEnabled: true, secondaryEnabled: true, secondaryTokenThreshold: 8000, fixedMessageId: null,
+  requestTimeoutSeconds: 300, maxOutputTokens: null,
+};
+export type ChatSummaryLevel = 'primary' | 'secondary';
+export interface ChatSummaryRequestSettings { requestTimeoutSeconds: number; maxOutputTokens: number | null }
+export interface ChatSummaryCallDiagnostics {
+  httpStatus?: number | null;
+  model: string; requestedMaxTokens: number | null; timeoutSeconds: number; durationMs: number;
+  promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; cachedTokens: number | null;
+  finishReason: string | null; contentCharacters: number; reasoningCharacters: number; serverError: string | null;
+}
+export interface ChatSummaryFailure { kind: 'timeout' | 'request' | 'output_limit' | 'empty_output' | 'invalid_output'; message: string; retryable: boolean }
+export interface ChatSummaryTask {
+  id: string; conversationId: string; level: ChatSummaryLevel;
+  status: 'running' | 'waiting' | 'failed' | 'completed';
+  attemptCount: number; automaticFailures: number; nextAttemptAt: string | null;
+  error: (ChatSummaryFailure & { occurredAt: string }) | null; calls: ChatSummaryCallDiagnostics[]; segmentIds: string[];
+  createdAt: string; updatedAt: string;
+}
+export class ChatSummaryGenerationError extends Error {
+  constructor(readonly failure: ChatSummaryFailure) { super(failure.message); }
+}
+export interface ChatSummaryTaskClaim { conversationId: string; claimId: string; generation: number; taskId: string }
+export interface SecondaryChatSummaryClaim {
+  taskId: string;
+  conversationId: string; claimId: string; generation: number;
+  segments: ChatSummarySegment[]; timeZone: string;
+}
+export interface ChatSummarySearchInput {
+  from?: string; to?: string; keywords?: string[]; offset?: number;
+}
+export interface ChatSummarySearchPage {
+  entries: ChatSummarySegment[]; nextOffset: number | null;
 }
 export interface ChatSummaryClaim {
+  taskId: string;
   conversationId: string; claimId: string; generation: number; revision: number;
   previous: ChatSummarySegment[]; timeZone: string;
   fromCursor: ChatCanonicalCursor | null; toCursor: ChatCanonicalCursor | null; batchSize: number;
@@ -34,14 +80,25 @@ export interface ChatSummaryModelInput {
 }
 export interface ChatSummaryRepository {
   readContext(conversationId: string, protectedMessageIds: readonly number[]): Promise<ChatSummarySnapshot>;
-  listConversationIds(): Promise<string[]>;
+  prepareConversations(now: string): Promise<{ conversationIds: string[]; pausedConversationIds: string[] }>;
   getNextWakeAt(): Promise<string | null>;
   claim(conversationId: string, batchSize: number, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<ChatSummaryClaim | null>;
   renewClaim(claim: ChatSummaryClaim, now: string, expiresAt: string): Promise<boolean>;
   appendClaim(claim: ChatSummaryClaim, additions: readonly ChatSummaryAddition[], now: string): Promise<boolean>;
   releaseClaim(claim: ChatSummaryClaim): Promise<void>;
+  readSettings(conversationId: string): Promise<ChatSummarySettings>;
+  updateSettings(conversationId: string, patch: ChatSummarySettingsPatch): Promise<void>;
+  setFixedStart(conversationId: string, messageId: number | null): Promise<void>;
+  recordInvocation(claim: ChatSummaryTaskClaim, diagnostics: ChatSummaryCallDiagnostics, now: string): Promise<void>;
+  failTask(claim: ChatSummaryTaskClaim, failure: ChatSummaryFailure, now: string): Promise<boolean>;
+  retryTask(conversationId: string, taskId: string, now: string): Promise<void>;
+  claimSecondary(conversationId: string, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<SecondaryChatSummaryClaim | null>;
+  appendSecondary(claim: SecondaryChatSummaryClaim, segmentId: string, content: string, now: string): Promise<boolean>;
+  releaseSecondaryClaim(claim: SecondaryChatSummaryClaim): Promise<void>;
+  search(assistantId: string, input: ChatSummarySearchInput): Promise<ChatSummarySearchPage>;
   create(conversationId: string, segmentId: string, content: string, now: string, timeZone: string): Promise<void>;
   edit(conversationId: string, segmentId: string, content: string, now: string): Promise<void>;
+  replaceSecondary(conversationId: string, expected: readonly ChatSummarySegment[], content: string | null, now: string): Promise<void>;
   delete(conversationId: string, segmentId: string): Promise<void>;
   clear(conversationId: string): Promise<void>;
 }

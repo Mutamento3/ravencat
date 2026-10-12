@@ -2,6 +2,7 @@
 export type { AIProfile, AIConfig } from './domain/AIProfile';
 export type * from './domain/AssistantToolPermission';
 export * from './domain/AuxiliaryModel';
+export { createChangeOwnAvatarTool } from './aiTools/ChangeOwnAvatarTool';
 export type {
   AIAssistantSettingsUpdate,
   AIModelSettingsUpdate,

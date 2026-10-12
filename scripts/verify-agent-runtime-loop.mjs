@@ -248,6 +248,18 @@ assert.deepEqual(direct.events.map((event) => event.type), [
   'run_completed',
 ]);
 
+// 工具附图必须穿过真实执行循环，到达 complete / stream 共用的下一轮模型输入。
+for (const modelTransport of ['complete', 'stream']) {
+  const modelImages = [{ url: 'data:image/png;base64,AAA' }];
+  const view = await runCase({
+    task: { modelTransport },
+    tools: [createTool('view_image', async () => ({ status: 'success', data: {}, modelContent: '原图', modelImages }))],
+    turns: [createTurn({ toolCalls: [{ id: 'view-1', name: 'view_image', arguments: '{}' }] }), createTurn({ text: '看到了' })],
+  });
+  assert.deepEqual(view.gateway.requests[1].history.find(item => item.role === 'tool').images, modelImages);
+  assert.equal(view.result.terminalCode, 'COMPLETED');
+}
+
 const continuationDecisions = [];
 const completionContinuation = await runCase({
   task: { allowedToolNames: ['schedule_self_wake'] },
@@ -1011,6 +1023,143 @@ assert.equal(
   '已有 canonical 用户可见输出意图时允许模型以空正文完成',
 );
 assert.equal(toolOwnedVisibleOutput.result.finalText, '');
+
+// 发送工具的意图属于模型参数；Runtime 只消费成功结果，不重新解析参数或业务 data。
+const outputTool = createTool('visible_output', async (input) => ({
+  status: 'success', data: { intent: 'canonical-output' }, modelContent: '输出已准备',
+  metadata: { fulfillsUserVisibleOutput: true, completionIntent: input.on_success },
+}), {
+  type: 'object', properties: { on_success: { type: 'string', enum: ['finish', 'continue'] } },
+  required: ['on_success'], additionalProperties: false,
+});
+const finishCall = (id) => createToolCall(id, 'visible_output', { on_success: 'finish' });
+const continueCall = (id) => createToolCall(id, 'visible_output', { on_success: 'continue' });
+for (const modelTransport of ['complete', 'stream']) {
+  const finishOutput = await runCase({
+    task: { modelTransport, maxSteps: 1, maxToolCalls: 1 }, tools: [outputTool],
+    turns: [createTurn({ toolCalls: [finishCall('finish')] })],
+  });
+  assert.equal(finishOutput.result.terminalCode, 'COMPLETED');
+  assert.equal(finishOutput.gateway.requests.length, 1, 'finish 成功后不补空模型回合，预算耗尽也不追加正文');
+  assert.equal(finishOutput.result.finalText, '');
+  assert.equal(finishOutput.result.history.at(-1).role, 'tool', '结束仍记录完整 observation');
+  assert.deepEqual(finishOutput.events.slice(-2).map(({ type }) => type), ['step_completed', 'run_completed']);
+
+  const consecutiveOutput = await runCase({
+    task: { modelTransport }, tools: [outputTool],
+    turns: [
+      createTurn({ toolCalls: [continueCall('first')] }),
+      createTurn({ toolCalls: [finishCall('second')] }),
+    ],
+  });
+  assert.equal(consecutiveOutput.result.terminalCode, 'COMPLETED');
+  assert.equal(consecutiveOutput.gateway.requests.length, 2, 'continue 保留下一条输出，最后 finish 不再续轮');
+  assert.equal(consecutiveOutput.executions.length, 2);
+
+  const batchOutput = await runCase({
+    task: { modelTransport }, tools: [outputTool],
+    turns: [createTurn({ toolCalls: [finishCall('first'), finishCall('last')] })],
+  });
+  assert.equal(batchOutput.result.terminalCode, 'COMPLETED');
+  assert.equal(batchOutput.executions.length, 2, '前一个 finish 不得截断已提出的批次');
+  assert.equal(batchOutput.gateway.requests.length, 1);
+}
+
+const unfinishedBatch = await runCase({
+  tools: [outputTool],
+  turns: [
+    createTurn({ toolCalls: [finishCall('first'), continueCall('last')] }),
+    createTurn({ text: '继续补充' }),
+  ],
+});
+assert.equal(unfinishedBatch.gateway.requests.length, 2, '只认最后一个工具的结束意图');
+assert.equal(unfinishedBatch.result.finalText, '继续补充');
+
+const failedReadTool = createTool('failed_read', async () => ({
+  status: 'error', code: 'READ_FAILED', retryable: false, modelContent: '读取失败',
+}));
+for (const toolCalls of [
+  [createToolCall('failed', 'failed_read'), finishCall('last')],
+  [finishCall('first'), createToolCall('failed', 'failed_read')],
+]) {
+  const failedBatch = await runCase({
+    tools: [outputTool, failedReadTool],
+    turns: [createTurn({ toolCalls }), createTurn({ text: '处理工具失败' })],
+  });
+  assert.equal(failedBatch.result.terminalCode, 'COMPLETED');
+  assert.equal(failedBatch.gateway.requests.length, 2, '同批前后任一工具失败都必须回灌模型');
+  assert.ok(failedBatch.gateway.requests[1].history.some((item) => item.content === '读取失败'));
+}
+
+for (const input of [{}, { on_success: 'unknown' }]) {
+  const invalidIntent = await runCase({
+    tools: [outputTool], turns: [
+      createTurn({ toolCalls: [createToolCall('invalid', 'visible_output', input)] }),
+      createTurn({ toolCalls: [finishCall('corrected')] }),
+    ],
+  });
+  assert.equal(invalidIntent.result.terminalCode, 'COMPLETED');
+  assert.equal(invalidIntent.result.steps[0].toolCalls[0].outcome.code, 'TOOL_INPUT_INVALID');
+  assert.equal(invalidIntent.executions.length, 1, '缺失或非法意图在 schema 边界拒绝，不执行发送');
+  assert.equal(invalidIntent.gateway.requests.length, 2);
+}
+
+const finishDecisions = [];
+const finishContinuation = await runCase({
+  tools: [outputTool],
+  turns: [
+    createTurn({ text: '语音前言', toolCalls: [finishCall('main')] }),
+    createTurn({ toolCalls: [finishCall('supplement')] }),
+  ],
+  beforeComplete: async (context) => {
+    finishDecisions.push(context);
+    return context.completionContinuationUsed ? { action: 'complete' } : {
+      action: 'continue', instruction: '补充一个可见输出', allowedToolNames: ['visible_output'],
+    };
+  },
+});
+assert.equal(finishContinuation.result.terminalCode, 'COMPLETED');
+assert.equal(finishContinuation.gateway.requests.length, 2, '工具 finish 仍经过既有完成前检查');
+assert.deepEqual(finishDecisions.map(({ completionContinuationUsed }) => completionContinuationUsed), [false, true]);
+assert.equal(finishDecisions[0].finalText, '语音前言', '模型已有正文不因工具结束而丢失');
+
+const { SelectStickerTool } = loadTypeScriptModule('src/features/stickers/aiTools/StickerAgentTools.ts', {
+  '@features/media': { mediaImageFailure: () => null },
+  '../application/StickerRuntime': { getStickersRuntimeDependencies: () => ({ media: { resolveMediaAsset: async () => ({}) } }) },
+  '../application/AIStickerCommands': { getStickerVectorState: async () => ({ status: 'missing_or_stale', reminder: '缺向量仍可发送' }) },
+  '@shared/runtime/abortSignal': abortSignalModule,
+  '../application/StickerQueries': {
+    getStickerById: async (id) => ({
+      id, mediaAssetId: 'sticker-asset', name: '猫猫', tags: [],
+      annotationStatus: id === 'pending' ? 'pending' : 'ready',
+    }),
+  },
+  '../application/StickerSearch': {},
+  '../domain/StickerSearch': {},
+  '../domain/Sticker': {},
+});
+const stickerTool = createTool(SelectStickerTool.name, SelectStickerTool.execute, SelectStickerTool.definition.parameters);
+for (const on_success of ['finish', 'continue']) {
+  const stickerReply = await runCase({
+    tools: [stickerTool], turns: [
+      createTurn({ toolCalls: [createToolCall('sticker', 'select_sticker', { sticker_id: 'ready', on_success })] }),
+      ...(on_success === 'continue' ? [createTurn({ text: '再补一句' })] : []),
+    ],
+  });
+  assert.equal(stickerReply.result.terminalCode, 'COMPLETED');
+  assert.equal(stickerReply.gateway.requests.length, on_success === 'finish' ? 1 : 2);
+  const outcome = stickerReply.result.steps[0].toolCalls[0].outcome;
+  assert.equal(outcome.metadata.completionIntent, on_success, '真实表情包工具转交模型意图');
+  assert.equal(outcome.data.sticker.stickerId, 'ready');
+}
+const pendingSticker = await runCase({
+  tools: [stickerTool], turns: [
+    createTurn({ toolCalls: [createToolCall('sticker', 'select_sticker', { sticker_id: 'pending', on_success: 'finish' })] }),
+    createTurn({ text: '换一个可用表情包' }),
+  ],
+});
+assert.equal(pendingSticker.result.steps[0].toolCalls[0].outcome.code, 'STICKER_NOT_READY');
+assert.equal(pendingSticker.gateway.requests.length, 2, '真实表情包业务失败仍交回模型');
 
 const completeAndStream = await Promise.all([
   runCase({ turns: [createTurn({ text: '同一状态机' })], task: { modelTransport: 'complete' } }),

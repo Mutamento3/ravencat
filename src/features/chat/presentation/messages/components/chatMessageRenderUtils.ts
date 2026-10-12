@@ -117,6 +117,7 @@ export function buildMessageBubbleRenderState(params: {
   isMe: boolean;
   senderType: SenderType;
   replyToText?: string | null;
+  hasReplyQuote?: boolean;
   attachments: ChatAttachment[];
   sticker?: StickerMessageSnapshot | null;
   voice?: ChatVoiceMessageMetadata['voice'] | null;
@@ -138,11 +139,11 @@ export function buildMessageBubbleRenderState(params: {
     !isSystem &&
     !hasTextContent &&
     params.attachments.length === 1 &&
-    (params.attachments[0]?.type === 'image' || (!params.replyToText && params.attachments[0]?.type === 'file'));
+    !params.hasReplyQuote && !params.replyToText;
   const isStandaloneStickerMessage =
     !isReasoning &&
     !isSystem &&
-    !params.replyToText &&
+    !params.hasReplyQuote && !params.replyToText &&
     !hasTextContent &&
     hasSticker;
 

@@ -16,7 +16,7 @@ import type {
   MessagePaginationParams,
   PaginatedMessages,
 } from './ChatMessage';
-import type { DatabaseTransactionExecutor } from '@platform/persistence';
+import type { DatabaseReadExecutor, DatabaseTransactionExecutor } from '@platform/persistence';
 import type { ChatRecordStatistics } from './ChatRecordStatistics';
 
 /** 统一消息提交输入：消息内容 + 最终预览文本。 */
@@ -203,7 +203,7 @@ export interface IMessageRepository {
    *
    * 用于在事件层把 assistant 分段消息重新聚合为一条 logical message。
    */
-  getMessagesByLogicalMessageId(sessionId: string, logicalMessageId: string): Promise<ChatMessage[]>;
+  getMessagesByLogicalMessageId(sessionId: string, logicalMessageId: string, executor?: DatabaseReadExecutor): Promise<ChatMessage[]>;
 
   /**
    * 按回合 run 行固定的输入区间读取用户消息：(lowerExclusive, upperInclusive]。

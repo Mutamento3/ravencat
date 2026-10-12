@@ -1,6 +1,6 @@
 /** 正文与派生任务在同一事务标记，所有运行时访问经单写者协调器。 */
 import { databaseCoordinator, type DatabaseReadExecutor, type DatabaseTransactionExecutor } from '@platform/persistence';
-import { MemoryNotFoundError, MemoryVectorDimensionError, normalizeMemoryText, type MemoryEntry, type MemoryRecallSettings, type PassiveTriggerKeyword } from '../domain/Memory';
+import { MemoryNotFoundError, MemoryTriggerNotFoundError, MemoryVectorDimensionError, normalizeMemoryText, type MemoryEntry, type MemoryRecallSettings, type MemoryTriggerKeyword, type PassiveTriggerGroup } from '../domain/Memory';
 import type { CreateMemoryRecord, MemoryEmbeddingClaim, MemoryEmbeddingModel, MemoryRepository } from '../domain/MemoryRepository';
 
 /** 只提交首次选择；向量 revision 与 claim 的同步仍由 commit 后的原有队列负责。 */
@@ -20,8 +20,10 @@ const ENTRY_QUERY = `SELECT ${ENTRY_COLUMNS}
   FROM memory_items m JOIN memory_item_embeddings e ON e.memory_id = m.id`;
 
 /** 三个 consumer 共用关系定义，显式关联不依赖记忆文本。 */
-const TRIGGER_ASSOCIATION = `(INSTR(m.normalized_content, t.normalized_keyword) > 0
-  OR INSTR(m.normalized_summary, t.normalized_keyword) > 0
+const TRIGGER_LEXICAL_ASSOCIATION = `(t.auto_associate = 1 AND EXISTS (
+  SELECT 1 FROM memory_trigger_keywords k WHERE k.group_id = t.id
+  AND (INSTR(m.normalized_content, k.normalized_keyword) > 0 OR INSTR(m.normalized_summary, k.normalized_keyword) > 0)))`;
+const TRIGGER_ASSOCIATION = `(${TRIGGER_LEXICAL_ASSOCIATION}
   OR EXISTS (SELECT 1 FROM memory_passive_associations a WHERE a.trigger_id = t.id AND a.memory_id = m.id))`;
 
 function mapEntry(row: EntryRow): MemoryEntry {
@@ -41,6 +43,18 @@ async function readEntry(db: DatabaseReadExecutor, poolId: string, memoryId: str
   const row = await db.getFirstAsync<EntryRow>(`${ENTRY_QUERY} WHERE m.pool_id = ? AND m.id = ?`, [poolId, memoryId]);
   if (!row) throw new MemoryNotFoundError();
   return mapEntry(row);
+}
+
+async function requireTriggerGroup(db: DatabaseReadExecutor, poolId: string, groupId: string): Promise<void> {
+  const group = await db.getFirstAsync('SELECT id FROM memory_trigger_groups WHERE pool_id = ? AND id = ?', [poolId, groupId]);
+  if (!group) throw new MemoryTriggerNotFoundError();
+}
+
+async function writeTriggerKeywords(tx: DatabaseTransactionExecutor, groupId: string, keywords: MemoryTriggerKeyword[]): Promise<void> {
+  for (const [position, item] of keywords.entries()) {
+    await tx.runAsync('INSERT INTO memory_trigger_keywords (group_id, keyword, normalized_keyword, position) VALUES (?, ?, ?, ?)',
+      [groupId, item.keyword, item.normalizedKeyword, position]);
+  }
 }
 
 async function markContentPending(tx: DatabaseTransactionExecutor, memoryId: string): Promise<void> {
@@ -164,45 +178,53 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
       active_page_size = excluded.active_page_size`, [poolId, settings.passiveLimit, settings.activePageSize]);
   }
 
-  async listTriggers(poolId: string): Promise<PassiveTriggerKeyword[]> {
-    const rows = await executor('listTriggers').getAllAsync<{
-      id: string; keyword: string; normalized_keyword: string; associated_count: number; enabled_count: number;
-    }>(`SELECT t.id, t.keyword, t.normalized_keyword, COUNT(m.id) AS associated_count,
-      COUNT(m.id) - COUNT(d.memory_id) AS enabled_count FROM memory_passive_triggers t
-      LEFT JOIN memory_items m ON m.pool_id = t.pool_id AND ${TRIGGER_ASSOCIATION}
-      LEFT JOIN memory_passive_disabled d ON d.trigger_id = t.id AND d.memory_id = m.id
-      WHERE t.pool_id = ? GROUP BY t.id ORDER BY t.normalized_keyword, t.id`, [poolId]);
-    return rows.map((row) => ({ id: row.id, poolId, keyword: row.keyword, normalizedKeyword: row.normalized_keyword,
-      associatedCount: row.associated_count, enabledCount: row.enabled_count }));
+  async listTriggers(poolId: string): Promise<PassiveTriggerGroup[]> {
+    return executor('listTriggers').withExclusiveTransactionAsync(async (tx) => {
+      const rows = await tx.getAllAsync<{
+        id: string; auto_associate: number; associated_count: number; enabled_count: number;
+      }>(`SELECT t.id, t.auto_associate, COUNT(m.id) AS associated_count,
+        COUNT(m.id) - COUNT(d.memory_id) AS enabled_count FROM memory_trigger_groups t
+        LEFT JOIN memory_items m ON m.pool_id = t.pool_id AND ${TRIGGER_ASSOCIATION}
+        LEFT JOIN memory_passive_disabled d ON d.trigger_id = t.id AND d.memory_id = m.id
+        WHERE t.pool_id = ? GROUP BY t.id ORDER BY t.rowid`, [poolId]);
+      const words = await tx.getAllAsync<{ group_id: string; keyword: string; normalized_keyword: string }>(
+        `SELECT k.* FROM memory_trigger_keywords k JOIN memory_trigger_groups t ON t.id = k.group_id
+         WHERE t.pool_id = ? ORDER BY k.position`, [poolId]);
+      const keywords = new Map<string, MemoryTriggerKeyword[]>(rows.map((row) => [row.id, []]));
+      for (const word of words) keywords.get(word.group_id)!.push({ keyword: word.keyword, normalizedKeyword: word.normalized_keyword });
+      return rows.map((row) => ({ id: row.id, poolId, keywords: keywords.get(row.id)!, autoAssociate: row.auto_associate === 1,
+        associatedCount: row.associated_count, enabledCount: row.enabled_count }));
+    });
   }
 
-  async createTriggers(poolId: string, triggers: { id: string; keyword: string; normalizedKeyword: string }[], memoryId?: string) {
-    await executor('createTriggers').withExclusiveTransactionAsync(async (tx) => {
-      if (memoryId !== undefined) await readEntry(tx, poolId, memoryId);
-      for (const trigger of triggers) {
-        await tx.runAsync(`INSERT INTO memory_passive_triggers (id, pool_id, keyword, normalized_keyword)
-          VALUES (?, ?, ?, ?) ON CONFLICT(pool_id, normalized_keyword) DO NOTHING`,
-        [trigger.id, poolId, trigger.keyword, trigger.normalizedKeyword]);
-        if (memoryId !== undefined) {
-          await tx.runAsync(`INSERT OR IGNORE INTO memory_passive_associations (trigger_id, memory_id)
-            SELECT id, ? FROM memory_passive_triggers WHERE pool_id = ? AND normalized_keyword = ?`,
-          [memoryId, poolId, trigger.normalizedKeyword]);
-          await tx.runAsync(`DELETE FROM memory_passive_disabled WHERE memory_id = ?
-            AND trigger_id IN (SELECT id FROM memory_passive_triggers WHERE pool_id = ? AND normalized_keyword = ?)`,
-          [memoryId, poolId, trigger.normalizedKeyword]);
-        }
+  async createTriggerGroup(poolId: string, groupId: string, keywords: MemoryTriggerKeyword[], memoryIds: string[], autoAssociate: boolean) {
+    await executor('createTriggerGroup').withExclusiveTransactionAsync(async (tx) => {
+      await tx.runAsync('INSERT INTO memory_trigger_groups (id, pool_id, auto_associate) VALUES (?, ?, ?)', [groupId, poolId, autoAssociate ? 1 : 0]);
+      await writeTriggerKeywords(tx, groupId, keywords);
+      for (const memoryId of memoryIds) {
+        await readEntry(tx, poolId, memoryId);
+        await tx.runAsync('INSERT INTO memory_passive_associations (trigger_id, memory_id) VALUES (?, ?)', [groupId, memoryId]);
       }
     });
   }
 
+  async updateTriggerGroup(poolId: string, groupId: string, keywords: MemoryTriggerKeyword[], autoAssociate: boolean) {
+    await executor('updateTriggerGroup').withExclusiveTransactionAsync(async (tx) => {
+      await requireTriggerGroup(tx, poolId, groupId);
+      await tx.runAsync('UPDATE memory_trigger_groups SET auto_associate = ? WHERE id = ?', [autoAssociate ? 1 : 0, groupId]);
+      await tx.runAsync('DELETE FROM memory_trigger_keywords WHERE group_id = ?', [groupId]);
+      await writeTriggerKeywords(tx, groupId, keywords);
+    });
+  }
+
   async deleteTrigger(poolId: string, triggerId: string) {
-    await executor('deleteTrigger').runAsync('DELETE FROM memory_passive_triggers WHERE pool_id = ? AND id = ?', [poolId, triggerId]);
+    await executor('deleteTrigger').runAsync('DELETE FROM memory_trigger_groups WHERE pool_id = ? AND id = ?', [poolId, triggerId]);
   }
 
   async listTriggerMemories(poolId: string, triggerId: string) {
     const rows = await executor('listTriggerMemories').getAllAsync<EntryRow & { disabled_id: string | null }>(`SELECT ${ENTRY_COLUMNS}, d.memory_id AS disabled_id
       FROM memory_items m JOIN memory_item_embeddings e ON e.memory_id = m.id
-      JOIN memory_passive_triggers t ON t.pool_id = m.pool_id AND t.id = ?
+      JOIN memory_trigger_groups t ON t.pool_id = m.pool_id AND t.id = ?
       LEFT JOIN memory_passive_disabled d ON d.trigger_id = t.id AND d.memory_id = m.id
       WHERE m.pool_id = ? AND ${TRIGGER_ASSOCIATION}
       ORDER BY m.remembered_at DESC, m.id`, [triggerId, poolId]);
@@ -210,31 +232,29 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async setAutoRecall(poolId: string, triggerId: string, memoryId: string, enabled: boolean) {
-    if (enabled) {
-      await executor('enableRecall').withExclusiveTransactionAsync(async (tx) => {
-        // 已有字面关系只恢复开关；用户选择额外记忆时才固化手动关系。
+    await executor('setAutoRecall').withExclusiveTransactionAsync(async (tx) => {
+      await requireTriggerGroup(tx, poolId, triggerId);
+      await readEntry(tx, poolId, memoryId);
+      if (enabled) {
+        // 自动文本关系只恢复开关，显式选择的额外记忆才物化；组规则不依赖命中的具体词。
         await tx.runAsync(`INSERT OR IGNORE INTO memory_passive_associations (trigger_id, memory_id)
-          SELECT t.id, m.id FROM memory_passive_triggers t JOIN memory_items m ON m.pool_id = t.pool_id
-          WHERE t.pool_id = ? AND t.id = ? AND m.id = ?
-            AND INSTR(m.normalized_content, t.normalized_keyword) = 0 AND INSTR(m.normalized_summary, t.normalized_keyword) = 0`,
-        [poolId, triggerId, memoryId]);
-        await tx.runAsync(`DELETE FROM memory_passive_disabled WHERE trigger_id = ? AND memory_id = ?
-          AND EXISTS (SELECT 1 FROM memory_passive_triggers t WHERE t.id = ? AND t.pool_id = ?)
-          AND EXISTS (SELECT 1 FROM memory_items m WHERE m.id = ? AND m.pool_id = ?)`,
-        [triggerId, memoryId, triggerId, poolId, memoryId, poolId]);
-      });
-    } else {
-      await executor('disableRecall').runAsync(`INSERT OR IGNORE INTO memory_passive_disabled (trigger_id, memory_id)
-        SELECT t.id, m.id FROM memory_passive_triggers t JOIN memory_items m ON m.pool_id = t.pool_id
-        WHERE t.pool_id = ? AND t.id = ? AND m.id = ?`, [poolId, triggerId, memoryId]);
-    }
+          SELECT t.id, m.id FROM memory_trigger_groups t CROSS JOIN memory_items m
+          WHERE t.id = ? AND m.id = ?
+            AND NOT ${TRIGGER_LEXICAL_ASSOCIATION}`,
+        [triggerId, memoryId]);
+        await tx.runAsync('DELETE FROM memory_passive_disabled WHERE trigger_id = ? AND memory_id = ?', [triggerId, memoryId]);
+      } else {
+        await tx.runAsync('INSERT OR IGNORE INTO memory_passive_disabled (trigger_id, memory_id) VALUES (?, ?)', [triggerId, memoryId]);
+      }
+    });
   }
 
   async recallPassive(poolId: string, normalizedInput: string) {
     const settings = await this.getRecallSettings(poolId);
     const rows = await executor('recallPassive').getAllAsync<EntryRow>(`${ENTRY_QUERY} WHERE m.pool_id = ?
-      AND EXISTS (SELECT 1 FROM memory_passive_triggers t WHERE t.pool_id = m.pool_id
-        AND INSTR(?, t.normalized_keyword) > 0 AND ${TRIGGER_ASSOCIATION}
+      AND EXISTS (SELECT 1 FROM memory_trigger_groups t WHERE t.pool_id = m.pool_id
+        AND EXISTS (SELECT 1 FROM memory_trigger_keywords k WHERE k.group_id = t.id AND INSTR(?, k.normalized_keyword) > 0)
+        AND ${TRIGGER_ASSOCIATION}
         AND NOT EXISTS (SELECT 1 FROM memory_passive_disabled d WHERE d.trigger_id = t.id AND d.memory_id = m.id))
       ORDER BY m.remembered_at DESC, m.id LIMIT ?`, [poolId, normalizedInput, settings.passiveLimit]);
     return rows.map(mapEntry);

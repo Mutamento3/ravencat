@@ -1,10 +1,28 @@
 /** 新正文与派生任务使用独立表名，避免历史主题 migration 重放污染 V3。 */
 import type { DatabaseWriteExecutor } from '../runtime';
 
-/** 手动关系独立于正文匹配；删除任一端时由外键清理。 */
-export const MEMORY_PASSIVE_ASSOCIATION_SCHEMA = `
+/** 词只在组内唯一；关系和关闭事实归组所有，删除任一端时由外键清理。 */
+export const MEMORY_TRIGGER_GROUP_SCHEMA = `
+CREATE TABLE IF NOT EXISTS memory_trigger_groups (
+  id TEXT PRIMARY KEY,
+  pool_id TEXT NOT NULL REFERENCES memory_pools(id) ON DELETE CASCADE,
+  auto_associate INTEGER NOT NULL DEFAULT 0 CHECK (auto_associate IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_memory_trigger_groups_pool ON memory_trigger_groups(pool_id);
+CREATE TABLE IF NOT EXISTS memory_trigger_keywords (
+  group_id TEXT NOT NULL REFERENCES memory_trigger_groups(id) ON DELETE CASCADE,
+  keyword TEXT NOT NULL,
+  normalized_keyword TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY(group_id, normalized_keyword)
+);
 CREATE TABLE IF NOT EXISTS memory_passive_associations (
-  trigger_id TEXT NOT NULL REFERENCES memory_passive_triggers(id) ON DELETE CASCADE,
+  trigger_id TEXT NOT NULL REFERENCES memory_trigger_groups(id) ON DELETE CASCADE,
+  memory_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
+  PRIMARY KEY(trigger_id, memory_id)
+);
+CREATE TABLE IF NOT EXISTS memory_passive_disabled (
+  trigger_id TEXT NOT NULL REFERENCES memory_trigger_groups(id) ON DELETE CASCADE,
   memory_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
   PRIMARY KEY(trigger_id, memory_id)
 );
@@ -58,25 +76,31 @@ CREATE TABLE IF NOT EXISTS memory_item_embeddings (
   failed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_memory_embedding_queue ON memory_item_embeddings(status, retry_at, claim_expires_at);
-CREATE TABLE IF NOT EXISTS memory_passive_triggers (
-  id TEXT PRIMARY KEY,
-  pool_id TEXT NOT NULL REFERENCES memory_pools(id) ON DELETE CASCADE,
-  keyword TEXT NOT NULL,
-  normalized_keyword TEXT NOT NULL,
-  UNIQUE(pool_id, normalized_keyword)
-);
-CREATE TABLE IF NOT EXISTS memory_passive_disabled (
-  trigger_id TEXT NOT NULL REFERENCES memory_passive_triggers(id) ON DELETE CASCADE,
-  memory_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
-  PRIMARY KEY(trigger_id, memory_id)
-);
-${MEMORY_PASSIVE_ASSOCIATION_SCHEMA}
+${MEMORY_TRIGGER_GROUP_SCHEMA}
 CREATE TABLE IF NOT EXISTS memory_recall_settings (
   pool_id TEXT PRIMARY KEY REFERENCES memory_pools(id) ON DELETE CASCADE,
   passive_limit INTEGER NOT NULL DEFAULT 5 CHECK (passive_limit BETWEEN 0 AND 20),
   active_page_size INTEGER NOT NULL DEFAULT 10 CHECK (active_page_size BETWEEN 1 AND 50)
 );
 `;
+
+/** 外层升级事务拥有提交；旧词各自保留 ID、动态文本关联和关闭事实，不猜测用户的分组意图。 */
+export async function migrateMemoryTriggerGroups(db: DatabaseWriteExecutor): Promise<void> {
+  await db.execAsync(`
+    ALTER TABLE memory_passive_associations RENAME TO memory_legacy_associations;
+    ALTER TABLE memory_passive_disabled RENAME TO memory_legacy_disabled;
+    ${MEMORY_TRIGGER_GROUP_SCHEMA}
+    INSERT INTO memory_trigger_groups (id, pool_id, auto_associate)
+      SELECT id, pool_id, 1 FROM memory_passive_triggers;
+    INSERT INTO memory_trigger_keywords (group_id, keyword, normalized_keyword, position)
+      SELECT id, keyword, normalized_keyword, 0 FROM memory_passive_triggers;
+    INSERT INTO memory_passive_associations SELECT * FROM memory_legacy_associations;
+    INSERT INTO memory_passive_disabled SELECT * FROM memory_legacy_disabled;
+    DROP TABLE memory_legacy_associations;
+    DROP TABLE memory_legacy_disabled;
+    DROP TABLE memory_passive_triggers;
+  `);
+}
 
 /** 用户授权定向清旧；只清旧结构，第二次启动及 V3 备份恢复不触碰新正文。 */
 export async function migrateMemoryV3(db: DatabaseWriteExecutor): Promise<void> {

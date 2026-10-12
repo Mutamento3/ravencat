@@ -89,6 +89,8 @@ export class SessionRepository implements ISessionRepository {
          WHERE id = ?`,
         [boundary, clearedAt, clearedAt, sessionId],
       );
+      // 清空是隐藏历史；起点必须与可见范围一起取消，旧摘要与生成开关保持不变。
+      await transaction.runAsync('UPDATE chat_summary_settings SET fixed_message_id = NULL WHERE conversation_id = ?', [sessionId]);
       return boundary;
     });
   }

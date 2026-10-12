@@ -16,6 +16,7 @@ export {
 } from './registerMcpToolsForHostRun';
 export {
   cancelActiveHostAgentRunsForReset,
+  resumeHostAgentRunsAfterReset,
   cancelHostAgentRun,
   runHostAgent,
 } from './HostAgentRunAssembly';

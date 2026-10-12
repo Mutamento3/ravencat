@@ -33,7 +33,7 @@ canonical storageKey 在文件第一次可能被目录枚举看到之前 reserve
 
 ## 3. 引用所有权与删除
 
-当前 live reference 覆盖 Profile 壁纸/时刻封面、Calls 背景、用户/AI/群头像、Moment 图片、Sticker，以及 Chat 附件、缩略图、语音与 Sticker snapshot。Chat snapshot 仍可能持有 live 资产引用，不因为它叫 snapshot 就忽略。
+当前 live reference 覆盖 Profile 壁纸/时刻封面、Calls 背景、用户/AI/群头像、Moment 图片、各收藏库的 Sticker、AI 私有下载记录，以及 Chat 附件、缩略图、语音、Sticker snapshot 与独立消息收藏。Chat snapshot 仍可能持有 live 资产引用，不因为它叫 snapshot 就忽略。收藏的快照 JSON 由 SQLite 的有效 JSON 约束保证可枚举，引用与快照同事务写入；删除原消息或角色不删除收藏引用。
 
 不维护一份可漂移的 refCount。业务删除只撤销自身事实，再由 Media 根据全部真实引用裁决：
 

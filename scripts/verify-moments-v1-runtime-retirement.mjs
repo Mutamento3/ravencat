@@ -25,7 +25,7 @@ function load(relativePath, requireMock = (specifier) => {
 
 // 此处只验证注册，未执行工具业务；隔离界面、应用服务及其他 Feature 的初始化。
 const placeholder = new Proxy({}, {
-  get: (_target, name) => ({
+  get: (_target, name) => name === 'createChangeOwnAvatarTool' ? () => ({ name: 'change_own_avatar', definition: { name: 'change_own_avatar', description: '', parameters: {} } }) : ({
     name: String(name),
     definition: { name: String(name), description: '', parameters: { type: 'object' } },
   }),
@@ -41,6 +41,7 @@ const registration = load('src/host/composition/agent/createAgentToolRegistry.ts
   if (specifier === '@features/moments') return moments;
   if (specifier === '@platform/agentRuntime') return { AgentToolRegistry };
   if (specifier === './LegacyAgentToolAdapter') return adapter;
+  if (specifier === './assertImageToolRunCurrent') return {};
   if (specifier === '@features/phoneTools/neteaseComposition') return { productionNetEaseChildTools: [] };
   assert.ok(specifier.startsWith('@features/'), `Registry 未声明依赖：${specifier}`);
   return placeholder;

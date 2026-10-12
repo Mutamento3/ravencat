@@ -15,7 +15,7 @@ import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema
  *   2. 转译 SQLiteMessageRepository 源码，仅把 @platform/persistence 替换为
  *      内存库适配的 databaseCoordinator stub，其余查询逻辑执行真实代码；
  *   3. 运行 4 个行为场景（核心复现 / clear 后多条 / 未 clear / 群聊兼容）；
- *   4. 源码契约：DeleteChatMessage 的 preview 重算必须走 getLatestVisibleMessage。
+ *   删除用例的事务与 preview 行为另由 verify-chat-delete-preview-boundary 覆盖。
  */
 
 import assert from 'node:assert/strict';
@@ -38,20 +38,6 @@ function transpileToModuleUrl(sourceText) {
   }).outputText;
   return `data:text/javascript;base64,${Buffer.from(output).toString('base64')}`;
 }
-
-// ============================================================================
-// 源码契约：DeleteChatMessage 的 preview 重算必须使用 visible latest
-// ============================================================================
-const deleteChatMessageSource = read('src/features/chat/messages/application/DeleteChatMessage.ts');
-const previewSyncMatch = deleteChatMessageSource.match(
-  /async function syncSessionPreviewAfterDelete[\s\S]*?\n\}/,
-);
-assert.ok(previewSyncMatch, 'DeleteChatMessage 必须存在 syncSessionPreviewAfterDelete');
-assert.match(
-  previewSyncMatch[0],
-  /getLatestVisibleMessage\(/,
-  '删除消息后的 preview 重算必须查询 getLatestVisibleMessage，不得回退 clear 前隐藏历史',
-);
 
 // ============================================================================
 // 装配真实 SQLiteMessageRepository（stub 掉 databaseCoordinator）

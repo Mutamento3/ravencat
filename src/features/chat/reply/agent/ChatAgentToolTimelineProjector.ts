@@ -103,14 +103,17 @@ export class ChatAgentToolTimelineProjector {
         tokensUsed: step.turn.usage.totalTokens,
         promptTokens: step.turn.usage.promptTokens,
         completionTokens: step.turn.usage.completionTokens,
-        metadataJson: JSON.stringify(buildChatToolStatusMessageMetadata({
-          aiConfig: this.params.aiConfig,
-          runtimeContext: this.params.runtimeContext,
-          status: 'running',
-          toolNames,
-          toolDisplayNames,
-          displayText,
-        })),
+        metadataJson: JSON.stringify({
+          ...buildChatToolStatusMessageMetadata({
+            aiConfig: this.params.aiConfig,
+            runtimeContext: this.params.runtimeContext,
+            status: 'running',
+            toolNames,
+            toolDisplayNames,
+            displayText,
+          }),
+          cachedTokens: step.turn.usage.cachedTokens,
+        }),
       },
       previewText: null,
       notifyUI: this.params.callbacks.notifyUI,
@@ -147,7 +150,7 @@ export class ChatAgentToolTimelineProjector {
           : 'completed',
         toolNames,
         toolDisplayNames: this.resolveToolDisplayNames(timelineToolCalls),
-        extra: { stepIndex },
+        extra: { stepIndex, cachedTokens: step.turn.usage.cachedTokens },
       });
     }
 
@@ -206,7 +209,7 @@ export class ChatAgentToolTimelineProjector {
         displayText: cancelled
           ? `调用已取消：${joinToolDisplayNames(displayNames)}`
           : undefined,
-        extra: { stepIndex, terminalCode },
+        extra: { stepIndex, terminalCode, cachedTokens: step.turn.usage.cachedTokens },
       });
     }
   }

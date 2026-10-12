@@ -93,7 +93,26 @@ function createEntityId(prefix: string): string {
 
 export class SQLiteCallRepository implements ICallRepository {
   async createSession(input: CreateCallSessionInput): Promise<CallSession> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'calls.createSession', feature: 'calls', priority: 'interactive' });
+    return databaseCoordinator.transaction(
+      { name: 'calls.createSession', feature: 'calls', priority: 'interactive' },
+      (transaction) => this.createSessionInTransaction(transaction, input),
+    );
+  }
+
+  async createSessionIfIdle(input: CreateCallSessionInput): Promise<CallSession | null> {
+    return databaseCoordinator.transaction(
+      { name: 'calls.createSessionIfIdle', feature: 'calls', priority: 'interactive' },
+      async (transaction) => {
+        const occupied = await transaction.getFirstAsync(
+          `SELECT 1 FROM call_sessions WHERE state IN ${ACTIVE_CALL_STATE_FILTER} LIMIT 1`,
+        );
+        if (occupied) return null;
+        return this.createSessionInTransaction(transaction, input);
+      },
+    );
+  }
+
+  private async createSessionInTransaction(db: DatabaseTransactionExecutor, input: CreateCallSessionInput): Promise<CallSession> {
     const now = new Date().toISOString();
     const id = input.id || createEntityId('call');
     const state = input.state || 'requested';
@@ -128,11 +147,8 @@ export class SQLiteCallRepository implements ICallRepository {
       ]
     );
 
-    const session = await this.getSessionById(id);
-    if (!session) {
-      throw new Error(`Failed to retrieve inserted call session ${id}`);
-    }
-    return session;
+    const row = await db.getFirstAsync<CallSessionRow>('SELECT * FROM call_sessions WHERE id = ?', [id]);
+    return this.mapSessionRow(row!);
   }
 
   async updateSession(id: string, patch: UpdateCallSessionInput): Promise<CallSession> {

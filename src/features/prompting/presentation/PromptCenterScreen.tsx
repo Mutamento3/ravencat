@@ -4,12 +4,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { ChevronDown, ChevronRight, Star } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import ModalSheet from '@shared/ui/ModalSheet';
 import { getPromptCenterSnapshot } from '../application/GetPromptCenterSnapshot';
 import { deleteDefaultUserPrompt, getDefaultPromptEditor, getPromptAssistant, moveDefaultUserPrompt, resetDefaultDefinition, saveDefaultDefinition, saveDefaultUserPrompt, setDefaultPromptSwitch } from '../application/ManagePromptDefaults';
-import { createAssistantUserPrompt, deleteAssistantUserPrompt, getAssistantPromptEditorDetails, reorderAssistantUserPrompts, resetAssistantDefinitionOverride, saveAssistantDefinitionOverride, saveAssistantDefinitionState, setAssistantToolPermission, setAssistantDirectToolExposure, updateAssistantUserPrompt } from '../application/ManageAssistantPrompts';
+import { applyAssistantDirectToolsGlobally, createAssistantUserPrompt, deleteAssistantUserPrompt, getAssistantPromptEditorDetails, reorderAssistantUserPrompts, resetAssistantDefinitionOverride, saveAssistantDefinitionOverride, saveAssistantDefinitionState, setAssistantToolPermission, setAssistantDirectToolExposure, updateAssistantUserPrompt } from '../application/ManageAssistantPrompts';
 import type { AssistantPromptEditorDetails } from '../application/ManageAssistantPrompts';
 import type { PromptAssistantOption, PromptAssistantSummary } from '../application/PromptingRuntimeDependencies';
 import type { DefaultUserPrompt } from '../domain/PromptDefaults';
@@ -32,12 +32,11 @@ interface Props {
   assistantId?: string;
   onBack: () => void;
   onOpenMcp: () => void;
-  onOpenPhoneTools: () => void;
   onOpenUserProfile: () => void;
   onOpenProtocols: (assistantId: string) => void;
 }
 
-export default function PromptCenterScreen({ assistants, assistantListError, onSelectAssistant, onOpenGlobalPrompts, page, refreshRevision, onOpenPage, assistantId, onBack, onOpenMcp, onOpenPhoneTools, onOpenUserProfile, onOpenProtocols }: Props) {
+export default function PromptCenterScreen({ assistants, assistantListError, onSelectAssistant, onOpenGlobalPrompts, page, refreshRevision, onOpenPage, assistantId, onBack, onOpenMcp, onOpenUserProfile, onOpenProtocols }: Props) {
   const theme = useTheme();
   const styles = useThemedStyles(createPromptCenterStyles);
   const catalog = useMemo(() => getPromptCenterSnapshot(), []);
@@ -167,7 +166,10 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
   const tools = snapshot?.tools.map((tool) => ({ ...tool, enabled: details?.tools.find((item) => item.name === tool.name)?.enabled ?? tool.enabled })) ?? [];
   const directToolNames = new Set(details?.directToolNames);
   const directTools = tools.filter((tool) => directToolNames.has(tool.name));
-  const packages = [...new Set(tools.map((tool) => tool.hostOnly ? 'host' : tool.owner))];
+  const packages = [...new Set([
+    ...tools.filter((tool) => tool.hostOnly).map(() => 'host'),
+    ...tools.filter((tool) => !tool.hostOnly).map((tool) => tool.owner),
+  ])];
   const prompts = assistantId ? details?.userPrompts ?? [] : snapshot?.userPrompts ?? [];
   const editingPrompt = page.kind === 'userEditor' ? prompts.find((item) => item.id === page.promptId) : undefined;
   const title = page.kind === 'overview' ? '提示词中心' : page.kind === 'custom' ? (assistantId ? '自定义提示词' : '全局常驻提示词') : page.kind === 'tools' ? '工具调用' : page.kind === 'package' ? PACKAGE_NAMES[page.id] ?? page.id : page.kind === 'editor' ? (page.definitionId === 'foundation.default_core' ? '系统基础规则' : '视觉真实性规则') : page.kind === 'persona' ? 'AI 人设' : page.promptId ? '编辑提示词' : '添加提示词';
@@ -190,11 +192,11 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
         {row('编辑对象', assistant ? `${assistant.name}${assistant.isHostAI ? ' · 主理 AI' : ''} · 本页改动只对这位 AI 生效` : '暂无 AI', () => setSelectorOpen(true), undefined, !assistants.length)}
         <Text style={styles.section}>先认识彼此</Text>
         {row('系统基础规则', '运行环境、行为边界与视觉真实性', () => openDefinition('foundation.default_core'), 1)}
-        <View style={styles.card}>
+        <ThemedSurface variant="card" style={styles.card}>
           <View style={styles.cardHeader}><Text style={styles.number}>02</Text><Text style={styles.title}>人设</Text></View>
           {row('AI 人设', assistant ? '查看当前人设 · 在对话设置中修改' : '当前未绑定 AI，无法查看', assistant ? () => onOpenPage({ kind: 'persona' }) : undefined, undefined, !assistant)}
           {row('用户人设', '在个人资料中修改 · 自动保存 · 所有 AI 共用', onOpenUserProfile)}
-        </View>
+        </ThemedSurface>
         {row('协议空间常驻提示词', assistant ? '你与 AI 均可修改的固定注入信息，全部持续生效' : '当前未绑定 AI，无法查看', assistant ? () => onOpenProtocols(assistant.id) : undefined, 3, !assistant)}
         {row('AI 身份池', '共同的身份背景，供所有聊天 AI 了解彼此', undefined, 4)}
         {row('自定义提示词', `${prompts.length} 条${assistant ? '专属' : '全局'}提示词 · 按列表顺序拼接`, () => onOpenPage({ kind: 'custom' }), 5)}
@@ -212,7 +214,7 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
       </>}
       {page.kind === 'persona' && <>
         <Text style={styles.description}>人设在这位 AI 的对话设置中修改，保存后同步显示在这里。</Text>
-        <View style={styles.card}><Text selectable style={styles.body}>{assistant!.persona || '尚未设置 AI 人设'}</Text></View>
+        <ThemedSurface variant="card" style={styles.card}><Text selectable style={styles.body}>{assistant!.persona || '尚未设置 AI 人设'}</Text></ThemedSurface>
       </>}
       {(page.kind === 'editor' || page.kind === 'userEditor') && <>
         {page.kind === 'userEditor' && !assistantId && <Text style={styles.description}>全局常驻提示词 · 保存后对所有 AI 生效。</Text>}
@@ -231,33 +233,39 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
       {page.kind === 'custom' && <>
         <Text style={styles.description}>长按卡片上下移动，列表顺序就是这些提示词的拼接顺序。{assistant ? `下面的修改只对 ${assistant.name} 生效。` : '这里是无 AI 时添加的全局常驻提示词，修改、关闭或删除会影响所有 AI。'}</Text>
         {assistant && row('全局常驻提示词', `${snapshot.userPrompts.length} 条 · 单独管理对所有 AI 生效的提示词`, onOpenGlobalPrompts)}
-        {!prompts.length && <View style={styles.card}><Text style={styles.title}>留一点空间给你的想法</Text><Text style={styles.body}>还没有自定义提示词，点击右上角添加。</Text></View>}
+        {!prompts.length && <ThemedSurface variant="card" style={styles.card}><Text style={styles.title}>留一点空间给你的想法</Text><Text style={styles.body}>还没有自定义提示词，点击右上角添加。</Text></ThemedSurface>}
         {prompts.map((prompt, index) => <CustomPromptRow key={prompt.id} prompt={prompt} index={index} disabled={busy} styles={styles}
           onEdit={() => openUser(prompt)} onToggle={(enabled) => togglePrompt(prompt, enabled)}
           onMove={(offset) => movePrompt(prompt, index, offset)} onDelete={() => deletePrompt(prompt)} />)}
       </>}
       {page.kind === 'tools' && <>
-        <Text style={styles.description}>{assistant ? '这位 AI 的单项权限；总开关、场景与身份边界仍共同决定本轮可用工具。' : '全局默认权限；AI 的单独设置可以覆盖默认值。主理专属工具仍只授予主理 AI。'}</Text>
-        <View style={styles.card}>
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel="特批工具" accessibilityState={{ expanded: directToolsExpanded }}
-            activeOpacity={0.7} style={[styles.cardHeader, styles.collapsibleHeader]} onPress={() => setDirectToolsExpanded((expanded) => !expanded)}>
-            <Star size={20} color={theme.colors.brand.primary} fill={theme.colors.brand.primary} />
-            <Text style={[styles.title, styles.copy]}>特批工具</Text>
-            <Text style={styles.subtitle}>{directTools.length} 个</Text>
-            {directToolsExpanded ? <ChevronDown size={18} color={theme.colors.text.tertiary} /> : <ChevronRight size={18} color={theme.colors.text.tertiary} />}
-          </TouchableOpacity>
+        <Text style={styles.description}>{assistant ? '这位 AI 的单项权限；总开关、场景与身份边界仍共同决定本轮可用工具。全局应用会以当前普通工具星标覆盖所有现有 AI，主理专属星标与调用权限保持不变。' : '全局默认权限；AI 的单独设置可以覆盖默认值。主理专属工具仍只授予主理 AI。'}</Text>
+        <ThemedSurface variant="card" style={styles.card}>
+          <View style={styles.cardHeader}>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="特批工具" accessibilityState={{ expanded: directToolsExpanded }}
+              activeOpacity={0.7} style={[styles.cardHeader, styles.collapsibleHeader, styles.copy]} onPress={() => setDirectToolsExpanded((expanded) => !expanded)}>
+              <Star size={20} color={theme.colors.brand.primary} fill={theme.colors.brand.primary} />
+              <Text style={[styles.title, styles.copy]}>特批工具</Text>
+              <Text style={styles.subtitle}>{directTools.length} 个</Text>
+              {directToolsExpanded ? <ChevronDown size={18} color={theme.colors.text.tertiary} /> : <ChevronRight size={18} color={theme.colors.text.tertiary} />}
+            </TouchableOpacity>
+            {assistant && <TouchableOpacity accessibilityRole="button" accessibilityLabel="全局应用特批工具" accessibilityState={{ disabled: busy }}
+              disabled={busy} style={styles.actionButton} onPress={() => {
+                const snapshotNames = [...directToolNames];
+                void mutate(() => applyAssistantDirectToolsGlobally(snapshotNames), () => showAppDialog({ title: '已全局应用', message: '普通工具星标已同步到所有现有 AI；主理专属星标与调用权限保持不变。' }));
+              }}><Text style={[styles.action, busy && styles.muted]}>全局应用</Text></TouchableOpacity>}
+          </View>
           {directToolsExpanded && (directTools.length > 0 ? directTools.map((tool) => {
             const packageId = tool.hostOnly ? 'host' : tool.owner;
             return row(tool.name, `${PACKAGE_NAMES[packageId] ?? packageId} · ${tool.enabled ? '允许调用' : '单项权限已关闭'}`,
               () => onOpenPage({ kind: 'package', id: packageId }));
           }) : <Text style={styles.body}>{assistant ? '暂无特批工具，进入下方工具包点亮工具旁的星标即可添加。' : '选择 AI 后可在工具包中配置特批工具。'}</Text>)}
-        </View>
+        </ThemedSurface>
         {packages.map((id) => row(PACKAGE_NAMES[id] ?? id, `${tools.filter((tool) => (tool.hostOnly ? 'host' : tool.owner) === id).length} 个工具`, () => onOpenPage({ kind: 'package', id })))}
       </>}
       {page.kind === 'package' && <>
         <Text style={styles.description}>{assistant ? `点亮星标，将工具设为 ${assistant.name} 的用户特批工具，直接注入说明与调用参数，无需拆包。右侧开关仍控制调用权限。` : '选择 AI 后可配置星标特批工具；这里仅管理全局默认调用权限。'}</Text>
-        {page.id === 'host' && row('手机工具', '仅对主理 AI 生效 · 开关在手机工具页管理', onOpenPhoneTools, undefined, !assistant?.isHostAI)}
-        {tools.filter((tool) => (tool.hostOnly ? 'host' : tool.owner) === page.id).map((tool) => <View key={tool.name} style={styles.card}>
+        {tools.filter((tool) => (tool.hostOnly ? 'host' : tool.owner) === page.id).map((tool) => <ThemedSurface variant="card" nativeGlass={false} key={tool.name} style={styles.card}>
           <View style={styles.cardHeader}><Text style={[styles.title, styles.copy]}>{tool.name}</Text>
             {assistantId && <TouchableOpacity accessibilityRole="switch" accessibilityLabel={`直接暴露 ${tool.name}`} accessibilityState={{ checked: directToolNames.has(tool.name), disabled: busy || (tool.hostOnly && !assistant?.isHostAI) }}
               disabled={busy || (tool.hostOnly && !assistant?.isHostAI)} style={styles.starButton}
@@ -266,7 +274,7 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
             </TouchableOpacity>}
             <Toggle accessibilityLabel={`启用 ${tool.name}`} disabled={busy || (tool.hostOnly && !assistant?.isHostAI)} value={tool.enabled} onValueChange={(enabled) => toggleTool(tool.name, enabled)} /></View>
           <Text selectable style={styles.body}>{tool.description}</Text>
-        </View>)}
+        </ThemedSurface>)}
       </>}
     </ScrollView>}
     {selectorOpen && <ModalSheet visible onClose={() => setSelectorOpen(false)} title="选择编辑的 AI">

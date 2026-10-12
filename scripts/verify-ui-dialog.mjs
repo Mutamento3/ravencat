@@ -38,7 +38,7 @@ const { default: AppDialogHost } = load('src/shared/ui/AppDialogHost.tsx', {
   },
   'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 24, bottom: 16, left: 0, right: 0 }) },
   'lucide-react-native': Object.fromEntries(['Check', 'CircleAlert', 'Info', 'TriangleAlert'].map((name) => [name, name])),
-  '@shared/theme': { useTheme: () => theme, useThemedStyles: (factory) => factory(theme) },
+  '@shared/theme': { ThemedSurface: 'View', useTheme: () => theme, useThemedStyles: (factory) => factory(theme) },
 });
 let renderer;
 const mount = async () => { await act(async () => { renderer = create(React.createElement(AppDialogHost)); }); };

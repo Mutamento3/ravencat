@@ -64,6 +64,7 @@ coverage/
 .nyc_output/
 
 # Build outputs
+/artifacts/
 build/
 *.apk
 *.aab
@@ -104,3 +105,4 @@ credentials.json
 
 # 个人清单，不提交
 万一.txt
+mine/

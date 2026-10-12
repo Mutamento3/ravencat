@@ -83,6 +83,22 @@ export class SQLitePromptingRepository implements
     );
   }
 
+  async applyDirectToolSnapshot(assistantIds: readonly string[], toolNames: readonly string[], exposedToolNames: readonly string[]): Promise<void> {
+    if (toolNames.length === 0) return;
+    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.applyDirectToolSnapshot', feature: 'prompting', priority: 'runtime' });
+    await db.withExclusiveTransactionAsync(async (tx) => {
+      for (const assistantId of assistantIds) {
+        await tx.runAsync(
+          `DELETE FROM assistant_direct_tools WHERE assistant_id = ? AND tool_name IN (${toolNames.map(() => '?').join(', ')})`,
+          [assistantId, ...toolNames]
+        );
+        for (const toolName of exposedToolNames) {
+          await tx.runAsync('INSERT INTO assistant_direct_tools (assistant_id, tool_name) VALUES (?, ?)', [assistantId, toolName]);
+        }
+      }
+    });
+  }
+
   async listCustomBlocks(): Promise<PromptCustomBlock[]> {
     const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.listCustomBlocks', feature: 'prompting', priority: 'runtime' });
     const rows = await db.getAllAsync<CustomBlockRow>(

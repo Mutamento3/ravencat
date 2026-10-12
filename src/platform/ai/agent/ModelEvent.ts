@@ -12,6 +12,8 @@ export interface ModelUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** 包含于 promptTokens；缺失表示服务商未提供缓存统计。 */
+  cachedTokens?: number;
 }
 
 export interface ModelToolCall {
@@ -33,6 +35,7 @@ export interface ModelToolResultHistoryItem {
   toolCallId: string;
   name: string;
   content: string;
+  images?: { url: string }[];
 }
 
 export type ModelHistoryItem = ModelAssistantHistoryItem | ModelToolResultHistoryItem;

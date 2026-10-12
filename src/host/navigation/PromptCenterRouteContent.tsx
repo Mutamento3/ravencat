@@ -49,7 +49,6 @@ export default function PromptCenterRouteContent({ page }: { page: PromptCenterP
     onOpenGlobalPrompts={() => router.push('/prompt-center/custom')}
     onBack={() => router.back()}
     onOpenMcp={() => router.push('/mcp-tools')}
-    onOpenPhoneTools={() => router.push('/phone-tools')}
     onOpenUserProfile={() => router.push('/profile')}
     onOpenProtocols={(aiId) => router.push({ pathname: '/chat/[aiId]/protocol', params: { aiId } })} />;
 }

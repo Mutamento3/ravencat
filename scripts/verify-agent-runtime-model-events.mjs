@@ -74,6 +74,7 @@ function response(overrides = {}) {
     promptTokens: 10,
     completionTokens: 5,
     totalTokens: 15,
+    cachedTokens: 6,
     success: true,
     error: null,
     toolCalls: null,
@@ -189,7 +190,7 @@ assert.deepEqual(streamTurn, {
   assistantText: '答',
   reasoningText: '需要',
   toolCalls: [{ index: 0, id: 'call-1', name: 'search', arguments: '{"q":"a"}' }],
-  usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+  usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: 6 },
   finishReason: 'tool_calls',
 });
 assert.equal(streamEvents.filter((event) => event.type === 'tool_call_completed').length, 1);

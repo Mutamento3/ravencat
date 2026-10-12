@@ -25,6 +25,7 @@ import ImagePreviewModal from './ImagePreviewModal';
 interface ImageAttachmentCardProps {
   attachment: ChatAttachment;
   isMe: boolean;
+  thumbnail?: boolean;
   onLongPress?: (position: { x: number; y: number }) => void;
 }
 
@@ -39,6 +40,7 @@ type ImageResolutionState =
 export default function ImageAttachmentCard({
   attachment,
   isMe: _isMe,
+  thumbnail = false,
   onLongPress,
 }: ImageAttachmentCardProps) {
   const theme = useTheme();
@@ -73,6 +75,7 @@ export default function ImageAttachmentCard({
   }, [mediaReference, setResolution]);
 
   const imageStyle = useMemo(() => {
+    if (thumbnail) return { ...styles.imageFixed, ...styles.imageThumbnail };
     const width = attachment.width || 0;
     const height = attachment.height || 0;
     if (!width || !height) {
@@ -83,12 +86,12 @@ export default function ImageAttachmentCard({
       ...styles.imageFixed,
       height: clampHeight((220 * height) / width),
     };
-  }, [attachment.height, attachment.width, styles.imageFixed]);
+  }, [attachment.height, attachment.width, styles.imageFixed, styles.imageThumbnail, thumbnail]);
 
   return (
     <>
       <Pressable
-        style={styles.container}
+        style={[styles.container, thumbnail && styles.thumbnailContainer]}
         onLongPress={onLongPress ? (event) => onLongPress({
           x: event.nativeEvent.pageX,
           y: event.nativeEvent.pageY,
@@ -136,6 +139,13 @@ const createStyles = (theme: PresentationTheme) => StyleSheet.create({
     height: 160,
     borderRadius: theme.radius.sm,
     backgroundColor: theme.colors.border.light,
+  },
+  thumbnailContainer: {
+    width: 72,
+  },
+  imageThumbnail: {
+    width: 72,
+    height: 72,
   },
   placeholder: {
     justifyContent: 'center',

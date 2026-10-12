@@ -1,7 +1,7 @@
 /** 通过 databaseCoordinator 实现聊天消息查询、分页、提交、已读与预览维护的 SQLite 仓储适配器。 */
 import {
   databaseCoordinator,
-  type CoordinatedDatabaseExecutor,
+  type DatabaseReadExecutor,
   type DatabaseTransactionExecutor,
 } from '@platform/persistence';
 import type {
@@ -519,28 +519,15 @@ export class MessageRepository implements IMessageRepository {
   async getMessagesByLogicalMessageId(
     sessionId: string,
     logicalMessageId: string,
-    executor?: CoordinatedDatabaseExecutor,
+    executor?: DatabaseReadExecutor,
   ): Promise<ChatMessage[]> {
-    try {
-      const normalizedLogicalMessageId = String(logicalMessageId || '').trim();
-      if (!sessionId || !normalizedLogicalMessageId) {
-        return [];
-      }
-
-      const db = executor ?? databaseCoordinator.openTaskExecutor({ name: 'chat.getMessagesByLogicalMessageId', feature: 'chat', priority: 'interactive' });
-      // 该查询会被消息落库与记忆恢复并发触发；同步读取可避开 Android 上异步 NativeStatement 的回收竞态。
-      const rows = await db.getAllAsync<MessageRow>(
-        `SELECT * FROM messages
-         WHERE session_id = ? AND logical_message_id = ?
-         ORDER BY segment_index ASC, id ASC`,
-        [sessionId, normalizedLogicalMessageId]
-      );
-
-      return rows.map((row) => this.mapRowToEntity(row));
-    } catch (error) {
-      console.error('[MessageRepository] Failed to get messages by logical message id:', error);
-      return [];
-    }
+    const db = executor ?? databaseCoordinator.openTaskExecutor({ name: 'chat.getMessagesByLogicalMessageId', feature: 'chat', priority: 'interactive' });
+    // 联删判断属于删除事务；SQL 失败必须使整笔删除回滚，不能伪装成没有关联消息。
+    const rows = await db.getAllAsync<MessageRow>(
+      `SELECT * FROM messages WHERE session_id = ? AND logical_message_id = ? ORDER BY segment_index ASC, id ASC`,
+      [sessionId, logicalMessageId],
+    );
+    return rows.map((row) => this.mapRowToEntity(row));
   }
 
   /**

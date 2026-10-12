@@ -36,6 +36,8 @@ const { CreateMediaAsset } = load('src/features/media/application/CreateMediaAss
 const db = new DatabaseSync(':memory:');
 db.exec(CALL_BACKGROUND_SELECTION_SCHEMA);
 db.exec(MEDIA_ASSET_SCHEMA);
+db.exec(load('src/platform/persistence/sqlite/chatFavoriteSchema.ts').CHAT_FAVORITES_SCHEMA);
+db.exec(load('src/platform/persistence/sqlite/aiImageSchema.ts').AI_DOWNLOADED_IMAGES_SCHEMA);
 db.exec(load('src/platform/persistence/sqlite/wallpaperSelectionSchema.ts').WALLPAPER_SELECTION_SCHEMA);
 db.exec('CREATE TABLE chat_conversations (id TEXT PRIMARY KEY, kind TEXT)');
 db.exec(`

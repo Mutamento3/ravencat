@@ -206,7 +206,20 @@ export interface InstalledApplicationInfo {
   buildNumber: string;
 }
 
+export interface DeviceLocationAccessState {
+  permission: 'not_granted' | 'approximate' | 'precise';
+  servicesEnabled: boolean;
+}
+
+export type DeviceLocationSnapshot =
+  | { status: 'available'; latitude: number; longitude: number; accuracyMeters: number;
+      measuredAtEpochMs: number; ageMs: number; permission: 'approximate' | 'precise'; isMock: boolean }
+  | { status: 'permission_not_granted' | 'location_services_disabled' | 'location_provider_unavailable' | 'location_unavailable' };
+
 declare class DeviceObserverNativeModule extends NativeModule {
+  getLocationAccessState(): Promise<DeviceLocationAccessState>;
+  getCurrentLocation(): Promise<DeviceLocationSnapshot>;
+  openLocationSettings(): Promise<void>;
   getInstalledApplicationInfo(): InstalledApplicationInfo;
   getBatterySnapshot(): Promise<DeviceBatterySnapshot>;
   isUsageAccessGranted(): Promise<boolean>;
@@ -440,3 +453,15 @@ export function queryAppUsage(beginTime: number, endTime: number): Promise<AppUs
 }
 
 export default DeviceObserver;
+
+export function getDeviceLocationAccessState(): Promise<DeviceLocationAccessState> {
+  return DeviceObserver.getLocationAccessState();
+}
+
+export function getCurrentDeviceLocation(): Promise<DeviceLocationSnapshot> {
+  return DeviceObserver.getCurrentLocation();
+}
+
+export function openDeviceLocationSettings(): Promise<void> {
+  return DeviceObserver.openLocationSettings();
+}

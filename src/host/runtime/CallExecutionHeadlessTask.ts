@@ -6,7 +6,7 @@ import {
   subscribeNativeCallCancellation, subscribeNativeCallCommand,
   type NativeCallCommand,
 } from '../../../modules/call-runtime';
-import { ensureCallHostReady } from '../composition/ensureCallHostReady';
+import { ensureHostDatabaseReady } from '../composition/ensureHostDatabaseReady';
 
 export async function runCallExecutionHeadlessTask(data: { callId?: string }): Promise<void> {
   const callId = data.callId?.trim();
@@ -55,7 +55,7 @@ export async function runCallExecutionHeadlessTask(data: { callId?: string }): P
     });
   });
   try {
-    await ensureCallHostReady();
+    await ensureHostDatabaseReady();
     const call = await getCallSession(callId);
     if (!call) throw new Error(`通话 ${callId} 不存在`);
     if (cancelled || !await nativeCallRuntime.isAlive(callId)) {

@@ -66,6 +66,11 @@ export interface AgentToolExecutionMetadata {
    * 只有拥有 canonical 输出投影的工具才能设置；Runtime 据此允许最终正文为空。
    */
   fulfillsUserVisibleOutput?: boolean;
+  /**
+   * 用户可见输出工具转交模型声明的成功后意图；只有输出意图已准备成功才能设置。
+   * Runtime 在整批成功且最后一个工具选择 finish 时进入正常完成流程。
+   */
+  completionIntent?: 'finish' | 'continue';
   /** Host 拆包成功的事实；Chat 在正式回复事务中持久化其三轮有效期。 */
   openedToolPackageId?: string;
   [key: string]: unknown;
@@ -76,6 +81,8 @@ export type AgentToolExecutionResult<T> =
       status: 'success';
       data: T;
       modelContent: string;
+      /** 工具提供的真实视觉输入；只进入模型 history，不创建用户消息。 */
+      modelImages?: { url: string }[];
       metadata?: AgentToolExecutionMetadata;
     }
   | {

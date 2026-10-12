@@ -390,22 +390,6 @@ export class GroupChatRepository implements IGroupChatRepository {
     return row ? this.mapGroupRowToEntity(row) : null;
   }
 
-  async updatePreview(
-    groupId: string,
-    lastMessage: string,
-    lastTime: string | null,
-    lastMessageId: number | null,
-  ): Promise<boolean> {
-    const now = new Date().toISOString();
-    const database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'chat.updatePreview', feature: 'chat', priority: 'interactive' });
-    await database.runAsync(
-      `UPDATE group_chats
-       SET last_message = ?, last_time = ?, last_message_id = ?, updated_at = ?
-       WHERE id = ?`,
-      [lastMessage, lastTime, lastMessageId, now, groupId]
-    );
-    return true;
-  }
 
   async listAvatarMediaAssetMigrationCandidates(): Promise<GroupAvatarMediaAssetMigrationCandidate[]> {
     const database = databaseCoordinator.openTaskExecutor({
@@ -870,6 +854,34 @@ export class GroupChatRepository implements IGroupChatRepository {
         );
 
         return active.id;
+      },
+    );
+  }
+
+  async interruptSpeechPlansWithoutOwner(activeGroupIds: readonly string[]): Promise<string[]> {
+    const now = new Date().toISOString();
+    const errorMessage = '应用进程中断，本轮召唤已停止';
+    return databaseCoordinator.transaction(
+      { name: 'chat.interrupt-orphan-group-plans', feature: 'chat', priority: 'runtime' },
+      async (transaction) => {
+        const plans = await transaction.getAllAsync<{ id: string; group_id: string }>(
+          `SELECT id, group_id FROM group_speech_plans
+           WHERE status IN ('pending', 'preparing', 'running')
+             AND group_id NOT IN (SELECT value FROM json_each(?))`,
+          [JSON.stringify(activeGroupIds)],
+        );
+        for (const plan of plans) {
+          await transaction.runAsync(
+            `UPDATE group_speech_plans SET status = 'failed', completed_at = ?, updated_at = ?, error_message = ? WHERE id = ?`,
+            [now, now, errorMessage, plan.id],
+          );
+          await transaction.runAsync(
+            `UPDATE group_speech_tasks SET status = 'failed', completed_at = ?, updated_at = ?, error_message = ?
+             WHERE plan_id = ? AND status IN ('queued', 'running')`,
+            [now, now, errorMessage, plan.id],
+          );
+        }
+        return plans.map((plan) => plan.group_id);
       },
     );
   }

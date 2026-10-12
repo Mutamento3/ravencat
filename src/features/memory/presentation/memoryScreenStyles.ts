@@ -22,4 +22,8 @@ export const createMemoryScreenStyles = (theme: PresentationTheme) => StyleSheet
   buttonText: { color: theme.colors.text.inverse, fontWeight: '600', fontSize: 15 },
   disabled: { opacity: 0.45 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border.light },
+  triggerHeader: { gap: 12 },
+  triggerTitle: { fontSize: 19, lineHeight: 28, fontWeight: '600', color: theme.colors.text.primary },
+  triggerAction: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: 2, alignSelf: 'flex-start' },
+  triggerFooter: { alignItems: 'center', paddingVertical: 12 },
 });

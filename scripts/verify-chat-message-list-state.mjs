@@ -3,14 +3,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
+import React from 'react';
+import { act, create } from 'react-test-renderer';
 import { arrival } from './chat-message-arrival-fixture.mjs';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+const frames = new Map();
+let nextFrame = 0;
 
 function loadModule(relativePath, requireModule = () => ({})) {
   const sourcePath = path.join(projectRoot, relativePath);
   const output = ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+      jsx: ts.JsxEmit.React, esModuleInterop: true,
+    },
   }).outputText;
   const module = { exports: {} };
   vm.runInNewContext(output, {
@@ -29,6 +37,8 @@ function loadModule(relativePath, requireModule = () => ({})) {
     Math,
     JSON,
     Error,
+    requestAnimationFrame: (callback) => { frames.set(++nextFrame, callback); return nextFrame; },
+    cancelAnimationFrame: (id) => frames.delete(id),
   });
   return module.exports;
 }
@@ -434,4 +444,164 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
 assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.getChatInteractionProfile({ id: 'liquid-glass' })), true);
 assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.getChatInteractionProfile({ id: 'moon-kimi' })), false);
 assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.getChatInteractionProfile({ id: 'paper-note' })), false);
+
+// 原生列表只模拟布局完成、尺寸变化和滚动命令；跟随决策使用真实组件。
+{
+  let scrolls = 0;
+  let offset = 600;
+  const FlashList = React.forwardRef(function FlashList(props, ref) {
+    React.useImperativeHandle(ref, () => ({
+      scrollToEnd: () => { scrolls++; offset = 1000; },
+    }), []);
+    return React.createElement('FlashList', props);
+  });
+  const toolStatus = loadModule(
+    'src/features/chat/presentation/messages/components/chatToolStatusPresentation.ts',
+    () => metadata,
+  );
+  const togetherListening = loadModule(
+    'src/features/chat/presentation/messages/components/togetherListeningCardViewModel.ts',
+    () => metadata,
+  );
+  const theme = loadModule('src/shared/theme/themes/moonKimi.ts').moonKimiTheme;
+  const boundaries = {
+    react: React,
+    'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable' },
+    '@expo/vector-icons': { Ionicons: 'Icon' },
+    '@shopify/flash-list': { FlashList },
+    '@features/chat/messages/domain': { ...metadata, buildSessionPreviewTextFromMessage: (msg) => msg.text },
+    '@shared/utils/timeFormat': { formatMessageTime: () => '12:00' },
+    './ChatMessageListParts': { MessageListItem: 'MessageListItem' },
+    '../../../messages/domain/ChatMessageSelection': { getChatSelectionKey: (msg) => String(msg.id) },
+    './chatMessageRenderUtils': renderUtils,
+    '../MessageBubble/layoutProbe': { createLayoutProbeCellRenderer: () => undefined },
+    './togetherListeningCardViewModel': togetherListening,
+    './chatMessagePresentation': presentation,
+    './chatToolStatusPresentation': toolStatus,
+    './chatActionGrouping': actionGrouping,
+    './chatPresentationRun': presentationRun,
+    './chatStyles': { createMessageListStyles: () => ({}) },
+    './useAgentTransientTimeline': { useAgentTransientTimeline: (_session, messages) => ({ messages }) },
+    '@features/chat/messages/application/AgentTransientTimeline': transientStore,
+    '@shared/theme': { ...themes, useTheme: () => theme },
+    './chatMessageListState': state,
+    './chatHistoryPagination': loadModule('src/features/chat/presentation/messages/components/chatHistoryPagination.ts'),
+    './useArrivedAssistantMessages': { useArrivedAssistantMessages: (messages) => messages },
+  };
+  const List = loadModule(
+    'src/features/chat/presentation/messages/components/ChatMessageList.tsx',
+    (name) => {
+      assert.ok(Object.hasOwn(boundaries, name), `未声明的列表依赖：${name}`);
+      return boundaries[name];
+    },
+  ).default;
+  const flushFrames = () => {
+    const pending = [...frames.values()];
+    frames.clear();
+    act(() => pending.forEach((callback) => callback()));
+  };
+  let messages = [message({ id: 601, senderType: 'reasoning' }), message({ id: 602 })];
+  let props = { sessionId: 's1', messages, hasMore: false, isLoadingMore: false, onPreviewFile: () => {}, onDismissInputSurface: () => {} };
+  let renderer;
+  act(() => { renderer = create(React.createElement(List, props)); });
+  const list = () => renderer.root.findByType('FlashList');
+  const commit = (height) => {
+    act(() => {
+      // 模拟 FlashList 自带贴底配置的行为，覆盖第二条滚动入口。
+      if (list().props.maintainVisibleContentPosition.autoscrollToBottomThreshold != null) {
+        scrolls++; offset = 1000;
+      }
+      list().props.onContentSizeChange(400, height);
+      list().props.onCommitLayoutEffect();
+    });
+    flushFrames();
+  };
+  const update = (changes) => {
+    props = { ...props, ...changes };
+    act(() => renderer.update(React.createElement(List, props)));
+  };
+  const usageMessage = message({ id: 602, tokensUsed: 120, promptTokens: 100, completionTokens: 20,
+    metadataJson: '{"cachedTokens":80}' });
+  update({ messages: [messages[0], usageMessage], aiAssistant: { id: 'ai', showTokenUsage: true } });
+  assert.equal(list().props.data.at(-1).displayTokensUsed, 120, '开启选择后实际列表提供用量提示');
+  update({ aiAssistant: { id: 'ai', showTokenUsage: false } });
+  assert.equal(list().props.data.at(-1).displayTokensUsed, 0, '关闭选择后实际列表隐藏所有用量提示');
+  assert.equal(usageMessage.tokensUsed, 120, '关闭展示不会修改消息用量事实');
+  assert.equal(JSON.parse(usageMessage.metadataJson).cachedTokens, 80);
+  update({ aiAssistant: { id: 'ai', showTokenUsage: true } });
+  assert.equal(list().props.data.at(-1).displayTokensUsed, 120, '重新开启立即显示已有消息用量');
+  update({ messages, aiAssistant: undefined });
+  commit(1200);
+  scrolls = 0; offset = 600;
+  commit(1500);
+  commit(1200);
+  assert.equal(scrolls, 0, '展开和收起思维链只改变高度，不能滚到底部');
+  assert.equal(offset, 600, '展开后阅读位置保留');
+  update({ translations: { 602: { text: '译文', sourceLabel: '测试' } } });
+  commit(1350);
+  assert.equal(scrolls, 0, '展示变化不能冒充新消息');
+  messages = [...messages, message({ id: 603, text: '流式正文' })];
+  update({ messages }); commit(1450);
+  assert.equal(scrolls, 1, '尾部新消息在布局完成后跟随');
+  messages = [...messages.slice(0, -1), message({ id: 603, text: '流式正文继续增长' })];
+  update({ messages }); commit(1550);
+  assert.equal(scrolls, 2, '相同消息身份的流式更新仍应跟随');
+  commit(1800);
+  assert.equal(scrolls, 2, '消息更新完成后，另一次局部展开不能沿用跟随请求');
+  messages = [message({ id: 600 }), ...messages];
+  update({ messages }); commit(2000);
+  assert.equal(scrolls, 2, '历史 prepend 不触发贴底');
+  const away = { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 600 } } };
+  act(() => {
+    list().props.onScrollBeginDrag();
+    list().props.onScroll(away);
+    list().props.onScrollEndDrag(away);
+  });
+  messages = [...messages, message({ id: 604 })];
+  update({ messages }); commit(2100);
+  assert.equal(scrolls, 2, '用户滚离底部时，新消息不得拉回');
+  assert.equal(renderer.root.findAllByProps({ accessibilityLabel: '查看新消息' }).length > 0, true);
+  act(() => list().props.onScrollEndDrag({ nativeEvent: { ...away.nativeEvent, contentOffset: { y: 1500 }, contentSize: { height: 2100 } } }));
+  update({ pauseAutoScroll: true, messages: [...messages, message({ id: 605 })] });
+  commit(2200);
+  assert.equal(scrolls, 2, '分享预览暂停期间不得自动跟随');
+
+  const layout = (height) => {
+    act(() => list().props.onLayout({ nativeEvent: { layout: { height } } }));
+    flushFrames();
+  };
+  update({ pauseAutoScroll: false });
+  layout(600);
+  assert.equal(scrolls, 2, '首次测量视口由列表初始定位负责');
+  // 键盘打开时，原生滚动事件可能先于布局事件报告缩小后的视口。
+  act(() => list().props.onScroll({ nativeEvent: {
+    contentOffset: { y: 1600 }, contentSize: { height: 2200 }, layoutMeasurement: { height: 300 },
+  } }));
+  layout(300);
+  assert.equal(scrolls, 3, '原本贴底时，键盘缩小视口仍应让最新消息出现在键盘上方');
+  layout(300);
+  commit(2400);
+  assert.equal(scrolls, 3, '键盘打开后，同高度布局或思维链展开仍不能强制贴底');
+  layout(600);
+  assert.equal(scrolls, 4, '键盘收起后，贴底状态随视口恢复');
+  act(() => list().props.onScrollEndDrag(away));
+  layout(300);
+  layout(600);
+  assert.equal(scrolls, 4, '阅读历史时，键盘开关不得拉回最新消息');
+  act(() => list().props.onScrollEndDrag({ nativeEvent: {
+    contentOffset: { y: 1800 }, contentSize: { height: 2400 }, layoutMeasurement: { height: 600 },
+  } }));
+  update({ pauseAutoScroll: true });
+  layout(300);
+  assert.equal(scrolls, 4, '分享预览暂停期间，视口变化也不得自动跟随');
+  update({ pauseAutoScroll: false });
+  // 用户在等待下一帧布局跟随时滚离底部，应取消此次自动跟随。
+  act(() => {
+    list().props.onLayout({ nativeEvent: { layout: { height: 600 } } });
+    list().props.onScrollEndDrag(away);
+  });
+  flushFrames();
+  assert.equal(scrolls, 4, '视口跟随执行前仍应尊重用户新产生的上翻意图');
+  act(() => renderer.unmount());
+}
 console.log('Chat message list state verification passed.');

@@ -198,9 +198,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const { default: Menu } = load('src/features/chat/presentation/messages/components/ChatMessageActionMenu.tsx', {
   'react-native': {
     Modal: 'Modal', View: 'View', Text: 'Text', TouchableOpacity: 'Button', TouchableWithoutFeedback: 'Backdrop',
-    StyleSheet: { create: (styles) => styles }, Dimensions: { get: () => ({ width: 400, height: 800 }) },
+    StyleSheet: { create: (styles) => styles }, useWindowDimensions: () => ({ width: 400, height: 800 }),
   },
   '@expo/vector-icons': { Ionicons: 'Icon' },
+  'lucide-react-native': { Pin: 'Icon', PinOff: 'Icon', Star: 'Icon' },
   '@shared/theme': { useTheme: () => ({ mode: 'light', colors: { brand: { onPrimary: 'white' }, text: { primary: 'black' }, border: { strong: 'gray' } } }) },
 });
 let rendered;

@@ -36,18 +36,18 @@ export interface AIAssistantSummary {
   isBlocked: boolean;
 }
 
-/** 对话设置拥有展示信息、人设与消息呈现策略，不接受身份键。 */
+/** 对话设置拥有展示信息、人设、上下文与消息呈现策略，不接受身份键。 */
 export type AIAssistantSettingsUpdate = Partial<Pick<
   AIProfile,
-  'name' | 'avatar' | 'avatarMediaAssetId' | 'systemPrompt' | 'allowMultipleBubbles'
+  'name' | 'avatar' | 'avatarMediaAssetId' | 'systemPrompt' | 'allowMultipleBubbles' | 'showTokenUsage'
+  | 'privateContextPrimaryLimit' | 'privateContextSecondaryLimit'
+  | 'groupContextPrimaryLimit' | 'groupContextSecondaryLimit'
 >>;
 
 /** 角色模型页只拥有调用配置；身份、名称、头像和人设由各自入口维护。 */
 export type AIModelSettingsUpdate = Partial<Pick<AIProfile,
   'model' | 'apiKey' | 'apiBaseUrl' | 'temperature' | 'topP' | 'maxTokens'
-  | 'privateContextPrimaryLimit' | 'privateContextSecondaryLimit'
-  | 'groupContextPrimaryLimit' | 'groupContextSecondaryLimit'
-  | 'enableTools' | 'allowMultipleBubbles' | 'disableThinking'
+  | 'enableTools' | 'disableThinking'
 >>;
 
 /**
@@ -86,4 +86,8 @@ export interface IAIAssistantRepository {
     transaction: DatabaseTransactionExecutor,
     input: CommitAIAvatarMediaAssetReferenceInput,
   ): Promise<void>;
+  replaceAvatarMediaAssetReference(
+    input: CommitAIAvatarMediaAssetReferenceInput,
+    guard: (transaction: DatabaseTransactionExecutor) => Promise<void>,
+  ): Promise<boolean>;
 }

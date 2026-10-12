@@ -22,6 +22,7 @@ import type {
 } from './ConversationTurn';
 
 export interface IConversationTurnRepository {
+  isRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, runId: string): Promise<boolean>;
   getRegenerationState(sessionId: string): Promise<ChatRegenerationState>;
   /** 只持久化用户意图；实际 claim 和执行仍由 Android 宿主完成。 */
   requestRegeneration(sessionId: string, messageId: number): Promise<number>;

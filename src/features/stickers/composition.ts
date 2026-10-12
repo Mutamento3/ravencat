@@ -14,6 +14,10 @@ import { createRandomUUID } from '@platform/device';
 import { databaseCoordinator } from '@platform/persistence';
 import { configureStickersRuntime } from './application/StickerRuntime';
 import { SQLiteStickerRepository } from './infrastructure/SQLiteStickerRepository';
+import { SQLiteAIStickerProcessingRepository } from './infrastructure/SQLiteAIStickerProcessingRepository';
+import type { Sticker, StickerAnnotationMetadata } from './domain/Sticker';
+import type { AgentToolExecutionContext } from '@shared/aiTools';
+import type { DatabaseTransactionExecutor } from '@platform/persistence';
 
 const stickerDatabase = databaseCoordinator.openTaskExecutor({
   name: 'stickers.repository',
@@ -31,11 +35,15 @@ let configured = false;
  * Sticker 只引用模型配置 ID，Base URL / API Key / model name 始终即时读取，
  * 不在 Sticker 侧保存第二份。重复调用保持幂等。
  */
-export function configureStickerRuntime(): void {
+export function configureStickerRuntime(
+  recognize: (sticker: Sticker, signal: AbortSignal) => Promise<StickerAnnotationMetadata>,
+  assertCurrent: (transaction: DatabaseTransactionExecutor, context: AgentToolExecutionContext) => Promise<void>,
+): void {
   if (configured) return;
   configured = true;
   configureStickersRuntime({
     repository: stickerRepository,
+    aiProcessing: { repository: new SQLiteAIStickerProcessingRepository(stickerDatabase), executionId: createRandomUUID(), recognize, assertCurrent },
     media: {
       createMediaAssetWithReference,
       resolveMediaAsset,

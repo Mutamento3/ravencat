@@ -1,6 +1,6 @@
 /** 用户与工具共用的正文输入边界；pool 由已授权的 AI 身份解析。 */
 import { randomUUID } from 'expo-crypto';
-import { ACTIVE_RECALL_PAGE_SIZE_OPTIONS, PASSIVE_RECALL_LIMIT_OPTIONS, MemoryInputError, normalizeMemoryText, requireMemoryContent, requireMemorySummary, type MemoryRecallSettings } from '../domain/Memory';
+import { ACTIVE_RECALL_PAGE_SIZE_OPTIONS, PASSIVE_RECALL_LIMIT_OPTIONS, MemoryInputError, normalizeMemoryText, requireMemoryContent, requireMemorySummary, requireMemoryTriggerKeywords, type MemoryRecallSettings } from '../domain/Memory';
 import type { CreateMemoryRecord } from '../domain/MemoryRepository';
 import { getMemoryRuntimeDependencies } from './MemoryRuntimeDependencies';
 import { emitMemoryChanged } from './MemorySignals';
@@ -58,20 +58,23 @@ export async function setMemoryRecallSettings(assistantId: string, settings: Mem
   await runtime.repository.setRecallSettings(space.poolId, settings);
   emitMemoryChanged();
 }
-/** 用户可批量配置触发词，并显式绑定正文中没有这些词的记忆。 */
-export async function addMemoryTrigger(assistantId: string, value: string, memoryId?: string) {
-  const keywords = new Map<string, string>();
-  for (const item of value.split(/[,，、;；\r\n]+/)) {
-    const keyword = item.trim();
-    const normalized = normalizeMemoryText(keyword);
-    if (normalized && !keywords.has(normalized)) keywords.set(normalized, keyword);
-  }
-  if (keywords.size === 0) throw new MemoryInputError('触发词不能为空');
+/** 新组只绑定用户选中的记忆；文本自动关联是各组可选的规则。 */
+export async function addMemoryTrigger(assistantId: string, value: string, memoryIds: string[], autoAssociate = false) {
+  const keywords = requireMemoryTriggerKeywords(value);
+  const ids = Array.from(new Set(memoryIds));
+  if (!autoAssociate && ids.length === 0) throw new MemoryInputError('请至少选择一条关联记忆');
   const runtime = getMemoryRuntimeDependencies();
   const space = await runtime.resolveMemorySpace(assistantId);
-  await runtime.repository.createTriggers(space.poolId, Array.from(keywords, ([normalizedKeyword, keyword]) => ({
-    id: randomUUID(), keyword, normalizedKeyword,
-  })), memoryId);
+  const groupId = randomUUID();
+  await runtime.repository.createTriggerGroup(space.poolId, groupId, keywords, ids, autoAssociate);
+  emitMemoryChanged();
+  return groupId;
+}
+export async function editMemoryTrigger(assistantId: string, groupId: string, value: string, autoAssociate: boolean) {
+  const keywords = requireMemoryTriggerKeywords(value);
+  const runtime = getMemoryRuntimeDependencies();
+  const space = await runtime.resolveMemorySpace(assistantId);
+  await runtime.repository.updateTriggerGroup(space.poolId, groupId, keywords, autoAssociate);
   emitMemoryChanged();
 }
 export async function deleteMemoryTrigger(assistantId: string, triggerId: string) {

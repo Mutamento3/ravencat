@@ -3,7 +3,7 @@
 import React from 'react';
 import { StyleSheet, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import { AIInfoCard, showAppDialog } from '@shared/ui';
@@ -41,11 +41,15 @@ const createStyles = (theme: PresentationTheme) =>
       flex: 1,
     },
     aiInfoCard: {
-      backgroundColor: theme.colors.surface.default,
+      marginTop: theme.spacing.md,
+      marginHorizontal: theme.spacing.lg,
+      borderRadius: theme.radius.lg,
       marginBottom: theme.spacing.md,
     },
     section: {
-      backgroundColor: theme.colors.surface.default,
+      marginHorizontal: theme.spacing.lg,
+      borderRadius: theme.radius.lg,
+      overflow: 'hidden',
       marginBottom: theme.spacing.md,
     },
     menuItem: {
@@ -136,12 +140,18 @@ export default function AIOptions({
     });
   };
 
-  const modelMenuItems = [
+  const settingsMenuItems = [
     {
       key: 'model-settings',
       icon: <SettingsIcon color={theme.colors.brand.primary} />,
       title: '模型设置',
       onPress: onModelSettings,
+    },
+    {
+      key: 'chat-settings',
+      icon: <ChatSettingsIcon color={theme.colors.brand.primary} />,
+      title: '对话设置',
+      onPress: onChatSettings,
     },
   ];
 
@@ -156,12 +166,6 @@ export default function AIOptions({
       key: 'chat-summary', icon: <SummaryIcon color={theme.colors.brand.primary} />,
       title: '聊天摘要', onPress: onChatSummary,
     }] : []),
-    {
-      key: 'chat-settings',
-      icon: <ChatSettingsIcon color={theme.colors.brand.primary} />,
-      title: '对话设置',
-      onPress: onChatSettings,
-    },
     ...(conversationId ? [{
       key: 'chat-statistics', icon: <StatisticsIcon color={theme.colors.brand.primary} />,
       title: '相遇痕迹', onPress: onChatStatistics,
@@ -189,13 +193,14 @@ export default function AIOptions({
       <NavigationHeader title="更多" onGoBack={onBack} />
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <AIInfoCard
-          name={aiAssistant?.name || 'AI助手'}
-          model={aiAssistant?.model || '默认模型'}
-          avatarUrl={aiAssistant?.avatar}
-          style={styles.aiInfoCard}
-        />
-        <MenuSection items={modelMenuItems} styles={styles} />
+        <ThemedSurface variant="card" style={styles.aiInfoCard}>
+          <AIInfoCard
+            name={aiAssistant?.name || 'AI助手'}
+            model={aiAssistant?.model || '默认模型'}
+            avatarUrl={aiAssistant?.avatar}
+          />
+        </ThemedSurface>
+        <MenuSection items={settingsMenuItems} styles={styles} />
         <MenuSection items={primaryMenuItems} styles={styles} />
         <MenuSection items={dangerMenuItems} styles={styles} />
       </ScrollView>

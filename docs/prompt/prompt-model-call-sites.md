@@ -9,7 +9,7 @@
 - 业务 Prompt 定义由所属 Feature 的 `*PromptDefinitions.ts` 暴露，Host 在 `src/host/prompt/catalog/` 聚合；
 - Chat、Ledger 与复用聊天投递的场景通过 `ResolvedPromptPackAssembler` 编译；2.x 历史预设和绑定仅由只读兼容解析器接入；
 - Calls 去电决策（`call.outgoing_decision`）同样走 resolved Chat Pack，与普通消息共享人设、用户身份、附加提示词与近期历史，仅追加决策场景与 JSON 契约；
-- Calls 挂断跟进、Together Listening 拒绝跟进、群聊管理员、Chat 摘要与 OCR 通过 `assembleResolvedStandalonePromptPack()` 编译；Companion AI 日程正式 autonomous run 使用 resolved Chat Pack 与 Feature 场景块；
+- Calls 挂断跟进、Together Listening 拒绝跟进、群聊管理员与 OCR 通过 `assembleResolvedStandalonePromptPack()` 编译；两级 Chat 摘要通过 `assembleResolvedSummaryPromptPack()` 复用普通单聊稳定前缀，固定来源与任务规则独立注入；Companion AI 日程正式 autonomous run 使用 resolved Chat Pack 与 Feature 场景块；
 - `PromptPackCompiler` 是最终 Block 顺序、受保护项、token 预算与 model messages 的唯一权威；
 - 工具续轮和流式续轮复用首轮已编译的 client/system prompt，不重新拼接业务提示词；
 - `BaseAIClient` 只负责请求传输，不拥有业务提示词定义。
@@ -27,7 +27,7 @@
 | `call.post_user_hangup` | `features/calls/application/runtime/PostUserHangUpFollowUp.ts` | standalone Pack + Calls Blocks | send_message/stay_silent JSON |
 | `together_listening.post_user_decline` | `features/togetherListening/application/PostUserDeclineFollowUp.ts` | standalone Pack + Together Listening Blocks | send_message/stay_silent 严格 JSON |
 | `raven_cat.ai_schedule_trigger` | `features/companion/application/RunAIScheduleAutonomousAgent.ts` → `RunHostAutonomousAgent.ts` → Host Agent assembly | resolved Chat Pack + AI Schedule Blocks | 正常 Agent tool loop；业务动作由 Feature Tool 提交 |
-| `chat.summary` | `host/composition/configureChatSummaryRuntime.ts` | standalone Pack + Chat 摘要 Blocks | 仅新增正文 content 的 JSON；事务提交归 Chat |
+| `chat.summary` | `host/composition/configureChatSummaryRuntime.ts` | resolved Summary Pack：聊天稳定前缀＋一级或二级任务规则 | content JSON；一级追加或二级归纳交接的事务提交归 Chat |
 | `vision.ocr` | `features/chat/reply/application/ResolveChatImageModelInput.ts` | standalone Pack | 视觉转述纯文本 |
 
 聊天回复是纯文本，分段由客户端 `AssistantReplySegmentation` 决定；`allowMultipleBubbles` 只控制展示/分段策略。`assistant-turn-xml` 和静默 memoryControl 通道已删除。通话与独立 JSON 任务继续使用表中各自的输出要求。

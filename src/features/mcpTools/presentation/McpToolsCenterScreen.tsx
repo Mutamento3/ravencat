@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import { EmptyState } from '@shared/ui';
 import NavigationHeader from '@shared/ui/NavigationHeader';
@@ -219,7 +219,7 @@ export default function McpToolsCenterScreen({
             description="添加一个支持 Streamable HTTP 的 Server，并选择可使用它的 AI。"
           />
         ) : (
-          <View style={styles.listCard}>
+          <ThemedSurface variant="card" style={styles.listCard}>
             {servers.map((server, index) => {
               const statusColor = CONNECTION_STATUS_COLORS[server.connectionStatus];
               return (
@@ -262,7 +262,7 @@ export default function McpToolsCenterScreen({
                 </View>
               );
             })}
-          </View>
+          </ThemedSurface>
         )}
       </ScrollView>
     </SafeAreaView>

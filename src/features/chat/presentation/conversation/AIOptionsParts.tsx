@@ -1,5 +1,6 @@
 /** 渲染单聊选项页复用的助手信息、菜单项与图标组件。 */
 
+import { ThemedSurface } from '@shared/theme';
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -34,7 +35,7 @@ interface IconProps {
 
 export function MenuSection({ items, styles }: MenuSectionProps) {
   return (
-    <View style={styles.section}>
+    <ThemedSurface variant="card" style={styles.section}>
       {items.map((item) => (
         <MenuItem
           key={item.key}
@@ -46,7 +47,7 @@ export function MenuSection({ items, styles }: MenuSectionProps) {
           styles={styles}
         />
       ))}
-    </View>
+    </ThemedSurface>
   );
 }
 

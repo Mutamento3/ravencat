@@ -1,8 +1,8 @@
 /** 面板复用 Memory 的查询和命令，星空不拥有记忆事实或路由。 */
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Keyboard, KeyboardAvoidingView, Modal, Pressable, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronRight, Plus, Search, X } from 'lucide-react-native';
+import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View } from 'react-native';
+import { Check, ChevronRight, Plus, Search, X } from 'lucide-react-native';
+import { ModalSheet, Toggle } from '@shared/ui';
 import { useTheme, useThemedStyles } from '@shared/theme';
 import { normalizeMemoryText, memorySearchText } from '../domain/Memory';
 import { addMemoryTrigger } from '../application/MemoryCommands';
@@ -21,33 +21,24 @@ export default function MemorySpacePanel({ visible, snapshot, error, busy, refre
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<'entries' | 'triggers'>('entries');
   const [triggerInput, setTriggerInput] = useState('');
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-  useEffect(() => {
-    if (!visible) return;
-    setKeyboardVisible(Keyboard.isVisible());
-    const showSubscription = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
-    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
-    return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, [visible]);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [selectedMemoryIds, setSelectedMemoryIds] = useState<string[]>([]);
+  const [autoAssociate, setAutoAssociate] = useState(false);
   const selected = snapshot?.selectedSpace;
+  useEffect(() => {
+    setCreatingGroup(false); setTriggerInput(''); setSelectedMemoryIds([]); setAutoAssociate(false); setQuery('');
+  }, [selected?.poolId]);
   const filtered = useMemo(() => {
     const normalized = normalizeMemoryText(query);
     return snapshot?.entries.filter(entry => normalizeMemoryText(memorySearchText(entry)).includes(normalized)) ?? [];
   }, [snapshot, query]);
 
-  return <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose} statusBarTranslucent>
-    {/* 隐藏事件的坐标仍可能落在 Modal 内；隐藏后停止避让，避免 height 模式反复改变自身测量高度。 */}
-    <KeyboardAvoidingView style={styles.modal} behavior="padding" enabled={visible && keyboardVisible}>
-      <Pressable style={styles.scrim} accessibilityRole="button" accessibilityLabel="收起记忆面板" onPress={onClose} />
-      <SafeAreaView edges={['bottom']} style={styles.sheet}>
+  return <ModalSheet visible={visible} onClose={onClose} avoidKeyboard style={styles.sheet}>
         <View style={styles.handle} />
         <View style={styles.sheetHeader}>
           <View style={{ flex: 1 }}>
             <Text style={styles.sheetName}>{selected ? selected.assistantName : '记忆空间'}</Text>
-            {snapshot && <Text style={styles.sheetMeta}>{snapshot.entries.length} 段记忆 · {snapshot.triggers.length} 个触发词{selected?.isHost ? ' · 主理' : ''}</Text>}
+            {snapshot && <Text style={styles.sheetMeta}>{snapshot.entries.length} 段记忆 · {snapshot.triggers.length} 个关联组{selected?.isHost ? ' · 主理' : ''}</Text>}
           </View>
           {selected && tab === 'entries' && <Pressable accessibilityRole="button" accessibilityLabel="新建记忆" style={styles.sheetButton} disabled={busy} onPress={() => onCreateMemory(selected.assistantId)}><Plus size={24} color={theme.colors.brand.primary} /></Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="收起记忆面板" style={styles.sheetButton} onPress={onClose}><X size={20} color={theme.colors.text.secondary} /></Pressable>
@@ -68,14 +59,34 @@ export default function MemorySpacePanel({ visible, snapshot, error, busy, refre
               </Pressable>}
               ListEmptyComponent={<Text style={styles.meta}>{query ? '没有包含这些文字的记忆。' : '这里还没有记忆。点右上角加号，留下第一件重要的事。'}</Text>} />
           </> : <>
-            <Text style={styles.description}>本次输入命中任一触发词时，自动带入关联记忆。正文或摘要包含它时自动关联，也可进入触发词手动选择其他记忆。多个词用逗号、顿号、分号或换行分隔。</Text>
-            <View style={styles.search}><TextInput accessibilityLabel="添加多个触发词" style={styles.input} value={triggerInput} onChangeText={setTriggerInput} placeholder="触发词，触发词…" placeholderTextColor={theme.colors.text.secondary} /><Pressable accessibilityRole="button" accessibilityLabel="保存触发词" style={styles.sheetButton} disabled={busy || !triggerInput.trim()} onPress={() => { void run(async () => { await addMemoryTrigger(selected.assistantId, triggerInput); setTriggerInput(''); }); }}><Plus size={22} color={theme.colors.brand.primary} /></Pressable></View>
+            {creatingGroup ? <FlatList key="create-group" data={filtered} keyExtractor={entry => entry.id} contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled" initialNumToRender={8} maxToRenderPerBatch={8} windowSize={5}
+              ListHeaderComponent={<View style={{ gap: 12 }}>
+                <Text style={styles.body}>新建关联组</Text>
+                <Text style={styles.meta}>多个词用逗号、顿号、分号或换行分隔。命中任一词，带入本组开启的记忆；相同词可以出现在其他组。</Text>
+                <TextInput multiline accessibilityLabel="关联组的触发词" style={styles.groupInput} value={triggerInput} onChangeText={setTriggerInput} editable={!busy} placeholder="chatgpt、openai的ai、codex" placeholderTextColor={theme.colors.text.secondary} />
+                <View style={styles.row}><Text style={[styles.meta, { flex: 1 }]}>自动关联正文或摘要含任一词的记忆</Text><Toggle accessibilityLabel="自动关联包含触发词的记忆" disabled={busy} value={autoAssociate} onValueChange={setAutoAssociate} /></View>
+                <Text style={styles.meta}>选择关联记忆（已选 {selectedMemoryIds.length} 条）</Text>
+                <TextInput accessibilityLabel="查找要关联的记忆" style={styles.groupInput} value={query} onChangeText={setQuery} placeholder="查找记忆" placeholderTextColor={theme.colors.text.secondary} />
+                <View style={styles.row}>
+                  <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setCreatingGroup(false); setQuery(''); }}><Text style={styles.activeTabText}>取消</Text></Pressable>
+                  <Pressable accessibilityRole="button" style={(busy || !triggerInput.trim() || (!autoAssociate && !selectedMemoryIds.length)) && styles.disabled} disabled={busy || !triggerInput.trim() || (!autoAssociate && !selectedMemoryIds.length)} onPress={() => { void run(async () => {
+                    await addMemoryTrigger(selected.assistantId, triggerInput, selectedMemoryIds, autoAssociate);
+                    setCreatingGroup(false); setTriggerInput(''); setSelectedMemoryIds([]); setAutoAssociate(false); setQuery('');
+                  }); }}><Text style={styles.activeTabText}>{busy ? '保存中…' : '保存关联组'}</Text></Pressable>
+                </View>
+              </View>}
+              renderItem={({ item: entry }) => <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selectedMemoryIds.includes(entry.id) }} disabled={busy} style={styles.card} onPress={() => setSelectedMemoryIds(ids => ids.includes(entry.id) ? ids.filter(id => id !== entry.id) : [...ids, entry.id])}>
+                <View style={styles.row}><Text style={[styles.body, { flex: 1 }]} numberOfLines={3}>{entry.summary ?? entry.content}</Text>{selectedMemoryIds.includes(entry.id) && <Check size={20} color={theme.colors.brand.primary} />}</View>
+                {entry.summary && <Text style={styles.meta} numberOfLines={3}>{entry.content}</Text>}
+              </Pressable>}
+              ListEmptyComponent={<Text style={styles.meta}>{query ? '没有匹配的记忆。' : '先添加记忆，再建立关联组。'}</Text>} /> : <>
+            <Text style={styles.description}>每个组可有多个词和多条记忆。命中任一词，带入该组开启的记忆；同名词可命中多个组，同一条记忆只带入一次。</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="新建关联组" disabled={busy} style={styles.tabs} onPress={() => { setCreatingGroup(true); setQuery(''); }}><Plus size={20} color={theme.colors.brand.primary} /><Text style={styles.activeTabText}>新建关联组</Text></Pressable>
             <FlatList key="triggers" data={snapshot.triggers} keyExtractor={trigger => trigger.id} contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled" refreshing={refreshing} onRefresh={refresh} initialNumToRender={8} maxToRenderPerBatch={8} windowSize={5}
-              renderItem={({ item: trigger }) => <Pressable accessibilityRole="button" disabled={busy} style={styles.card} onPress={() => onOpenTrigger(selected.assistantId, trigger.id)}><View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.body}>{trigger.keyword}</Text><Text style={styles.meta}>{trigger.associatedCount} 条关联 · {trigger.enabledCount} 条自动带入</Text></View><ChevronRight size={18} color={theme.colors.text.secondary} /></View></Pressable>}
-              ListEmptyComponent={<Text style={styles.meta}>添加一个触发词，让有关的记忆在聊天时浮现。</Text>} />
+              renderItem={({ item: trigger }) => <Pressable accessibilityRole="button" disabled={busy} style={styles.card} onPress={() => onOpenTrigger(selected.assistantId, trigger.id)}><View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.body}>{trigger.keywords.map(word => word.keyword).join('、')}</Text><Text style={styles.meta}>已关联 {trigger.associatedCount} 条记忆 · {trigger.enabledCount} 条自动带入</Text></View><ChevronRight size={18} color={theme.colors.text.secondary} /></View></Pressable>}
+              ListEmptyComponent={<Text style={styles.meta}>添加一个关联组，让有关的记忆在聊天时浮现。</Text>} />
+            </>}
           </>}
         </>}
-      </SafeAreaView>
-    </KeyboardAvoidingView>
-  </Modal>;
+  </ModalSheet>;
 }

@@ -20,19 +20,25 @@ export const sendVoiceMessageDefinition = {
   description: [
     '把完整自然语言作为一条真实语音消息发送给用户。一次调用只发送一条；需要连续多条时按顺序多次调用。',
     '成功后不要再用普通文本重复同一正文。不需要语音时直接回复文字。',
+    '语音本身可以构成完整回复；用 on_success 声明成功后结束或继续。失败会返回错误供你处理。',
   ].join(''),
   parameters: {
     type: 'object',
     properties: {
       text: { type: 'string', minLength: 1, maxLength: 2000, description: '这条语音实际说出的完整口语正文，可自然使用语气词和标点停顿；不写动作、旁白或表演说明' },
+      on_success: {
+        type: 'string',
+        enum: ['finish', 'continue'],
+        description: '成功后意图：本次回复已完整选 finish，系统将结束本轮，不再请求你；还要发送语音、表情包、补充文字或执行其他操作选 continue。同批多个工具按顺序执行，仅最后一个工具的 finish 决定结束；任何工具失败都会继续请求你。仅补充“语音已发送”等状态说明不构成继续的理由，无需为可能失败选择 continue。',
+      },
     },
-    required: ['text'],
+    required: ['text', 'on_success'],
     additionalProperties: false,
   },
 };
 
 export async function sendVoiceMessage(
-  input: { text?: string } & SpeechDelivery,
+  input: { text?: string; on_success: 'finish' | 'continue' } & SpeechDelivery,
   context: AgentToolExecutionContext,
   modelSnapshot?: ResolvedSpeechModel | null,
 ): Promise<AgentToolExecutionResult<VoiceMessageSendIntent>> {
@@ -86,7 +92,7 @@ export async function sendVoiceMessage(
     return {
       status: 'success',
       data: intent,
-      metadata: { fulfillsUserVisibleOutput: true },
+      metadata: { fulfillsUserVisibleOutput: true, completionIntent: input.on_success },
       modelContent: '语音消息已准备，等待与本轮 Chat 回复一起提交。不要重复输出相同正文。',
     };
   } catch (error) {
@@ -113,7 +119,13 @@ export async function createConfiguredVoiceMessageTool(assistantId: string) {
   const properties: Record<string, import('@shared/aiTools').JsonSchema> = { ...sendVoiceMessageDefinition.parameters.properties };
   if (modelSnapshot) {
     const metadata = readSpeechMetadata(modelSnapshot.metadataJson);
-    properties.text = { ...properties.text, description: getSpeechTextGuidance(metadata.provider, modelSnapshot.model) };
+    properties.text = {
+      ...properties.text,
+      description: [
+        '本工具的 text 参数用于语音合成；以下正文、声音与表达标记、停顿说明仅适用于该参数。',
+        getSpeechTextGuidance(metadata.provider, modelSnapshot.model),
+      ].join('\n'),
+    };
     for (const field of getSpeechParameters(metadata.provider, modelSnapshot.model)) {
       if (!['speed', 'emotion', 'instructions', 'audioTag'].includes(field.key)) continue;
       // 未知兼容服务由用户填写连接参数，不能据接口名字承诺模型表达能力。
@@ -129,7 +141,7 @@ export async function createConfiguredVoiceMessageTool(assistantId: string) {
     description: `${sendVoiceMessageDefinition.description}可根据当前情境主动使用本工具字段说明中支持的表达参数或句内标记，让语音自然地表现情绪。`,
     parameters: { ...sendVoiceMessageDefinition.parameters, properties },
   };
-  return { ...SendVoiceMessageTool, definition, execute: (input: { text?: string } & SpeechDelivery, context: AgentToolExecutionContext) => sendVoiceMessage(input, context, modelSnapshot) };
+  return { ...SendVoiceMessageTool, definition, execute: (input: { text?: string; on_success: 'finish' | 'continue' } & SpeechDelivery, context: AgentToolExecutionContext) => sendVoiceMessage(input, context, modelSnapshot) };
 }
 
 export function isVoiceMessageSendIntent(value: unknown): value is VoiceMessageSendIntent {

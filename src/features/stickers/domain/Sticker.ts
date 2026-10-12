@@ -11,6 +11,8 @@ export type StickerAnnotationStatus =
 export interface Sticker {
   id: string;
   mediaAssetId: string;
+  /** null 表示用户收藏；AI 收藏由角色 ID 独立持有。 */
+  ownerAssistantId: string | null;
   groupId: string | null;
   name: string;
   description: string | null;
@@ -70,6 +72,8 @@ export interface ListStickersInput {
 }
 
 export interface SearchStickersInput {
+  /** 由工具执行上下文注入，只查询用户与当前 AI 的收藏。 */
+  assistantId?: string;
   query?: string;
   tags?: readonly string[];
   emotion?: string | null;
@@ -77,6 +81,8 @@ export interface SearchStickersInput {
   limit?: number;
   /** AI 选择必须只消费已经完成结构化标注的 Sticker。 */
   readyOnly?: boolean;
+  /** 维护搜索同时返回自己的识别失败项；其他收藏仍服从 readyOnly。 */
+  includeOwnUnannotated?: boolean;
 }
 
 export interface StickerMetadataPatch {

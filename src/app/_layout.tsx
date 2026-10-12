@@ -32,6 +32,7 @@ export default function RootLayout() {
           <Stack.Screen name="prompt-center/index" />
           <Stack.Screen name="backup/index" />
           <Stack.Screen name="profile" />
+          <Stack.Screen name="favorites" />
           <Stack.Screen name="profile/[field]" />
           <Stack.Screen name="moments/publish" />
           <Stack.Screen name="moments/settings" />

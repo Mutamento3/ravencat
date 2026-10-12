@@ -6,6 +6,7 @@ import {
   createWalletRecordFromRow,
   createQuickAction,
   createQuickActionFromRow,
+  DEFAULT_WALLET_CATEGORIES,
 } from '../domain/WalletRecord';
 import type { WalletRecord, QuickAction, WalletRecordType } from '../domain/WalletRecord';
 import type { 
@@ -549,12 +550,19 @@ export class SQLiteLedgerRepository implements ILedgerRepository {
    * 获取所有分类（去重）
    * @returns 分类列表
    */
-  async getCategories(): Promise<string[]> {
+  async getCategories(type?: WalletRecordType): Promise<string[]> {
     const db: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'wallet.getCategories', feature: 'wallet', priority: 'runtime' });
+    const where = type ? 'WHERE type = ?' : '';
     const results = await db.getAllAsync<{ category: string }>(
-      'SELECT DISTINCT category FROM ledger_records ORDER BY category'
+      `SELECT category FROM ledger_records ${where}
+       UNION SELECT category FROM ledger_quick_actions ${where}
+       ORDER BY category`,
+      type ? [type, type] : []
     );
-    return results.map(r => r.category);
+    const defaults = type
+      ? DEFAULT_WALLET_CATEGORIES[type]
+      : [...DEFAULT_WALLET_CATEGORIES.expense, ...DEFAULT_WALLET_CATEGORIES.income];
+    return [...new Set([...defaults, ...results.map(r => r.category)])];
   }
 
   // ==================== 历史记账功能 ====================

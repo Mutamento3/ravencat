@@ -4,7 +4,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CircleHelp } from 'lucide-react-native';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 
 interface HelpSection { title: string; body: string }
@@ -23,7 +23,7 @@ const createStyles = (theme: PresentationTheme) => StyleSheet.create({
     position: 'absolute', top: 0, width: 0, height: 0,
     borderLeftWidth: 8, borderRightWidth: 8, borderBottomWidth: 8,
     borderLeftColor: 'transparent', borderRightColor: 'transparent',
-    borderBottomColor: theme.colors.surface.raised,
+    borderBottomColor: theme.effects.glass.enabled ? theme.effects.glass.borderColor : theme.colors.surface.raised,
     zIndex: 1,
   },
   panel: {
@@ -68,7 +68,7 @@ function HelpPopover({ anchor, sections, onClose }: {
       <Pressable style={StyleSheet.absoluteFill} accessibilityRole="button" accessibilityLabel="关闭使用说明" onPress={onClose} />
       {layout && <View style={[styles.popover, { left: layout.left, top: layout.top, width: layout.width }]}>
         <View pointerEvents="none" style={[styles.arrow, { left: layout.arrowLeft }]} />
-        <View style={[styles.panel, { maxHeight: layout.maxHeight }]}>
+        <ThemedSurface variant="modal" cornerRadius={styles.panel.borderRadius} backgroundColor={styles.panel.backgroundColor} style={[styles.panel, { maxHeight: layout.maxHeight }]}>
           <Text style={styles.label}>使用说明</Text>
           <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
             {sections.map((section) => <View key={section.title} style={styles.section}>
@@ -76,7 +76,7 @@ function HelpPopover({ anchor, sections, onClose }: {
               <Text style={styles.body}>{section.body}</Text>
             </View>)}
           </ScrollView>
-        </View>
+        </ThemedSurface>
       </View>}
     </View>
   </Modal>;

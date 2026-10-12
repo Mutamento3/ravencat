@@ -20,11 +20,17 @@ runId 由发起任务的产品 owner 创建并传入，Runtime 不生成或替�
 ## 2. 单一模型与工具循环
 
 - complete 与 stream 共享同一 loop；流式只改变事件传输形式。
-- 工具结果作为 observation 进入下一次模型请求；续轮不重新编译业务 Prompt。
+- 工具结果始终记录为 observation；需要续轮时进入下一次模型请求，续轮不重新编译业务 Prompt。
 - 模型决定 observation 是否足够，Runtime 不根据内容相似度或同名同参调用推断任务完成。
+- 语音与表情包发送工具要求模型通过 `on_success: finish | continue` 声明成功后意图，成功结果通过 `metadata.completionIntent` 转交 Runtime。整批成功且最后一个工具选择 `finish` 时，直接进入既有正常完成入口（含 `beforeComplete`），不追加模型回合；批次任一失败、参数非法或最后工具未选择结束时，继续回灌 observation。结束意图不截断同批后续工具，不代替业务 owner 的 canonical commit，也不丢弃模型已经输出的正文。
 - 工具结果、未知结果和最终输出保持原来的业务含义；Runtime 不替 Feature 写消息、更新 preview 或发通知。
 
 Calls 的 `ProcessCallAIReply.ts` 当前仍拥有 `lookAtUser` 后追加图片/OCR 的多模态续答流程，尚未接入通用 AgentRunLoop。不能把它写成已完成统一，也不能为文档整理迁移产品实现；接入需要先裁决多模态 observation/history 的边界。
+
+统一 Runtime 现已支持工具结果的 `modelImages` 附图：与文本 observation 一同记录在
+tool history 中，模型网关先提交完整 tool_calls 结果批次，再追加图片观察输入。
+complete / stream 使用同一组装路径；附图只属于本次模型观察，不产生用户 Chat 消息。
+`view_image` 已使用此契约，Calls 自有 `lookAtUser` 流程仍保持上述独立状态。
 
 ## 3. 工具契约与权限
 
@@ -45,7 +51,7 @@ Host 冻结工具暴露面，Runtime 校验当前 allowlist 与 schema，Feature
 
 Chat 固定为 **10 个工具回合、每回合最多 3 次、总计 30 次**。同一 step 的工具按模型返回顺序串行执行。单批超过 3 次时整批不执行，返回 `TOOL_BATCH_LIMIT_EXCEEDED` 供模型修正，避免部分副作用。
 
-工具回合或总额度耗尽后追加无工具模型回合，由模型根据已有 observation 给出最终正文；预算耗尽不是运行错误。
+工具回合或总额度耗尽后，尚未通过发送工具意图完成的 run 追加无工具模型回合，由模型根据已有 observation 给出最终正文；预算耗尽不是运行错误。
 
 同一模型回合提出的整批工具共享 **10 分钟 wall-clock deadline**，不按工具数量叠加。模型请求与最终回答不计入这个工具时限，Runtime 不设置整个 Agent run 的任务过期时间。工具超过批次时限后回灌 `TOOL_EXECUTION_TIMEOUT`，表示结果未知，不自动重试。
 

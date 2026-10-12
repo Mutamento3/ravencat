@@ -313,7 +313,7 @@ await projector.completeModelTurn(1, {
   assistantText,
   reasoningText: '',
   toolCalls: [],
-  usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+  usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedTokens: 0 },
   finishReason: 'stop',
 });
 await projector.finalizeFinalTurn(1, {
@@ -322,7 +322,7 @@ await projector.finalizeFinalTurn(1, {
   assistantText,
   reasoningText: '',
   toolCalls: [],
-  usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+  usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedTokens: 0 },
   finishReason: 'stop',
 });
 assert.equal(
@@ -333,6 +333,11 @@ assert.equal(
 assert.ok(
   projectorLogs.updates.some(({ patch }) => patch.status === 'sent'),
   'ST-01 草稿最终必须收口为 sent',
+);
+assert.equal(
+  JSON.parse(projectorLogs.updates.find(({ patch }) => patch.status === 'sent').patch.metadataJson).cachedTokens,
+  0,
+  '流式收口应持久保存服务商返回的 0 命中，不能丢成未知',
 );
 const finalizedMessageId = projectorLogs.persisted.find(
   (message) => message.senderType === 'assistant',

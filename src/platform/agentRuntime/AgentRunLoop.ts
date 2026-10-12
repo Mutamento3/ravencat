@@ -148,62 +148,62 @@ export class AgentRunLoop {
         if (turn.assistantText.length === 0 && !hasToolProducedUserVisibleOutput(state)) {
           throw new AgentRuntimeTerminalError('MODEL_PROTOCOL_ERROR');
         }
-        state.finalText = turn.assistantText;
-        const decision = await context.beforeComplete?.({
-          runId: state.runId,
-          task: state.task,
-          history: state.history,
-          finalText: state.finalText,
-          completionContinuationUsed,
-        });
-        this.dependencies.budgetGuard.assertNotCancelled(context.signal);
-        if (!completionContinuationUsed && decision?.action === 'continue') {
-          completionContinuation = validateCompletionContinuation(decision, state.task);
-          completionContinuationUsed = true;
+      } else {
+        const batchRejection = completionContinuation
+          ? inspectCompletionContinuationBatch(turn.toolCalls)
+          : this.dependencies.budgetGuard.inspectToolBatch(state, turn.toolCalls);
+        if (batchRejection) {
+          await rejectAgentToolBatch(
+            this.dependencies,
+            state,
+            step,
+            turn.toolCalls,
+            batchRejection,
+            context
+          );
+          if (completionContinuation) {
+            completionContinuation.toolCallAvailable = false;
+          }
+          toolAccessClosed = toolAccessClosed || batchRejection.closeToolAccess;
+          markStepCompleted(step, this.dependencies.clock.now());
+          await emitStepCompleted(state, step, context);
           continue;
         }
-        throw new AgentRuntimeTerminalError('COMPLETED');
-      }
 
-      const batchRejection = completionContinuation
-        ? inspectCompletionContinuationBatch(turn.toolCalls)
-        : this.dependencies.budgetGuard.inspectToolBatch(state, turn.toolCalls);
-      if (batchRejection) {
-        await rejectAgentToolBatch(
+        const batchResult = await executeAgentToolBatch(
           this.dependencies,
           state,
           step,
           turn.toolCalls,
-          batchRejection,
           context
         );
         if (completionContinuation) {
           completionContinuation.toolCallAvailable = false;
         }
-        toolAccessClosed = toolAccessClosed || batchRejection.closeToolAccess;
+        toolAccessClosed = toolAccessClosed || batchResult.closeToolAccess;
         markStepCompleted(step, this.dependencies.clock.now());
         await emitStepCompleted(state, step, context);
-        continue;
+        if (!shouldCompleteAfterToolBatch(step)) {
+          continue;
+        }
       }
 
-      const batchResult = await executeAgentToolBatch(
-        this.dependencies,
-        state,
-        step,
-        turn.toolCalls,
-        context
-      );
-      if (completionContinuation) {
-        completionContinuation.toolCallAvailable = false;
-      }
-      toolAccessClosed = toolAccessClosed || batchResult.closeToolAccess;
-      markStepCompleted(step, this.dependencies.clock.now());
-      await emitAgentEvent(context, {
-        type: 'step_completed',
+      // 正文结束与工具声明结束共用完成入口，不能绕过调用方的完成前检查。
+      state.finalText = turn.assistantText;
+      const decision = await context.beforeComplete?.({
         runId: state.runId,
-        stepIndex: step.stepIndex,
-        toolCallCount: step.toolCalls.length,
+        task: state.task,
+        history: state.history,
+        finalText: state.finalText,
+        completionContinuationUsed,
       });
+      this.dependencies.budgetGuard.assertNotCancelled(context.signal);
+      if (!completionContinuationUsed && decision?.action === 'continue') {
+        completionContinuation = validateCompletionContinuation(decision, state.task);
+        completionContinuationUsed = true;
+        continue;
+      }
+      throw new AgentRuntimeTerminalError('COMPLETED');
     }
   }
 
@@ -284,6 +284,14 @@ function hasToolProducedUserVisibleOutput(state: AgentRunState): boolean {
   return state.steps.some((step) => step.toolCalls.some(({ outcome }) => (
     outcome.status === 'success' && outcome.metadata?.fulfillsUserVisibleOutput === true
   )));
+}
+
+/** 结束意图只在整批完成后生效；不能截断后续工具，也不能隐藏同批错误。 */
+function shouldCompleteAfterToolBatch(step: AgentStepRecord): boolean {
+  const lastOutcome = step.toolCalls[step.toolCalls.length - 1].outcome;
+  return lastOutcome.status === 'success'
+    && lastOutcome.metadata?.completionIntent === 'finish'
+    && step.toolCalls.every(({ outcome }) => outcome.status === 'success');
 }
 
 function validateCompletionContinuation(
@@ -502,7 +510,8 @@ function recordToolOutcome(
   startedAt: number | null,
   clock: AgentClock
 ): void {
-  appendToolResultHistory(state, toolCall, modelContentForOutcome(outcome), clock.now());
+  appendToolResultHistory(state, toolCall, modelContentForOutcome(outcome), clock.now(),
+    outcome.status === 'success' ? outcome.modelImages : undefined);
   const completedAt = clock.now();
   step.toolCalls.push({
     toolCall,

@@ -122,6 +122,16 @@ const MEDIA_ASSET_REFERENCE_QUERY = `
   FROM stickers
   WHERE TRIM(media_asset_id) <> ''
   UNION ALL
+  SELECT media_asset_id, 'ai_download', id, 'ai_downloaded_images.media_asset_id'
+  FROM ai_downloaded_images
+  UNION ALL
+  SELECT CAST(tree.value AS TEXT), 'chat_favorite', chat_favorites.id,
+         'chat_favorites.snapshot_json:' || tree.fullkey
+  FROM chat_favorites, json_tree(chat_favorites.snapshot_json) AS tree
+  WHERE tree.type = 'text'
+    AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
+    AND TRIM(CAST(tree.value AS TEXT)) <> ''
+  UNION ALL
   SELECT CAST(tree.value AS TEXT),
          CASE
            WHEN tree.key = 'thumbnailMediaAssetId' THEN 'chat_thumbnail'
@@ -186,6 +196,16 @@ const MEDIA_ASSET_CANDIDATE_UNREFERENCED_QUERY = `
     AND NOT EXISTS (
           SELECT 1 FROM stickers
           WHERE stickers.media_asset_id = candidate.asset_id
+        )
+    AND NOT EXISTS (
+          SELECT 1 FROM ai_downloaded_images
+          WHERE ai_downloaded_images.media_asset_id = candidate.asset_id
+        )
+    AND NOT EXISTS (
+          SELECT 1 FROM chat_favorites, json_tree(chat_favorites.snapshot_json) AS tree
+          WHERE tree.type = 'text'
+            AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
+            AND TRIM(CAST(tree.value AS TEXT)) = candidate.asset_id
         )
     AND NOT EXISTS (
           SELECT 1
@@ -525,7 +545,11 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
       UNION
       SELECT media_asset_id AS asset_id FROM call_background_selection
       WHERE id = ? AND media_asset_id IS NOT NULL
-    `, [assistantId, assistantId]);
+      UNION
+      SELECT media_asset_id AS asset_id FROM stickers WHERE owner_assistant_id = ?
+      UNION
+      SELECT media_asset_id AS asset_id FROM ai_downloaded_images WHERE assistant_id = ?
+    `, [assistantId, assistantId, assistantId, assistantId]);
     return rows.map((row) => row.asset_id);
   }
 

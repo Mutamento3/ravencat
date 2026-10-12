@@ -16,6 +16,7 @@
 | [eslint](https://www.npmjs.com/package/eslint/v/9.39.4) | 9.39.4 | MIT | 开发工具 |
 | [eslint-config-expo](https://www.npmjs.com/package/eslint-config-expo/v/10.0.0) | 10.0.0 | MIT | 开发工具 |
 | [expo](https://www.npmjs.com/package/expo/v/54.0.33) | 54.0.33 | MIT | 运行依赖 |
+| [expo-asset](https://www.npmjs.com/package/expo-asset/v/12.0.13) | 12.0.13 | MIT | 运行依赖 |
 | [expo-build-properties](https://www.npmjs.com/package/expo-build-properties/v/1.0.10) | 1.0.10 | MIT | 运行依赖 |
 | [expo-camera](https://www.npmjs.com/package/expo-camera/v/17.0.10) | 17.0.10 | MIT | 运行依赖 |
 | [expo-constants](https://www.npmjs.com/package/expo-constants/v/18.0.13) | 18.0.13 | MIT | 运行依赖 |

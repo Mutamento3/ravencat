@@ -35,6 +35,8 @@ export {
 } from './PersistentMediaStore';
 export { inspectMediaFileContent } from './MediaFileContent';
 export { detectImageAnimation, inspectImageAnimation } from './ImageAnimation';
+export { inspectLocalImage, readLocalImageAsBase64, ImageFileReadError } from './InspectLocalImage';
+export { prepareVisionImage, readVisionImageAsBase64 } from './PrepareVisionImage';
 export {
   TemporarySpeechAudioStore,
   clearTemporarySpeechAudioForFactoryReset,
@@ -141,3 +143,11 @@ export {
   type AppUsageSnapshot,
 } from './DeviceStatus';
 export { getPersistentMediaCategoryPrefix } from './PersistentMediaStore';
+export {
+  getDeviceLocationAccessState,
+  getCurrentDeviceLocation,
+  openDeviceLocationSettings,
+  manageDeviceLocationPermission,
+  type DeviceLocationAccessState,
+  type DeviceLocationSnapshot,
+} from './DeviceLocation';

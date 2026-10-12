@@ -1,6 +1,6 @@
 /** 同一投影决定摘要与尚未总结原文；对话计数，应用事件随所属范围交接。 */
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
-import { buildChatSystemEventModelText, buildSessionPreviewTextFromMessage, buildVoiceMessageModelText, getMessageSticker, getMessageSharedRecord, isCallStatusMessageMetadata, isTogetherListeningMessageMetadata, parseMessageMetadata } from '../../messages/domain/chatMessageMetadata';
+import { buildChatSystemEventModelText, buildSessionPreviewTextFromMessage, buildVoiceMessageModelText, buildReplyQuoteModelText, getMessageAttachments, getMessageSticker, getMessageSharedRecord, isCallStatusMessageMetadata, isTogetherListeningMessageMetadata, parseMessageMetadata } from '../../messages/domain/chatMessageMetadata';
 import { buildStickerModelText } from '../../messages/domain/ChatSticker';
 import { buildSharedChatRecordText, type SharedChatRecord } from '../../messages/domain/SharedChatRecord';
 
@@ -34,9 +34,14 @@ export function projectChatContextMessage(message: ChatMessage, cursor: ChatCano
   const sharedRecord = getMessageSharedRecord(message);
   const text = sharedRecord ? buildSharedChatRecordText(sharedRecord, message.text) : voice || (sticker ? buildStickerModelText(sticker)
     : message.isMe ? buildSessionPreviewTextFromMessage(message) : message.text);
-  if (!text.trim()) return null;
+  // 历史原文只投影素材引用，不读文件；图片 ID 留在模型上下文，列表预览保持展示语义。
+  const imageReferences = getMessageAttachments(message).flatMap(attachment =>
+    attachment.type === 'image' && attachment.mediaAssetId
+      ? [`图片：${attachment.fileName || '未命名图片'}；mediaAssetId=${attachment.mediaAssetId}`] : []);
+  const content = [text, ...imageReferences].filter(Boolean).join('\n').trim();
+  if (!content) return null;
   return { cursor, messageId: message.id, kind: 'dialogue', role: message.isMe ? 'user' : 'assistant',
-    content: message.replyToText ? '[引用：' + message.replyToText + ']\n' + text.trim() : text.trim(),
+    content: [buildReplyQuoteModelText(message), content].filter(Boolean).join('\n'),
     timestamp: message.createdAt, logicalMessageId: message.logicalMessageId ?? null,
     ...(sharedRecord ? { sharedRecord, sharedComment: message.text } : {}) };
 }

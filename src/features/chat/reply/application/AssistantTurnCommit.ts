@@ -179,6 +179,7 @@ export function buildAssistantTurnItems(
         completionTokens: isFinalSegment ? response.completionTokens || 0 : 0,
         metadataJson: JSON.stringify(buildMessageMetadata(aiConfig, runtimeContext, {
           kind: 'reply',
+          cachedTokens: isFinalSegment ? response.cachedTokens : undefined,
         })),
         logicalMessageId,
         segmentIndex,

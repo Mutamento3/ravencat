@@ -32,6 +32,9 @@ export type {
   CreateMediaAssetResult,
 } from './application/CreateMediaAsset';
 export type { ResolvedMediaAsset } from './application/MediaAssetResolver';
+export { MediaAssetNotFoundError, MediaAssetMissingError } from './application/MediaAssetResolver';
+export { mediaImageFailure } from './application/MediaImageToolResult';
+export { DownloadImageTool, ViewImageTool } from './application/AIImageTools';
 export {
   createMediaAssetWithReference,
   auditMediaAssetClosure,

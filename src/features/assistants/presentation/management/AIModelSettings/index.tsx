@@ -5,7 +5,7 @@ import { View, ScrollView, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { AIProfile } from '../../../domain/AIProfile';
 
-import { getChatInteractionProfile, useTheme } from '@shared/theme';
+import { useTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import { ModelPickerModal, Button, InputField, ToggleField, AIInfoCard, SliderField, showAppDialog, type AppDialogButton, type AppDialogTone } from '@shared/ui';
 import useModelSettings from './useModelSettings';
@@ -16,7 +16,6 @@ import { AutoSaveErrors } from '@shared/ui/AutoSaveErrors';
 import ModelSection from './ModelSection';
 import { AssistantVoiceModelPicker } from '../AssistantVoiceModelPicker';
 import MaxTokensSection from './MaxTokensSection';
-import ContextWindowSection from './ContextWindowSection';
 
 import { createModelSettingsStyles } from './styles';
 import { createCommonStyles } from '@shared/ui/commonStyles';
@@ -43,8 +42,6 @@ export default function AIModelSettings({
   onManageVoiceModels,
 }: AIModelSettingsProps) {
   const theme = useTheme();
-  const interactionProfile = getChatInteractionProfile(theme);
-  const canUseShortTextProtocol = interactionProfile.enableAssistantMessageSegmentation;
   const styles = useMemo(() => createModelSettingsStyles(theme), [theme]);
   const commonStyles = useMemo(() => createCommonStyles(theme), [theme]);
   // 显示弹窗的回调
@@ -69,8 +66,6 @@ export default function AIModelSettings({
     apiKey,
     enableTools,
     disableThinking,
-    allowMultipleBubbles,
-    contextLimits,
     isHostAI,
     isCheckingHost,
     isChangingHost,
@@ -81,13 +76,11 @@ export default function AIModelSettings({
     setApiKey,
     setEnableTools,
     setDisableThinking,
-    setAllowMultipleBubbles,
 
     // handlers
     handleTempChange,
     handleTopPChange,
     handleMaxTokensChange,
-    handleContextLimitChange,
     handleFetchModels,
     handleSelectModel,
     handleTestConnection,
@@ -226,14 +219,6 @@ export default function AIModelSettings({
             onChangeText={handleMaxTokensChange}
           /></View>
 
-          {/* 上下文可见条数（群聊两个字段暂未生效，见主客动态装载设计文档） */}
-          <View onLayout={feedback.fieldLayout(['privatePrimary', 'privateSecondary', 'groupPrimary', 'groupSecondary'])}><ContextWindowSection
-            onBlur={blur}
-            errors={errors}
-            values={contextLimits}
-            onChange={handleContextLimitChange}
-          /></View>
-
           {/* 重置按钮 */}
           <Button
             title="重置为默认值"
@@ -260,20 +245,6 @@ export default function AIModelSettings({
               hint="开启后，AI 可调用时刻等工具获取上下文。"
               value={enableTools}
               onValueChange={setEnableTools}
-            />
-          </View>
-
-          {/* 气泡数量只影响客户端自动分段开关，不改变聊天输出格式要求。 */}
-          <View style={[styles.section, styles.sectionLightBorder]}>
-            <ToggleField
-              label="允许多气泡回复"
-              hint={
-                canUseShortTextProtocol
-                  ? '开启后客户端会按空行和句长把回复自动拆成多个气泡；表达风格仍由人设和提示词决定。'
-                  : '当前主题实际使用单气泡；你的多气泡原设置会保留，切回支持主题后恢复。'
-              }
-              value={allowMultipleBubbles}
-              onValueChange={setAllowMultipleBubbles}
             />
           </View>
 

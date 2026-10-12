@@ -38,6 +38,7 @@ import type {
 interface StickerRow {
   id: string;
   media_asset_id: string;
+  owner_assistant_id: string | null;
   group_id: string | null;
   name: string;
   description: string | null;
@@ -82,6 +83,7 @@ interface StickerGroupRow {
 const STICKER_COLUMNS = `
   id,
   media_asset_id,
+  owner_assistant_id,
   group_id,
   name,
   description,
@@ -116,6 +118,7 @@ function mapStickerRow(row: StickerRow): Sticker {
   return {
     id: row.id,
     mediaAssetId: row.media_asset_id,
+    ownerAssistantId: row.owner_assistant_id,
     groupId: row.group_id,
     name: row.name,
     description: row.description,
@@ -173,6 +176,7 @@ function buildStickerValues(sticker: Sticker): (string | number | null)[] {
   return [
     sticker.id,
     sticker.mediaAssetId,
+    sticker.ownerAssistantId,
     sticker.groupId,
     sticker.name,
     sticker.description,
@@ -223,7 +227,7 @@ function mapStickerEmbeddingRow(row: StickerEmbeddingRow): StickerEmbedding {
  * canonical 语义字段（name / description / tags / emotion）是否发生了实际变化。
  * 自动识别 complete 与手动编辑共用这一判定，保证同一条 revision 规则。
  */
-function semanticFieldsChanged(
+export function semanticFieldsChanged(
   current: Sticker,
   next: { name: string; description: string | null; tags: string[]; emotion: string | null },
 ): boolean {
@@ -249,17 +253,17 @@ export class SQLiteStickerRepository implements StickerRepository {
     }),
   ) {}
 
-  async getStickerById(id: string): Promise<Sticker | null> {
+  async getStickerById(id: string, assistantId?: string): Promise<Sticker | null> {
     const row = await this.database.getFirstAsync<StickerRow>(
-      `SELECT ${STICKER_COLUMNS} FROM stickers WHERE id = ? LIMIT 1`,
-      [id],
+      `SELECT ${STICKER_COLUMNS} FROM stickers WHERE id = ? AND (owner_assistant_id IS NULL OR owner_assistant_id = ?) LIMIT 1`,
+      [id, assistantId ?? null],
     );
     return row ? mapStickerRow(row) : null;
   }
 
   async getStickerByMediaAssetId(mediaAssetId: string): Promise<Sticker | null> {
     const row = await this.database.getFirstAsync<StickerRow>(
-      `SELECT ${STICKER_COLUMNS} FROM stickers WHERE media_asset_id = ? LIMIT 1`,
+      `SELECT ${STICKER_COLUMNS} FROM stickers WHERE media_asset_id = ? AND owner_assistant_id IS NULL LIMIT 1`,
       [mediaAssetId],
     );
     return row ? mapStickerRow(row) : null;
@@ -286,7 +290,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   async listStickers(input: ListStickersInput = {}): Promise<Sticker[]> {
     const mode = input.mode ?? 'all';
     const limit = limitFor(input.limit, mode === 'recent' ? STICKER_RECENT_LIMIT : STICKER_LIST_LIMIT);
-    const where: string[] = [];
+    const where: string[] = ['owner_assistant_id IS NULL'];
     const params: (string | number)[] = [];
 
     if (mode === 'favorites') {
@@ -337,6 +341,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   ): Promise<Sticker[]> {
     const { where, params, tags } = buildStickerSearchFilters({
       readyOnly: true,
+      assistantId: input.assistantId,
       groupId: input.groupId,
       tags: input.tags,
       emotion: input.emotion,
@@ -356,10 +361,11 @@ export class SQLiteStickerRepository implements StickerRepository {
   async getStickerByIdInTransaction(
     transaction: DatabaseTransactionExecutor,
     id: string,
+    ownerAssistantId: string | null = null,
   ): Promise<Sticker | null> {
     const row = await transaction.getFirstAsync<StickerRow>(
-      `SELECT ${STICKER_COLUMNS} FROM stickers WHERE id = ? LIMIT 1`,
-      [id],
+      `SELECT ${STICKER_COLUMNS} FROM stickers WHERE id = ? AND owner_assistant_id IS ? LIMIT 1`,
+      [id, ownerAssistantId],
     );
     return row ? mapStickerRow(row) : null;
   }
@@ -367,10 +373,11 @@ export class SQLiteStickerRepository implements StickerRepository {
   async getStickerByMediaAssetIdInTransaction(
     transaction: DatabaseTransactionExecutor,
     mediaAssetId: string,
+    ownerAssistantId: string | null = null,
   ): Promise<Sticker | null> {
     const row = await transaction.getFirstAsync<StickerRow>(
-      `SELECT ${STICKER_COLUMNS} FROM stickers WHERE media_asset_id = ? LIMIT 1`,
-      [mediaAssetId],
+      `SELECT ${STICKER_COLUMNS} FROM stickers WHERE media_asset_id = ? AND owner_assistant_id IS ? LIMIT 1`,
+      [mediaAssetId, ownerAssistantId],
     );
     return row ? mapStickerRow(row) : null;
   }
@@ -393,27 +400,28 @@ export class SQLiteStickerRepository implements StickerRepository {
     // 收藏库容量是集合级数据不变量，必须在与 insert 相同的事务里判定：
     // 否则并发导入会各自读到 499 然后一起写入。重复内容的复用由调用方在本事务
     // 内先按 media_asset_id 命中既有 Sticker，不会走到这里，因此不会误报。
-    const currentCount = await this.countStickersInTransaction(transaction);
+    const currentCount = await this.countStickersInTransaction(transaction, sticker.ownerAssistantId);
     if (currentCount >= STICKER_LIBRARY_MAX_COUNT) {
       throw new StickerLibraryFullError(STICKER_LIBRARY_MAX_COUNT);
     }
     await transaction.runAsync(
       `INSERT INTO stickers (
-         id, media_asset_id, group_id, name, description, tags_json, emotion,
+         id, media_asset_id, owner_assistant_id, group_id, name, description, tags_json, emotion,
          source_file_name, mime_type, width, height, is_animated, is_favorite,
          use_count, last_used_at, annotation_status, annotation_error,
          annotation_claim_id, annotation_claimed_at, semantic_revision,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       buildStickerValues(sticker),
     );
   }
 
   async countStickersInTransaction(
     transaction: DatabaseTransactionExecutor,
+    ownerAssistantId: string | null = null,
   ): Promise<number> {
     const row = await transaction.getFirstAsync<{ total: number }>(
-      'SELECT COUNT(*) AS total FROM stickers',
+      'SELECT COUNT(*) AS total FROM stickers WHERE owner_assistant_id IS ?', [ownerAssistantId],
     );
     return row?.total ?? 0;
   }
@@ -469,9 +477,12 @@ export class SQLiteStickerRepository implements StickerRepository {
     id: string,
     patch: StickerMetadataPatch,
     updatedAt: string,
+    ownerAssistantId: string | null = null,
+    guard?: (transaction: DatabaseTransactionExecutor) => Promise<void>,
   ): Promise<Sticker> {
     return this.database.withExclusiveTransactionAsync(async (transaction) => {
-      const current = await this.getStickerByIdInTransaction(transaction, id);
+      if (guard) await guard(transaction);
+      const current = await this.getStickerByIdInTransaction(transaction, id, ownerAssistantId);
       if (!current) throw new StickerNotFoundError(id);
       const nextName = patch.name ?? current.name;
       const nextDescription = patch.description === undefined
@@ -491,7 +502,8 @@ export class SQLiteStickerRepository implements StickerRepository {
         `UPDATE stickers
          SET name = ?, description = ?, tags_json = ?, emotion = ?,
              semantic_revision = CASE WHEN ? THEN semantic_revision + 1 ELSE semantic_revision END,
-             updated_at = ?
+             updated_at = ?, annotation_status = CASE WHEN ? THEN 'ready' ELSE annotation_status END,
+             annotation_error = CASE WHEN ? THEN NULL ELSE annotation_error END
          WHERE id = ?`,
         [
           nextName,
@@ -500,10 +512,14 @@ export class SQLiteStickerRepository implements StickerRepository {
           nextEmotion,
           bumpRevision ? 1 : 0,
           updatedAt,
+          ownerAssistantId !== null ? 1 : 0,
+          ownerAssistantId !== null ? 1 : 0,
           id,
         ],
       );
-      const updated = await this.getStickerByIdInTransaction(transaction, id);
+      const updated = await this.getStickerByIdInTransaction(transaction, id, ownerAssistantId);
+      if (ownerAssistantId !== null) await transaction.runAsync(
+        "UPDATE ai_sticker_tasks SET status = 'cancelled', error = NULL, updated_at = ? WHERE sticker_id = ? AND status = 'processing'", [updatedAt, id]);
       if (!updated) throw new StickerNotFoundError(id);
       return updated;
     });
@@ -545,19 +561,12 @@ export class SQLiteStickerRepository implements StickerRepository {
     });
   }
 
-  async deleteSticker(id: string): Promise<boolean> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
-      // 向量表虽有 ON DELETE CASCADE，但旧库 foreign_keys 配置可能未开启；
-      // 显式删除保证语义索引不残留孤儿行。
-      await transaction.runAsync(
-        `DELETE FROM sticker_embeddings WHERE sticker_id = ?`,
-        [id],
-      );
+  async deleteSticker(id: string, ownerAssistantId: string | null = null, guard?: (transaction: DatabaseTransactionExecutor) => Promise<void>): Promise<boolean> {
+    return this.database.withExclusiveTransactionAsync(async transaction => {
+      if (guard) await guard(transaction);
       const result = await transaction.runAsync(
-        `DELETE FROM stickers WHERE id = ?`,
-        [id],
-      );
-      return result.changes > 0;
+        'DELETE FROM stickers WHERE id = ? AND owner_assistant_id IS ?', [id, ownerAssistantId]);
+      return result.changes === 1;
     });
   }
 
@@ -566,7 +575,7 @@ export class SQLiteStickerRepository implements StickerRepository {
       const result = await transaction.runAsync(
         `UPDATE stickers
          SET use_count = use_count + 1, last_used_at = ?, updated_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND owner_assistant_id IS NULL`,
         [usedAt, usedAt, id],
       );
       if (result.changes !== 1) throw new StickerNotFoundError(id);
@@ -584,7 +593,7 @@ export class SQLiteStickerRepository implements StickerRepository {
       const candidate = await transaction.getFirstAsync<StickerRow>(
         `SELECT ${STICKER_COLUMNS}
          FROM stickers
-         WHERE annotation_status = 'pending'
+         WHERE annotation_status = 'pending' AND owner_assistant_id IS NULL
          ORDER BY created_at ASC, id ASC
          LIMIT 1`,
       );
@@ -760,7 +769,7 @@ export class SQLiteStickerRepository implements StickerRepository {
          SET annotation_status = 'pending', annotation_error = NULL,
              annotation_claim_id = NULL, annotation_claimed_at = NULL,
              updated_at = ?
-         WHERE annotation_status = 'processing'
+         WHERE owner_assistant_id IS NULL AND annotation_status = 'processing'
            AND annotation_claimed_at IS NOT NULL
            AND annotation_claimed_at <= ?`,
         [updatedAt, cutoff],
@@ -776,7 +785,7 @@ export class SQLiteStickerRepository implements StickerRepository {
          SET annotation_status = 'pending', annotation_error = NULL,
              annotation_claim_id = NULL, annotation_claimed_at = NULL,
              updated_at = ?
-         WHERE annotation_status = 'processing'`,
+         WHERE owner_assistant_id IS NULL AND annotation_status = 'processing'`,
         [updatedAt],
       );
       return result.changes;
@@ -811,7 +820,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     const rows = await this.database.getAllAsync<StickerRow>(
       `SELECT ${STICKER_COLUMNS}
        FROM stickers
-       WHERE id IN (${placeholders})`,
+       WHERE owner_assistant_id IS NULL AND id IN (${placeholders})`,
       uniqueIds,
     );
     return rows.map(mapStickerRow);
@@ -914,7 +923,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   async deleteStickerEmbeddingsByModel(modelConfigId: string): Promise<number> {
     return this.database.withExclusiveTransactionAsync(async (transaction) => {
       const result = await transaction.runAsync(
-        `DELETE FROM sticker_embeddings WHERE model_config_id = ?`,
+        `DELETE FROM sticker_embeddings WHERE model_config_id = ? AND sticker_id IN (SELECT id FROM stickers WHERE owner_assistant_id IS NULL)`,
         [modelConfigId],
       );
       return result.changes;
@@ -923,7 +932,7 @@ export class SQLiteStickerRepository implements StickerRepository {
 
   async countReadyStickers(): Promise<number> {
     const row = await this.database.getFirstAsync<{ total: number }>(
-      `SELECT COUNT(*) AS total FROM stickers WHERE annotation_status = 'ready'`,
+      `SELECT COUNT(*) AS total FROM stickers WHERE annotation_status = 'ready' AND owner_assistant_id IS NULL`,
     );
     return row?.total ?? 0;
   }
@@ -932,7 +941,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     const row = await this.database.getFirstAsync<{ total: number }>(
       `SELECT COUNT(*) AS total
        FROM sticker_embeddings e
-       JOIN stickers s ON s.id = e.sticker_id AND s.annotation_status = 'ready'
+       JOIN stickers s ON s.id = e.sticker_id AND s.annotation_status = 'ready' AND s.owner_assistant_id IS NULL
        WHERE e.model_config_id = ?
          AND e.model_config_updated_at = ?
          AND e.semantic_revision = s.semantic_revision
@@ -962,7 +971,7 @@ export class SQLiteStickerRepository implements StickerRepository {
        FROM stickers s
        LEFT JOIN sticker_embeddings e
          ON e.sticker_id = s.id AND e.model_config_id = ?
-       WHERE s.annotation_status = 'ready'
+       WHERE s.annotation_status = 'ready' AND s.owner_assistant_id IS NULL
          AND (
            e.sticker_id IS NULL
            OR e.model_config_updated_at <> ?
@@ -991,7 +1000,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     }>(
       `SELECT g.id, g.name, COUNT(s.id) AS sticker_count
        FROM sticker_groups g
-       JOIN stickers s ON s.group_id = g.id AND s.annotation_status = 'ready'
+       JOIN stickers s ON s.group_id = g.id AND s.annotation_status = 'ready' AND s.owner_assistant_id IS NULL
        GROUP BY g.id, g.name
        ORDER BY g.sort_order ASC, g.name COLLATE NOCASE ASC, g.id ASC`,
     );
@@ -1008,7 +1017,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     const rows = await this.database.getAllAsync<StickerRow>(
       `SELECT ${STICKER_COLUMNS}
        FROM stickers
-       WHERE annotation_status = 'ready' AND group_id = ?
+       WHERE annotation_status = 'ready' AND owner_assistant_id IS NULL AND group_id = ?
          ${cursor ? 'AND (created_at < ? OR (created_at = ? AND id < ?))' : ''}
        ORDER BY created_at DESC, id DESC
        LIMIT ?`,
@@ -1034,11 +1043,14 @@ function buildStickerSearchFilters(input: SearchStickersInput): {
   const query = normalizeSearchText(input.query);
   const tags = normalizeSearchTags(input.tags);
   const emotion = input.emotion?.trim() ?? '';
-  const where: string[] = [];
-  const params: (string | number)[] = [];
+  const where: string[] = ['(owner_assistant_id IS NULL OR owner_assistant_id = ?)'];
+  const params: (string | number)[] = [input.assistantId ?? ''];
 
   if (input.readyOnly) {
-    where.push("annotation_status = 'ready'");
+    if (input.includeOwnUnannotated && input.assistantId) {
+      where.push("(annotation_status = 'ready' OR owner_assistant_id = ?)");
+      params.push(input.assistantId);
+    } else where.push("annotation_status = 'ready'");
   }
   if (query) {
     const pattern = `%${query}%`;

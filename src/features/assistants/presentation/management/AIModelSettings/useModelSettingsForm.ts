@@ -6,8 +6,8 @@ import { useAutoSaveDraft } from '@shared/ui/useAutoSaveDraft';
 import { readDraftNumber } from '@shared/ui/draftValidation';
 import {
   DEFAULT_MAX_TOKENS,
-  getDefaultContextLimitsDraft, getModelSettingsDraft, parseModelSettingsDraft,
-  type ContextLimitsDraft, type ModelSettingsDraft,
+  getModelSettingsDraft, parseModelSettingsDraft,
+  type ModelSettingsDraft,
 } from './modelSettingsHelpers';
 
 export default function useModelSettingsForm({ aiAssistant, onUpdated }: {
@@ -41,18 +41,15 @@ export default function useModelSettingsForm({ aiAssistant, onUpdated }: {
     // 无效草稿保留原输入，滑杆只接受已保存的合法投影。
     temperature: temperatureInput.error ? aiAssistant.temperature : temperatureInput.value,
     topP: topPInput.error ? aiAssistant.topP : topPInput.value,
-    contextLimits: { privatePrimary: draft.privatePrimary, privateSecondary: draft.privateSecondary, groupPrimary: draft.groupPrimary, groupSecondary: draft.groupSecondary },
     setApiBaseUrl: (value: string) => setField('apiBaseUrl', value),
     setApiKey: (value: string) => setField('apiKey', value),
     setSelectedModel: (value: string) => setField('selectedModel', value, true),
     setEnableTools: (value: boolean) => setField('enableTools', value, true),
     setDisableThinking: (value: boolean) => setField('disableThinking', value, true),
-    setAllowMultipleBubbles: (value: boolean) => setField('allowMultipleBubbles', value, true),
     handleTempChange: (value: string, immediate = false) => setField('tempInput', value, immediate),
     handleTopPChange: (value: string, immediate = false) => setField('topPInput', value, immediate),
     handleMaxTokensChange: (value: string, immediate = false) => setField('maxTokens', value, immediate),
-    handleContextLimitChange: (key: keyof ContextLimitsDraft, value: string) => setField(key, value),
     getConnectionParams,
-    handleReset: () => change({ tempInput: '', topPInput: '', maxTokens: String(DEFAULT_MAX_TOKENS), ...getDefaultContextLimitsDraft() }, true),
+    handleReset: () => change({ tempInput: '', topPInput: '', maxTokens: String(DEFAULT_MAX_TOKENS) }, true),
   };
 }

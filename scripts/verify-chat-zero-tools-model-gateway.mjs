@@ -175,7 +175,7 @@ function createClient() {
   return client;
 }
 
-async function runCase(transport, tools, promptPack = compilePrompt()) {
+async function runCase(transport, tools, promptPack = compilePrompt(), history = []) {
   timelineEvents.length = 0;
   const client = createClient();
   const gateway = new ChatAgentModelGateway({
@@ -192,7 +192,7 @@ async function runCase(transport, tools, promptPack = compilePrompt()) {
   await gateway.runTurn({
     task: {},
     toolInstructions: { catalog: '固定工具包目录', state: '本轮工具包状态' },
-    history: [],
+    history,
     tools,
     transport,
     signal: controller.signal,
@@ -213,10 +213,20 @@ const cases = [
   { transport: 'stream', tools: [toolDescriptor()], method: 'chatStreamWithTools', messageId: 'tools-stream-message' },
 ];
 
+for (const { transport, tools } of cases) {
+  const history = [
+    { role: 'assistant', content: '', toolCalls: [{ id: 'view', name: 'view_image', arguments: '{}' }] },
+    { role: 'tool', toolCallId: 'view', name: 'view_image', content: '图片观察', images: [{ url: 'data:image/png;base64,AAA' }] },
+  ];
+  const { client } = await runCase(transport, tools, compilePrompt(), history);
+  assert.equal(client.calls[0].options.allowImageContentFallback, false, '工具附图必须真实交付，不能降级后声称看图成功');
+}
+
 for (const testCase of cases) {
   const { client, completed, signal, timelineEvents: events } = await runCase(testCase.transport, testCase.tools);
   assert.equal(client.calls.length, 1, `${testCase.transport} + ${testCase.tools.length} tools 只能调用一次 Provider`);
   const call = client.calls[0];
+  assert.equal(call.options.allowImageContentFallback, true, '聊天图片拒绝允许带未看图说明的文字回复');
   assert.deepEqual(call.messages, [
     { role: 'system', content: '角色设定\n\n其他固定能力规则\n\n原工具使用规则\n\n固定工具包目录\n\n旧摘要段' },
     { role: 'assistant', content: '之前的聊天' },

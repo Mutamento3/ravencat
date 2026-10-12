@@ -8,7 +8,7 @@ import {
   getHostAICooldownStatus,
   listAIAssistantSummaries,
 } from '@features/assistants';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import { AIAvatar, AIInfoCard, Button, ModalSheet, ToggleField, showAppDialog } from '@shared/ui';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -324,7 +324,7 @@ export default function CompanionSettingsScreen({
         </TouchableOpacity>
 
         {__DEV__ && !hostAI && cooldown?.appointment.isInCooldown ? (
-          <View style={[styles.card, styles.developmentCard]}>
+          <ThemedSurface variant="card" style={[styles.card, styles.developmentCard]}>
             <View style={styles.cardContent}>
               <Text style={styles.settingLabel}>开发关系工具</Text>
               <Text style={[styles.settingHint, styles.developmentDescription]}>
@@ -338,30 +338,30 @@ export default function CompanionSettingsScreen({
                 style={styles.developmentButton}
               />
             </View>
-          </View>
+          </ThemedSurface>
         ) : null}
 
         <SectionTitle text="伴随模式" styles={styles} />
-        <View style={styles.card}>
+        <ThemedSurface variant="card" style={styles.card}>
           <View style={styles.cardContent}>
             <ToggleField label="伴随模式" hint={toggleHint(toggleState, hostAI !== null)} value={toggleEnabled} onValueChange={(value) => void (value ? enableCompanion() : disableCompanion())} disabled={busy || !hostAI} />
             {transitioning ? <View style={styles.progressRow}><ActivityIndicator size="small" color={theme.colors.brand.primary} /><Text style={styles.progressText}>{toggleState === 'enabling' ? '正在开启…' : '正在关闭…'}</Text></View> : null}
             {toggleState === 'enabling' ? <Button title="取消开启" variant="outline" onPress={() => void disableCompanion()} /> : null}
           </View>
-        </View>
+        </ThemedSurface>
 
         {errorMessage ? <View style={styles.errorCard}><Text style={styles.errorText}>{errorMessage}</Text>{toggleState === 'disabled' ? <><Text style={styles.errorText}>伴随模式当前为关闭状态，不会在后台自动重试。</Text><View style={styles.errorActions}><Button title="重新开启" variant="outline" onPress={() => void enableCompanion()} /></View></> : null}</View> : null}
 
         {expanded && settings ? <>
           <SectionTitle text="伴随设置" styles={styles} />
-          <View style={styles.card}>
+          <ThemedSurface variant="card" style={styles.card}>
             <View style={styles.cardContent}>
               <TouchableOpacity style={styles.settingRow} onPress={() => { setQuietDraft({ start: settings.quietHoursStartMinutes, end: settings.quietHoursEndMinutes }); setShowQuietHours(true); }} accessibilityRole="button">
                 <View><Text style={styles.settingLabel}>勿扰时段</Text><Text style={styles.settingHint}>{settings.quietHoursEnabled ? '告诉主理 AI 你通常希望安静的时段' : '当前未提供勿扰偏好'}</Text></View><Text style={styles.settingValue}>{formatTime(settings.quietHoursStartMinutes)}–{formatTime(settings.quietHoursEndMinutes)}</Text>
               </TouchableOpacity>
               <ToggleField label="启用勿扰" hint="用于表达你通常希望安静的时段" value={settings.quietHoursEnabled} onValueChange={(value) => void updateQuietHoursEnabled(value)} disabled={busy} />
             </View>
-          </View>
+          </ThemedSurface>
 
           <TouchableOpacity style={styles.entryCard} onPress={() => onOpenScreen('proactive-life')} accessibilityRole="button"><View><Text style={styles.entryTitle}>主动生活</Text><Text style={styles.entryHint}>查看自主醒来、AI 日程与历史活动</Text></View><Ionicons name="chevron-forward" size={20} color={theme.colors.text.tertiary} /></TouchableOpacity>
           <TouchableOpacity style={styles.entryCard} onPress={() => onOpenScreen('blacklist')}><View><Text style={styles.entryTitle}>窥屏黑名单</Text><Text style={styles.entryHint}>{`已选择 ${settings.userScreenCaptureBlacklist.length} 个应用 · 系统保护固定开启`}</Text></View><Ionicons name="chevron-forward" size={20} color={theme.colors.text.tertiary} /></TouchableOpacity>

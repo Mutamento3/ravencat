@@ -192,25 +192,24 @@ await renderer.act(async () => { mounted.unmount(); });
 let checkButtonPresses = 0;
 const { ProfileContent } = load('src/features/profile/presentation/ProfileContent.tsx', {
   'react-native': { Text: 'Text', TouchableOpacity: 'TouchableOpacity', View: 'View' },
-  'lucide-react-native': { ArchiveRestore: 'Icon', RefreshCw: 'Icon', Trash2: 'Icon', UserRound: 'Icon' },
+  'lucide-react-native': { ArchiveRestore: 'Icon', RefreshCw: 'Icon', Star: 'Icon', Trash2: 'Icon', UserRound: 'Icon' },
   '@shared/ui': { UserAvatar: 'Avatar' },
   '@shared/theme': { ThemedSurface: 'Surface', useTheme: () => ({ colors: { feedback: { error: '#f00' }, text: { primary: '#333' } } }) },
   '@platform/device/DeviceStatus': { getInstalledApplicationInfo: () => ({ name: 'RavenCat', version: '2.0.0', buildNumber: '123' }) },
   './ProfileTab.styles': { createProfileStyles: () => ({}) },
 });
 const profileProps = { profile: { name: '测试用户' }, hasLoadedProfile: false,
-  onOpenProfile() {}, onBackupPress() {}, onClearAllData() {}, onCheckUpdates() { checkButtonPresses++; },
+  onOpenProfile() {}, onOpenFavorites() {}, onBackupPress() {}, onClearAllData() {}, onCheckUpdates() { checkButtonPresses++; },
   checkingUpdates: false, availableUpdateVersion: '2.1.0', updateProgress: null, updateDownloaded: false };
 await renderer.act(async () => { mounted = renderer.create(React.createElement(ProfileContent, profileProps)); });
-let menu = mounted.root.findAllByType('TouchableOpacity');
-assert.deepEqual(menu.slice(1).map((item) => item.props.accessibilityLabel.split('，')[0]), ['备份与恢复', '检查更新', '清空所有数据']);
-assert.match(menu[2].props.accessibilityLabel, /有新版本/);
-await renderer.act(async () => { menu[2].props.onPress(); });
+const updateMenuItem = () => mounted.root.findAllByType('TouchableOpacity')
+  .find((item) => item.props.accessibilityLabel.split('，')[0] === '检查更新');
+assert.match(updateMenuItem().props.accessibilityLabel, /有新版本/);
+await renderer.act(async () => { updateMenuItem().props.onPress(); });
 assert.equal(checkButtonPresses, 1);
 await renderer.act(async () => { mounted.update(React.createElement(ProfileContent, { ...profileProps, checkingUpdates: true, updateProgress: 0.5 })); });
-menu = mounted.root.findAllByType('TouchableOpacity');
-assert.equal(menu[2].props.disabled, true);
-assert.match(menu[2].props.accessibilityLabel, /下载 50%/);
+assert.equal(updateMenuItem().props.disabled, true);
+assert.match(updateMenuItem().props.accessibilityLabel, /下载 50%/);
 await renderer.act(async () => { mounted.unmount(); });
 
 let notificationAccess = false;
@@ -221,7 +220,7 @@ let onForeground;
 const nativeComponents = Object.fromEntries(['ActivityIndicator', 'ScrollView', 'Text', 'TouchableOpacity', 'View', 'RefreshControl'].map((name) => [name, name]));
 const { default: PermissionScreen } = load('src/features/companion/presentation/CompanionSystemAccessScreen.tsx', {
   '@expo/vector-icons': { Ionicons: 'Icon' },
-  '@shared/theme': { useTheme: () => ({ colors: { brand: { primary: '#333' }, text: { tertiary: '#999' } } }), useThemedStyles: () => ({}) },
+  '@shared/theme': { ThemedSurface: 'Surface', useTheme: () => ({ colors: { brand: { primary: '#333' }, text: { tertiary: '#999' } } }), useThemedStyles: () => ({}) },
   '@shared/ui/NavigationHeader': () => null,
   'react-native': { ...nativeComponents, Platform: { Version: 33 }, Linking: { openSettings: async () => {} },
     AppState: { addEventListener: (_event, listener) => { onForeground = listener; return { remove() {} }; } } },
@@ -236,7 +235,9 @@ const { default: PermissionScreen } = load('src/features/companion/presentation/
     getNotificationListenerAccessState: async () => ({ status: notificationAccess ? 'granted' : 'not_granted' }),
     openNotificationListenerSettings: async () => { openedNotificationSettings++; return { status: 'settings_open_dispatched', reason: null }; } },
   './CompanionSettingsShared.styles': { createStyles: () => ({}) },
-  '@platform/device': { isUsageAccessGranted: async () => false, openUsageAccessSettings: async () => {} },
+  '@platform/device': { isUsageAccessGranted: async () => false, openUsageAccessSettings: async () => {},
+    getDeviceLocationAccessState: async () => ({ foregroundGranted: false, locationServicesEnabled: true }),
+    manageDeviceLocationPermission: async () => {}, openDeviceLocationSettings: async () => {} },
   '@platform/updates/DownloadApplicationUpdate': { isApplicationUpdateInstallAllowed: () => installAccess,
     openApplicationUpdateInstallSettings: async () => { openedInstallSettings++; } },
 });

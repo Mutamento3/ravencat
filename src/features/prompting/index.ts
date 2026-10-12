@@ -39,6 +39,7 @@ export {
   deleteAssistantUserPrompt,
   getAssistantPromptAdvancedSnapshot,
   getAssistantPromptEditorDetails,
+  getAssistantToolPermissions,
   getInitialAssistantPromptEditorSnapshot,
   reorderAssistantUserPrompts,
   resetAssistantDefinitionOverride,

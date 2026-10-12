@@ -14,6 +14,7 @@ export type PhoneToolCatalogItemId =
   | 'installedAppSearch'
   | 'foregroundApp'
   | 'appUsage'
+  | 'currentLocation'
   | 'accessibilityScreenRead'
   | 'ocrScreenRead'
   | 'appLaunch'
@@ -51,7 +52,15 @@ export const PHONE_TOOL_CATALOG = [
     toolName: 'get_app_usage',
     category: 'awareness',
     title: '读取应用使用时长',
-    description: '按需查询今天、昨天或最近 7 天的应用前台使用时长；点击授予系统使用情况访问权限。',
+    description: '按需查询今天、昨天或最近 7 天的应用前台使用时长，需要系统使用情况访问权限。',
+    implementationStatus: 'available',
+  },
+  {
+    id: 'currentLocation',
+    toolName: 'get_current_location',
+    category: 'awareness',
+    title: '获取当前位置',
+    description: '按需获取一次手机经纬度、精度与测量时间，支持大致位置；需要定位权限并开启系统定位。',
     implementationStatus: 'available',
   },
   {

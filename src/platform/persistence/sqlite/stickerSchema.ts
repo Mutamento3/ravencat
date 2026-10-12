@@ -12,13 +12,14 @@ export const STICKER_GROUPS_SCHEMA = `
 `;
 
 /**
- * Sticker 是 MediaAsset 的业务引用。media_asset_id 唯一，保证同一份媒体在当前
- * 收藏库中只有一条 Sticker 记录；删除 Sticker 刻意不级联删除 MediaAsset。
+ * 收藏身份属于用户或某个 AI；同一媒体可在不同收藏库拥有独立语义。
+ * 删除收藏只撤销引用，不级联删除媒体。
  */
 export const STICKERS_SCHEMA = `
   CREATE TABLE IF NOT EXISTS stickers (
     id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
-    media_asset_id TEXT NOT NULL UNIQUE CHECK (length(trim(media_asset_id)) > 0),
+    media_asset_id TEXT NOT NULL CHECK (length(trim(media_asset_id)) > 0),
+    owner_assistant_id TEXT,
     group_id TEXT,
     name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 120),
     description TEXT,
@@ -57,7 +58,27 @@ export const STICKERS_SCHEMA = `
       (annotation_status <> 'failed' AND annotation_error IS NULL)
     ),
     FOREIGN KEY (media_asset_id) REFERENCES media_assets(id) ON DELETE RESTRICT,
-    FOREIGN KEY (group_id) REFERENCES sticker_groups(id) ON DELETE SET NULL
+    FOREIGN KEY (group_id) REFERENCES sticker_groups(id) ON DELETE SET NULL,
+    FOREIGN KEY (owner_assistant_id) REFERENCES ai_assistants(id) ON DELETE CASCADE
+  );
+`;
+
+export const STICKER_OWNERSHIP_INDEXES = `
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_sticker_user_media ON stickers(media_asset_id) WHERE owner_assistant_id IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_sticker_ai_media ON stickers(owner_assistant_id, media_asset_id) WHERE owner_assistant_id IS NOT NULL;
+`;
+
+/** AI 显式处理任务只有一个持久 claim；失败、取消与旧进程任务不进入自动队列。 */
+export const AI_STICKER_TASKS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS ai_sticker_tasks (
+    sticker_id TEXT PRIMARY KEY NOT NULL REFERENCES stickers(id) ON DELETE CASCADE,
+    operation TEXT NOT NULL CHECK (operation IN ('recognize', 'embed')),
+    claim_id TEXT NOT NULL,
+    execution_id TEXT NOT NULL,
+    semantic_revision INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('processing', 'succeeded', 'failed', 'cancelled')),
+    error TEXT,
+    updated_at TEXT NOT NULL
   );
 `;
 
@@ -128,13 +149,14 @@ export const STICKER_EMBEDDINGS_MODEL_INDEX = `
 export const STICKER_SCHEMA = [
   STICKER_GROUPS_SCHEMA,
   STICKERS_SCHEMA,
+  STICKER_OWNERSHIP_INDEXES,
   STICKER_GROUPS_ORDER_INDEX,
   STICKERS_GROUP_ORDER_INDEX,
   STICKERS_FAVORITE_RECENT_INDEX,
   STICKERS_ANNOTATION_INDEX,
 ].join('\n');
 
-/** Sticker System V2 的新增 schema；迁移 81 之后的老库由迁移 84 补齐。 */
+/** Sticker System 的模型与向量表；持久 AI 任务由数据库总装配统一创建。 */
 export const STICKER_V2_SCHEMA = [
   STICKER_SYSTEM_CONFIG_SCHEMA,
   STICKER_EMBEDDINGS_SCHEMA,

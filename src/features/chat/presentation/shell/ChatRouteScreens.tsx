@@ -21,6 +21,9 @@ import ChatSettings from '../conversation/ChatSettings';
 import ChatStatisticsScreen from '../conversation/ChatStatisticsScreen';
 import ChatSummaryScreen from '../../summary/presentation/ChatSummaryScreen';
 import ChatSummaryEditorScreen from '../../summary/presentation/ChatSummaryEditorScreen';
+import ChatSummarySettingsScreen from '../../summary/presentation/ChatSummarySettingsScreen';
+import ChatSummaryTaskScreen from '../../summary/presentation/ChatSummaryTaskScreen';
+import ChatSecondarySummaryScreen from '../../summary/presentation/ChatSecondarySummaryScreen';
 import ChatDetail from '../messages/ChatDetail';
 import FilePreview from '../messages/FilePreview';
 import ChatBackground from '../messages/components/ChatBackground';
@@ -427,8 +430,9 @@ export function ChatProtocolRouteScreen({ aiId, onConvertToMemory }: {
   );
 }
 
-export function ChatSummaryRouteScreen({ aiId, onCreateSummary, onEditSummary }: {
+export function ChatSummaryRouteScreen({ aiId, onCreateSummary, onEditSummary, onEditSecondary, onTask, onSettings }: {
   aiId: string; onCreateSummary(): void; onEditSummary(segmentId: string): void;
+  onEditSecondary(): void; onTask(taskId: string): void; onSettings(): void;
 }) {
   const router = usePreparedConversation(aiId);
   useSubScreenLifecycle(router.state.setCurrentSubScreen, 'summary', 'menu');
@@ -438,6 +442,7 @@ export function ChatSummaryRouteScreen({ aiId, onCreateSummary, onEditSummary }:
   if (router.preparing || !router.state.currentSession) return <RouteLoading />;
   return <ChatSummaryScreen key={router.state.currentSession.id} conversationId={router.state.currentSession.id}
     onBack={router.routeBack} onCreateSummary={onCreateSummary} onEditSummary={onEditSummary}
+    onEditSecondary={onEditSecondary} onTask={onTask} onSettings={onSettings}
   />;
 }
 
@@ -454,16 +459,29 @@ export function ChatStatisticsRouteScreen({ aiId }: { aiId: string }) {
   />;
 }
 
-export function ChatSummaryEditorRouteScreen({ aiId, segmentId }: { aiId: string; segmentId?: string }) {
+export function ChatSummaryEditorRouteScreen({ aiId, segmentId, taskId, secondary = false, onSettings, onEditSource, onEditSecondary }: {
+  aiId: string; segmentId?: string; taskId?: string; secondary?: boolean; onSettings(): void; onEditSource(id: string): void; onEditSecondary(): void;
+}) {
   const router = usePreparedConversation(aiId);
   useSubScreenLifecycle(router.state.setCurrentSubScreen, 'summary', 'summary');
   if (router.unavailableReason) {
     return <ConversationUnavailable reason={router.unavailableReason} onBack={router.returnToConversations} />;
   }
   if (router.preparing || !router.state.currentSession) return <RouteLoading />;
+  if (taskId) return <ChatSummaryTaskScreen key={`${router.state.currentSession.id}:${taskId}`}
+    conversationId={router.state.currentSession.id} taskId={taskId} onBack={router.routeBack} onSettings={onSettings} onEditSummary={onEditSource} onEditSecondary={onEditSecondary} />;
+  if (secondary) return <ChatSecondarySummaryScreen key={router.state.currentSession.id}
+    conversationId={router.state.currentSession.id} onBack={router.routeBack} onEditSource={onEditSource} />;
   return <ChatSummaryEditorScreen key={`${router.state.currentSession.id}:${segmentId ?? 'new'}`}
-    conversationId={router.state.currentSession.id} segmentId={segmentId} onBack={router.routeBack}
+    conversationId={router.state.currentSession.id} segmentId={segmentId} onBack={router.routeBack} onEditSource={onEditSource}
   />;
+}
+export function ChatSummarySettingsRouteScreen({ aiId }: { aiId: string }) {
+  const router = usePreparedConversation(aiId);
+  useSubScreenLifecycle(router.state.setCurrentSubScreen, 'summary', 'summary');
+  if (router.unavailableReason) return <ConversationUnavailable reason={router.unavailableReason} onBack={router.returnToConversations} />;
+  if (router.preparing || !router.state.currentSession) return <RouteLoading />;
+  return <ChatSummarySettingsScreen key={router.state.currentSession.id} conversationId={router.state.currentSession.id} onBack={router.routeBack} />;
 }
 
 export function ChatModelSettingsRouteScreen({
@@ -507,6 +525,8 @@ export function ChatSettingsRouteScreen({ aiId }: { aiId: string }) {
     <ChatSettings
       key={state.currentAI.id}
       aiAssistant={state.currentAI}
+      conversationId={state.currentSession!.id}
+      onChooseFixedStart={() => router.returnToConversation(aiId)}
       chatBackgroundKey={state.currentSession?.id
         ? `single:${state.currentSession.id}`
         : `single:${state.currentAI.id}`}

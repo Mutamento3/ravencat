@@ -1,7 +1,7 @@
 /** 在不拉起界面的 Android Headless JS 中处理来电通知拒绝动作。 */
 
 import { getCallSession, rejectCall } from '@features/calls';
-import { ensureCallHostReady } from '../composition/ensureCallHostReady';
+import { ensureHostDatabaseReady } from '../composition/ensureHostDatabaseReady';
 
 interface CallNotificationActionTaskData {
   notificationAction?: string;
@@ -24,7 +24,7 @@ export async function runCallNotificationActionHeadlessTask(
     return;
   }
 
-  await ensureCallHostReady();
+  await ensureHostDatabaseReady();
   const call = await getCallSession(callId);
   if (
     !call

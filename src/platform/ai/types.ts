@@ -64,6 +64,8 @@ export interface ToolCall {
 // ============================================================================
 
 export interface ChatResponse {
+  httpStatus?: number | null;
+  usageReported?: boolean;
   text: string;
   reasoningText?: string;
   /** Provider 已返回的原始 finish_reason，供 Agent adapter 做语义归一化。 */
@@ -72,6 +74,8 @@ export interface ChatResponse {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** 输入中命中服务端缓存的 token；缺失表示服务商未提供。 */
+  cachedTokens?: number;
   success: boolean;
   error: string | null;
   toolCalls: ToolCall[] | null;
@@ -197,6 +201,7 @@ export interface ChatStreamOptions extends ChatOptions {
 }
 
 export interface ChatWithToolsOptions {
+  allowImageContentFallback?: boolean;
   includeSystemPrompt?: boolean;
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   enforceReasoningContent?: boolean;
@@ -224,6 +229,14 @@ export interface ConnectionTestOptions {
 // OpenAI API 响应类型
 // ============================================================================
 
+export interface OpenAIChatUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number };
+  prompt_cache_hit_tokens?: number;
+}
+
 export interface OpenAIChatCompletionResponse {
   id?: string;
   choices?: {
@@ -235,11 +248,7 @@ export interface OpenAIChatCompletionResponse {
     };
     finish_reason?: string;
   }[];
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    total_tokens?: number;
-  };
+  usage?: OpenAIChatUsage;
 }
 
 export interface OpenAIEmbeddingResponse {

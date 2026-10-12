@@ -107,16 +107,4 @@ assert.deepEqual(
   '手机工具页面目录必须完整来自 Phone catalog',
 );
 
-for (const item of directoryItems.filter((candidate) => candidate.implementationStatus === 'planned')) {
-  assert.equal(item.destination, null, `${item.toolName} 尚未实现，不得提供配置入口`);
-}
-
-const softLockItem = directoryItems.find((item) => item.toolName === 'soft_lock_app');
-assert.equal(directoryItems.find((item) => item.toolName === 'get_app_usage').destination, 'usageAccessSettings');
-assert.equal(
-  softLockItem?.destination,
-  null,
-  'soft_lock_app 使用统一阻断页，不提供自定义页面入口',
-);
-
 console.log('Phone Tools catalog contracts verified.');

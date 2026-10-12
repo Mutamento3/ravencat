@@ -151,14 +151,22 @@ await repository.resetOverride('foundation.default_core'); await repository.dele
 stored = await repository.read();
 assert.deepEqual(stored.overrides, {}); assert.equal(stored.userPrompts.length, 1);
 // 真实持久化与 application：两个 AI 的正文、时间和自定义片段互不覆盖。
-database.exec("INSERT INTO ai_assistants VALUES ('ai-1'), ('ai-2');");
+database.exec("PRAGMA foreign_keys = ON; INSERT INTO ai_assistants VALUES ('ai-1'), ('ai-2'), ('ai-3');");
 const { sqlitePromptingRepository: assistantRepository } = load('src/features/prompting/infrastructure/SQLitePromptingRepository.ts', {
   '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => executor } },
 });
 const scopedManagement = load('src/features/prompting/application/ManageAssistantPrompts.ts', {
   './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => ({
     assistantPrompts: assistantRepository, defaults: repository,
-    tools: { list: async () => [{ name: 'read_memory' }, { name: 'send_voice_message' }] },
+    assistants: { listOptions: async () => [
+      { id: 'ai-1', isHostAI: true }, { id: 'ai-2', isHostAI: false }, { id: 'ai-3', isHostAI: false },
+    ] },
+    tools: {
+      list: async () => [{ name: 'read_memory', hostOnly: false }, { name: 'send_voice_message', hostOnly: false }, { name: 'schedule_self_wake', hostOnly: true }],
+      set: async (id, name, enabled) => executor.runAsync(
+        'INSERT OR REPLACE INTO assistant_tool_permissions (assistant_id, tool_name, enabled, updated_at) VALUES (?, ?, ?, ?)', [id, name, Number(enabled), 'now']
+      ),
+    },
     catalog: { getById: () => ({ protection: 'overridable', defaultContent: '默认规则' }) },
   }) },
 });
@@ -190,6 +198,36 @@ await assert.rejects(scopedManagement.setAssistantDirectToolExposure('ai-1', 'un
 await scopedManagement.setAssistantDirectToolExposure('ai-1', 'read_memory', false);
 assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-1'), []);
 await scopedManagement.setAssistantDirectToolExposure('ai-2', 'send_voice_message', true);
+
+// 全局应用只替换普通星标，主理专属配置和单项权限保留；空快照同样生效。
+await scopedManagement.setAssistantDirectToolExposure('ai-1', 'schedule_self_wake', true);
+await scopedManagement.setAssistantDirectToolExposure('ai-1', 'read_memory', true);
+await scopedManagement.setAssistantToolPermission('ai-1', 'schedule_self_wake', false);
+await scopedManagement.setAssistantToolPermission('ai-2', 'read_memory', false);
+const permissionsBefore = database.prepare('SELECT * FROM assistant_tool_permissions ORDER BY assistant_id, tool_name').all();
+await scopedManagement.applyAssistantDirectToolsGlobally(await scopedManagement.listAssistantDirectToolNames('ai-1'));
+assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-1'), ['read_memory', 'schedule_self_wake']);
+for (const id of ['ai-2', 'ai-3']) assert.deepEqual(await scopedManagement.listAssistantDirectToolNames(id), ['read_memory']);
+await assert.rejects(scopedManagement.setAssistantDirectToolExposure('ai-2', 'schedule_self_wake', true), /只有主理 AI/u);
+await assert.rejects(scopedManagement.setAssistantDirectToolExposure('ai-2', 'schedule_self_wake', false), /只有主理 AI/u);
+await assert.rejects(scopedManagement.setAssistantToolPermission('ai-2', 'schedule_self_wake', true), /只有主理 AI/u);
+await scopedManagement.setAssistantDirectToolExposure('ai-2', 'read_memory', false);
+await scopedManagement.setAssistantDirectToolExposure('ai-2', 'send_voice_message', true);
+await scopedManagement.applyAssistantDirectToolsGlobally(await scopedManagement.listAssistantDirectToolNames('ai-2'));
+assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-1'), ['schedule_self_wake', 'send_voice_message']);
+for (const id of ['ai-2', 'ai-3']) assert.deepEqual(await scopedManagement.listAssistantDirectToolNames(id), ['send_voice_message']);
+const starsBefore = database.prepare('SELECT * FROM assistant_direct_tools ORDER BY assistant_id, tool_name').all();
+database.exec("CREATE TRIGGER reject_global_star BEFORE INSERT ON assistant_direct_tools WHEN NEW.assistant_id = 'ai-3' BEGIN SELECT RAISE(ABORT, '拒绝全局星标'); END;");
+await assert.rejects(scopedManagement.applyAssistantDirectToolsGlobally(['read_memory']), /拒绝全局星标/u);
+assert.deepEqual(database.prepare('SELECT * FROM assistant_direct_tools ORDER BY assistant_id, tool_name').all(), starsBefore, '中途失败回滚所有 AI 的修改');
+database.exec('DROP TRIGGER reject_global_star');
+await scopedManagement.applyAssistantDirectToolsGlobally([]);
+assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-1'), ['schedule_self_wake']);
+for (const id of ['ai-2', 'ai-3']) assert.deepEqual(await scopedManagement.listAssistantDirectToolNames(id), []);
+assert.deepEqual(database.prepare('SELECT * FROM assistant_tool_permissions ORDER BY assistant_id, tool_name').all(), permissionsBefore);
+database.exec("INSERT INTO ai_assistants VALUES ('ai-future');");
+assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-future'), [], '快照不成为未来新增 AI 的默认配置');
+await scopedManagement.setAssistantDirectToolExposure('ai-2', 'send_voice_message', true);
 database.exec('PRAGMA foreign_keys = ON; DELETE FROM ai_assistants WHERE id = \'ai-2\';');
 assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-2'), [], '角色删除同时清除特批配置');
 database.close();
@@ -219,6 +257,7 @@ const aiReads = [];
 const aiDetails = { overrides: [], userPrompts: [], tools: [], directToolNames: [], timeEnabled: true, batteryEnabled: true };
 const otherDetails = { overrides: [], userPrompts: [], tools: [], directToolNames: [], timeEnabled: true, batteryEnabled: true };
 const detailsFor = (id) => id === ai.id ? aiDetails : otherDetails;
+const globalSnapshots = [];
 let definitionSaveGate;
 const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx', {
   '@shared/ui': { Toggle: 'Switch', showAppDialog: ({ title, message, buttons }) => alerts.push([title, message, buttons]) },
@@ -244,6 +283,13 @@ const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx'
     },
   },
   '../application/ManageAssistantPrompts': {
+    applyAssistantDirectToolsGlobally: async (names) => {
+      globalSnapshots.push([...names]);
+      const ordinary = names.filter((name) => !fixture.tools.find((tool) => tool.name === name).hostOnly);
+      for (const details of [aiDetails, otherDetails]) {
+        details.directToolNames = [...details.directToolNames.filter((name) => fixture.tools.find((tool) => tool.name === name).hostOnly), ...ordinary];
+      }
+    },
     getAssistantPromptEditorDetails: async (id) => { aiReads.push(['details', id]); return { ...detailsFor(id) }; },
     saveAssistantDefinitionState: async ({ assistantId, definitionId, enabled }) => {
       detailsFor(assistantId)[definitionId === 'context.device_battery' ? 'batteryEnabled' : 'timeEnabled'] = enabled;
@@ -296,7 +342,7 @@ for (const file of fs.readdirSync(path.join(root, 'src/app/prompt-center'), { re
   const routeName = relative.slice('src/app/'.length, -4);
   routeComponents.set(routeName, load(relative, { 'expo-router': expo, '@host/navigation/PromptCenterRouteContent': RouteContent }).default);
 }
-for (const name of ['settings', 'mcp-tools/index', 'phone-tools/index', 'chat/[aiId]/protocol', 'profile']) {
+for (const name of ['settings', 'mcp-tools/index', 'chat/[aiId]/protocol', 'profile']) {
   routeComponents.set(name, () => React.createElement('ExternalPage', { name }));
 }
 const stackConfig = { routeNames: [...routeComponents.keys()], routeParamList: {}, routeGetIdList: {} };
@@ -352,6 +398,7 @@ assert.equal(stackState.routes.at(-1).name, 'mcp-tools/index');
 await systemBack();
 await renderer.act(async () => button('工具调用').props.onPress());
 assert.equal(currentTitle(), '工具调用');
+assert.equal(activeScreen().findAllByProps({ accessibilityLabel: '全局应用特批工具' }).length, 0, '无 AI 时不提供星标全局应用');
 assert.equal(activeScreen().findByProps({ accessibilityLabel: '特批工具' }).props.accessibilityState.expanded, false, '列表默认折叠');
 await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '特批工具' }).props.onPress());
 assert.ok(text(activeScreen()).includes('选择 AI 后可在工具包中配置特批工具。'));
@@ -360,7 +407,7 @@ await renderer.act(async () => button('主理 AI 专属').props.onPress());
 assert.ok(text(activeScreen()).includes('完整主理工具说明'));
 assert.equal(activeScreen().findByType('Switch').props.accessibilityLabel, '启用 schedule_self_wake');
 assert.equal(activeScreen().findByType('Switch').props.disabled, true);
-assert.equal(button('手机工具').props.disabled, true);
+assert.equal(button('手机工具'), undefined, '包内直接管理主理工具，不显示重复跳转');
 assert.ok(!text(activeScreen()).includes('parameters'));
 await systemBack();
 assert.equal(currentTitle(), '工具调用');
@@ -450,10 +497,8 @@ assert.equal(aiDetails.batteryEnabled, false);
 assert.equal(otherDetails.batteryEnabled, true);
 await renderer.act(async () => button('工具调用').props.onPress());
 await renderer.act(async () => button('主理 AI 专属').props.onPress());
-assert.equal(button('手机工具').props.disabled, false);
-await renderer.act(async () => button('手机工具').props.onPress());
-assert.equal(stackState.routes.at(-1).name, 'phone-tools/index');
-await systemBack(); await systemBack(); await systemBack();
+assert.equal(button('手机工具'), undefined, '主理 AI 同样直接在包内管理工具');
+await systemBack(); await systemBack();
 await renderer.act(async () => button('编辑对象').props.onPress());
 await renderer.act(async () => button('另一位 AI').props.onPress());
 assert.equal(stackState.routes.at(-1).params.assistantId, otherAI.id);
@@ -542,6 +587,44 @@ await systemBack(); await systemBack();
 assert.equal(stackState.routes.at(-1).name, 'settings');
 await renderer.act(async () => expo.useRouter().push({ pathname: '/prompt-center', params: { assistantId: otherAI.id } }));
 assert.equal(stackState.routes.at(-1).params.assistantId, otherAI.id, '从 AI 设置进入应保留指定对象，不自动改为主理');
+// 全局应用是独立按钮，不触发折叠；普通 AI 与主理 AI 均可同步普通星标。
+await renderer.act(async () => button('工具调用').props.onPress());
+assert.ok(text(activeScreen()).indexOf('特批工具') < text(activeScreen()).indexOf('主理 AI 专属'));
+assert.ok(text(activeScreen()).indexOf('主理 AI 专属') < text(activeScreen()).indexOf('记忆'), '主理专属工具包排在普通包前面');
+await renderer.act(async () => button('主理 AI 专属').props.onPress());
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '直接暴露 schedule_self_wake' }).props.disabled, true);
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '启用 schedule_self_wake' }).props.disabled, true);
+await systemBack();
+await renderer.act(async () => button('记忆').props.onPress());
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '直接暴露 read_memory' }).props.onPress());
+await systemBack();
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '全局应用特批工具' }).props.onPress());
+assert.deepEqual(globalSnapshots.at(-1), ['read_memory']);
+assert.deepEqual(aiDetails.directToolNames, ['read_memory']);
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '特批工具' }).props.accessibilityState.expanded, false);
+assert.equal(alerts.at(-1)[0], '已全局应用');
+await systemBack();
+await renderer.act(async () => button('编辑对象').props.onPress());
+await renderer.act(async () => button('测试 AI').props.onPress());
+await renderer.act(async () => button('工具调用').props.onPress());
+await renderer.act(async () => button('主理 AI 专属').props.onPress());
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '直接暴露 schedule_self_wake' }).props.onPress());
+await systemBack();
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '全局应用特批工具' }).props.onPress());
+assert.deepEqual(globalSnapshots.at(-1), ['read_memory', 'schedule_self_wake']);
+assert.deepEqual(otherDetails.directToolNames, ['read_memory'], '主理专属星标不得扩散到普通 AI');
+await systemBack();
+await renderer.act(async () => button('编辑对象').props.onPress());
+await renderer.act(async () => button('另一位 AI').props.onPress());
+await renderer.act(async () => button('工具调用').props.onPress());
+await renderer.act(async () => button('记忆').props.onPress());
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '直接暴露 read_memory' }).props.onPress());
+await systemBack();
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '全局应用特批工具' }).props.onPress());
+assert.deepEqual(globalSnapshots.at(-1), []);
+assert.deepEqual(aiDetails.directToolNames, ['schedule_self_wake'], '普通 AI 的空快照不取消主理专属星标');
+assert.equal(otherDetails.tools[0].enabled, false, '同步星标不修改调用权限');
+await systemBack();
 await systemBack();
 optionListError = true;
 await renderer.act(async () => expo.useRouter().push('/prompt-center'));

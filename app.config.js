@@ -25,7 +25,7 @@ module.exports = ({ config }) => {
         ? "com.skylucky.kimiphone.dev"  // Dev Client 包名
         : "com.skylucky.kimiphone",       // Release 包名
       adaptiveIcon: {
-        foregroundImage: "./assets/adaptive-icon.png",
+        foregroundImage: isDevBuild ? "./assets/adaptive-icon.png" : "./assets/icon.png",
         backgroundColor: isDevBuild ? "#FFFFFF" : "#000000"
       },
       edgeToEdgeEnabled: true,

@@ -4,7 +4,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import { EXPENSE_COLOR, INCOME_COLOR } from './walletVisualizationColors';
 
@@ -100,13 +100,15 @@ const Overview: React.FC<OverviewProps> = ({ expense, income, onPress }) => {
 
   if (onPress) {
     return (
-      <TouchableOpacity style={styles.container} onPress={onPress} activeOpacity={0.8}>
-        {content}
+      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+        <ThemedSurface variant="card" backgroundColor={theme.colors.background.screen} style={styles.container}>
+          {content}
+        </ThemedSurface>
       </TouchableOpacity>
     );
   }
 
-  return <View style={styles.container}>{content}</View>;
+  return <ThemedSurface variant="card" backgroundColor={theme.colors.background.screen} style={styles.container}>{content}</ThemedSurface>;
 };
 
 export default Overview;

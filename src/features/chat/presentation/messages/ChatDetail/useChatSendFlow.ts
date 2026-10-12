@@ -24,6 +24,7 @@ import type { StickerMessageSnapshot } from '../../../messages/domain/ChatSticke
 import {
   getMessageAttachments,
   getMessageSticker,
+  getMessageReplyQuote,
 } from '../../../messages/domain/chatMessageMetadata';
 import type { ChatVoiceRecordingState, ChatVoiceMessageReviewDraft, ReplyTarget } from '../components/chatTypes';
 import {
@@ -254,6 +255,7 @@ export function useChatSendFlow({
         replyToId: replyTo?.id || null,
         showTimeSeparatorBefore: shouldShowTimeSeparatorForOptimisticMessage(messages),
         replyToText: replyTo?.text || null,
+        replyQuote: replyTo?.quote,
         attachments,
         sticker,
       });
@@ -278,6 +280,7 @@ export function useChatSendFlow({
             text: normalizedText,
             replyToId: replyTo?.id || null,
             replyToText: replyTo?.text || null,
+            replyQuote: replyTo?.quote,
             clientMessageId: tail.clientMessageId,
             attachments,
             sticker,
@@ -561,6 +564,7 @@ export function useChatSendFlow({
             text: message.text,
             replyToId: message.replyToId,
             replyToText: message.replyToText,
+            replyQuote: getMessageReplyQuote(message),
             clientMessageId: message.clientMessageId || null,
             attachments,
             sticker,

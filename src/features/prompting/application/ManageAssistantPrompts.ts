@@ -70,14 +70,12 @@ export async function getAssistantPromptEditorDetails(
   assistantId: string
 ): Promise<AssistantPromptEditorDetails> {
   const dependencies = getPromptingRuntimeDependencies();
-  const toolDefinitions = await dependencies.tools.list();
-  const [storedSettings, states, overrides, userPrompts, toolOverrides, defaults, directToolNames] = await Promise.all([
+  const [storedSettings, states, overrides, userPrompts, tools, directToolNames] = await Promise.all([
     dependencies.assistantPrompts.getAssistantSettings(assistantId),
     dependencies.assistantPrompts.listDefinitionStates(assistantId),
     dependencies.assistantPrompts.listDefinitionOverrides(assistantId),
     dependencies.assistantPrompts.listAssistantUserPrompts(assistantId),
-    dependencies.tools.listOverrides(assistantId),
-    dependencies.defaults.read(),
+    getAssistantToolPermissions(assistantId),
     dependencies.assistantPrompts.listDirectToolNames(assistantId),
   ]);
   const now = new Date().toISOString();
@@ -87,10 +85,6 @@ export async function getAssistantPromptEditorDetails(
     createdAt: now,
     updatedAt: now,
   };
-  const toolOverrideByName = new Map(toolOverrides.map((override) => [
-    override.toolName,
-    override.enabled,
-  ]));
   return {
     directToolNames,
     settings,
@@ -99,11 +93,21 @@ export async function getAssistantPromptEditorDetails(
     states,
     overrides,
     userPrompts: [...userPrompts].sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id)),
-    tools: toolDefinitions.map((definition) => ({
-      ...definition,
-      enabled: toolOverrideByName.get(definition.name) ?? defaults.toolPermissions[definition.name] ?? definition.defaultEnabled,
-    })),
+    tools,
   };
+}
+
+/** 手机目录与编辑器共用单项权限解析，不读取 AI 专属提示词。 */
+export async function getAssistantToolPermissions(assistantId: string): Promise<AssistantPromptEditorDetails['tools']> {
+  const dependencies = getPromptingRuntimeDependencies();
+  const [definitions, overrides, defaults] = await Promise.all([
+    dependencies.tools.list(), dependencies.tools.listOverrides(assistantId), dependencies.defaults.read(),
+  ]);
+  const overrideByName = new Map(overrides.map((override) => [override.toolName, override.enabled]));
+  return definitions.map((definition) => ({
+    ...definition,
+    enabled: overrideByName.get(definition.name) ?? defaults.toolPermissions[definition.name] ?? definition.defaultEnabled,
+  }));
 }
 
 export async function getAssistantPromptAdvancedSnapshot(): Promise<AssistantPromptAdvancedSnapshot> {
@@ -257,12 +261,13 @@ export function deleteAssistantUserPrompt(id: string, assistantId: string): Prom
   return getPromptingRuntimeDependencies().assistantPrompts.deleteAssistantUserPrompt(id, assistantId);
 }
 
-export function setAssistantToolPermission(
+export async function setAssistantToolPermission(
   assistantId: string,
   toolName: string,
   enabled: boolean
 ): Promise<void> {
-  return getPromptingRuntimeDependencies().tools.set(assistantId, toolName, enabled);
+  await assertAssistantToolEditable(assistantId, toolName);
+  await getPromptingRuntimeDependencies().tools.set(assistantId, toolName, enabled);
 }
 
 /** 星标只决定 schema 是否常驻，不授予调用权限。 */
@@ -271,10 +276,31 @@ export async function setAssistantDirectToolExposure(
   toolName: string,
   exposed: boolean
 ): Promise<void> {
+  await assertAssistantToolEditable(assistantId, toolName);
+  await getPromptingRuntimeDependencies().assistantPrompts.setDirectToolExposure(assistantId, toolName, exposed);
+}
+
+/** 全局应用是一次普通工具星标快照，不改写主理专属偏好或调用权限。 */
+export async function applyAssistantDirectToolsGlobally(directToolNames: readonly string[]): Promise<void> {
   const dependencies = getPromptingRuntimeDependencies();
-  const tools = await dependencies.tools.list();
-  if (!tools.some((tool) => tool.name === toolName)) throw new Error('工具不存在或不在提示词中心管理');
-  await dependencies.assistantPrompts.setDirectToolExposure(assistantId, toolName, exposed);
+  const [tools, assistants] = await Promise.all([dependencies.tools.list(), dependencies.assistants.listOptions()]);
+  const selectedNames = new Set(directToolNames);
+  const toolNames = tools.filter((tool) => !tool.hostOnly).map((tool) => tool.name);
+  await dependencies.assistantPrompts.applyDirectToolSnapshot(
+    assistants.map((assistant) => assistant.id),
+    toolNames,
+    toolNames.filter((name) => selectedNames.has(name))
+  );
+}
+
+async function assertAssistantToolEditable(assistantId: string, toolName: string): Promise<void> {
+  const dependencies = getPromptingRuntimeDependencies();
+  const tool = (await dependencies.tools.list()).find((item) => item.name === toolName);
+  if (!tool) throw new Error('工具不存在或不在提示词中心管理');
+  if (tool.hostOnly) {
+    const assistant = (await dependencies.assistants.listOptions()).find((item) => item.id === assistantId);
+    if (!assistant?.isHostAI) throw new Error('只有主理 AI 可以修改主理专属工具');
+  }
 }
 
 export function listAssistantDirectToolNames(assistantId: string): Promise<string[]> {

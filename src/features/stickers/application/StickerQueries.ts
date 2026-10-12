@@ -29,9 +29,9 @@ export function searchStickers(input: SearchStickersInput = {}): Promise<Sticker
   return getStickersRuntimeDependencies().repository.searchStickers(input);
 }
 
-export async function getStickerById(stickerId: string): Promise<Sticker> {
+export async function getStickerById(stickerId: string, assistantId?: string): Promise<Sticker> {
   const id = requireId(stickerId);
-  const sticker = await getStickersRuntimeDependencies().repository.getStickerById(id);
+  const sticker = await getStickersRuntimeDependencies().repository.getStickerById(id, assistantId);
   if (!sticker) throw new StickerNotFoundError(id);
   return sticker;
 }

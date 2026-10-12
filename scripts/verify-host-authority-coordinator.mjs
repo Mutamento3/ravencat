@@ -120,6 +120,7 @@ let pendingRevoke = null;
 const assistantManagement = loadTypeScriptModule(
   'src/features/assistants/AIAssistantManagement.ts',
   {
+    '@platform/device': {},
     '@features/media': {
       createMediaAssetWithReference: async () => {},
       collectChatSessionMediaAssetCandidates: async () => [],
@@ -216,7 +217,7 @@ await Promise.all([actionBeforeDelete, deletingCurrentHost]);
 assert.equal(deleteCalls, 1);
 assert.equal(relationshipRemovedCalls, 2, '撤销和删除都必须完成关系移除副作用');
 
-let raceWake = null;
+let raceSchedule = null;
 let claimGate = null;
 let autonomousRunGate = null;
 let autonomousRunStarted = null;
@@ -227,16 +228,20 @@ let consumeCalls = 0;
 const raceEvents = [];
 relationshipRemovedHandler = async (aiId, reason) => {
   raceEvents.push(['relationship-removed', aiId, reason]);
-  if (raceWake?.status === 'scheduled') {
-    raceWake = { ...raceWake, status: 'superseded' };
+  if (raceSchedule?.status === 'scheduled') {
+    raceSchedule = { ...raceSchedule, status: 'cancelled' };
   }
 };
 
-const headlessSelfWake = loadTypeScriptModule(
-  'src/features/companion/application/RunHeadlessSelfWake.ts',
+const headlessSchedule = loadTypeScriptModule(
+  'src/features/companion/application/RunHeadlessAISchedule.ts',
   {
     '@features/assistants': {
       runAsCurrentHostAuthority: assistantManagement.runAsCurrentHostAuthority,
+    },
+    './AIScheduleRecovery': {
+      claimAndTrackAIScheduleRun: (_runId, claim) => claim(),
+      completeTrackedAIScheduleRun: (_runId, _disposition, consume) => consume(),
     },
     './AutonomousRunDiagnostic': {
       summarizeAutonomousAgentRun: () => ({}),
@@ -247,13 +252,13 @@ const headlessSelfWake = loadTypeScriptModule(
         generateAutonomousRunId: () => `authority-race-run-${++generatedRunNumber}`,
       }),
     },
-    './RunCompanionAutonomousAgent': {
-      runCompanionAutonomousAgent: async (input) => {
+    './RunAIScheduleAutonomousAgent': {
+      runAIScheduleAutonomousAgent: async (input) => {
         autonomousRunCalls += 1;
-        raceEvents.push(['run-started', input.claimedWake.wakeId]);
+        raceEvents.push(['run-started', input.claimedSchedule.scheduleId]);
         autonomousRunStarted?.resolve();
         if (autonomousRunGate) await autonomousRunGate.promise;
-        raceEvents.push(['run-finished', input.claimedWake.wakeId]);
+        raceEvents.push(['run-finished', input.claimedSchedule.scheduleId]);
         return {
           taskId: 'authority-race-task',
           status: 'completed',
@@ -266,50 +271,50 @@ const headlessSelfWake = loadTypeScriptModule(
         };
       },
     },
-    './SelfWakeApplicationOwner': {
-      claimSelfWake: async (input) => {
+    './AIScheduleProjectionOwner': {
+      claimAIScheduleForHeadless: async (input) => {
         claimCalls += 1;
-        raceEvents.push(['claim-started', input.wakeId]);
+        raceEvents.push(['claim-started', input.scheduleId]);
         claimGate?.started.resolve();
         if (claimGate) await claimGate.release.promise;
-        assert.equal(raceWake?.status, 'scheduled', 'claim 只接受 scheduled wake');
-        raceWake = {
-          ...raceWake,
+        assert.equal(raceSchedule?.status, 'scheduled', 'claim 只接受 scheduled wake');
+        raceSchedule = {
+          ...raceSchedule,
           status: 'claimed',
-          claimedByRunId: input.claimedByRunId,
+          claimedByRunId: input.runId,
         };
-        raceEvents.push(['claimed', input.wakeId]);
-        return { status: 'claimed', wake: raceWake };
+        raceEvents.push(['claimed', input.scheduleId]);
+        return { status: 'claimed', schedule: raceSchedule };
       },
-      consumeSelfWake: async ({ wakeId }) => {
+      consumeAIScheduleWithProjection: async ({ scheduleId }) => {
         consumeCalls += 1;
-        assert.equal(raceWake?.wakeId, wakeId);
-        assert.equal(raceWake?.status, 'claimed', 'disable 后 claimed wake 仍须可 consume');
-        raceWake = { ...raceWake, status: 'consumed' };
-        raceEvents.push(['consumed', wakeId]);
-        return { status: 'consumed', wake: raceWake };
+        assert.equal(raceSchedule?.scheduleId, scheduleId);
+        assert.equal(raceSchedule?.status, 'claimed', 'disable 后 claimed wake 仍须可 consume');
+        raceSchedule = { ...raceSchedule, status: 'consumed' };
+        raceEvents.push(['consumed', scheduleId]);
+        return { status: 'consumed', schedule: raceSchedule };
       },
     },
   },
 );
 
-function formalWakeCallback(hostAIId, wakeId) {
+function formalScheduleCallback(hostAIId, scheduleId) {
   return {
-    wakeReason: 'system_timer',
+    triggerKind: 'ai_schedule',
     source: 'work-manager',
-    eventId: wakeId,
+    eventId: scheduleId,
     hostAIId,
-    scheduleRevision: 1,
+    projectionToken: 'revision-1', expectedRemindAtEpochMs: Date.parse('2026-08-30T08:00:00.000Z'),
     createdAtEpochMs: Date.parse('2026-08-30T08:00:05.000Z'),
   };
 }
 
-function resetWakeRace(hostAIId, wakeId) {
+function resetScheduleRace(hostAIId, scheduleId) {
   managedHostAiId = hostAIId;
-  raceWake = {
-    wakeId,
+  raceSchedule = {
+    scheduleId,
     ownerAIId: hostAIId,
-    wakeAt: '2026-08-30T08:00:00.000Z',
+    remindAt: '2026-08-30T08:00:00.000Z',
     status: 'scheduled',
     claimedByRunId: null,
   };
@@ -323,13 +328,13 @@ function resetWakeRace(hostAIId, wakeId) {
 }
 
 // callback 先取得 authority：claim 完成后让出 lane，后续 revoke 不得撤销行动机会。
-resetWakeRace('host-claim-first', 'wake-claim-first');
+resetScheduleRace('host-claim-first', 'wake-claim-first');
 claimGate = { started: deferred(), release: deferred() };
 autonomousRunGate = deferred();
 autonomousRunStarted = deferred();
 pendingRevoke = { started: deferred(), release: deferred() };
-const claimFirstCallback = headlessSelfWake.runHeadlessSelfWake(
-  formalWakeCallback('host-claim-first', 'wake-claim-first'),
+const claimFirstCallback = headlessSchedule.runHeadlessAISchedule(
+  formalScheduleCallback('host-claim-first', 'wake-claim-first'),
 );
 await claimGate.started.promise;
 let claimFirstRevokeEntered = false;
@@ -340,24 +345,24 @@ assert.equal(claimFirstRevokeEntered, false, 'claim 持有 authority lane 时 re
 claimGate.release.resolve();
 await autonomousRunStarted.promise;
 await pendingRevoke.started.promise;
-assert.equal(raceWake.status, 'claimed');
+assert.equal(raceSchedule.status, 'claimed');
 pendingRevoke.release.resolve();
 await claimFirstRevoke;
-assert.equal(raceWake.status, 'claimed', 'relationship removal 不得 supersede claimed wake');
+assert.equal(raceSchedule.status, 'claimed', 'relationship removal 不得 supersede claimed wake');
 autonomousRunGate.resolve();
 assert.equal((await claimFirstCallback).status, 'ran');
-assert.equal(raceWake.status, 'consumed');
+assert.equal(raceSchedule.status, 'consumed');
 assert.equal(claimCalls, 1);
 assert.equal(autonomousRunCalls, 1);
 assert.equal(consumeCalls, 1);
 
 // revoke 先取得 authority：关系移除与 disable 完成后，旧 callback 必须 handled no-op。
-resetWakeRace('host-revoke-first', 'wake-revoke-first');
+resetScheduleRace('host-revoke-first', 'wake-revoke-first');
 pendingRevoke = { started: deferred(), release: deferred() };
 const revokeFirstMutation = assistantManagement.revokeHostAIAssistant('host-revoke-first');
 await pendingRevoke.started.promise;
-const revokeFirstCallback = headlessSelfWake.runHeadlessSelfWake(
-  formalWakeCallback('host-revoke-first', 'wake-revoke-first'),
+const revokeFirstCallback = headlessSchedule.runHeadlessAISchedule(
+  formalScheduleCallback('host-revoke-first', 'wake-revoke-first'),
 );
 await Promise.resolve();
 assert.equal(claimCalls, 0, 'revoke 持有 authority lane 时旧 callback 不得提前 claim');
@@ -367,18 +372,18 @@ assert.deepEqual(await revokeFirstCallback, {
   status: 'ignored',
   reason: 'not_current_host',
 });
-assert.equal(raceWake.status, 'superseded');
+assert.equal(raceSchedule.status, 'cancelled');
 assert.equal(claimCalls, 0);
 assert.equal(autonomousRunCalls, 0);
 assert.equal(consumeCalls, 0);
 
 // 删除当前 Host 后到达的旧 callback 同样不得 claim 或启动 autonomous run。
-resetWakeRace('host-delete-first', 'wake-delete-first');
+resetScheduleRace('host-delete-first', 'wake-delete-first');
 await assistantManagement.deleteAIAssistant('host-delete-first');
-assert.equal(raceWake.status, 'superseded');
+assert.equal(raceSchedule.status, 'cancelled');
 assert.deepEqual(
-  await headlessSelfWake.runHeadlessSelfWake(
-    formalWakeCallback('host-delete-first', 'wake-delete-first'),
+  await headlessSchedule.runHeadlessAISchedule(
+    formalScheduleCallback('host-delete-first', 'wake-delete-first'),
   ),
   { status: 'ignored', reason: 'not_current_host' },
 );

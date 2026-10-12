@@ -11,10 +11,8 @@ export interface ChatInteractionProfile {
   /**
    * 语音消息是否可以用长按打开语音专属 action menu（“转文字 / 收起文字”）。
    *
-   * 与 `enableMessageLongPressMenu` 分开建模的原因：Moon Kimi 用 inline assistant
-   * actions 取代通用长按菜单，但语音气泡没有 inline actions 可以承载 transcript
-   * 展开。这不是“通用长按菜单”的例外，而是语音消息自己的可达入口，因此用独立
-   * capability 表达，而不是在 theme profile 里堆 if/else 特例。
+   * 语音卡内部的播放 Pressable 需要独立声明长按回调，不能依赖外层正文触控。
+   * 各主题保留消息管理入口，包括收藏与转写展开；inline actions 仍独立展示。
    */
   enableVoiceMessageLongPressMenu: boolean;
   showAssistantInlineActions: boolean;
@@ -43,8 +41,8 @@ const OFFICIAL_REPLICA_CHAT_INTERACTION_PROFILE: ChatInteractionProfile = {
   emptyStateSurface: 'official-replica',
   reasoningSurface: 'official-replica',
   toolStatusSurface: 'official-replica',
-  enableMessageLongPressMenu: false,
-  // 普通文本继续只用 inline actions；语音气泡仍需可达的 transcript 入口。
+  enableMessageLongPressMenu: true,
+  // 内联操作保留；用户和 AI 都可通过长按管理消息与收藏。
   enableVoiceMessageLongPressMenu: true,
   showAssistantInlineActions: true,
   showTokenUsage: false,

@@ -9,9 +9,20 @@
  */
 
 import { getChatGroupRuntimeDependencies } from './ChatGroupRuntime';
-import { abortGroupSpeechPlanExecution } from './GroupSpeechExecutionAbort';
+import { abortGroupSpeechPlanExecution, listActiveGroupSpeechGroupIds } from './GroupSpeechExecutionAbort';
 import { cancelGroupAutoInvocation } from './GroupAutoInvocationScheduler';
 import { emitChatGroupSpeechPlanChanged } from '../../messages/events/ChatEvents';
+
+/** 冷启动只结算失去执行者的旧计划；同进程仍活着的调用保留原 owner。 */
+export async function interruptAbandonedGroupSpeechPlans(): Promise<void> {
+  const groupIds = await getChatGroupRuntimeDependencies().groups.interruptSpeechPlansWithoutOwner(
+    listActiveGroupSpeechGroupIds(),
+  );
+  for (const groupId of groupIds) {
+    cancelGroupAutoInvocation(groupId);
+    emitChatGroupSpeechPlanChanged(groupId);
+  }
+}
 
 /** 返回 true 表示确实终止了一个 active plan；无 active plan 时返回 false。 */
 export async function terminateGroupSpeechPlan(groupId: string): Promise<boolean> {

@@ -1,7 +1,7 @@
 /** 汇总 RavenCat 当前已经接入的 Android 系统访问与后台运行能力。 */
 
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -25,7 +25,6 @@ import {
   getIncomingCallDiagnostics,
   openFullScreenIntentSettings,
   openIncomingCallNotificationSettings,
-  type IncomingCallDiagnostics,
 } from '@features/calls';
 import {
   getBatteryOptimizationState,
@@ -43,7 +42,14 @@ import {
   type DeviceObserverConnectionState,
 } from '@features/deviceControl';
 import { createStyles } from './CompanionSettingsShared.styles';
-import { isUsageAccessGranted, openUsageAccessSettings } from '@platform/device';
+import {
+  getDeviceLocationAccessState,
+  isUsageAccessGranted,
+  manageDeviceLocationPermission,
+  openDeviceLocationSettings,
+  openUsageAccessSettings,
+  type DeviceLocationAccessState,
+} from '@platform/device';
 import { isApplicationUpdateInstallAllowed, openApplicationUpdateInstallSettings } from '@platform/updates/DownloadApplicationUpdate';
 
 interface CompanionSystemAccessScreenProps {
@@ -60,7 +66,7 @@ interface SystemAccessSnapshot {
   notificationListenerGranted: boolean;
   updateInstallAllowed: boolean;
   observer: DeviceObserverConnectionState;
-  incomingCallDiagnostics: IncomingCallDiagnostics;
+  location: DeviceLocationAccessState;
 }
 
 export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemAccessScreenProps) {
@@ -74,7 +80,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
   const refresh = useCallback(async (pullToRefresh = false) => {
     if (pullToRefresh) setRefreshing(true);
     try {
-      const [overlayGranted, notification, battery, observer, incomingCallDiagnostics, usageAccessGranted, notificationListener] =
+      const [overlayGranted, notification, battery, observer, incomingCallDiagnostics, usageAccessGranted, notificationListener, location] =
         await Promise.all([
           isOverlayPermissionGranted(),
           getCompanionNotificationDiagnostics(),
@@ -83,6 +89,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
           getIncomingCallDiagnostics(),
           isUsageAccessGranted(),
           getNotificationListenerAccessState(),
+          getDeviceLocationAccessState(),
         ]);
       setSnapshot({
         overlayGranted,
@@ -96,7 +103,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
         notificationListenerGranted: notificationListener.status === 'granted',
         updateInstallAllowed: isApplicationUpdateInstallAllowed(),
         observer,
-        incomingCallDiagnostics,
+        location,
       });
       setErrorMessage(null);
     } catch (error) {
@@ -159,7 +166,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
         {snapshot ? (
           <>
             <Text style={styles.sectionTitle}>必要系统访问</Text>
-            <View style={styles.card}>
+            <ThemedSurface variant="card" style={styles.card}>
               <View style={styles.cardContent}>
                 <PermissionRow label="通知提醒" value={snapshot.notificationGranted} onPress={() => void openNotificationSettings()} styles={styles} description="用于普通消息、主动联系和后台状态通知。" />
                 <PermissionRow label="通知使用权" value={snapshot.notificationListenerGranted} onPress={() => {
@@ -171,28 +178,35 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
                 <PermissionRow label="屏幕内容读取" value={snapshot.observer.accessibilityConnected && snapshot.observer.canRetrieveWindowContent} onPress={() => void openDeviceObserverSettings()} styles={styles} description={observerHint(snapshot.observer)} />
                 <PermissionRow label="使用情况访问" value={snapshot.usageAccessGranted} onPress={() => {
                   void openUsageAccessSettings().catch((error: unknown) => setErrorMessage(toMessage(error, '无法打开使用情况访问设置。')));
-                }} styles={styles} description="允许主理 AI 按需查询应用前台使用时长。" last />
+                }} styles={styles} description="允许主理 AI 按需查询应用前台使用时长。" />
+                <PermissionRow label="定位权限" value={snapshot.location.permission !== 'not_granted'}
+                  grantedLabel={snapshot.location.permission === 'precise' ? '精确位置' : '大致位置'} onPress={() => {
+                    void manageDeviceLocationPermission().then(() => refresh()).catch((error: unknown) => setErrorMessage(toMessage(error, '无法管理定位权限。')));
+                  }} styles={styles} description="允许主理 AI 按需获取一次手机位置；仅申请使用期间权限，支持大致位置，不持续追踪。" />
+                <PermissionRow label="系统定位" value={snapshot.location.servicesEnabled} onPress={() => {
+                  void openDeviceLocationSettings().catch((error: unknown) => setErrorMessage(toMessage(error, '无法打开系统定位设置。')));
+                }} styles={styles} description="手机系统的定位总开关；开启后仍需授予本应用定位权限。" last />
               </View>
-            </View>
+            </ThemedSurface>
 
             <Text style={styles.sectionTitle}>应用更新</Text>
-            <View style={styles.card}>
+            <ThemedSurface variant="card" style={styles.card}>
               <View style={styles.cardContent}>
                 <PermissionRow label="安装未知应用" value={snapshot.updateInstallAllowed} onPress={() => {
                   void openApplicationUpdateInstallSettings().catch((error: unknown) => setErrorMessage(toMessage(error, '无法打开安装未知应用设置。')));
                 }} styles={styles} description="允许 RavenCat 打开系统安装页更新自身。每次安装仍需手动确认。" last />
               </View>
-            </View>
+            </ThemedSurface>
 
             <Text style={styles.sectionTitle}>后台可靠性</Text>
-            <View style={styles.card}>
+            <ThemedSurface variant="card" style={styles.card}>
               <View style={styles.cardContent}>
                 <PermissionRow label="电池优化" value={snapshot.batteryGranted} onPress={() => void (snapshot.batteryGranted ? openBatteryOptimizationSettings() : requestIgnoreBatteryOptimizations())} styles={styles} description="允许后台运行可减少系统延迟，但不能阻止强制停止或厂商清理。" last />
               </View>
-            </View>
+            </ThemedSurface>
 
             <Text style={styles.sectionTitle}>通话系统访问</Text>
-            <View style={styles.card}>
+            <ThemedSurface variant="card" style={styles.card}>
               <View style={styles.cardContent}>
                 {Number(Platform.Version) >= 34 ? (
                   <PermissionRow label="全屏来电授权" value={snapshot.fullScreenIntentAllowed} onPress={() => void openFullScreenIntentSettings()} styles={styles} description="允许来电在锁屏或熄屏时弹出；部分手机还需开启下方的后台弹出界面与锁屏显示。" />
@@ -201,17 +215,8 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
                 )}
                 <PermissionRow label="来电通知" value={snapshot.incomingCallChannelEnabled} onPress={() => void openIncomingCallNotificationSettings()} styles={styles} description="检查来电通知 Channel、锁屏显示与悬浮通知。" last />
               </View>
-            </View>
+            </ThemedSurface>
 
-            <Text style={styles.sectionTitle}>来电诊断</Text>
-            <View style={styles.card}>
-              <View style={styles.cardContent}>
-                <DiagnosticRow label="应用通知总开关" value={snapshot.incomingCallDiagnostics.notificationsEnabled ? '开启' : '关闭'} styles={styles} />
-                <DiagnosticRow label="来电 Channel 重要度" value={describeImportance(snapshot.incomingCallDiagnostics.incomingCallChannelImportance)} styles={styles} />
-                <DiagnosticRow label="Channel 锁屏可见性" value={describeLockscreenVisibility(snapshot.incomingCallDiagnostics.incomingCallChannelLockscreenVisibility)} styles={styles} />
-                <DiagnosticRow label="上次来电发布" value={describeLastPost(snapshot.incomingCallDiagnostics)} styles={styles} last />
-              </View>
-            </View>
             <TouchableOpacity style={styles.entryCard} onPress={() => void openBackgroundPopupSettings()} accessibilityRole="button">
               <View style={styles.permissionText}>
                 <Text style={styles.entryTitle}>后台弹出界面与锁屏显示</Text>
@@ -232,6 +237,7 @@ function PermissionRow({
   value,
   onPress,
   description,
+  grantedLabel = '已开启',
   last,
   styles,
 }: {
@@ -239,6 +245,7 @@ function PermissionRow({
   value: boolean;
   onPress: () => void;
   description: string;
+  grantedLabel?: string;
   last?: boolean;
   styles: ReturnType<typeof createStyles>;
 }) {
@@ -249,7 +256,7 @@ function PermissionRow({
         <Text style={styles.permissionHint}>{description}</Text>
       </View>
       <Text style={[styles.permissionStatus, value ? styles.statusGranted : null]}>
-        {value ? '已开启' : '去开启'}
+        {value ? grantedLabel : '去开启'}
       </Text>
     </TouchableOpacity>
   );
@@ -279,32 +286,6 @@ function observerHint(observer: DeviceObserverConnectionState): string {
   if (!observer.accessibilityConnected) return '系统已启用，但设备观察服务尚未连接。';
   if (!observer.canRetrieveWindowContent) return '服务已连接，但当前不能读取窗口内容。';
   return '设备观察服务已连接，可读取窗口内容。';
-}
-
-function describeImportance(value: number): string {
-  if (value >= 4) return '高';
-  if (value === 3) return '默认';
-  if (value === 2) return '低';
-  if (value === 1) return '最低';
-  if (value === 0) return '已关闭';
-  return `未知(${value})`;
-}
-
-function describeLockscreenVisibility(value: number | null | undefined): string {
-  if (value === 1) return '公开';
-  if (value === 0) return '隐藏内容';
-  if (value === -1) return '锁屏不显示';
-  if (value === -1000) return '跟随系统默认';
-  if (value === null || value === undefined) return '系统未返回';
-  return `未知(${value})`;
-}
-
-function describeLastPost(diagnostics: IncomingCallDiagnostics): string {
-  if (!diagnostics.lastPostAttemptAtEpochMs) return '尚未发布';
-  const date = new Date(diagnostics.lastPostAttemptAtEpochMs);
-  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
-  if (diagnostics.lastPostShown) return `成功 ${time}`;
-  return `失败 ${time}${diagnostics.lastPostError ? ` · ${diagnostics.lastPostError}` : ''}`;
 }
 
 function toMessage(error: unknown, fallback: string): string {

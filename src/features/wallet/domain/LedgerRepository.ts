@@ -98,7 +98,8 @@ export interface ILedgerRepository {
   updateQuickAction(id: string, updates: UpdateQuickActionInput): Promise<boolean>;
   deleteQuickAction(id: string): Promise<boolean>;
   useQuickAction(quickActionId: string, recordDate?: string): Promise<WalletRecord>;
-  getCategories(): Promise<string[]>;
+  /** 返回预设与账单、快捷记账中已使用的分类；不受日期或记录条数限制。 */
+  getCategories(type?: WalletRecordType): Promise<string[]>;
   
   /**
    * 获取时间范围内的汇总数据（用于历史记账详情页）

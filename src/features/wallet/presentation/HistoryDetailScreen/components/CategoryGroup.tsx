@@ -43,7 +43,8 @@ export function CategoryGroup({
   return (
     <View style={styles.categoryGroup}>
       <View style={styles.categoryHeader}>
-        <View style={[styles.categoryTag, { backgroundColor: color }]}>
+        <View style={styles.categoryTag}>
+          <View style={[styles.categoryDot, { backgroundColor: color }]} />
           <Text style={styles.categoryTagText}>{category}</Text>
         </View>
         <Text

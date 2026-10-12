@@ -143,6 +143,8 @@ async function loadBuildChatBatchAIInput() {
     }
   `);
   const source = read('src/features/chat/reply/application/BuildChatBatchAIInput.ts')
+    .replace(/from ['"]@features\/media['"]/g,
+      `from '${transpileToModuleUrl('export function mediaImageFailure() { return null; }')}'`)
     .replace(/from ['"]\.\.\/\.\.\/messages\/domain\/SharedChatRecord['"]/g,
       `from '${transpileToModuleUrl(read('src/features/chat/messages/domain/SharedChatRecord.ts'))}'`)
     .replace(
@@ -169,6 +171,8 @@ async function loadAttachmentParser() {
     };
   `);
   const source = read('src/features/chat/messages/application/AttachmentParser.ts')
+    .replace(/from ['"]\.\.\/domain\/ChatAttachment['"]/g,
+      `from '${transpileToModuleUrl(read('src/features/chat/messages/domain/ChatAttachment.ts'))}'`)
     .replace(/from ['"]@platform\/device['"]/g, `from '${mediaUrl}'`);
   return import(transpileToModuleUrl(source));
 }
@@ -235,7 +239,7 @@ assert.equal(
 );
 assert.throws(
   () => assertChatAttachmentFileSupported({ fileName: 'report.docx' }),
-  /此文件无法解析，无法发送。当前支持 TXT、MD、JSON 和 CSV 文件/,
+  /此文件无法解析，无法发送。当前支持 TXT 和 MD 文件/,
 );
 
 globalThis.__GROUP_ATTACHMENT_READ_TEXT__ = async () => '# 群聊附件\r\n正文';

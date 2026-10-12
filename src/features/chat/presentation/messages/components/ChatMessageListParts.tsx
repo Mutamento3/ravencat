@@ -24,6 +24,7 @@ import type {
 } from '@features/chat/messages/domain';
 import {
   getMessageSharedRecord,
+  parseMessageMetadata,
 } from '../../../messages/domain/chatMessageMetadata';
 import {
   areChatMessagesEquivalent,
@@ -343,8 +344,7 @@ export const TouchableMessageBubble = memo(function TouchableMessageBubble({
   const isAssistantMessage = msg.senderType === 'assistant' && !msg.isMe;
   const shouldHandleLongPress = interactionProfile.enableMessageLongPressMenu && Boolean(onMessageLongPress);
   // 语音气泡不经过外层 Touchable 的长按：其内部播放 Pressable 会吞掉 Android 长按
-  // responder。因此语音消息用更细粒度的 capability 判断，使 Moon Kimi 这类关闭了
-  // 通用长按菜单、只保留 inline actions 的主题，仍然给语音提供“转文字”入口。
+  // responder。因此语音消息通过独立回调到达同一菜单，不依赖外层正文的触控路径。
   const shouldHandleVoiceLongPress =
     interactionProfile.enableVoiceMessageLongPressMenu
     && Boolean(voice)
@@ -391,7 +391,7 @@ export const TouchableMessageBubble = memo(function TouchableMessageBubble({
     onMessageLongPress?.(msg, position);
   }, [msg, onMessageLongPress, shouldHandleVoiceLongPress]);
 
-  const handleImageLongPress = useCallback((position: { x: number; y: number }) => {
+  const handleAttachmentLongPress = useCallback((position: { x: number; y: number }) => {
     onMessageLongPress?.(msg, position);
   }, [msg, onMessageLongPress]);
 
@@ -417,7 +417,11 @@ export const TouchableMessageBubble = memo(function TouchableMessageBubble({
         isMe={msg.isMe}
         senderType={msg.senderType}
         tokensUsed={displayTokensUsed}
+        promptTokens={msg.promptTokens}
+        completionTokens={msg.completionTokens}
+        cachedTokens={parseMessageMetadata(msg)?.cachedTokens}
         replyToText={msg.replyToText}
+        replyQuote={parseMessageMetadata(msg)?.replyQuote}
         avatar={resolvedAIIdentity.avatar as string | null}
         userAvatar={userAvatar as string | null}
         aiId={resolvedAIIdentity.aiId}
@@ -443,7 +447,7 @@ export const TouchableMessageBubble = memo(function TouchableMessageBubble({
         isVoiceTranscriptExpanded={isVoiceTranscriptExpanded}
         canLongPressVoice={shouldHandleVoiceLongPress}
         onVoiceLongPress={handleVoiceLongPress}
-        onImageLongPress={shouldHandleLongPress ? handleImageLongPress : undefined}
+        onAttachmentLongPress={shouldHandleLongPress ? handleAttachmentLongPress : undefined}
       />
 
       {shouldShowInlineActions ? (

@@ -15,7 +15,8 @@ const EXPECTED_CALL_SITES = new Map([
   ['features/chat/group/application/GroupSpeakerPlanning.ts', /assembleStandalone/],
   ['features/chat/reply/application/ResolveChatImageModelInput.ts', /scenarioId: 'vision\.ocr'/],
   ['platform/agentRuntime/BaseAIClientAgentModelGateway.ts', /buildAgentModelMessages/],
-  ['host/composition/configureChatSummaryRuntime.ts', /scenarioId: 'chat\.summary'/],
+  // 两级摘要的固定来源与稳定前缀由 verify-memory-v3-prompt 行为验证，不锁定某个组装 helper。
+  ['host/composition/configureChatSummaryRuntime.ts', null],
   // Sticker 语义标注是 Feature 自有的辅助模型调用（sticker recognition）：识别 prompt 与
   // JSON 契约都由 Sticker 拥有，不进入统一 Chat Prompt Pack，也不继承 persona / 聊天历史 /
   // RavenCat foundation。这里的证据就是它自己那份识别 prompt，而不是路径白名单。

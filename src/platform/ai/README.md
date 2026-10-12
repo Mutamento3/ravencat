@@ -15,6 +15,8 @@
 
 Temperature / Top P 未配置或为 null 时，普通、流式、工具请求与连接测试均不发送对应字段，由服务商决定默认值；显式数值（包括 0）原样发送。客户端不补充本地采样默认值，也不根据模型名自动覆盖参数。
 
+聊天用量来自服务商的 `usage`，流式请求显式要求 `stream_options.include_usage`。缓存命中读取 `prompt_tokens_details.cached_tokens` 或 DeepSeek 的 `prompt_cache_hit_tokens`，在 Provider 边界归一化为可选的 `cachedTokens`；缺失与 0 分开表达。缓存量已包含在输入 token 中，不再次加到总量；流式累计帧按服务商最新统计更新，不把各帧相加。
+
 `disableThinking` 对已支持的可切换模型明确表达两端：`false` 开启思考，`true` 关闭思考。Qwen／百炼使用 `enable_thinking`，OpenRouter 使用 `reasoning.enabled`，其他兼容接口使用 `thinking.type: enabled / disabled`。已识别的可切换模型包括 Qwen3（排除固定思考、Instruct 与 Preview）、Qwen Plus/Flash/Turbo、DeepSeek V3.1/V3.2/V4、Kimi K2.5/K2.6 和 GLM 4.6/4.7/5/5.1/5.2；不能因百炼 Kimi 默认不思考而把开关关闭误解为省略参数。未提供开关的调用、未识别模型与非思考模型在未选择关闭时仍沿用服务商默认。连接测试、流式与非流式共用请求构造；不通过隐藏返回内容伪装关闭思考，不为关闭参数错误自动降级重试。固定思考模型或不同参数契约的自部署接口不保证支持该选择。
 
 ## 依赖方向

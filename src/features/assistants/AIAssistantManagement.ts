@@ -9,8 +9,11 @@ import {
   createMediaAssetWithReference,
   MEDIA_ASSET_STORAGE_BACKEND,
   releaseMediaAssetCandidates,
+  resolveMediaAsset,
 } from '@features/media';
 import type { PersistentAvatarDraft } from '@platform/device/DeviceMediaService';
+import { inspectLocalImage } from '@platform/device';
+import type { DatabaseTransactionExecutor } from '@platform/persistence';
 import { HostRelationshipError } from './domain/HostRepository';
 import {
   HostAuthorityCoordinator,
@@ -154,6 +157,21 @@ export async function updateAIAssistantAvatarFromDraft(
 }
 
 export type AIAssistantUpdatedListener = (assistant: AIProfile) => void;
+
+/** 工具只传当前执行角色；事务内 fence 与头像 CAS 分别保护运行资格和用户的后续编辑。 */
+export async function changeOwnAvatarFromMediaAsset(assistantId: string, mediaAssetId: string, guard: (transaction: DatabaseTransactionExecutor) => Promise<void>) {
+  const expected = await aiAssistantRepository.getAvatarMediaAssetReference(assistantId);
+  if (!expected) return { changed: false, reason: 'AI 已不存在' };
+  const media = await resolveMediaAsset(mediaAssetId);
+  await inspectLocalImage(media.localUri);
+  const changed = await aiAssistantRepository.replaceAvatarMediaAssetReference({ ownerId: assistantId,
+    expectedAvatar: expected.avatar, expectedAvatarMediaAssetId: expected.avatarMediaAssetId, mediaAssetId }, guard);
+  if (!changed) return { changed: false, reason: '头像在处理期间已被修改或角色已删除，旧请求未覆盖新设置' };
+  await releaseMediaAssetCandidates([expected.avatarMediaAssetId]);
+  const assistant = await aiAssistantRepository.getById(assistantId);
+  if (assistant) emitAIAssistantUpdated(assistant);
+  return { changed: true, mediaAssetId };
+}
 
 const aiAssistantUpdatedListeners = new Set<AIAssistantUpdatedListener>();
 

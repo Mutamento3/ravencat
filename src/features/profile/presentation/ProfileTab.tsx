@@ -12,6 +12,7 @@ import { DEFAULT_USER_PROFILE } from './userProfileConstants';
 
 interface ProfileTabProps {
   onOpenProfile(): void;
+  onOpenFavorites(): void;
   onOpenBackup(): void;
   onClearData(): void | Promise<void>;
   checkingUpdates: boolean;
@@ -21,7 +22,7 @@ interface ProfileTabProps {
   onCheckUpdates(): void;
 }
 
-export default function ProfileTab({ onOpenProfile, onOpenBackup, onClearData,
+export default function ProfileTab({ onOpenProfile, onOpenFavorites, onOpenBackup, onClearData,
   checkingUpdates, availableUpdateVersion, updateProgress, updateDownloaded, onCheckUpdates }: ProfileTabProps) {
   const theme = useTheme();
   const styles = useMemo(() => createProfileStyles(theme), [theme]);
@@ -39,6 +40,7 @@ export default function ProfileTab({ onOpenProfile, onOpenBackup, onClearData,
     <ScrollView style={styles.settingsContainer} contentContainerStyle={{ paddingBottom: theme.effects.glass.enabled ? bottomPadding : 0 }}>
       <ProfileContent profile={profile ?? DEFAULT_USER_PROFILE} hasLoadedProfile={!!profile}
         onOpenProfile={onOpenProfile}
+        onOpenFavorites={onOpenFavorites}
         onBackupPress={onOpenBackup} onClearAllData={clear}
         checkingUpdates={checkingUpdates} availableUpdateVersion={availableUpdateVersion}
         updateProgress={updateProgress} updateDownloaded={updateDownloaded}

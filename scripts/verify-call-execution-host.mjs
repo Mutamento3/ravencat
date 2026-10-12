@@ -28,14 +28,14 @@ const deferred = () => {
 async function flush() { await new Promise(resolve => setImmediate(resolve)); }
 
 let order = [];
-const gate = load('src/host/composition/ensureCallHostReady.ts', {
+const gate = load('src/host/composition/ensureHostDatabaseReady.ts', {
   '@platform/persistence': { async initDatabase() { order.push('database'); } },
   './completePendingBackupRestore': { async completePendingBackupRestore() { order.push('restore'); } },
 });
-await gate.ensureCallHostReady();
+await gate.ensureHostDatabaseReady();
 assert.deepEqual(order, ['restore', 'database'], '没有备份恢复任务时也必须等待普通 bootstrap');
 const rejectTask = load('src/host/notifications/CallNotificationActionHeadlessTask.ts', {
-  '../composition/ensureCallHostReady': gate,
+  '../composition/ensureHostDatabaseReady': gate,
   '@features/calls': {
     async getCallSession(id) { order.push('query'); return { id, aiAssistantId: 'ai', chatSessionId: 'chat' }; },
     async rejectCall() { order.push('reject'); },
@@ -44,6 +44,17 @@ const rejectTask = load('src/host/notifications/CallNotificationActionHeadlessTa
 order = [];
 await rejectTask.runCallNotificationActionHeadlessTask({ callId: 'call', aiId: 'ai', sessionId: 'chat', notificationAction: 'reject' });
 assert.deepEqual(order, ['restore', 'database', 'query', 'reject']);
+
+const leaveTask = load('src/host/notifications/TogetherListeningNotificationActionHeadlessTask.ts', {
+  '../composition/ensureHostDatabaseReady': gate,
+  '@features/togetherListening': {
+    async getTogetherListeningActivityById(id) { order.push('query'); return { id, hostAiId: 'ai', chatSessionId: 'chat' }; },
+    async leaveTogetherListeningByUser() { order.push('leave'); },
+  },
+});
+order = [];
+await leaveTask.runTogetherListeningNotificationActionHeadlessTask({ activityId: 'activity', hostAiId: 'ai', chatSessionId: 'chat', notificationAction: 'leave' });
+assert.deepEqual(order, ['restore', 'database', 'query', 'leave']);
 
 function harness({ alive = true, pending = [], deferInitialize = false, failInitialize = false, deferDrain = false } = {}) {
   const terminal = deferred();
@@ -65,7 +76,7 @@ function harness({ alive = true, pending = [], deferInitialize = false, failInit
     getSnapshot: () => ({ isListening: true, async stopRealtimeSpeech() { calls.push('mute'); }, async startRealtimeSpeech() { calls.push('unmute'); } }),
   };
   const entry = load('src/host/runtime/CallExecutionHeadlessTask.ts', {
-    '../composition/ensureCallHostReady': { async ensureCallHostReady() { calls.push('bootstrap'); } },
+    '../composition/ensureHostDatabaseReady': { async ensureHostDatabaseReady() { calls.push('bootstrap'); } },
     '@features/calls': {
       async getCallSession(id) { return { id, state: 'active' }; },
       async endCall(id, reason) { calls.push(reason); terminal.resolve(); return { call: { id, state: 'ended' } }; },

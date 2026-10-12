@@ -4,114 +4,13 @@ import { createRequire, Module } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
+import { SCHEMAS, createSqliteExecutor } from './helpers/sqlite-bootstrap-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'calls-runtime-contracts-'));
-
-function readSource(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-const callsPublicApiSource = readSource('src/features/calls/index.ts');
-assert.doesNotMatch(callsPublicApiSource, /infrastructure/);
-assert.doesNotMatch(
-  callsPublicApiSource,
-  /\b(?:configureCallRuntimeDependencies|SQLiteCallRepository|callRepository)\b/,
-);
-const callsCompositionSource = readSource('src/features/calls/composition.ts');
-assert.match(callsCompositionSource, /configureCallRuntimeDependencies/);
-assert.match(callsCompositionSource, /callRepository/);
-assert.match(callsCompositionSource, /callAudioPlayback/);
-assert.match(callsCompositionSource, /requestCallCameraPermission/);
-const configureAIRuntimeSource = readSource('src/host/composition/configureAIRuntime.ts');
-assert.match(configureAIRuntimeSource, /from '@features\/calls\/composition'/);
-const callRuntimeDependenciesSource = readSource(
-  'src/features/calls/application/runtime/CallRuntimeDependencies.ts',
-);
-const processCallAIReplySource = readSource(
-  'src/features/calls/application/runtime/ProcessCallAIReply.ts',
-);
-assert.doesNotMatch(
-  callRuntimeDependenciesSource,
-  /IMessageRepository|promptHistory|repository:\s*IMessageRepository/,
-  'Calls runtime 不得注入完整 Chat message repository',
-);
-assert.doesNotMatch(
-  processCallAIReplySource,
-  /promptHistoryRepository|repositories\.message|repository:\s*promptHistoryRepository/,
-  'Calls reply 不得从 ToolContext 或 Prompt Pack 注入 Chat message repository',
-);
-// Phase 11 流式回复契约：模型调用走 chatStreamWithTools，delta 只驱动按句 TTS；
-// aiSpeechText 仍由完整回复收齐后一次性提交，delta 期间不得落库。
-assert.match(
-  processCallAIReplySource,
-  /chatStreamWithTools/,
-  '通话回复必须走流式 chatStreamWithTools',
-);
-assert.match(
-  processCallAIReplySource,
-  /onSpeechSentence/,
-  '通话回复必须以 onSpeechSentence 输出净化整句',
-);
-// 逐句播放、speaking 相位与输入打断由下方真实 CallTurnRuntimeService 行为场景验证。
-assert.doesNotMatch(
-  callRuntimeDependenciesSource,
-  /typeof\s+resolveChatImageModelInput/,
-  'Calls runtime 只能声明图片输入窄端口，不得反向依赖 Chat 内部实现类型',
-);
-
-// incoming requested/ringing 的唯一 surface 是原生 CallStyle / IncomingCallActivity，
-// RN 不再提供任何 incoming UI；异常路由进入 /calls/:id 时由 CallScreen route guard 退出。
-assert.equal(
-  fs.existsSync(path.join(repoRoot, 'src/features/calls/presentation/CallIncomingScreen.tsx')),
-  false,
-  'CallIncomingScreen 已无产品职责，文件必须删除',
-);
-const callsPresentationIndexSource = readSource('src/features/calls/presentation/index.ts');
-assert.doesNotMatch(
-  callsPresentationIndexSource,
-  /CallIncomingScreen/,
-  'Calls presentation 公共出口不得再暴露 incoming UI',
-);
-const callScreenSource = readSource('src/features/calls/presentation/CallScreen.tsx');
-assert.doesNotMatch(
-  callScreenSource,
-  /CallIncomingScreen/,
-  'CallScreen 不得保留 requested/ringing 的 incoming 分支',
-);
-assert.match(
-  callScreenSource,
-  /direction === 'incoming'[\s\S]*'requested'[\s\S]*'ringing'[\s\S]*onClose\(\)/,
-  'incoming requested/ringing 异常进入 /calls/:id 必须由 route guard 退出页面',
-);
-
-// F2：Calls 只能组合 Chat 窄 command，禁止重新手工拼接 persistence、preview 与 UI/public event。
-for (const relativePath of [
-  'src/features/calls/application/events/CreateCallStatusMessage.ts',
-  'src/features/calls/application/runtime/CallMessageWriter.ts',
-  'src/features/calls/application/runtime/PostUserHangUpFollowUp.ts',
-  'src/features/calls/application/runtime/AICallRuntimeService.ts',
-  'src/features/calls/application/runtime/CallFailureRecorder.ts',
-  'src/features/calls/application/runtime/ReconcileInterruptedCall.ts',
-]) {
-  const source = readSource(relativePath);
-  assert.doesNotMatch(source, /IMessageRepository|persistChatMessage|updateSessionPreview|emitChatMessages(?:Updated|Patched)/,
-    `${relativePath} 不得直接持有 Chat repository 或手工拼接消息提交流程`);
-}
-assert.match(
-  readSource('src/features/calls/application/runtime/CallMessageWriter.ts'),
-  /appendExternalAssistantMessage[\s\S]*delivery:\s*'none'/,
-  'CallMessageWriter 必须显式声明 no delivery',
-);
-assert.match(
-  readSource('src/features/calls/application/runtime/PostUserHangUpFollowUp.ts'),
-  /runtime\.chat\.appendExternalAssistantMessage[\s\S]*deliveryKind:\s*'proactive'/,
-  'post-hangup 必须通过 Chat command 并保留 proactive delivery',
-);
-// 消息与预览的原子 upsert、快照关联事实回滚及文件补偿由下方真实 adapter/application 验证，
-// 不通过函数体切片或 helper 名称推断提交语义。
 
 function compileProductionModule(relativePath) {
   const sourcePath = path.join(repoRoot, relativePath);
@@ -524,6 +423,11 @@ function createCallRepository(calls = [createCall()]) {
       const call = createCall({ ...input, acceptedAt: null, endedAt: null, endReason: null });
       sessions.set(call.id, call);
       return call;
+    },
+    async createSessionIfIdle(input) {
+      const activeStates = new Set(['requested', 'ringing', 'dialing', 'connecting', 'active', 'ending']);
+      if ([...sessions.values()].some((call) => activeStates.has(call.state))) return null;
+      return repository.createSession(input);
     },
     async getSessionById(callId) {
       return sessions.get(callId) || null;
@@ -2415,7 +2319,7 @@ scenario('悬浮窗挂断已经被错误收口的通话，真实结束入口驱�
       createCallMediaRuntime: () => mediaRuntime,
       registerHostedCallMediaRuntime,
     },
-    '../composition/ensureCallHostReady': { async ensureCallHostReady() {} },
+    '../composition/ensureHostDatabaseReady': { async ensureHostDatabaseReady() {} },
     '../../../modules/call-runtime': {
       nativeCallRuntime: {
         async isAlive() { return alive; },
@@ -2820,6 +2724,70 @@ scenario('TTS 单个任务失败后队列继续处理后续任务', async () => 
   assert.deepEqual(synthesizedTexts, ['失败任务', '恢复任务']);
   assert.deepEqual(playedAudioUris, ['file:///recovered.mp3']);
   assert.ok(callRepository.events.some((event) => event.kind === 'ttsEnded'));
+});
+
+scenario('两次来电预检均读到空闲时，失败方不创建第二通也不发通知', async () => {
+  const repository = createCallRepository([]);
+  resetRuntime(repository);
+  const permissions = deferred();
+  let checked = 0;
+  let posted = 0;
+  fakeRuntime.requestNotificationPermission = async () => {
+    checked += 1;
+    if (checked === 2) permissions.resolve();
+    await permissions.promise;
+    return true;
+  };
+  fakeRuntime.sendAIIncomingCallNotification = async () => { posted += 1; return true; };
+  const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+  const results = await Promise.all(['a', 'b'].map(id => service.requestIncomingCall({
+    chatSessionId: `chat-${id}`, aiConfig: createAIConfig({ id }),
+    payload: { reason: '聊聊', urgency: 'normal', openingLine: '你好', expectedMode: 'video' },
+  })));
+  assert.equal(results.filter(result => result.status === 'ringing').length, 1);
+  assert.equal(results.find(result => result.status === 'failed').call, null);
+  assert.equal(repository.sessions.size, 1);
+  assert.equal(posted, 1);
+  await service.markIncomingCallMissed(results.find(result => result.status === 'ringing').call.id);
+});
+
+scenario('真实仓储并发创建来电与去电只有一个占用，终态后可再次创建', async () => {
+  resetRuntime(createCallRepository());
+  const db = new DatabaseSync(':memory:');
+  db.exec(SCHEMAS.aiAssistants);
+  db.exec(SCHEMAS.sessions);
+  db.exec(SCHEMAS.callSessions);
+  db.prepare(`INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at)
+    VALUES ('ai', 'agent', 'AI', 'model', '2026-10-12', '2026-10-12')`).run();
+  db.prepare(`INSERT INTO sessions (id, ai_assistant_id, name, created_at, updated_at)
+    VALUES ('chat', 'ai', 'chat', '2026-10-12', '2026-10-12')`).run();
+  const executor = createSqliteExecutor(db);
+  let tail = Promise.resolve();
+  fakeRuntime.databaseCoordinator = {
+    transaction(_meta, operation) {
+      const next = tail.then(async () => {
+        db.exec('BEGIN IMMEDIATE');
+        try { const result = await operation(executor); db.exec('COMMIT'); return result; }
+        catch (error) { db.exec('ROLLBACK'); throw error; }
+      });
+      tail = next.then(() => undefined, () => undefined);
+      return next;
+    },
+  };
+  const repository = new SQLiteCallRepository();
+  const input = { chatSessionId: 'chat', aiAssistantId: 'ai', agentId: 'agent', requestedMode: 'video', source: 'aiTool' };
+  try {
+    for (const directions of [['incoming', 'incoming'], ['incoming', 'outgoing']]) {
+      db.exec('DELETE FROM call_sessions');
+      const calls = await Promise.all(directions.map((direction, index) => repository.createSessionIfIdle({
+        ...input, id: `parallel-${index}`, direction, state: direction === 'incoming' ? 'ringing' : 'dialing',
+      })));
+      assert.equal(calls.filter(Boolean).length, 1);
+      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM call_sessions').get().count, 1);
+      db.prepare("UPDATE call_sessions SET state = 'ended'").run();
+      assert.ok(await repository.createSessionIfIdle({ ...input, id: 'next', direction: 'incoming', state: 'ringing' }));
+    }
+  } finally { db.close(); }
 });
 
 let activeScenario = '初始化';

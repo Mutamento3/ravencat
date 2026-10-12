@@ -86,7 +86,7 @@ export function isStickerMessageMetadata(
 
 /** 将 Sticker 快照压成结构化文字，供模型理解消息语义；不读取媒体内容。 */
 export function buildStickerModelText(sticker: StickerMessageSnapshot): string {
-  const lines = ['发送了一个表情包。', `名称：${sticker.name}`];
+  const lines = ['发送了一个表情包。', `名称：${sticker.name}`, `素材 mediaAssetId：${sticker.mediaAssetId}；收藏 stickerId：${sticker.stickerId}`];
   if (sticker.description) {
     lines.push(`描述：${sticker.description}`);
   }

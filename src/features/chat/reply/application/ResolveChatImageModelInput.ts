@@ -1,6 +1,7 @@
 /** 按角色的图片识别选择决定直接传图或先由视觉模型转述。 */
 
 import { createAIClient } from '@platform/ai';
+import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { readAuxiliaryTaskPromptOverride } from '@shared/prompt';
 import {
   getChatReplyRuntimeDependencies,
@@ -26,8 +27,8 @@ export interface ResolveChatImageModelInputResult {
 
 interface ResolveChatImageModelInputBaseParams {
   assistantId: string;
-  mimeType?: string | null;
   contextText: string;
+  signal?: AbortSignal;
 }
 
 export type ResolveChatImageModelInputParams = ResolveChatImageModelInputBaseParams & (
@@ -35,8 +36,8 @@ export type ResolveChatImageModelInputParams = ResolveChatImageModelInputBasePar
   | { mediaAssetId: string; imageUri?: never }
 );
 
-function toDataUrl(base64: string, mimeType?: string | null): string {
-  return `data:${mimeType || 'image/jpeg'};base64,${base64}`;
+function toDataUrl(base64: string, mimeType: string): string {
+  return `data:${mimeType};base64,${base64}`;
 }
 
 function buildDirectVisionContext(contextText: string): string {
@@ -87,13 +88,14 @@ function buildVisionUnavailableContext(contextText: string): string {
 export async function resolveChatImageModelInput(
   params: ResolveChatImageModelInputParams,
 ): Promise<ResolveChatImageModelInputResult> {
+  throwIfAbortSignalAborted(params.signal);
   const mediaInput: ChatMediaReadInput = 'mediaAssetId' in params
     ? { kind: 'media_asset', assetId: params.mediaAssetId }
     : { kind: 'legacy_uri', uri: params.imageUri };
-  const base64 = await getChatReplyRuntimeDependencies().media.readAsBase64(mediaInput);
+  const image = await getChatReplyRuntimeDependencies().media.readVisionImage(mediaInput);
   const imagePart: ChatImageModelInputPart = {
     type: 'image_url',
-    image_url: { url: toDataUrl(base64, params.mimeType) },
+    image_url: { url: toDataUrl(image.base64, image.mimeType) },
   };
   const selection = await getChatReplyRuntimeDependencies().vision.resolveOCRModel(params.assistantId);
 
@@ -154,7 +156,7 @@ export async function resolveChatImageModelInput(
           ],
         },
       ],
-      { allowImageContentFallback: false },
+      { allowImageContentFallback: false, allowReasoningLengthRetry: false, signal: params.signal },
     );
     const ocrText = response.text.trim();
     if (!response.success || !ocrText) {
@@ -181,6 +183,7 @@ export async function resolveChatImageModelInput(
       parts: [{ type: 'text', text: buildOCRContext({ contextText: params.contextText, ocrText }) }],
     };
   } catch (error) {
+    throwIfAbortSignalAborted(params.signal);
     const message = error instanceof Error ? error.message : 'OCR 请求发生未知错误';
     console.warn('[ChatImageInput] OCR request failed', {
       assistantId: params.assistantId,

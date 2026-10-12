@@ -1,9 +1,9 @@
-/** 名称、人设按字段自动保存；头像、聊天及通话背景保留独立所有权。 */
+/** 对话资料与上下文按字段自动保存；头像、聊天及通话背景保留独立所有权。 */
 
 import { showAppDialog } from '@shared/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAutoSaveDraft, useAutoSaveNavigation } from '@shared/ui/useAutoSaveDraft';
-import type { DraftCommit } from '@shared/ui/AutoSaveDraftEditor';
+import { getChatSettingsDraft, parseChatSettingsDraft, type ContextLimitsDraft } from './chatSettingsDraft';
 
 import * as ImagePicker from 'expo-image-picker';
 
@@ -24,22 +24,6 @@ import {
   usePersistentAvatarDraft,
 } from '@platform/device/DeviceMediaService';
 
-type AssistantInfoDraft = { name: string; systemPrompt: string };
-function parseAssistantInfoDraft(draft: AssistantInfoDraft, changed: (keyof AssistantInfoDraft)[]): DraftCommit<AssistantInfoDraft, Partial<AssistantInfoDraft>> {
-  const result: DraftCommit<AssistantInfoDraft, Partial<AssistantInfoDraft>> = { patch: {}, accepted: [], errors: {} };
-  for (const field of changed) {
-    if (field === 'name') {
-      const name = draft.name.trim();
-      if (!name) { result.errors.name = 'AI 名称不能为空；这次修改尚未保存。'; continue; }
-      result.patch.name = name;
-    } else {
-      result.patch.systemPrompt = draft.systemPrompt;
-    }
-    result.accepted.push(field);
-  }
-  return result;
-}
-
 interface UseChatSettingsParams {
   aiAssistant: AIProfile;
   onBack?: (updatedAI?: Partial<AIProfile>) => void;
@@ -57,10 +41,10 @@ export default function useChatSettings({
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const avatarDirty = useRef(false);
   const avatarOperation = useRef<Promise<void> | null>(null);
-  const initialInfo = useMemo(() => ({ name: aiAssistant.name, systemPrompt: aiAssistant.systemPrompt ?? '' }), [aiAssistant.name, aiAssistant.systemPrompt]);
+  const initialInfo = useMemo(() => getChatSettingsDraft(aiAssistant), [aiAssistant]);
   const infoEditor = useAutoSaveDraft({
     initial: initialInfo,
-    parse: parseAssistantInfoDraft,
+    parse: parseChatSettingsDraft,
     save: async (patch) => {
       const updated = await updateAIAssistantSettings(aiAssistant.id, patch);
       if (!updated) throw new Error('AI 助手不存在');
@@ -138,7 +122,7 @@ export default function useChatSettings({
     const infoSaved = await flushInfo();
     return infoSaved && avatarOperation.current === null && !avatarDirty.current;
   }, [flushInfo]);
-  const { back } = useAutoSaveNavigation(flush, () => onBack?.(), () => setBlocked(true));
+  const { back, leave } = useAutoSaveNavigation(flush, () => onBack?.(), () => setBlocked(true));
   const restoreInfo = useCallback(async () => {
     await restoreInfoDraft();
     setBlocked(false);
@@ -220,8 +204,18 @@ export default function useChatSettings({
     systemPrompt: infoEditor.draft.systemPrompt,
     setSystemPrompt: (systemPrompt: string) => infoEditor.change({ systemPrompt }),
     nameError: infoEditor.errors.name,
+    settingsErrors: infoEditor.errors,
+    contextLimits: {
+      privatePrimary: infoEditor.draft.privatePrimary, privateSecondary: infoEditor.draft.privateSecondary,
+      groupPrimary: infoEditor.draft.groupPrimary, groupSecondary: infoEditor.draft.groupSecondary,
+    },
+    handleContextLimitChange: (field: keyof ContextLimitsDraft, value: string) => infoEditor.change({ [field]: value }),
+    allowMultipleBubbles: infoEditor.draft.allowMultipleBubbles,
+    setAllowMultipleBubbles: (allowMultipleBubbles: boolean) => infoEditor.change({ allowMultipleBubbles }, true),
+    showTokenUsage: infoEditor.draft.showTokenUsage,
+    setShowTokenUsage: (showTokenUsage: boolean) => infoEditor.change({ showTokenUsage }, true),
     infoSaveError: infoEditor.saveError,
-    avatarError, blocked, flush, back, restoreInfo, restoreAvatar, retryAvatar,
+    avatarError, blocked, flush, back, leave, restoreInfo, restoreAvatar, retryAvatar,
     avatarUrl,
     callBackgroundUri,
     isLoading: isLoading || isPickingAvatar || isCommittingAvatar,

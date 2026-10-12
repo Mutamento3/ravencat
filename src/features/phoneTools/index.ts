@@ -1,5 +1,6 @@
 /** Phone Tools 产品目录与受保护应用策略公共出口。 */
 export { GetAppUsageTool } from './aiTools/GetAppUsageTool';
+export { GetCurrentLocationTool } from './aiTools/GetCurrentLocationTool';
 
 export {
   PHONE_TOOL_CATALOG,

@@ -9,11 +9,14 @@ import {
   groupChatRepository,
   messageRepository,
   sessionRepository,
+  configureChatFavoriteRuntime,
+  SQLiteChatFavoriteRepository,
 } from '@features/chat/composition';
 import { clearDB, getDBInfo } from '@platform/persistence';
 import {
   PERSISTENT_MEDIA_CATEGORY,
   persistentMediaStore,
+  readVisionImageAsBase64,
 } from '@platform/device';
 import {
   aiAssistantRepository,
@@ -58,6 +61,7 @@ export function configureChatRuntime(): void {
     return;
   }
   configured = true;
+  configureChatFavoriteRuntime(new SQLiteChatFavoriteRepository());
 
   configureChatImageModels({
     repository: chatImageSettingsRepository,
@@ -67,6 +71,7 @@ export function configureChatRuntime(): void {
   });
   subscribeAuxiliaryModelsChanged(notifyChatImageModelsChanged);
   configureChatRuntimeDependencies({
+    mutations: { isRunCurrent: (transaction, runId) => conversationTurnRepository.isRunCurrentInTransaction(transaction, runId) },
     repositories: {
       messages: messageRepository,
       sessions: sessionRepository,
@@ -121,11 +126,11 @@ export function configureChatRuntime(): void {
       getInfo: getDBInfo,
     },
     media: {
-      readAsBase64: async (input) => {
+      readVisionImage: async (input) => {
         const localUri = input.kind === 'media_asset'
           ? (await resolveMediaAsset(input.assetId)).localUri
           : input.uri;
-        return persistentMediaStore.readAsBase64(localUri);
+        return readVisionImageAsBase64(localUri);
       },
     },
     vision: {

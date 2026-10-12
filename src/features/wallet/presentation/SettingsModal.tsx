@@ -6,6 +6,7 @@ import {
   View,
   Text,
   TouchableOpacity,
+  ScrollView,
   StyleSheet,
 } from 'react-native';
 import { useThemedStyles } from '@shared/theme';
@@ -26,6 +27,7 @@ const createStyles = (theme: PresentationTheme) =>
     content: {
       backgroundColor: theme.colors.background.app,
       padding: theme.spacing.xl,
+      flexShrink: 1,
     },
     header: {
       flexDirection: 'row',
@@ -57,11 +59,11 @@ const createStyles = (theme: PresentationTheme) =>
       alignItems: 'center',
       padding: 14,
       borderRadius: theme.radius.md,
-      backgroundColor: theme.colors.background.screen,
+      backgroundColor: theme.colors.surface.muted,
       marginBottom: theme.spacing.sm,
     },
     aiOptionActive: {
-      backgroundColor: theme.colors.surface.muted,
+      backgroundColor: theme.colors.brand.primary,
     },
     aiAvatar: {
       marginRight: 10,
@@ -72,13 +74,16 @@ const createStyles = (theme: PresentationTheme) =>
       color: theme.colors.text.primary,
     },
     aiTextActive: {
-      color: theme.colors.text.link,
+      color: theme.colors.brand.onPrimary,
       fontWeight: '500',
     },
     check: {
       fontSize: 16,
-      color: theme.colors.text.link,
+      color: theme.colors.brand.onPrimary,
       fontWeight: '600',
+    },
+    aiList: {
+      flexShrink: 1,
     },
   });
 
@@ -121,32 +126,39 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <Text style={styles.desc}>选中的AI会在记账后主动发送消息</Text>
 
-          <TouchableOpacity
-            style={[styles.aiOption, !selectedId && styles.aiOptionActive]}
-            onPress={() => setSelectedId(null)}
-          >
-            <Text style={[styles.aiText, !selectedId && styles.aiTextActive]}>不启用</Text>
-            {!selectedId && <Text style={styles.check}>✓</Text>}
-          </TouchableOpacity>
-
-          {aiList.map((ai) => (
+          {/* 操作栏保持可见，长 AI 列表在弹窗的剩余高度内滚动。 */}
+          <ScrollView style={styles.aiList} keyboardShouldPersistTaps="handled">
             <TouchableOpacity
-              key={ai.id}
-              style={[styles.aiOption, selectedId === ai.id && styles.aiOptionActive]}
-              onPress={() => setSelectedId(ai.id)}
+              style={[styles.aiOption, !selectedId && styles.aiOptionActive]}
+              onPress={() => setSelectedId(null)}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: !selectedId }}
             >
-              <AIAvatar
-                name={ai.name}
-                avatarUrl={ai.avatar}
-                size="small"
-                style={styles.aiAvatar}
-              />
-              <Text style={[styles.aiText, selectedId === ai.id && styles.aiTextActive]}>
-                {ai.name}
-              </Text>
-              {selectedId === ai.id && <Text style={styles.check}>✓</Text>}
+              <Text style={[styles.aiText, !selectedId && styles.aiTextActive]}>不启用</Text>
+              {!selectedId && <Text style={styles.check}>✓</Text>}
             </TouchableOpacity>
-          ))}
+
+            {aiList.map((ai) => (
+              <TouchableOpacity
+                key={ai.id}
+                style={[styles.aiOption, selectedId === ai.id && styles.aiOptionActive]}
+                onPress={() => setSelectedId(ai.id)}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: selectedId === ai.id }}
+              >
+                <AIAvatar
+                  name={ai.name}
+                  avatarUrl={ai.avatar}
+                  size="small"
+                  style={styles.aiAvatar}
+                />
+                <Text style={[styles.aiText, selectedId === ai.id && styles.aiTextActive]}>
+                  {ai.name}
+                </Text>
+                {selectedId === ai.id && <Text style={styles.check}>✓</Text>}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
       </View>
     </ModalSheet>
   );

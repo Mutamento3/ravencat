@@ -9,7 +9,7 @@ export const MODEL_NAME_PLACEHOLDER = '${modelName}';
 /**
  * 顶层基础规则：产品定位、已有能力边界、行为边界。
  *
- * 全场景常驻；窄任务预设（summary / ocr / group_admin / 挂断与拒绝跟进）不含此定义，
+ * 聊天与两级摘要共用；窄任务预设（ocr / group_admin / 挂断与拒绝跟进）不含此定义，
  * 以 systemPromptPresets.ts 为准。只写长期产品事实，不写本轮工具清单。
  * 按 token 成本优化：一个约束一句，删掉背景说明、同义重复与举例，不要为"读起来完整"再展开。
  */

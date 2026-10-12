@@ -98,6 +98,21 @@ class DeviceObserverModule : Module() {
       DeviceBatteryQuery(context).read()
     }.runOnQueue(Queues.DEFAULT)
 
+    AsyncFunction("getLocationAccessState") {
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      DeviceLocationQuery(context).accessState()
+    }
+
+    AsyncFunction("getCurrentLocation") Coroutine { ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      DeviceLocationQuery(context).read()
+    }
+
+    AsyncFunction("openLocationSettings") {
+      appContext.throwingActivity.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+      null
+    }.runOnQueue(Queues.MAIN)
+
     AsyncFunction("isUsageAccessGranted") {
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       AppUsageQuery(context).isAccessGranted()

@@ -63,6 +63,7 @@ import {
   emitChatMessagesReloadRequested,
   messageRepository,
   migrateLegacyChatAttachments,
+  interruptAbandonedGroupSpeechPlans,
   setChatForegroundContext,
   applyAssistantMessageArrivalSnapshot,
 } from '@features/chat/composition';
@@ -81,7 +82,7 @@ import {
   resetConversationListReady,
   waitForConversationListReady,
 } from '@shared/runtime/ConversationListReadySignal';
-import { cancelActiveHostAgentRunsForReset } from './composition/agent';
+import { cancelActiveHostAgentRunsForReset, resumeHostAgentRunsAfterReset } from './composition/agent';
 import HostErrorBoundary from './shell/HostErrorBoundary';
 import { ApplicationUpdateProvider } from './shell/ApplicationUpdateProvider';
 import {
@@ -104,7 +105,7 @@ import {
   createMessageNavigationTarget,
   createTogetherListeningNavigationTarget,
   getExternalNavigationKey,
-  getMessageNavigationHref,
+  openMessageConversation,
   isOneShotExternalNavigationTarget,
   type ExternalNavigationTarget,
 } from '@host/navigation/externalNavigation';
@@ -628,6 +629,10 @@ function HostLifecycle({
     const initializeDatabase = async () => {
       try {
         await initDatabase();
+        await interruptAbandonedGroupSpeechPlans();
+        if (!isMounted || resettingApplicationDataRef.current) return;
+        resumeHostAgentRunsAfterReset();
+        getConversationTurnCoordinator().resumeTurnsAfterReset();
         try {
           await reconcileTogetherListeningSystemPresentation();
         } catch (presentationRecoveryError) {
@@ -856,7 +861,7 @@ function HostLifecycle({
         return;
       }
 
-      router.navigate(getMessageNavigationHref(target) as Href);
+      openMessageConversation(router, target);
       setSessionRefreshTrigger((prev) => prev + 1);
       return;
     }
@@ -870,8 +875,7 @@ function HostLifecycle({
       emitChatMessagesUpdated(sessionId);
     }
 
-    const route = getMessageNavigationHref(target);
-    router.navigate(route as Href);
+    openMessageConversation(router, target);
   }, [navigateToExternalTargetError, router]);
 
   const handleIncomingCallNotification = useCallback(async (payload: ExternalNavigationTarget) => {
@@ -1323,7 +1327,12 @@ function HostLifecycle({
 
       // 先取消 StartupRecovery，再 drain，否则旧流程可能卡在等待会话列表。
       await cancelStartupRecoveryForReset();
-      await cancelActiveHostAgentRunsForReset();
+      const executionShutdown = await Promise.allSettled([
+        getConversationTurnCoordinator().cancelActiveTurnsForReset(),
+        cancelActiveHostAgentRunsForReset(),
+      ]);
+      const executionShutdownErrors = executionShutdown.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+      if (executionShutdownErrors.length > 0) throw new AggregateError(executionShutdownErrors, '恢复出厂执行关闭失败');
       await stopStickerAnnotationQueueForReset();
       await stopStickerEmbeddingQueueForReset();
       await stopMemoryEmbeddingQueueForReset();
@@ -1434,7 +1443,7 @@ function HostLifecycle({
                     sessionId: chatSessionId,
                   });
                   if (target && target.type !== 'ai-incoming-call' && target.type !== 'together-listening') {
-                    router.navigate(getMessageNavigationHref(target) as Href);
+                    openMessageConversation(router, target);
                   }
                 }}
               />

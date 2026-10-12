@@ -3,6 +3,8 @@
 
 import { readPromptDefaults, listAssistantDirectToolNames } from '@features/prompting';
 import { WebSearchTool, WebFetchTool, DownloadFileTool } from '@features/webTools';
+import { DownloadImageTool, ViewImageTool } from '@features/media';
+import { assertImageToolRunCurrent } from './assertImageToolRunCurrent';
 import type {
   AIToolsConfig,
   AgentTool,
@@ -13,6 +15,7 @@ import type {
 } from '@shared/aiTools';
 import {
   assistantToolPermissionRepository,
+  createChangeOwnAvatarTool,
   BlockAIAssistantTool,
   UnblockAIAssistantTool,
 } from '@features/assistants';
@@ -60,16 +63,19 @@ import {
 import {
   GetForegroundAppTool,
   GetAppUsageTool,
+  GetCurrentLocationTool,
   getPhoneToolPackageById,
 } from '@features/phoneTools';
 import { productionNetEaseChildTools } from '@features/phoneTools/neteaseComposition';
 import { ReadScreenAccessibilityTool, ReadScreenOcrTool } from '@features/screenCapture';
-import { SendMessageTool, SendVoiceMessageTool, createConfiguredVoiceMessageTool } from '@features/chat';
+import { SendMessageTool, SendVoiceMessageTool, SearchChatSummariesTool, createConfiguredVoiceMessageTool } from '@features/chat';
 import {
   ListStickerGroupsTool,
   ListStickersInGroupTool,
   SearchStickersTool,
   SelectStickerTool,
+  AddOwnStickerTool,
+  MaintainOwnStickerTool,
 } from '@features/stickers';
 import {
   InviteListeningTogetherTool,
@@ -251,6 +257,11 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   agentNativeBuiltInTool(WebSearchTool, 'webTools', SAFE_READ),
   agentNativeBuiltInTool(WebFetchTool, 'webTools', SAFE_READ),
   agentNativeBuiltInTool(DownloadFileTool, 'webTools', REVERSIBLE_ACTION),
+  agentNativeBuiltInTool(DownloadImageTool, 'media', REVERSIBLE_ACTION, { directChatOnly: true }),
+  agentNativeBuiltInTool(ViewImageTool, 'media', PRIVATE_READ, { directChatOnly: true }),
+  agentNativeBuiltInTool(createChangeOwnAvatarTool(assertImageToolRunCurrent), 'media', REVERSIBLE_ACTION, { directChatOnly: true }),
+  agentNativeBuiltInTool(AddOwnStickerTool, 'stickers', REVERSIBLE_ACTION, { directChatOnly: true }),
+  agentNativeBuiltInTool(MaintainOwnStickerTool, 'stickers', REVERSIBLE_ACTION, { directChatOnly: true }),
   builtInTool(GetProtocolsTool, 'protocol', SAFE_READ),
   builtInTool(SearchProtocolsTool, 'protocol', SAFE_READ),
   builtInTool(AddProtocolTool, 'protocol', REVERSIBLE_WRITE),
@@ -275,6 +286,7 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   builtInTool(LookAtUserTool, 'calls', SENSITIVE_ACTION, { callOnly: true }),
   agentNativeBuiltInTool(RememberMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   agentNativeBuiltInTool(RecallMemoryTool, 'memory', PRIVATE_READ, { memoryParticipation: 'read_write' }),
+  agentNativeBuiltInTool(SearchChatSummariesTool, 'chat', PRIVATE_READ, { directChatOnly: true }),
   agentNativeBuiltInTool(UpdateMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   agentNativeBuiltInTool(ForgetMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   builtInTool(BlockAIAssistantTool, 'assistants', SENSITIVE_ACTION, { hostOnly: true }),
@@ -285,6 +297,7 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   builtInTool(OpenAppTool, 'deviceControl', REVERSIBLE_ACTION, { hostOnly: true }),
   builtInTool(GetForegroundAppTool, 'phoneTools', PRIVATE_READ, { hostOnly: true }),
   builtInTool(GetAppUsageTool, 'phoneTools', PRIVATE_READ, { hostOnly: true }),
+  builtInTool(GetCurrentLocationTool, 'phoneTools', PRIVATE_READ, { hostOnly: true }),
   ...productionNetEaseChildTools.map((tool) => builtInTool(
     tool,
     'phoneTools',
@@ -450,7 +463,7 @@ export function getToolPackageRuntimeBindings(
   return BUILT_IN_TOOL_REGISTRATIONS.map((registration) => {
     const tool = registry.get(registration.tool.name);
     if (!tool) throw new Error(`工具未注册：${registration.tool.name}`);
-    return { packageId: registration.phoneToolPackageId ?? registration.owner, tool };
+    return { packageId: registration.tool.name === SearchChatSummariesTool.name ? 'memory' : registration.phoneToolPackageId ?? registration.owner, tool };
   });
 }
 
@@ -536,10 +549,7 @@ export interface ToolPermissionDescriptor {
   memoryParticipation: BuiltInToolMemoryParticipation;
   owner: string;
   hostOnly: boolean;
-  managedInPhoneTools: boolean;
 }
-
-const PHONE_TOOL_OWNERS = new Set(['deviceControl', 'phoneTools', 'screenCapture']);
 
 /** 全部内置工具共享默认与 AI 权限；主理身份和场景限制仍由 policy 裁决。 */
 export function getToolPermissionDescriptors(): ToolPermissionDescriptor[] {
@@ -553,7 +563,6 @@ export function getToolPermissionDescriptors(): ToolPermissionDescriptor[] {
       memoryParticipation: registration.memoryParticipation,
       owner: registration.owner,
       hostOnly: registration.hostOnly,
-      managedInPhoneTools: PHONE_TOOL_OWNERS.has(registration.owner),
     }));
 }
 
@@ -565,9 +574,7 @@ export async function resolveAllowedToolNames(assistantId: string): Promise<stri
   );
   return BUILT_IN_TOOL_REGISTRATIONS
     .filter((registration) => (
-      // 手机开关由手机工具模块裁决，不再叠加提示词中心的第二份权限。
-      PHONE_TOOL_OWNERS.has(registration.owner)
-        || (overrides.get(registration.tool.name) ?? defaults.toolPermissions[registration.tool.name] ?? registration.defaultEnabled)
+      overrides.get(registration.tool.name) ?? defaults.toolPermissions[registration.tool.name] ?? registration.defaultEnabled
     ))
     .map((registration) => registration.tool.name);
 }

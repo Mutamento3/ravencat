@@ -40,6 +40,7 @@ const executor = {
     catch (error) { database.exec('ROLLBACK'); throw error; }
   }),
 };
+const coordinator = { openTaskExecutor: () => executor, transaction: (_meta, operation) => executor.withExclusiveTransactionAsync(operation) };
 const cache = new Map();
 function load(relative) {
   const filename = path.resolve(root, relative);
@@ -48,11 +49,11 @@ function load(relative) {
   const source = fs.readFileSync(filename, 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const requireLocal = (specifier) => {
-    if (specifier === '@platform/persistence') return { databaseCoordinator: { openTaskExecutor: () => executor } };
+    if (specifier === '@platform/persistence') return { databaseCoordinator: coordinator };
     if (specifier === 'expo-file-system/legacy') return {};
     if (filename === path.join(root, 'src/platform/persistence/helpers.ts') && specifier === './runtime'
       || filename === path.join(root, 'src/platform/persistence/sqlite/initialization.ts') && specifier === '../runtime') {
-      return { databaseCoordinator: { openTaskExecutor: () => executor } };
+      return { databaseCoordinator: coordinator };
     }
     if (filename === path.join(root, 'src/platform/persistence/helpers.ts') && specifier === './sqlite/connection'
       || filename === path.join(root, 'src/platform/persistence/sqlite/initialization.ts') && specifier === './connection') {
@@ -74,9 +75,8 @@ function load(relative) {
   new Function('require', 'module', 'exports', compiled)(requireLocal, module, module.exports);
   return module.exports;
 }
-const { SCHEMAS, INDEXES } = load('src/platform/persistence/sqlite/schema.ts');
 const { runMigrations } = load('src/platform/persistence/sqlite/migrations.ts');
-const { migrateMemoryV3, migrateMemorySummary, MEMORY_PASSIVE_ASSOCIATION_SCHEMA } = load('src/platform/persistence/sqlite/memoryV3Schema.ts');
+const { migrateMemoryV3, migrateMemorySummary, migrateMemoryTriggerGroups } = load('src/platform/persistence/sqlite/memoryV3Schema.ts');
 const domain = load('src/features/memory/domain/Memory.ts');
 const { memoryEntryRepository: repository } = load('src/features/memory/infrastructure/SQLiteMemoryEntryRepository.ts');
 const runtime = load('src/features/memory/application/MemoryRuntimeDependencies.ts');
@@ -92,6 +92,11 @@ const summary = new SQLiteChatSummaryRepository((tx, conversationId, boundary) =
 }));
 const timelineDomain = load('src/features/chat/summary/domain/ChatSummaryTimeline.ts');
 const appendSummary = (claim, id, content, at) => summary.appendClaim(claim, [{ id, content, messages: claim.messages }], at);
+const withoutTasks = ({tasks,...content}) => content;
+const retryPending = async (conversationId, level) => {
+  const task=(await summary.readContext(conversationId,[])).tasks.find(value=>value.level===level && !['completed','cancelled'].includes(value.status));
+  await summary.retryTask(conversationId,task.id,new Date().toISOString());
+};
 const buildSummaryInput = (claim) => summaryApplication.buildChatSummaryModelInput({
   ...claim, part: { index: 1, total: 1 }, earlierAdditionsReadOnly: [],
 });
@@ -112,9 +117,7 @@ async function bootstrap() {
   const log = console.log; const warn = console.warn;
   try {
     console.log = () => {}; console.warn = () => {};
-    for (const sql of Object.values(SCHEMAS)) await raw.execAsync(sql);
     await runMigrations(raw);
-    for (const sql of Object.values(INDEXES)) await raw.execAsync(sql);
   } finally { console.log = log; console.warn = warn; }
   assert.deepEqual(await raw.getAllAsync('PRAGMA foreign_key_check'), []);
 }
@@ -159,21 +162,37 @@ try {
     assert.deepEqual(legacyMemory.prepare('SELECT * FROM memory_items').get(), migrated);
     assert.equal(legacyMemory.prepare('PRAGMA user_version').get().user_version, 107);
   } finally { legacyMemory.close(); }
-  // 既有触发词和关闭事实在新增关系表后保持原样，重复启动不清空手动绑定。
+  // 已发布的词、手动关系和关闭事实原子迁成组；失败保留旧结构，不清理用户数据。
   const legacyTriggers = new DatabaseSync(':memory:');
   try {
     legacyTriggers.exec(`PRAGMA foreign_keys = ON;
+      CREATE TABLE memory_pools (id TEXT PRIMARY KEY);
       CREATE TABLE memory_items (id TEXT PRIMARY KEY);
-      CREATE TABLE memory_passive_triggers (id TEXT PRIMARY KEY);
-      CREATE TABLE memory_passive_disabled (trigger_id TEXT, memory_id TEXT);
-      INSERT INTO memory_items VALUES ('old'); INSERT INTO memory_passive_triggers VALUES ('trigger');
-      INSERT INTO memory_passive_disabled VALUES ('trigger', 'old');`);
-    legacyTriggers.exec(MEMORY_PASSIVE_ASSOCIATION_SCHEMA);
+      CREATE TABLE memory_passive_triggers (id TEXT PRIMARY KEY, pool_id TEXT REFERENCES memory_pools(id), keyword TEXT, normalized_keyword TEXT, UNIQUE(pool_id, normalized_keyword));
+      CREATE TABLE memory_passive_disabled (trigger_id TEXT REFERENCES memory_passive_triggers(id) ON DELETE CASCADE, memory_id TEXT REFERENCES memory_items(id) ON DELETE CASCADE, PRIMARY KEY(trigger_id,memory_id));
+      CREATE TABLE memory_passive_associations (trigger_id TEXT REFERENCES memory_passive_triggers(id) ON DELETE CASCADE, memory_id TEXT REFERENCES memory_items(id) ON DELETE CASCADE, PRIMARY KEY(trigger_id,memory_id));
+      INSERT INTO memory_pools VALUES ('pool'); INSERT INTO memory_items VALUES ('old');
+      INSERT INTO memory_passive_triggers VALUES ('trigger', 'pool', 'ＡＢＣ', 'abc');
+      INSERT INTO memory_passive_disabled VALUES ('trigger', 'old');
+      INSERT INTO memory_passive_associations VALUES ('trigger', 'old');`);
+    const legacyExecutor = { execAsync: async sql => legacyTriggers.exec(sql) };
+    legacyTriggers.exec('BEGIN');
+    await migrateMemoryTriggerGroups(legacyExecutor);
+    legacyTriggers.exec('ROLLBACK');
+    assert.equal(legacyTriggers.prepare('SELECT keyword FROM memory_passive_triggers').get().keyword, 'ＡＢＣ');
     assert.equal(legacyTriggers.prepare('SELECT COUNT(*) AS count FROM memory_passive_disabled').get().count, 1);
-    legacyTriggers.exec("INSERT INTO memory_passive_associations VALUES ('trigger', 'old')");
-    legacyTriggers.exec(MEMORY_PASSIVE_ASSOCIATION_SCHEMA);
+    legacyTriggers.exec('BEGIN');
+    await migrateMemoryTriggerGroups(legacyExecutor);
+    legacyTriggers.exec('COMMIT');
+    assert.deepEqual({ ...legacyTriggers.prepare('SELECT * FROM memory_trigger_groups').get() }, { id: 'trigger', pool_id: 'pool', auto_associate: 1 });
+    assert.equal(legacyTriggers.prepare('SELECT keyword FROM memory_trigger_keywords').get().keyword, 'ＡＢＣ');
     assert.equal(legacyTriggers.prepare('SELECT COUNT(*) AS count FROM memory_passive_associations').get().count, 1);
+    assert.equal(legacyTriggers.prepare('SELECT COUNT(*) AS count FROM memory_passive_disabled').get().count, 1);
     assert.deepEqual(legacyTriggers.prepare('PRAGMA foreign_key_check').all(), []);
+    legacyTriggers.exec("DELETE FROM memory_trigger_groups WHERE id = 'trigger'");
+    for (const table of ['memory_trigger_keywords', 'memory_passive_associations', 'memory_passive_disabled']) {
+      assert.equal(legacyTriggers.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0);
+    }
   } finally { legacyTriggers.close(); }
   await bootstrap();
   database.exec(`INSERT OR IGNORE INTO user_profile (id, name, updated_at) VALUES ('self', '枫渡', '${now}');
@@ -202,10 +221,10 @@ try {
   await create('cat', '猫', now);
   await create('vector-only', '明天准备复习', later);
   await create('foreign', '猫与考试', later, 'pool-b');
-  await commands.addMemoryTrigger('a', '猫');
-  await commands.addMemoryTrigger('a', '考试');
+  await commands.addMemoryTrigger('a', '猫', [], true);
+  await commands.addMemoryTrigger('a', '考试', [], true);
   const triggers = await repository.listTriggers('pool-a');
-  const catTrigger = triggers.find((item) => item.keyword === '猫');
+  const catTrigger = triggers.find((item) => item.keywords[0].keyword === '猫');
   assert.equal(catTrigger.associatedCount, 3);
   await commands.setMemoryAutoRecall('a', catTrigger.id, 'both', false);
   assert.equal((await repository.recallPassive('pool-a', '猫')).some((item) => item.id === 'both'), false);
@@ -213,48 +232,92 @@ try {
   assert.equal((await repository.recallPassive('pool-a', '无关键词')).length, 0);
   {
     const manual = await commands.rememberMemory('a', '难过时希望被抱抱');
-    await commands.addMemoryTrigger('a', '安慰，低落、ＡＢＣ;abc；\n', manual.id);
-    const linked = (await repository.listTriggers('pool-a')).filter((item) => ['安慰', '低落', 'abc'].includes(item.normalizedKeyword));
-    assert.equal(linked.length, 3, '批量触发词按规范化去重');
-    assert.ok(linked.every((item) => item.associatedCount === 1 && item.enabledCount === 1));
+    const comfortId = await commands.addMemoryTrigger('a', '安慰，低落、ＡＢＣ;abc；\n', [manual.id]);
+    const comfort = (await repository.listTriggers('pool-a')).find(item => item.id === comfortId);
+    assert.deepEqual(comfort.keywords.map(item => item.normalizedKeyword), ['安慰', '低落', 'abc'], '批量输入保存成一个组，组内按规范化去重');
+    assert.equal(comfort.associatedCount, 1);
+    assert.equal(comfort.enabledCount, 1);
     for (const input of ['安慰', '低落', 'abc']) {
       assert.deepEqual((await repository.recallPassive('pool-a', input)).map((item) => item.id), [manual.id]);
     }
     assert.equal((await repository.recallPassive('pool-a', '安慰低落abc')).length, 1, '多个词命中同一记忆只带入一次');
-    const comfort = linked.find((item) => item.keyword === '安慰');
     await commands.editMemory('a', manual.id, '换成不包含任何触发词的正文', '独立摘要');
     assert.equal((await repository.listTriggerMemories('pool-a', comfort.id))[0].memory.content, '换成不包含任何触发词的正文');
     await commands.setMemoryAutoRecall('a', comfort.id, manual.id, false);
     assert.equal((await repository.recallPassive('pool-a', '安慰')).length, 0);
-    assert.equal((await repository.recallPassive('pool-a', '低落')).length, 1);
-    await Promise.all([
-      commands.addMemoryTrigger('a', '安慰', manual.id),
-      commands.addMemoryTrigger('a', '安慰', manual.id),
-    ]);
-    assert.equal((await repository.recallPassive('pool-a', '安慰')).length, 1, '重复绑定复用触发词并恢复开关');
-    assert.equal((await repository.listTriggers('pool-a')).filter((item) => item.keyword === '安慰').length, 1, '并发绑定只创建一个触发词');
-    await commands.setMemoryAutoRecall('b', comfort.id, 'foreign', true);
-    await commands.setMemoryAutoRecall('a', comfort.id, 'foreign', true);
+    assert.equal((await repository.recallPassive('pool-a', '低落')).length, 0, '关闭事实归组所有');
+    await commands.setMemoryAutoRecall('a', comfort.id, manual.id, true);
+    await assert.rejects(commands.setMemoryAutoRecall('b', comfort.id, 'foreign', true), domain.MemoryTriggerNotFoundError);
+    await assert.rejects(commands.setMemoryAutoRecall('a', comfort.id, 'foreign', true), domain.MemoryNotFoundError);
     assert.equal((await repository.listTriggerMemories('pool-a', comfort.id)).length, 1, '手动关系不能跨空间');
-    await assert.rejects(commands.addMemoryTrigger('b', '越界批量', manual.id), domain.MemoryNotFoundError);
+    await assert.rejects(commands.addMemoryTrigger('b', '越界批量', [manual.id]), domain.MemoryNotFoundError);
     assert.equal((await repository.listTriggers('pool-b')).length, 0);
-    await assert.rejects(commands.addMemoryTrigger('a', '，；\n'), domain.MemoryInputError);
+    await assert.rejects(commands.addMemoryTrigger('a', '，；\n', [manual.id]), domain.MemoryInputError);
+    await assert.rejects(commands.addMemoryTrigger('a', '空关联', []), domain.MemoryInputError);
     database.exec(`CREATE TRIGGER reject_manual_link BEFORE INSERT ON memory_passive_associations
-      WHEN (SELECT keyword FROM memory_passive_triggers WHERE id = NEW.trigger_id) = '事务词二'
+      WHEN NEW.memory_id = 'vector-only'
       BEGIN SELECT RAISE(ABORT, '绑定失败'); END;`);
-    await assert.rejects(commands.addMemoryTrigger('a', '事务词一，事务词二', manual.id), /绑定失败/);
+    await assert.rejects(commands.addMemoryTrigger('a', '事务词一，事务词二', [manual.id, 'vector-only']), /绑定失败/);
     database.exec('DROP TRIGGER reject_manual_link');
-    assert.equal((await repository.listTriggers('pool-a')).some((item) => item.keyword.startsWith('事务词')), false, '失败不留下部分触发词');
+    assert.equal((await repository.listTriggers('pool-a')).some((item) => item.keywords[0].keyword.startsWith('事务词')), false, '失败不留下部分组、词或关系');
     await commands.deleteMemoryTrigger('a', comfort.id);
     assert.equal((await repository.recallPassive('pool-a', '安慰')).length, 0);
-    assert.equal((await repository.recallPassive('pool-a', '低落')).length, 1);
+    assert.equal((await repository.recallPassive('pool-a', '低落')).length, 0);
     await commands.forgetMemory('a', manual.id);
-    for (const trigger of linked) await commands.deleteMemoryTrigger('a', trigger.id);
     assert.equal((await raw.getFirstAsync('SELECT COUNT(*) AS count FROM memory_passive_associations')).count, 0);
     await commands.setMemoryAutoRecall('a', catTrigger.id, 'vector-only', true);
     assert.ok((await repository.recallPassive('pool-a', '猫')).some((item) => item.id === 'vector-only'), '关联选择器可绑定已有触发词与无字面命中的记忆');
     await commands.setMemoryAutoRecall('a', catTrigger.id, 'vector-only', false);
     assert.equal((await repository.listTriggerMemories('pool-a', catTrigger.id)).find((item) => item.memory.id === 'vector-only').autoRecall, false);
+  }
+  {
+    // 1:1、1:n、n:1、n:n 共用一个组契约；词跨组重复，记忆跨组汇总后去重。
+    const one = await commands.rememberMemory('a', '恋人关系');
+    const two = await commands.rememberMemory('a', '一起写代码');
+    const three = await commands.rememberMemory('a', '珍惜彼此');
+    const unrelated = await commands.rememberMemory('a', 'chatgpt 只在正文出现，不应被新组自动关联');
+    const firstId = await commands.addMemoryTrigger('a', 'chatgpt、openai的ai、codex', [one.id, two.id, three.id, one.id]);
+    const secondId = await commands.addMemoryTrigger('a', 'chatgpt、独有甲、独有乙', [two.id]);
+    const thirdId = await commands.addMemoryTrigger('a', '单词', [one.id, three.id]);
+    const first = (await repository.listTriggers('pool-a')).find(group => group.id === firstId);
+    assert.equal(first.associatedCount, 3);
+    assert.equal(first.enabledCount, 3);
+    assert.equal(first.autoAssociate, false);
+    database.exec(`CREATE TRIGGER reject_group_edit BEFORE INSERT ON memory_trigger_keywords
+      WHEN NEW.keyword = '拒绝词' BEGIN SELECT RAISE(ABORT, '编辑失败'); END;`);
+    await assert.rejects(commands.editMemoryTrigger('a', firstId, '部分成功、拒绝词', true), /编辑失败/);
+    database.exec('DROP TRIGGER reject_group_edit');
+    assert.deepEqual((await repository.listTriggers('pool-a')).find(group => group.id === firstId), first, '编辑失败保留原词集合、规则和关系');
+    const ids = input => repository.recallPassive('pool-a', input).then(entries => entries.map(entry => entry.id).sort());
+    assert.deepEqual(await ids('chatgpt'), [one.id, two.id, three.id].sort());
+    assert.deepEqual(await ids('codex openai的ai'), [one.id, two.id, three.id].sort());
+    assert.deepEqual(await ids('独有甲'), [two.id]);
+    assert.deepEqual(await ids('单词'), [one.id, three.id].sort());
+    await commands.setMemoryAutoRecall('a', firstId, two.id, false);
+    assert.deepEqual(await ids('codex'), [one.id, three.id].sort());
+    assert.deepEqual(await ids('chatgpt'), [one.id, two.id, three.id].sort(), '关闭一组的关联不影响同名词命中的其他组');
+    await commands.editMemoryTrigger('a', firstId, '新版词、ＣＯＤＥＸ、codex', false);
+    assert.deepEqual(await ids('新版词'), [one.id, three.id].sort(), '编辑词集合保留手动关系和开关');
+    assert.deepEqual(await ids('openai的ai'), []);
+    assert.equal((await repository.listTriggers('pool-a')).find(group => group.id === firstId).keywords.length, 2);
+    await assert.rejects(commands.editMemoryTrigger('b', firstId, '越界', true), domain.MemoryTriggerNotFoundError);
+    await commands.editMemoryTrigger('a', firstId, 'chatgpt', true);
+    assert.ok((await ids('chatgpt')).includes(unrelated.id), '自动文本关联是组自身的可选规则');
+    await commands.editMemoryTrigger('a', firstId, 'chatgpt', false);
+    assert.ok(!(await ids('chatgpt')).includes(unrelated.id));
+    // 并发添加的两个组各自拥有关系，不能因同名词合并。
+    const concurrent = await Promise.all([
+      commands.addMemoryTrigger('a', '并发同词', [one.id]), commands.addMemoryTrigger('a', '并发同词', [three.id]),
+    ]);
+    assert.equal(new Set(concurrent).size, 2);
+    assert.deepEqual(await ids('并发同词'), [one.id, three.id].sort());
+    await commands.forgetMemory('a', three.id);
+    assert.equal((await repository.listTriggers('pool-a')).find(group => group.id === firstId).associatedCount, 2);
+    for (const id of [firstId, secondId, thirdId, ...concurrent]) await commands.deleteMemoryTrigger('a', id);
+    assert.deepEqual(await ids('chatgpt'), []);
+    assert.equal((await repository.getEntry('pool-a', one.id)).content, '恋人关系', '删除组不删除记忆');
+    for (const entry of [one, two, unrelated]) await commands.forgetMemory('a', entry.id);
+    assert.deepEqual(await raw.getAllAsync('PRAGMA foreign_key_check'), []);
   }
   await commands.setMemoryRecallSettings('a', { passiveLimit: 0, activePageSize: 5 });
   assert.equal((await repository.recallPassive('pool-a', '考试')).length, 0);
@@ -407,8 +470,8 @@ try {
   assert.throws(() => summaryApplication.parseChatSummaryAddition('{"content":"新增","replace":[]}'));
   assert.equal(summaryApplication.parseChatSummaryAddition('{"content":"新增"}'), '新增');
   assert.equal(summaryApplication.parseChatSummaryAddition(JSON.stringify({ content: '  ' + '🐈'.repeat(500) + '  ' })), '🐈'.repeat(500));
-  assert.throws(() => summaryApplication.parseChatSummaryAddition(JSON.stringify({ content: '猫'.repeat(501) })), /500/);
-  assert.throws(() => summaryApplication.parseChatSummaryAddition(JSON.stringify({ content: '🐈'.repeat(501) })), /500/);
+  assert.equal(summaryApplication.parseChatSummaryAddition(JSON.stringify({ content: '猫'.repeat(501) })), '猫'.repeat(501));
+  assert.equal(summaryApplication.parseChatSummaryAddition(JSON.stringify({ content: '🐈'.repeat(501) })), '🐈'.repeat(501));
   const dates = buildSummaryInput({ ...summaryClaim, messages: [{ ...summaryClaim.messages[0], content: '10 月 10 日考试' }] });
   assert.ok(JSON.parse(dates).newMessagesOnly[0].localDateTime.startsWith('2026-10-04'));
 
@@ -416,19 +479,21 @@ try {
   database.prepare('UPDATE conversation_turn_state SET reply_cursor = 100').run();
   const beforeFailure = await summary.readContext('conversation', [], []);
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => '{"content":"新增","replace":[]}' });
-  await assert.rejects(summaryApplication.processChatSummary('conversation', signal));
+  assert.equal(await summaryApplication.processChatSummary('conversation', signal),false);
   assert.deepEqual((await summary.readContext('conversation', [], [])).raw, beforeFailure.raw);
   assert.equal(database.prepare('SELECT claim_id FROM chat_summary_state WHERE conversation_id = ?').get('conversation').claim_id, null);
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1,
-    generateAddition: async () => JSON.stringify({ content: '猫'.repeat(501) }) });
-  await assert.rejects(summaryApplication.processChatSummary('conversation', signal), /500/);
-  assert.deepEqual(await summary.readContext('conversation', [], []), beforeFailure, '超长输出不能追加摘要或推进原文范围');
+    generateAddition: async () => '{"content":"不完整的 JSON' });
+  await retryPending('conversation','primary');
+  assert.equal(await summaryApplication.processChatSummary('conversation', signal),false);
+  assert.deepEqual(withoutTasks(await summary.readContext('conversation', [], [])), withoutTasks(beforeFailure), '无法解析的输出不能追加摘要或推进原文范围');
   assert.equal(database.prepare('SELECT claim_id FROM chat_summary_state WHERE conversation_id = ?').get('conversation').claim_id, null);
   const cancelledSummary = new AbortController();
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => {
     cancelledSummary.abort(); return '{"content":"取消后不能提交"}';
   } });
-  await assert.rejects(summaryApplication.processChatSummary('conversation', cancelledSummary.signal));
+  await retryPending('conversation','primary');
+  assert.equal(await summaryApplication.processChatSummary('conversation', cancelledSummary.signal),false);
   assert.deepEqual((await summary.readContext('conversation', [], [])).raw, beforeFailure.raw);
   await summary.create('conversation', 'collision', '用户维护的内容', now, 'Asia/Shanghai');
   const atomicClaim = await summary.claim('conversation', 1, 'atomic-claim', now, "2099-01-01T00:00:00.000Z", 'Asia/Shanghai');
@@ -440,6 +505,15 @@ try {
   const afterSuccess = await summary.readContext('conversation', [], []);
   assert.equal(afterSuccess.raw.length, beforeFailure.raw.length - 1);
   assert.deepEqual(afterSuccess.segments.map((item) => item.content), ['用户维护的内容', '成功的新摘要']);
+  let longSummaryCalls = 0;
+  const longSummary = '猫'.repeat(1000);
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1,
+    generateAddition: async () => { longSummaryCalls++; return JSON.stringify({ content: longSummary }); } });
+  assert.equal(await summaryApplication.processChatSummary('conversation',signal),true);
+  const afterLongSummary = await summary.readContext('conversation',[]);
+  assert.equal(longSummaryCalls,1,'有效正文超过500字直接保存，不为了字数重复请求');
+  assert.equal(afterLongSummary.segments.at(-1).content,longSummary,'超长正文不截断、不丢弃');
+  assert.equal(afterLongSummary.raw.length,afterSuccess.raw.length-1,'保存完整正文时正常交接原文范围');
 
   // 短通话共用 N；达到门槛时必须等待挂断，统一范围包含通话前原文。
   database.prepare("INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at) VALUES ('calls-ai', 'actor-calls-ai', '通话 AI', 'chat', ?, ?)").run(now, now);
@@ -513,7 +587,7 @@ try {
     return '{"content":"第一分片。"}';
   } });
   await assert.rejects(summaryApplication.processChatSummary('call-summary', signal), /第二分片失败/);
-  assert.deepEqual(await summaryApplication.getChatSummaryContext('call-summary'), longContext, '分片失败保留整个尚未交接范围');
+  assert.deepEqual(withoutTasks(await summaryApplication.getChatSummaryContext('call-summary')), withoutTasks(longContext), '分片失败保留整个尚未交接范围');
   modelInputs = [];
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 20, generateAddition: async (input) => {
     modelInputs.push(input);
@@ -733,6 +807,329 @@ try {
   } finally { globalThis.fetch = originalFetch; }
 
 
+  // 两级摘要领取完整阈值批次，独立维护；新来源不使在途旧批次失效。
+  database.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updated_at) VALUES ('secondary-ai','secondary-actor','二级测试','chat','${now}','${now}');
+    INSERT INTO chat_conversations VALUES ('secondary-test', 'direct');
+    INSERT INTO sessions (id, ai_assistant_id, name, created_at, updated_at) VALUES ('secondary-test', 'secondary-ai', '二级测试', '${now}', '${now}');`);
+  const secondarySettings = { generationEnabled: true, injectEnabled: true, fixedMessageId: null, secondaryEnabled: true, secondaryTokenThreshold: 8000, requestTimeoutSeconds: 300, maxOutputTokens: null };
+  assert.deepEqual(await summary.readSettings('secondary-test'), secondarySettings);
+  for (let index = 1; index <= 5; index++) await summary.create('secondary-test', 'primary-' + index,
+    '猫'.repeat(index === 5 ? 1599 : 1600), now, 'Asia/Shanghai');
+  assert.equal(await summary.claimSecondary('secondary-test', 'below', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai'), null);
+  await summary.create('secondary-test', 'primary-6', '考试'.repeat(500) + '日', now, 'Asia/Shanghai');
+  const secondaryClaim = await summary.claimSecondary('secondary-test', 'six', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  assert.deepEqual(secondaryClaim.segments.map(item => item.id), Array.from({length:6}, (_,i) => 'primary-' + (i+1)));
+  assert.equal(await summary.claimSecondary('secondary-test', 'loser', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai'), null);
+  await summary.create('secondary-test', 'primary-7', '后续'.repeat(300), now, 'Asia/Shanghai');
+  assert.equal(await summary.appendSecondary(secondaryClaim, 'secondary-six', '关于猫与考试的重要事件', later), true);
+  assert.equal(await summary.appendSecondary(secondaryClaim, 'duplicate', '不能重复提交', later), false);
+  let secondarySnapshot = await summary.readContext('secondary-test', []);
+  assert.equal(secondarySnapshot.segments.length, 8, '原六批保留在界面');
+  assert.deepEqual(secondarySnapshot.contextSegments.map(item => item.id), ['secondary-six', 'primary-7'], '旧归纳放在后来新摘要之前');
+  assert.equal(secondarySnapshot.segments.find(item => item.id === 'primary-7').compactionId, null);
+  await summary.edit('secondary-test', 'primary-1', '用户改过的猫记录', later);
+  await summary.delete('secondary-test', 'primary-6');
+  assert.equal((await summary.readContext('secondary-test', [])).contextSegments[0].content, '关于猫与考试的重要事件', '原摘要编辑删除不联动二级正文');
+  assert.ok(!(await summary.search('secondary-ai', { keywords: ['考试'] })).entries.some(item => item.id === 'primary-6'));
+  assert.ok((await summary.search('secondary-ai', { keywords: ['猫'], from: now, to: later })).entries.some(item => item.id === 'primary-1'), '已归纳原摘要仍可查询');
+  assert.equal((await summary.search('b', { keywords: ['猫'] })).entries.length, 0, '工具身份隔离');
+  await summary.edit('secondary-test', 'secondary-six', '用户自己修正的二级记录', later);
+  await summary.delete('secondary-test', 'secondary-six');
+  assert.deepEqual((await summary.readContext('secondary-test', [])).contextSegments.map(item => item.id), ['primary-7'], '删二级不补回或重新注入旧六批');
+  await summary.updateSettings('secondary-test', { ...secondarySettings, secondaryEnabled: false });
+  assert.equal((await summary.readContext('secondary-test', [])).contextSegments.length, 6, '仅关闭二级恢复现存一级摘要');
+  await summary.updateSettings('secondary-test', { ...secondarySettings, secondaryTokenThreshold: 100 });
+  let changingClaim = await summary.claimSecondary('secondary-test', 'changing', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  await summary.edit('secondary-test', 'primary-7', '来源变更'.repeat(150), later);
+  assert.equal(await summary.appendSecondary(changingClaim, 'stale-edit', '过期结果', later), false);
+  await summary.releaseSecondaryClaim(changingClaim);
+  changingClaim = await summary.claimSecondary('secondary-test', 'closing', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  await summary.updateSettings('secondary-test', { ...secondarySettings, generationEnabled: false, injectEnabled: false });
+  assert.equal(await summary.appendSecondary(changingClaim, 'stale-off', '关闭后不能提交', later), false);
+  assert.equal((await summary.readContext('secondary-test', [])).contextSegments.length, 0);
+  assert.equal(await summary.claim('secondary-test', 1, 'off-primary', now, later, 'Asia/Shanghai'), null);
+  assert.equal(await summary.claimSecondary('secondary-test', 'off-secondary', now, later, 'Asia/Shanghai'), null);
+  database.exec(`INSERT INTO messages (id,session_id,text,is_me,sender_type,created_at,status) VALUES
+    (2001,'secondary-test','已经总结的旧原文',1,'user','${now}','sent'),
+    (2002,'secondary-test','最近的助手回复',0,'assistant','${now}','sent'),
+    (2003,'secondary-test','最新问题',1,'user','${later}','sent');
+    UPDATE chat_summary_state SET processed_cursor='["${now}",2002,0,2002]' WHERE conversation_id='secondary-test';`);
+  assert.deepEqual((await summary.readContext('secondary-test', [2003])).raw.map(item => item.messageId), [2001,2002], '关闭绕过旧摘要游标');
+  await summary.updateSettings('secondary-test', { ...secondarySettings, secondaryTokenThreshold: 100 });
+  assert.deepEqual((await summary.readContext('secondary-test', [2003])).raw, [], '再次开启沿用处理进度');
+  changingClaim = await summary.claimSecondary('secondary-test', 'rollback-secondary', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  database.exec(`CREATE TRIGGER reject_secondary_mark BEFORE UPDATE OF compaction_id ON chat_summary_segments
+    BEGIN SELECT RAISE(ABORT, '二级交接失败'); END;`);
+  await assert.rejects(summary.appendSecondary(changingClaim, 'rollback-content', '不能半交接', later), /二级交接失败/);
+  secondarySnapshot = await summary.readContext('secondary-test', []);
+  assert.ok(!secondarySnapshot.segments.some(item => item.id === 'rollback-content'));
+  assert.equal(secondarySnapshot.segments.find(item => item.id === 'primary-7').compactionId, null);
+  database.exec('DROP TRIGGER reject_secondary_mark');
+  await summary.releaseSecondaryClaim(changingClaim);
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 99,
+    generateAddition: async () => { throw new Error('不应该读取原文'); },
+    generateSecondary: async () => { throw new (load('src/features/chat/summary/domain/ChatSummaryRepository.ts').ChatSummaryGenerationError)({kind:'request',message:'二级模型失败',retryable:true}); } });
+  assert.equal(await summaryApplication.processChatSummary('secondary-test', signal),false);
+  assert.deepEqual(withoutTasks(await summary.readContext('secondary-test', [])), withoutTasks(secondarySnapshot), '失败保留原一级摘要上下文');
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 99,
+    generateAddition: async () => { throw new Error('不应该读取原文'); },
+    generateSecondary: async () => JSON.stringify({summaries: []}) });
+  await retryPending('secondary-test','secondary');
+  assert.equal(await summaryApplication.processChatSummary('secondary-test', signal),false);
+  assert.deepEqual(withoutTasks(await summary.readContext('secondary-test', [])), withoutTasks(secondarySnapshot), '非法模型结果不交接');
+  const secondaryAbort = new AbortController();
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 99,
+    generateAddition: async () => { throw new Error('不应该读取原文'); },
+    generateSecondary: async () => { secondaryAbort.abort(); return JSON.stringify({content: '取消不提交'}); } });
+  await retryPending('secondary-test','secondary');
+  assert.equal(await summaryApplication.processChatSummary('secondary-test', secondaryAbort.signal),false);
+  assert.deepEqual(withoutTasks(await summary.readContext('secondary-test', [])), withoutTasks(secondarySnapshot));
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 99,
+    generateAddition: async () => { throw new Error('不应该读取原文'); },
+    generateSecondary: async () => JSON.stringify({content: '持久归纳'}) });
+  assert.equal(await summaryApplication.processChatSummary('secondary-test', signal), true);
+  const retainedSecondary = await summary.readContext('secondary-test', []);
+  await summary.create('secondary-test', 'deleted-source', '待删除'.repeat(100), now, 'Asia/Shanghai');
+  const deletedSourceClaim = await summary.claimSecondary('secondary-test', 'deleted-source-claim', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  await summary.delete('secondary-test', 'deleted-source');
+  assert.equal(await summary.appendSecondary(deletedSourceClaim, 'stale-delete', '不能重新记住已删除来源', later), false);
+  await summary.releaseSecondaryClaim(deletedSourceClaim);
+  const searchTool = load('src/features/chat/summary/aiTools/SearchChatSummariesTool.ts').SearchChatSummariesTool;
+  const searchContext = { task: { assistantId: 'secondary-ai' }, abortSignal: signal };
+  const searched = await searchTool.execute({ keywords: ['持久归纳'], from: now }, searchContext);
+  assert.equal(searched.status, 'success');
+  assert.equal(searched.data.entries.length, 1);
+  assert.equal((await searchTool.execute({ from: '无效时间' }, searchContext)).status, 'error');
+  await Promise.all([summary.updateSettings('secondary-test', {secondaryTokenThreshold: 200}),
+    summary.updateSettings('secondary-test', {secondaryEnabled: false})]);
+  assert.deepEqual(await summary.readSettings('secondary-test'), {generationEnabled:true,injectEnabled:true,fixedMessageId:null,secondaryEnabled:false,secondaryTokenThreshold:200,requestTimeoutSeconds:300,maxOutputTokens:null}, '独立字段保存不覆盖其他设置');
+  await summary.updateSettings('secondary-test', {secondaryTokenThreshold:100,secondaryEnabled:true});
+
+  // backlog 沿用一条持久摘要任务链：二级在途时新原文只累计，不能并行启动一级。
+  database.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updated_at) VALUES ('queue-ai','queue-actor','队列测试','chat','${now}','${now}');
+    INSERT INTO chat_conversations VALUES ('queue-summary','direct');
+    INSERT INTO sessions (id,ai_assistant_id,name,created_at,updated_at) VALUES ('queue-summary','queue-ai','队列测试','${now}','${now}');
+    INSERT INTO conversation_turn_state (session_id,reply_cursor,revision,updated_at) VALUES ('queue-summary',3001,0,'${now}');
+    INSERT INTO messages (id,session_id,text,is_me,sender_type,created_at,status) VALUES
+      (3001,'queue-summary','第一个问题',1,'user','${now}','sent'),
+      (3002,'queue-summary','第一个回复',0,'assistant','${now}','sent');`);
+  await summary.create('queue-summary', 'queue-old-primary', '猫'.repeat(7998), now, 'Asia/Shanghai');
+  const modelOrder = [];
+  let completeSecondary;
+  let secondaryStarted;
+  const secondaryStartedPromise = new Promise(resolve => { secondaryStarted = resolve; });
+  const secondaryResponse = new Promise(resolve => { completeSecondary = resolve; });
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1,
+    generateAddition: async () => { modelOrder.push('primary'); return JSON.stringify({content:'考试'}); },
+    generateSecondary: async input => { modelOrder.push('secondary');
+      assert.equal(input.segments.length,2,'阈值批次包含刚完成的一级摘要');
+      secondaryStarted(); return secondaryResponse; } });
+  const ongoingSummary = summaryApplication.processChatSummary('queue-summary', signal);
+  await secondaryStartedPromise;
+  database.exec(`INSERT INTO messages (id,session_id,text,is_me,sender_type,created_at,status) VALUES
+      (3003,'queue-summary','二级期间新问题',1,'user','${later}','sent'),
+      (3004,'queue-summary','二级期间新回复',0,'assistant','${later}','sent');
+    UPDATE conversation_turn_state SET reply_cursor=3003 WHERE session_id='queue-summary';`);
+  assert.equal(await summaryApplication.processChatSummary('queue-summary',signal),false,'持久 claim 拒绝并发领取');
+  assert.deepEqual(modelOrder,['primary','secondary']);
+  assert.ok((await summary.readContext('queue-summary',[])).raw.some(item=>item.messageId===3003),'二级期间新原文保留');
+  completeSecondary(JSON.stringify({content:'重要考试事项'}));
+  assert.equal(await ongoingSummary,true);
+  await summaryApplication.processChatSummary('queue-summary',signal);
+  await summaryApplication.processChatSummary('queue-summary',signal);
+  assert.deepEqual(modelOrder,['primary','secondary','primary','primary'],'继续补一级，累计未再达阈值就不调用二级模型');
+
+  // 固定起点只影响当前 AI，覆盖旧游标但不改它；两级在途结果一起撤销。
+  database.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updated_at) VALUES ('fixed-ai','fixed-actor','固定测试','chat','${now}','${now}');
+    INSERT INTO chat_conversations VALUES ('fixed-context','direct');
+    INSERT INTO sessions (id,ai_assistant_id,name,created_at,updated_at) VALUES ('fixed-context','fixed-ai','固定测试','${now}','${now}');
+    INSERT INTO conversation_turn_state (session_id,reply_cursor,revision,updated_at) VALUES ('fixed-context',4008,0,'${now}');`);
+  const fixedInsert = database.prepare(`INSERT INTO messages (id,session_id,text,is_me,sender_type,created_at,status,logical_message_id)
+    VALUES (?,'fixed-context',?,?,?,'${now}','sent',?)`);
+  for (const [id,sender,logicalId] of [[4001,'user',null],[4002,'assistant',null],[4003,'user',null],
+    [4004,'assistant','fixed-multi'],[4005,'assistant','fixed-multi'],[4006,'user',null],[4007,'assistant',null],[4008,'user',null]]) {
+    fixedInsert.run(id,'固定消息 '+id,Number(sender==='user'),sender,logicalId);
+  }
+  await summary.create('fixed-context','fixed-old-summary','保留的旧摘要',now,'Asia/Shanghai');
+  database.prepare('UPDATE chat_summary_state SET processed_cursor=? WHERE conversation_id=?').run(JSON.stringify([now,4005,0,4005]),'fixed-context');
+  const otherSettings = await summary.readSettings('secondary-test');
+  const priorCursor = database.prepare("SELECT processed_cursor FROM chat_summary_state WHERE conversation_id='fixed-context'").get().processed_cursor;
+  const staleFixedPrimary = await summary.claim('fixed-context',1,'before-fixing',now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  await summary.setFixedStart('fixed-context',4004);
+  assert.equal(await appendSummary(staleFixedPrimary,'stale-fixed-primary','不应提交',later),false);
+  const fixedContext = await summary.readContext('fixed-context',[4008]);
+  assert.deepEqual(fixedContext.raw.map(item=>item.messageId),[4004,4005,4006,4007],'含选中气泡，恢复已总结原文，保护当前输入');
+  assert.deepEqual(fixedContext.fixedStart,{messageId:4004,content:'固定消息 4004',messageCount:4},'分段计一次，界面计数包含最新输入');
+  assert.equal(fixedContext.contextSegments[0].content,'保留的旧摘要');
+  assert.equal(fixedContext.settings.generationEnabled,false);
+  assert.deepEqual(await summary.readSettings('secondary-test'),otherSettings,'另一个 AI 的开关不变');
+  assert.equal(await summary.claim('fixed-context',1,'blocked-fixed',now,later,'Asia/Shanghai'),null);
+  assert.equal(await summary.claimSecondary('fixed-context','blocked-secondary',now,later,'Asia/Shanghai'),null);
+  await assert.rejects(summary.updateSettings('fixed-context',{generationEnabled:true}),/取消固定/);
+  await assert.rejects(summary.setFixedStart('fixed-context',2001),/当前会话/);
+  await summary.updateSettings('fixed-context',{injectEnabled:false});
+  assert.deepEqual((await summary.readContext('fixed-context',[])).contextSegments,[]);
+  await summary.setFixedStart('fixed-context',null);
+  assert.equal((await summary.readSettings('fixed-context')).injectEnabled,false);
+  assert.equal((await summary.readSettings('fixed-context')).generationEnabled,false,'取消固定不恢复生成');
+  assert.equal(database.prepare("SELECT processed_cursor FROM chat_summary_state WHERE conversation_id='fixed-context'").get().processed_cursor,priorCursor);
+  await summary.updateSettings('fixed-context',{generationEnabled:true});
+  const resumed = await summary.claim('fixed-context',1,'resumed-original-cursor',now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.deepEqual(resumed.messages.map(item=>item.messageId),[4006],'从原摘要进度继续，不从曾固定的 4004 重来');
+  assert.ok(resumed.previous.some(item=>item.id==='fixed-old-summary'),'不注入摘要也不影响生成的只读背景');
+  await appendSummary(resumed,'fixed-resumed-summary','续接原进度',later);
+  const nextResumed = await summary.claim('fixed-context',1,'resumed-next-batch',now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.deepEqual(nextResumed.messages.map(item=>item.messageId),[4007],'积压继续分批');
+  await appendSummary(nextResumed,'fixed-next-summary','下一批',later);
+  await summary.updateSettings('fixed-context',{secondaryTokenThreshold:1});
+  const staleFixedSecondary = await summary.claimSecondary('fixed-context','secondary-before-fixed',now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  await summary.setFixedStart('fixed-context',4005);
+  assert.equal(await summary.appendSecondary(staleFixedSecondary,'stale-fixed-secondary','不能交接',later),false);
+  database.prepare("UPDATE messages SET text='用户修改了起点' WHERE id=4005").run();
+  assert.equal((await summary.readContext('fixed-context',[])).fixedStart.content,'用户修改了起点','预览读取当前正文');
+  const cursorAfterResume = database.prepare("SELECT processed_cursor FROM chat_summary_state WHERE conversation_id='fixed-context'").get().processed_cursor;
+  database.prepare('DELETE FROM messages WHERE id=4005').run();
+  const deletedFixed = await summary.readSettings('fixed-context');
+  assert.equal(deletedFixed.fixedMessageId,null,'删除路径由外键统一取消固定');
+  assert.equal(deletedFixed.generationEnabled,false);
+  assert.equal(deletedFixed.injectEnabled,false);
+  assert.equal(database.prepare("SELECT processed_cursor FROM chat_summary_state WHERE conversation_id='fixed-context'").get().processed_cursor,cursorAfterResume);
+  await summary.setFixedStart('fixed-context',4007);
+  const fixedSummaries = (await summary.readContext('fixed-context',[])).segments;
+  const { sessionRepository } = load('src/features/chat/conversation/infrastructure/SQLiteSessionRepository.ts');
+  await sessionRepository.clearConversationHistory('fixed-context');
+  const clearedFixed = await summary.readContext('fixed-context',[]);
+  assert.equal(clearedFixed.fixedStart,null,'清空隐藏历史也取消固定');
+  assert.deepEqual(clearedFixed.raw,[]);
+  assert.deepEqual(clearedFixed.segments,fixedSummaries,'清空保留旧摘要');
+  assert.equal(clearedFixed.settings.generationEnabled,false);
+  await assert.rejects(summary.setFixedStart('fixed-context',4007),/当前会话/);
+  await summary.setFixedStart('logical',308);
+  const retainedFixed = await summary.readContext('logical',[]);
+
+  // 两级共用首次请求加一次自动重试的预算；失败状态持久化，手动仍只执行一次。
+  database.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updated_at) VALUES ('retry-ai','retry-actor','重试测试','chat','${now}','${now}');
+    INSERT INTO chat_conversations VALUES ('retry-summary','direct');
+    INSERT INTO sessions (id,ai_assistant_id,name,created_at,updated_at) VALUES ('retry-summary','retry-ai','重试测试','${now}','${now}');
+    INSERT INTO conversation_turn_state (session_id,reply_cursor,revision,updated_at) VALUES ('retry-summary',5001,0,'${now}');
+    INSERT INTO messages (id,session_id,text,is_me,sender_type,created_at,status) VALUES (5001,'retry-summary','尚未总结的原文',1,'user','${now}','sent');`);
+  await summary.updateSettings('retry-summary',{secondaryTokenThreshold:1});
+  await summary.create('retry-summary','retry-source','待归纳',now,'Asia/Shanghai');
+  const retryFailure={kind:'timeout',message:'请求超过 300 秒',retryable:true};
+  let retryAt=now, retryTaskId;
+  for(let attempt=1;attempt<=2;attempt++) {
+    const current=await summary.claimSecondary('retry-summary','auto-'+attempt,retryAt,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+    assert.ok(current);retryTaskId=current.taskId;
+    await summary.recordInvocation(current,{model:'chat',requestedMaxTokens:100,timeoutSeconds:300,durationMs:300000,
+      promptTokens:null,completionTokens:null,totalTokens:null,cachedTokens:null,finishReason:null,contentCharacters:0,reasoningCharacters:0,serverError:null},retryAt);
+    await summary.failTask(current,retryFailure,retryAt);await summary.releaseSecondaryClaim(current);
+    const task=(await summary.readContext('retry-summary',[])).tasks.find(value=>value.id===retryTaskId);
+    assert.equal(task.automaticFailures,attempt);
+    if(attempt<2) {
+      assert.equal(task.status,'waiting');
+      assert.equal(Date.parse(task.nextAttemptAt)-Date.parse(retryAt),120000);
+      assert.equal(await summary.claimSecondary('retry-summary','too-early',retryAt,'2099-01-01T00:00:00.000Z','Asia/Shanghai'),null);
+      retryAt=task.nextAttemptAt;
+    } else {assert.equal(task.status,'failed');assert.equal(task.nextAttemptAt,null);}
+  }
+  assert.equal(await summary.claimSecondary('retry-summary','third-auto',later,'2099-01-01T00:00:00.000Z','Asia/Shanghai'),null,'第一次加一次自动重试后不再请求');
+  await summary.create('retry-summary','new-does-not-reset','新摘要',later,'Asia/Shanghai');
+  assert.equal(await summary.claimSecondary('retry-summary','new-auto',later,'2099-01-01T00:00:00.000Z','Asia/Shanghai'),null,'新消息或新一级不会解除失败暂停');
+  const primaryWhileSecondaryFailed=await summary.claim('retry-summary',1,'other-level',later,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.ok(primaryWhileSecondaryFailed,'二级失败不阻止一级');
+  await summary.failTask(primaryWhileSecondaryFailed,retryFailure,later);await summary.releaseClaim(primaryWhileSecondaryFailed);
+  const primaryRetryAt=(await summary.readContext('retry-summary',[])).tasks.find(value=>value.id===primaryWhileSecondaryFailed.taskId).nextAttemptAt;
+  const primaryRetry=await summary.claim('retry-summary',1,'primary-auto-retry',primaryRetryAt,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.ok(primaryRetry);await summary.failTask(primaryRetry,retryFailure,primaryRetryAt);await summary.releaseClaim(primaryRetry);
+  assert.equal(await summary.claim('retry-summary',1,'primary-third-auto','2098-01-01T00:00:00.000Z','2099-01-01T00:00:00.000Z','Asia/Shanghai'),null,'一级也只允许一次自动重试');
+
+  // 更新前留下的第三次等待与过期在途请求收口，不刷新次数，不影响手动意图。
+  database.prepare("UPDATE chat_summary_tasks SET status='waiting',next_attempt_at='2099-01-01T00:00:00.000Z' WHERE id=?").run(retryTaskId);
+  database.prepare("UPDATE chat_summary_tasks SET status='running' WHERE id=?").run(primaryWhileSecondaryFailed.taskId);
+  database.prepare("UPDATE chat_summary_state SET claim_id='old-process',claim_expires_at='2099-01-01T00:00:00.000Z' WHERE conversation_id='retry-summary'").run();
+  await summaryApplication.prepareChatSummaryConversations();
+  assert.equal((await summary.readContext('retry-summary',[])).tasks.find(task=>task.id===primaryWhileSecondaryFailed.taskId).status,'running','准备阶段不撤销仍有效的在途 claim');
+  database.prepare("UPDATE chat_summary_state SET claim_expires_at=? WHERE conversation_id='retry-summary'").run(now);
+  await summaryApplication.prepareChatSummaryConversations();
+  let paused=(await summary.readContext('retry-summary',[])).tasks;
+  assert.ok(paused.every(task=>task.status==='failed' && task.nextAttemptAt===null && task.automaticFailures===2),'旧版本已经失败两次的任务直接暂停，不补第三次请求');
+  await summary.retryTask('retry-summary',retryTaskId,later);
+  await summaryApplication.prepareChatSummaryConversations();
+  assert.equal((await summary.readContext('retry-summary',[])).tasks.find(task=>task.id===retryTaskId).status,'waiting','队列准备保留用户的手动重试意图');
+  await assert.rejects(summary.retryTask('secondary-test',retryTaskId,later),/不能重试/,'跨 AI 不能重试任务');
+  await summary.updateSettings('retry-summary',{secondaryTokenThreshold:8000});
+  await summary.retryTask('retry-summary',retryTaskId,later);
+  const cancelledManual=await summary.claimSecondary('retry-summary','manual-cancelled',later,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.ok(cancelledManual,'提高触发阈值后仍允许明确手动重试');
+  await summary.releaseSecondaryClaim(cancelledManual);
+  const interruptedManual=await summary.claimSecondary('retry-summary','manual-interrupted',later,later,'Asia/Shanghai');
+  assert.ok(interruptedManual,'取消恢复保留手动重试意图');
+  await summaryApplication.prepareChatSummaryConversations();
+  assert.equal((await summary.readContext('retry-summary',[])).tasks.find(task=>task.id===retryTaskId).status,'running','手动请求中断后仍可恢复，不被自动预算收口');
+  const manual=await summary.claimSecondary('retry-summary','manual-once',later,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.ok(manual,'运行中断、租期到期后仍恢复手动意图');await summary.failTask(manual,retryFailure,later);await summary.releaseSecondaryClaim(manual);
+  assert.equal((await summary.readContext('retry-summary',[])).tasks.find(value=>value.id===retryTaskId).status,'failed','手动失败不自动开启新循环');
+  await summary.updateSettings('retry-summary',{maxOutputTokens:4000,secondaryTokenThreshold:1});
+  const recovered=await summary.claimSecondary('retry-summary','config-repaired',later,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.ok(recovered,'修改请求配置后重新检查');
+  await summary.recordInvocation(recovered,{model:'chat',requestedMaxTokens:4000,timeoutSeconds:300,durationMs:1000,
+    promptTokens:80,completionTokens:20,totalTokens:100,cachedTokens:40,finishReason:'stop',contentCharacters:8,reasoningCharacters:12,serverError:null},later);
+  assert.equal(await summary.appendSecondary(recovered,'retry-result','完成的二级摘要',later),true);
+  const retainedRetry=(await summary.readContext('retry-summary',[])).tasks.find(value=>value.id===retryTaskId);
+  assert.equal(retainedRetry.status,'completed');assert.deepEqual(retainedRetry.segmentIds,['retry-result']);
+  assert.equal(retainedRetry.calls.at(-1).totalTokens,100);
+  assert.equal(retainedRetry.error.message,retryFailure.message,'成功后保留最近错误供调试');
+  assert.equal(retainedRetry.error.occurredAt,later,'成功时间不覆盖失败发生时间');
+
+  // 集中编辑原子合并二级正文和来源关联；不改调用事实，不覆盖编辑期间新生成的摘要。
+  database.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updated_at) VALUES ('merge-ai','merge-actor','合并测试','chat','${now}','${now}');
+    INSERT INTO chat_conversations VALUES ('merge-summary','direct');
+    INSERT INTO sessions (id,ai_assistant_id,name,created_at,updated_at) VALUES ('merge-summary','merge-ai','合并测试','${now}','${now}');`);
+  await summary.updateSettings('merge-summary',{secondaryTokenThreshold:1});
+  const mergeDiagnostics={model:'chat',requestedMaxTokens:4000,timeoutSeconds:300,durationMs:1000,
+    promptTokens:80,completionTokens:20,totalTokens:100,cachedTokens:40,finishReason:'stop',contentCharacters:8,reasoningCharacters:0,serverError:null};
+  for(let index=1;index<=2;index++) {
+    await summary.create('merge-summary','merge-p'+index,'来源'+index,now,'Asia/Shanghai');
+    const claim=await summary.claimSecondary('merge-summary','merge-claim'+index,now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+    await summary.recordInvocation(claim,mergeDiagnostics,now);
+    assert.equal(await summary.appendSecondary(claim,'merge-s'+index,'独立归纳'+index,now),true);
+  }
+  database.exec(`UPDATE chat_summary_segments SET source_start_at='2026-10-01T00:00:00.000Z',source_end_at='2026-10-02T00:00:00.000Z' WHERE id='merge-s1';
+    UPDATE chat_summary_segments SET source_start_at='2026-10-03T00:00:00.000Z',source_end_at='2026-10-04T00:00:00.000Z' WHERE id='merge-s2';`);
+  await summary.create('merge-summary','merge-p3','之后的新来源',later,'Asia/Shanghai');
+  const newCompaction=await summary.claimSecondary('merge-summary','merge-inflight',later,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  const beforeMerge=await summary.readContext('merge-summary',[]);
+  const mergeOriginals=beforeMerge.segments.filter(segment=>segment.level==='secondary');
+  database.exec("CREATE TRIGGER reject_summary_merge BEFORE DELETE ON chat_summary_segments WHEN OLD.id='merge-s2' BEGIN SELECT RAISE(ABORT,'合并交接失败'); END;");
+  await assert.rejects(summary.replaceSecondary('merge-summary',mergeOriginals,'不能半合并',later),/合并交接失败/);
+  assert.deepEqual(await summary.readContext('merge-summary',[]),beforeMerge,'合并失败时正文、来源、进度与任务全部回滚');
+  database.exec('DROP TRIGGER reject_summary_merge');
+  await assert.rejects(summary.replaceSecondary('retry-summary',mergeOriginals,'不能越界',later),/二级摘要已更新/);
+  await summary.replaceSecondary('merge-summary',mergeOriginals,'统一编辑'.repeat(200),later);
+  let mergedSnapshot=await summary.readContext('merge-summary',[]);
+  let merged=mergedSnapshot.segments.filter(segment=>segment.level==='secondary');
+  assert.equal(merged.length,1);assert.equal(merged[0].content,'统一编辑'.repeat(200),'手动编辑二级没有一级自动摘要的字数上限');
+  assert.equal(merged[0].sourceStartAt,'2026-10-01T00:00:00.000Z');assert.equal(merged[0].sourceEndAt,'2026-10-04T00:00:00.000Z');
+  assert.deepEqual(mergedSnapshot.segments.filter(segment=>segment.level==='primary').map(segment=>[segment.id,segment.compactionId,segment.content]),
+    [['merge-p1','merge-s1','来源1'],['merge-p2','merge-s1','来源2'],['merge-p3',null,'之后的新来源']]);
+  assert.deepEqual(mergedSnapshot.tasks,beforeMerge.tasks,'合并不重写模型的调用用量与完成事实');
+  assert.ok(!(await summary.search('merge-ai',{keywords:['独立归纳2']})).entries.some(segment=>segment.id==='merge-s2'),'被合并替换的正文不从搜索中返回');
+  assert.equal(await summary.appendSecondary(newCompaction,'merge-s3','之后生成的新归纳',later),true,'集中编辑不撤销仍在处理其他来源的归纳');
+  const afterNewCompaction=await summary.readContext('merge-summary',[]);
+  await assert.rejects(summary.replaceSecondary('merge-summary',merged,'过期编辑',later),/二级摘要已更新/);
+  assert.deepEqual(await summary.readContext('merge-summary',[]),afterNewCompaction,'拒绝覆盖编辑期间新生成的二级摘要');
+  await summary.replaceSecondary('merge-summary',afterNewCompaction.segments.filter(segment=>segment.level==='secondary'),'重新统一编辑',later);
+  mergedSnapshot=await summary.readContext('merge-summary',[]);
+  assert.ok(mergedSnapshot.segments.filter(segment=>segment.level==='primary').every(segment=>segment.compactionId==='merge-s1'));
+  await summary.delete('merge-summary','merge-p1');
+  assert.ok(!(await summary.search('merge-ai',{keywords:['来源1']})).entries.some(segment=>segment.id==='merge-p1'),'手动删除合并来源后不可搜索');
+  const retainedMerged=await summary.readContext('merge-summary',[]);
+  await summary.replaceSecondary('merge-summary',retainedMerged.segments.filter(segment=>segment.level==='secondary'),null,later);
+  const deletedMerged=await summary.readContext('merge-summary',[]);
+  assert.deepEqual(deletedMerged.contextSegments,[],'删除二级正文不会恢复原摘要注入');
+  assert.equal(deletedMerged.segments.length,2,'已归纳来源仍留在二级页面可查看');
+  assert.deepEqual(deletedMerged.tasks,retainedMerged.tasks,'删除正文保留调用历史');
+
   // 定向清旧不触及模型资产、业务选择与正文；事务失败完整回滚。
   database.exec(`CREATE TABLE memory_topics (id TEXT PRIMARY KEY); INSERT INTO memory_topics VALUES ('legacy');
     INSERT INTO auxiliary_model_configs (id, capability_kind, name, base_url, model, created_at, updated_at) VALUES ('retired-asset', 'memory_admin', '保留模型', 'https://example.invalid', 'm', '${now}', '${now}');
@@ -747,7 +1144,7 @@ try {
   assert.ok(database.prepare("SELECT id FROM auxiliary_model_configs WHERE id = 'retired-asset'").get());
   assert.equal(await repository.getEmbeddingModelId(), 'retained-choice');
   await summary.create('conversation', 'durable-summary', '长期保留的摘要', now, 'Asia/Shanghai');
-  await commands.addMemoryTrigger('a', '备份绑定词', 'vector-only');
+  const backupGroupId = await commands.addMemoryTrigger('a', '备份绑定词、备份同义词', ['vector-only']);
   await commands.setMemoryRecallSettings('a', { passiveLimit: 5, activePageSize: 10 });
   await bootstrap();
   assert.ok(await repository.getEntry('pool-a', 'vector-only'));
@@ -763,9 +1160,17 @@ try {
   await bootstrap();
   assert.equal((await repository.getEntry('pool-a', 'vector-only')).embeddingStatus, 'ready');
   assert.equal((await repository.recallPassive('pool-a', '备份绑定词'))[0].id, 'vector-only', '升级与备份恢复保留手动关系');
+  assert.equal((await repository.recallPassive('pool-a', '备份同义词'))[0].id, 'vector-only');
+  const restoredGroup = (await repository.listTriggers('pool-a')).find(group => group.id === backupGroupId);
+  assert.deepEqual(restoredGroup.keywords.map(word => word.keyword), ['备份绑定词', '备份同义词']);
+  assert.equal(restoredGroup.autoAssociate, false, '备份恢复保留组规则');
   assert.equal((await repository.listTriggerMemories('pool-a', catTrigger.id)).find((item) => item.memory.id === 'vector-only').autoRecall, false, '备份恢复保留手动关系的关闭开关');
   assert.ok((await summary.readContext('conversation', [], [])).segments.some((item) => item.id === 'durable-summary'));
   assert.deepEqual((await summary.readContext('call-summary', [], [])).segments, retainedCallSummary, '备份恢复保留通话事实与正文');
+  assert.deepEqual(withoutTasks(await summary.readContext('secondary-test', [])), withoutTasks(retainedSecondary), '备份恢复保留两级正文、归纳标记和设置');
+  assert.deepEqual(await summary.readContext('logical', []), retainedFixed, '备份恢复保留固定起点与独立开关');
+  assert.deepEqual((await summary.readContext('retry-summary',[])).tasks.find(value=>value.id===retryTaskId),retainedRetry,'重启和恢复保留失败次数与调用诊断');
+  assert.deepEqual(await summary.readContext('merge-summary',[]),deletedMerged,'合并及删除后的来源、调用事实随备份恢复');
   assert.deepEqual(await raw.getAllAsync('PRAGMA foreign_key_check'), []);
   {
     // 摘要检索、摘要编辑 fence 与工具省略／清空摘要都使用正式链路。
@@ -784,8 +1189,8 @@ try {
     assert.equal((await repository.getEntry('pool-a', withSummary.id)).embeddingStatus, 'ready');
     const summaryPage = await recall.recallMemoryForRun('a', 'summary-search', { keywords: ['晚安协议'] }, signal);
     assert.deepEqual(summaryPage.entries.map((entry) => entry.id), [withSummary.id]);
-    await commands.addMemoryTrigger('a', '晚安协议');
-    const summaryTrigger = (await repository.listTriggers('pool-a')).find((trigger) => trigger.keyword === '晚安协议');
+    await commands.addMemoryTrigger('a', '晚安协议', [], true);
+    const summaryTrigger = (await repository.listTriggers('pool-a')).find((trigger) => trigger.keywords[0].keyword === '晚安协议');
     assert.equal(summaryTrigger.associatedCount, 1);
     assert.equal((await repository.listTriggerMemories('pool-a', summaryTrigger.id))[0].memory.summary, '晚安协议');
     await commands.setMemoryRecallSettings('a', { passiveLimit: 5, activePageSize: 10 });
@@ -903,7 +1308,7 @@ try {
     }
     assert.deepEqual(await raw.getAllAsync('PRAGMA foreign_key_check'), []);
   }
-  console.log('Memory V3：正文、授权、触发关系、冻结分页、向量 CAS／三次上限、摘要交接／清理、重启与备份恢复通过');
+console.log('Memory V3：正文、授权、触发关系、冻结分页、向量 CAS／三次上限、摘要交接／固定起点／AI 隔离、重启与备份恢复通过');
 } finally {
   database.close();
   for (const filename of [databasePath, backupPath]) if (fs.existsSync(filename)) fs.unlinkSync(filename);

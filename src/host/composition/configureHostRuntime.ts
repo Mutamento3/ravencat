@@ -13,11 +13,14 @@ import { configureCompanionRuntime } from './configureCompanionRuntime';
 import { configurePromptingRuntime } from './configurePromptingRuntime';
 import { configureMcpToolsRuntime } from './configureMcpToolsRuntime';
 import { configureMediaRuntime } from './configureMediaRuntime';
+import { configureAIImageTools } from './configureAIImageTools';
 import { configureDeviceControlRuntime } from './configureDeviceControlRuntime';
 import { configureFloatingLayerRuntime } from './configureFloatingLayerRuntime';
 import { configurePhoneToolsRuntime } from './configurePhoneToolsRuntime';
 import { configureTogetherListeningRuntime } from './configureTogetherListeningRuntime';
 import { configureStickerRuntime } from '@features/stickers/composition';
+import { recognizeSticker } from './StickerAnnotationModelGateway';
+import { assertImageToolRunCurrent } from './agent/assertImageToolRunCurrent';
 import { configureStickerAnnotationQueue } from '../runtime/StickerAnnotationQueueCoordinator';
 import { configureStickerEmbeddingQueue } from '../runtime/StickerEmbeddingQueueCoordinator';
 import { configureMomentsRuntime } from './configureMomentsRuntime';
@@ -37,8 +40,9 @@ export function configureHostRuntime(): void {
   configureDeviceControlRuntime();
   configureFloatingLayerRuntime();
   configureMediaRuntime();
+  configureAIImageTools();
   configureMomentsRuntime();
-  configureStickerRuntime();
+  configureStickerRuntime(recognizeSticker, assertImageToolRunCurrent);
   configureStickerAnnotationQueue();
   configureStickerEmbeddingQueue();
   configureChatCallGateway({

@@ -49,13 +49,14 @@ export interface StickerEmbeddingModelContext {
  * Sticker，候选数量由收藏库容量上限决定，而不是 UI 列表分页。
  */
 export interface StickerSemanticSearchInput {
+  assistantId?: string;
   groupId?: string | null;
   tags?: readonly string[];
   emotion?: string | null;
 }
 
 export interface StickerRepository {
-  getStickerById(id: string): Promise<Sticker | null>;
+  getStickerById(id: string, assistantId?: string): Promise<Sticker | null>;
   getStickerByMediaAssetId(mediaAssetId: string): Promise<Sticker | null>;
   getGroupById(id: string): Promise<StickerGroup | null>;
   listGroups(): Promise<StickerGroup[]>;
@@ -72,10 +73,12 @@ export interface StickerRepository {
   getStickerByIdInTransaction(
     transaction: DatabaseTransactionExecutor,
     id: string,
+    ownerAssistantId?: string | null,
   ): Promise<Sticker | null>;
   getStickerByMediaAssetIdInTransaction(
     transaction: DatabaseTransactionExecutor,
     mediaAssetId: string,
+    ownerAssistantId?: string | null,
   ): Promise<Sticker | null>;
   getGroupByIdInTransaction(
     transaction: DatabaseTransactionExecutor,
@@ -86,7 +89,7 @@ export interface StickerRepository {
     sticker: Sticker,
   ): Promise<void>;
   /** 收藏库容量判定必须在调用方事务内执行，才能与 insert 一起原子成立。 */
-  countStickersInTransaction(transaction: DatabaseTransactionExecutor): Promise<number>;
+  countStickersInTransaction(transaction: DatabaseTransactionExecutor, ownerAssistantId?: string | null): Promise<number>;
 
   createGroup(input: CreateStickerGroupInput): Promise<StickerGroup>;
   renameGroup(id: string, name: string, updatedAt: string): Promise<StickerGroup>;
@@ -95,10 +98,12 @@ export interface StickerRepository {
     id: string,
     patch: StickerMetadataPatch,
     updatedAt: string,
+    ownerAssistantId?: string | null,
+    guard?: (transaction: DatabaseTransactionExecutor) => Promise<void>,
   ): Promise<Sticker>;
   setStickerFavorite(id: string, isFavorite: boolean | null, updatedAt: string): Promise<Sticker>;
   moveSticker(id: string, groupId: string | null, updatedAt: string): Promise<Sticker>;
-  deleteSticker(id: string): Promise<boolean>;
+  deleteSticker(id: string, ownerAssistantId?: string | null, guard?: (transaction: DatabaseTransactionExecutor) => Promise<void>): Promise<boolean>;
   recordStickerUse(id: string, usedAt: string): Promise<Sticker>;
 
   // -- Sticker System 业务级模型配置（不借用其他系统的选择）--

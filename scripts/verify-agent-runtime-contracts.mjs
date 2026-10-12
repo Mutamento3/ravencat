@@ -271,6 +271,11 @@ const builtInTools = [
   { module: '@features/webTools', symbol: 'WebSearchTool', name: 'web_search', owner: 'webTools', ...SAFE_READ },
   { module: '@features/webTools', symbol: 'WebFetchTool', name: 'web_fetch', owner: 'webTools', ...SAFE_READ },
   { module: '@features/webTools', symbol: 'DownloadFileTool', name: 'download_file', owner: 'webTools', ...REVERSIBLE_ACTION },
+  { module: '@features/media', symbol: 'DownloadImageTool', name: 'download_image', owner: 'media', ...REVERSIBLE_ACTION },
+  { module: '@features/media', symbol: 'ViewImageTool', name: 'view_image', owner: 'media', ...PRIVATE_READ },
+  { module: '@features/assistants', symbol: 'createChangeOwnAvatarTool', name: 'change_own_avatar', owner: 'media', ...REVERSIBLE_ACTION },
+  { module: '@features/stickers', symbol: 'AddOwnStickerTool', name: 'add_own_sticker', owner: 'stickers', ...REVERSIBLE_ACTION },
+  { module: '@features/stickers', symbol: 'MaintainOwnStickerTool', name: 'maintain_own_sticker', owner: 'stickers', ...REVERSIBLE_ACTION },
   { module: '@features/protocol', symbol: 'GetProtocolsTool', name: 'getProtocols', owner: 'protocol', ...SAFE_READ },
   { module: '@features/protocol', symbol: 'SearchProtocolsTool', name: 'searchProtocols', owner: 'protocol', ...SAFE_READ },
   { module: '@features/protocol', symbol: 'AddProtocolTool', name: 'addProtocol', owner: 'protocol', ...REVERSIBLE_WRITE },
@@ -305,6 +310,7 @@ const builtInTools = [
   { module: '@features/deviceControl', symbol: 'OpenAppTool', name: 'open_app', owner: 'deviceControl', ...REVERSIBLE_ACTION },
   { module: '@features/phoneTools', symbol: 'GetForegroundAppTool', name: 'get_foreground_app', owner: 'phoneTools', ...PRIVATE_READ },
   { module: '@features/phoneTools', symbol: 'GetAppUsageTool', name: 'get_app_usage', owner: 'phoneTools', ...PRIVATE_READ },
+  { module: '@features/phoneTools', symbol: 'GetCurrentLocationTool', name: 'get_current_location', owner: 'phoneTools', ...PRIVATE_READ },
   { module: '@features/screenCapture', symbol: 'ReadScreenAccessibilityTool', name: 'read_screen_accessibility', owner: 'screenCapture', ...PRIVATE_READ },
   { module: '@features/screenCapture', symbol: 'ReadScreenOcrTool', name: 'read_screen_ocr', owner: 'screenCapture', ...PRIVATE_READ },
   { module: '@features/companion', symbol: 'CreateAIScheduleTool', name: 'create_ai_schedule', owner: 'companion', ...REVERSIBLE_ACTION },
@@ -313,6 +319,7 @@ const builtInTools = [
   { module: '@features/companion', symbol: 'UpdateAIScheduleTool', name: 'update_ai_schedule', owner: 'companion', ...REVERSIBLE_WRITE },
   { module: '@features/companion', symbol: 'CancelAIScheduleTool', name: 'cancel_ai_schedule', owner: 'companion', ...SENSITIVE_ACTION },
   { module: '@features/chat', symbol: 'SendMessageTool', name: 'send_message', owner: 'chat', ...EXTERNAL_SIDE_EFFECT },
+  { module: '@features/chat', symbol: 'SearchChatSummariesTool', name: 'search_chat_summaries', owner: 'chat', ...PRIVATE_READ },
   { module: '@features/chat', symbol: 'SendVoiceMessageTool', name: 'send_voice_message', owner: 'chat', ...EXTERNAL_SIDE_EFFECT },
   { module: '@features/stickers', symbol: 'SearchStickersTool', name: 'search_stickers', owner: 'stickers', ...SAFE_READ },
   { module: '@features/stickers', symbol: 'ListStickerGroupsTool', name: 'list_sticker_groups', owner: 'stickers', ...SAFE_READ },
@@ -358,14 +365,18 @@ for (const tool of builtInTools) {
   featureMocks[tool.module][tool.symbol] = (
     tool.module === '@features/companion'
     || tool.module === '@features/webTools'
+    || tool.module === '@features/media'
     || tool.module === '@features/stickers'
     || tool.module === '@features/memory'
     || tool.symbol === 'SendVoiceMessageTool'
+    || tool.symbol === 'SearchChatSummariesTool'
   )
     ? createAgentNativeBuiltInTool(tool.name)
     : createLegacyTool(tool.name);
 }
 featureMocks['@features/memory'].releaseMemoryRecallRun = () => {};
+featureMocks['@features/assistants'].createChangeOwnAvatarTool = () => createAgentNativeBuiltInTool('change_own_avatar');
+featureMocks['./assertImageToolRunCurrent'] = { assertImageToolRunCurrent: () => {} };
 const defaultToolPermissions = {};
 featureMocks['@features/prompting'] = { readPromptDefaults: async () => ({ toolPermissions: defaultToolPermissions }) };
 assert.ok(featureMocks['@features/stickers'].SearchStickersTool, 'Sticker 搜索工具 mock 必须存在');
@@ -453,6 +464,9 @@ const availableNames = (config) => getAuthorizedToolDefinitionsForAI({
 }).map((definition) => definition.function.name);
 
 const regularChatNames = availableNames({ triggerSource: 'chat' });
+assert.ok(!regularChatNames.includes('get_current_location'), '普通 AI 不得获得定位工具');
+assert.ok(availableNames({ triggerSource: 'chat', isHostAI: true }).includes('get_current_location'), '已授权主理 AI 必须获得定位 schema');
+assert.ok(!availableNames({ triggerSource: 'chat', isHostAI: true, allowedToolNames: [] }).includes('get_current_location'), '主理身份不能绕过定位调用授权');
 assert.ok(regularChatNames.includes('search_stickers'), '普通单聊必须暴露 Sticker 搜索工具');
 assert.ok(regularChatNames.includes('select_sticker'), '普通单聊必须暴露 Sticker 选择工具');
 assert.ok(regularChatNames.includes('send_voice_message'), '普通单聊必须暴露语音消息工具');
@@ -727,6 +741,7 @@ const { resolveAllowedToolNames: resolveAllowedToolNamesWithOverrides } = loadTy
           { toolName: 'search_installed_apps', enabled: false },
           { toolName: 'open_app', enabled: false },
           { toolName: 'get_foreground_app', enabled: false },
+          { toolName: 'get_current_location', enabled: false },
           { toolName: 'read_screen_accessibility', enabled: false },
           { toolName: 'read_screen_ocr', enabled: false },
           { toolName: 'create_ai_schedule', enabled: false },
@@ -741,20 +756,17 @@ defaultToolPermissions.recall_memory = false;
 defaultToolPermissions.open_app = false;
 const defaultAllowedNames = await resolveAllowedToolNames('assistant-1');
 assert.ok(!defaultAllowedNames.includes('recall_memory'), '普通工具服从提示词默认权限');
-assert.ok(defaultAllowedNames.includes('open_app'), '手机权限不能受提示词中心的旧全局记录控制');
+assert.ok(!defaultAllowedNames.includes('open_app'), '手机工具服从共用的提示词默认权限');
 delete defaultToolPermissions.recall_memory;
 delete defaultToolPermissions.open_app;
 const overriddenAllowedNames = await resolveAllowedToolNamesWithOverrides('assistant-1');
+assert.ok(!overriddenAllowedNames.includes('get_current_location'), '定位调用开关沿用共用的 AI 单项授权');
 assert.ok(!overriddenAllowedNames.includes('search_protocols'), '普通工具必须继续服从 per-assistant override');
 assert.ok(!overriddenAllowedNames.includes('blockAIAssistant'), '单项权限必须可以关闭 blockAIAssistant');
 assert.ok(!overriddenAllowedNames.includes('unblockAIAssistant'), '单项权限必须可以关闭 unblockAIAssistant');
-assert.ok(overriddenAllowedNames.includes('soft_lock_app'), '手机权限由手机工具模块管理，不叠加提示词覆盖');
-assert.ok(overriddenAllowedNames.includes('release_soft_lock'), '手机权限由手机工具模块管理，不叠加提示词覆盖');
-assert.ok(overriddenAllowedNames.includes('search_installed_apps'), '手机权限由手机工具模块管理，不叠加提示词覆盖');
-assert.ok(overriddenAllowedNames.includes('open_app'), '手机权限由手机工具模块管理，不叠加提示词覆盖');
-assert.ok(overriddenAllowedNames.includes('get_foreground_app'), '手机权限由手机工具模块管理，不叠加提示词覆盖');
-assert.ok(overriddenAllowedNames.includes('read_screen_accessibility'), '手机权限由手机工具模块管理，不叠加提示词覆盖');
-assert.ok(overriddenAllowedNames.includes('read_screen_ocr'), '手机权限由手机工具模块管理，不叠加提示词覆盖');
+for (const name of ['soft_lock_app', 'release_soft_lock', 'search_installed_apps', 'open_app', 'get_foreground_app', 'read_screen_accessibility', 'read_screen_ocr']) {
+  assert.ok(!overriddenAllowedNames.includes(name), '手机工具共用 AI 的单项调用权限');
+}
 assert.ok(!overriddenAllowedNames.includes('create_ai_schedule'), '单项权限必须可以关闭 create_ai_schedule');
 assert.ok(
   !overriddenAllowedNames.includes('invite_listening_together'),

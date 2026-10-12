@@ -145,7 +145,7 @@ assert.ok(
 );
 
 // ---------------------------------------------------------------------------
-// 3. 迁移 84：schema 补齐 + 旧数据清理 + 级联删除
+// 3. 当前建库：模型引用、语义版本与级联删除
 // ---------------------------------------------------------------------------
 // 运行真实升级链，不再截取单个迁移函数体冻结当前实现。
 const migrationModules = new Map();
@@ -162,7 +162,7 @@ function loadMigrationModule(relativePath) {
   return module.exports;
 }
 const { SCHEMAS } = loadMigrationModule('src/platform/persistence/sqlite/schema.ts');
-const { runMigrations } = loadMigrationModule('src/platform/persistence/sqlite/migrations.ts');
+const { runMigrations, DATABASE_SCHEMA_VERSION } = loadMigrationModule('src/platform/persistence/sqlite/migrations.ts');
 const stickerSchemaModule = await importSource('src/platform/persistence/sqlite/stickerSchema.ts');
 
 function createAdapter(db) {
@@ -181,6 +181,7 @@ function createCurrentDatabase() {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON;');
   for (const sql of Object.values(SCHEMAS)) db.exec(sql);
+  db.exec(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION}`);
   db.exec(`INSERT INTO media_assets (id,storage_backend,storage_key,hash_algorithm,content_hash,mime_type,byte_size,status,created_at,updated_at)
     VALUES ('asset-1','app-private-file','test.png','sha256','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','image/png',1,'ready','2026-09-01','2026-09-01');
     INSERT INTO stickers (id,media_asset_id,name,mime_type,annotation_status,created_at,updated_at)
@@ -398,14 +399,7 @@ assert.ok(
   searchStickersDefinition.includes('list_sticker_groups'),
   'search_stickers 描述必须说明分组工具只是搜索之后的补充路径',
 );
-const groupItemSnapshotMatch = agentToolsSource.match(
-  /export interface StickerAIGroupItemSnapshot \{[\s\S]*?\n\}/,
-);
-assert.ok(groupItemSnapshotMatch, '必须定义分组浏览轻量 snapshot');
-assert.ok(
-  !/mediaAssetId|uri|base64|sourceFileName/i.test(groupItemSnapshotMatch[0]),
-  '分组浏览 snapshot 不得返回媒体 URI / base64 / 文件细节',
-);
+// 分组结果的媒体 ID、向量提醒和文件内容隔离由 verify-ai-image-tools 行为测试覆盖。
 assert.ok(
   !/必须来自 search_stickers/.test(agentToolsSource),
   'select_sticker 不得再限制 ID 必须来自搜索',
@@ -519,6 +513,7 @@ function createModuleLoader(stubs) {
 
 function createStickerDatabase() {
   const db = new DatabaseSync(':memory:');
+  db.exec('CREATE TABLE ai_assistants (id TEXT PRIMARY KEY);');
   db.exec('PRAGMA foreign_keys = ON;');
   // 只保留 stickers 外键需要的最小 media_assets 形态；MediaAsset 由内存网关提供。
   db.exec(`

@@ -61,13 +61,13 @@ export default function MemoryEditorScreen({ assistantId, memoryId, onBack }: {
             <Pressable style={[styles.button, (busy || !count || count > 500 || summaryCount > 50) && styles.disabled]} disabled={busy || !count || count > 500 || summaryCount > 50} onPress={() => { void run(() => editing ? editMemory(assistantId, memoryId!, content, summary) : rememberMemory(assistantId, content, null, summary), true); }}><Text style={styles.buttonText}>{busy ? '正在保存…' : '保存记忆'}</Text></Pressable>
             {editing && <>
               <View style={styles.card}>
-                <Text style={styles.label}>为这条记忆添加触发词</Text>
-                <Text style={styles.subtitle}>多个词用逗号、顿号、分号或换行分隔。命中任一词即可自动带入这条记忆，正文和摘要不必包含这些词。关联开关可在空间的触发词页管理。</Text>
+                <Text style={styles.label}>为这条记忆新建关联组</Text>
+                <Text style={styles.subtitle}>多个词用逗号、顿号、分号或换行分隔，保存为同一组。命中任一词即可带入这条记忆，也可在触发词页为本组添加其他记忆。</Text>
                 <TextInput multiline accessibilityLabel="这条记忆的触发词" style={styles.input} value={triggerInput} onChangeText={setTriggerInput} editable={!busy} placeholder="例如：难过，心情不好，需要安慰" placeholderTextColor={theme.colors.text.tertiary} />
                 <Pressable disabled={busy || !triggerInput.trim()} style={(busy || !triggerInput.trim()) && styles.disabled} onPress={() => { void run(async () => {
-                  await addMemoryTrigger(assistantId, triggerInput, memoryId!);
+                  await addMemoryTrigger(assistantId, triggerInput, [memoryId!]);
                   setTriggerInput('');
-                  showAppDialog({ title: '已关联触发词', message: '输入包含其中任一触发词时，这条记忆可自动带入。' });
+                  showAppDialog({ title: '已创建关联组', message: '输入包含其中任一触发词时，这条记忆可自动带入。' });
                 }); }}><Text style={styles.action}>添加并关联</Text></Pressable>
               </View>
               {currentEditing && <>

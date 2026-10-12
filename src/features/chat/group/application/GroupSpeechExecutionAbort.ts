@@ -10,6 +10,21 @@
  */
 
 const controllersByPlanId = new Map<string, Set<AbortController>>();
+const invocationCountsByGroupId = new Map<string, number>();
+
+/** 从读取/claim 前登记 owner，冷启动恢复不能把本进程的准备阶段误判为孤儿。 */
+export function registerGroupSpeechInvocation(groupId: string): () => void {
+  invocationCountsByGroupId.set(groupId, (invocationCountsByGroupId.get(groupId) ?? 0) + 1);
+  return () => {
+    const remaining = invocationCountsByGroupId.get(groupId)! - 1;
+    if (remaining === 0) invocationCountsByGroupId.delete(groupId);
+    else invocationCountsByGroupId.set(groupId, remaining);
+  };
+}
+
+export function listActiveGroupSpeechGroupIds(): string[] {
+  return [...invocationCountsByGroupId.keys()];
+}
 
 /** 注册并返回反注册函数；任务结束（无论成败）必须反注册。 */
 export function registerGroupSpeechAbort(

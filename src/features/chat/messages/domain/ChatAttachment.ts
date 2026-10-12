@@ -1,6 +1,11 @@
 /** 定义聊天附件及其草稿、解析状态和 AI 处理元数据的领域契约。 */
 export type ChatAttachmentType = 'image' | 'file';
 
+/** 新上传文档与收藏文件分类共用 TXT/MD 的业务类型定义；历史预览独立保留旧类型。 */
+export function isChatTextDocumentFileName(fileName: string): boolean {
+  return /\.(txt|md)$/i.test(fileName);
+}
+
 export type ChatAttachmentSource =
   | 'gallery'
   | 'camera'

@@ -203,7 +203,13 @@ export async function processAIReply(
       return;
     }
 
-    console.error('[processAIReply] Process AI reply error:', error);
+    // 模型请求失败走既有错误气泡与失败收尾，不升级为开发版 error 提示；
+    // 内部非预期异常仍保留 error 级别，避免掩盖程序问题。
+    if (error instanceof ChatAgentModelRequestError) {
+      console.warn('[processAIReply] Model request failed:', error);
+    } else {
+      console.error('[processAIReply] Process AI reply error:', error);
+    }
     await persistReplyError({
       sessionId,
       errorMessage: resolveAIReplyErrorMessage(error),

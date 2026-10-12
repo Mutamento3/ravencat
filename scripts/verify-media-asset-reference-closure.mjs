@@ -1,5 +1,4 @@
-import { chatMessageMutations } from './chat-timeline-fixture.mjs';
-import { installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /**
  * MediaAsset M5 correctness closure：引用写入与 release 的 TOCTOU、级联删除候选收集。
  *
@@ -60,6 +59,7 @@ const { MEDIA_ASSET_SCHEMA, MEDIA_ASSET_CONTENT_HASH_INDEX } = await loadTypeScr
   'src/platform/persistence/sqlite/mediaAssetSchema.ts',
 );
 const { CALL_BACKGROUND_SELECTION_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callBackgroundSchema.ts');
+const { CHAT_FAVORITES_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatFavoriteSchema.ts');
 const chatTimelineSqlModule = await loadTypeScriptModule('src/features/chat/messages/infrastructure/ChatTimelineSql.ts');
 const messageTimeSeparatorModule = await loadTypeScriptModule(
   'src/features/chat/messages/domain/MessageTimeSeparator.ts',
@@ -96,6 +96,7 @@ function createDatabase() {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(MEDIA_ASSET_SCHEMA);
+  db.exec(CHAT_FAVORITES_SCHEMA);
   db.exec(MEDIA_ASSET_CONTENT_HASH_INDEX);
   db.exec(`
     CREATE TABLE profile_wallpaper_selections (selection_key TEXT PRIMARY KEY, media_asset_id TEXT, legacy_uri TEXT, revision INTEGER);
@@ -174,8 +175,10 @@ function createDatabase() {
     );
     CREATE TABLE stickers (
       id TEXT PRIMARY KEY,
-      media_asset_id TEXT NOT NULL
+      media_asset_id TEXT NOT NULL,
+      owner_assistant_id TEXT
     );
+    CREATE TABLE ai_downloaded_images (id TEXT PRIMARY KEY, assistant_id TEXT, media_asset_id TEXT);
     CREATE TABLE moments (id TEXT PRIMARY KEY);
     CREATE TABLE moment_media (
       id TEXT PRIMARY KEY,
@@ -1035,8 +1038,8 @@ for (const kind of ['attachment', 'thumbnail', 'voice', 'sticker']) {
   assert.deepEqual((await lifecycle.audit()).danglingReferences, []);
 }
 
-// E3. 共享 asset：普通消息与分享记录都由最终 live 引用裁决释放。
-for (const sharedRecord of [false, true]) {
+// E3. 原消息、分享记录与引用快照都由最终 live 引用裁决释放。
+for (const referenceKind of ['voice', 'sharedRecord', 'replyQuote']) {
   const { db, writer, lifecycle, messages } = createHarness();
   db.prepare(`INSERT INTO chat_conversations (id, kind) VALUES ('s-e3-deleted', 'direct')`).run();
   db.prepare(`INSERT INTO chat_conversations (id, kind) VALUES ('s-e3-live', 'direct')`).run();
@@ -1046,8 +1049,10 @@ for (const sharedRecord of [false, true]) {
   const deletedMessage = insertMetadataMessage(db, 's-e3-deleted', {
     attachments: [{ mediaAssetId: 'shared-del' }],
   });
-  const liveMessage = insertMetadataMessage(db, 's-e3-live', sharedRecord ? {
+  const liveMessage = insertMetadataMessage(db, 's-e3-live', referenceKind === 'sharedRecord' ? {
     kind: 'shared_record', sharedRecord: { entries: [{ attachments: [{ mediaAssetId: 'shared-del' }] }] },
+  } : referenceKind === 'replyQuote' ? {
+    replyQuote: { text: '', attachments: [{ mediaAssetId: 'shared-del' }], sticker: null, voice: null },
   } : { voice: { mediaAssetId: 'shared-del' } });
 
   const firstDeletion = await messages.deleteMessagesWithMediaCandidates([deletedMessage]);

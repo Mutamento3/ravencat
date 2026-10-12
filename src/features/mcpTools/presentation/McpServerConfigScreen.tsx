@@ -4,7 +4,7 @@ import { Toggle, showAppDialog } from '@shared/ui';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import { listAIAssistantSummaries, type AIAssistantSummary } from '@features/assistants';
@@ -505,7 +505,7 @@ export default function McpServerConfigScreen({
         {testing && <ActivityIndicator style={styles.saving} />}
 
         {discovery ? (
-          <View style={styles.discoveryCard}>
+          <ThemedSurface variant="card" cornerRadius={theme.radius.md} style={styles.discoveryCard}>
             <Text style={styles.discoveryTitle}>
               连接成功：{discovery.serverInfo?.name ?? '未知 Server'}
             </Text>
@@ -526,11 +526,11 @@ export default function McpServerConfigScreen({
                 ) : null}
               </View>
             ))}
-          </View>
+          </ThemedSurface>
         ) : null}
 
         {toolGrants && toolGrants.length > 0 ? (
-          <View style={styles.discoveryCard}>
+          <ThemedSurface variant="card" cornerRadius={theme.radius.md} style={styles.discoveryCard}>
             <Text style={styles.discoveryTitle}>工具授权</Text>
             <Text style={styles.discoveryMeta}>
               首次发现和新增工具默认允许 AI 请求，可按需关闭
@@ -564,7 +564,7 @@ export default function McpServerConfigScreen({
                 </View>
               </View>
             ))}
-          </View>
+          </ThemedSurface>
         ) : null}
 
         <TouchableOpacity

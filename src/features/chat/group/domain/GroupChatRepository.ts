@@ -73,19 +73,6 @@ export interface IGroupChatRepository {
     input: CommitGroupAvatarMediaAssetReferenceInput,
   ): Promise<void>;
   /**
-   * 删除消息后的 preview 重算：调用方（DeleteChatMessage）先查出最新现存消息，
-   * 这里把 preview 与其消息身份一起重设；空会话传 lastMessageId = null。
-   * 必须同时更新 last_message_id，否则晚到的 AI preview 回调会按旧的
-   * last_message_id 通过 CAS，把已删除消息复活成会话列表预览。
-   */
-  updatePreview(
-    groupId: string,
-    lastMessage: string,
-    /** 当前可见时间线为空时传 null（排序时间不得引用被隐藏的旧消息）。 */
-    lastTime: string | null,
-    lastMessageId: number | null,
-  ): Promise<boolean>;
-  /**
    * 与已提交消息事实绑定的 preview 更新：仅当该消息不早于当前 preview 来源
    * 消息且仍然存在于 messages 表时才生效（last_message_id CAS + 存在性守卫）。
    * 用于 commit 后的晚到 preview 副作用——旧 plan 的 AI 回复晚到不得覆盖
@@ -141,6 +128,8 @@ export interface IGroupChatRepository {
    * commit 后的副作用（abort 在途请求、取消 30 秒计时）由应用层负责。
    */
   terminateActiveSpeechPlan(groupId: string): Promise<string | null>;
+  /** 冷启动收口失去进程 owner 的计划及未完成任务，保留消息与已完成任务，不自动重跑。 */
+  interruptSpeechPlansWithoutOwner(activeGroupIds: readonly string[]): Promise<string[]>;
   updateSpeechPlanInput(
     planId: string,
     invokedUserMessageIds: number[],

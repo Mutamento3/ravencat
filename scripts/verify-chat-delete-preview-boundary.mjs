@@ -9,13 +9,13 @@ import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema
  *    sessions.last_message / group_chats.last_message。
  * 2. 删除瞬间的媒体引用候选：最终 mediaAssetCandidates 必须来自 delete transaction 里
  *    重新读取的当前 message rows，而不是 application 最开始读到的 target snapshot。
- *    本脚本注入「读取 target 之后、DELETE 之前提交的 legacy attachment migration CAS」，
- *    断言那次新写入的 canonical assetId 仍然进入候选集。
+ *    本脚本让真实迁移事务先进入队列、删除随后进入，验证 canonical 引用仍进入候选集。
+ * 3. 删除与新消息提交交错：最新消息读取后另一个提交开始排队，最终 preview 不得回退。
+ * 4. 关联消息查询失败：删除事务回滚，不留下正文、推理和 preview 的部分更新。
  *
  * 与 verify-chat-visible-latest-message.mjs 的区别：
  *   本脚本走真实 application 入口 deleteChatMessage()，覆盖完整编排链路
- *   deleteChatMessage → deleteMessagesWithMediaCandidates → syncSessionPreviewAfterDelete
- *   → getLatestVisibleMessage → updateSessionPreview / groupPreview.updatePreview，
+ *   删除、关联消息裁决与 preview 修复共用事实事务，媒体释放留在 commit 后，
  *   并直接断言落库后的 preview 最终状态，而不是 repository 返回值或源码正则。
  *
  * 与 verify-media-asset-reference-closure.mjs 的分工：
@@ -28,7 +28,7 @@ import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema
  *   - 转译真实 DeleteChatMessage / SQLiteMessageRepository / chatMessageMetadata，
  *     仅替换环境依赖（databaseCoordinator、ChatMessageRuntime 依赖槽）；
  *   - executor 提供与生产 DatabaseCoordinator 等价的单写者 exclusive transaction；
- *   - groupPreview 为薄写端口适配器，与真实仓储相同的 UPDATE 语句，并记录调用。
+ *   - Group Repository 使用传入事务执行 preview SQL；不再注入事务外的旧写端口。
  */
 
 import assert from 'node:assert/strict';
@@ -64,6 +64,7 @@ function transpileSource(relativePath) {
 const persistenceStubUrl = transpileToModuleUrl(
   `export const databaseCoordinator = {
      openTaskExecutor: (...args) => globalThis.__DELETE_PREVIEW_ENV__.executor,
+     transaction: (_meta, operation) => globalThis.__DELETE_PREVIEW_ENV__.executor.withExclusiveTransactionAsync(operation),
    };
    export const __persistenceStub = true;`,
 );
@@ -71,6 +72,11 @@ const chatMessageRuntimeStubUrl = transpileToModuleUrl(
   `export function getChatMessageRuntimeDependencies() {
      return globalThis.__DELETE_PREVIEW_ENV__.runtime;
    }`,
+);
+const groupRuntimeStubUrl = transpileToModuleUrl(
+  `export function getChatGroupRuntimeDependencies() {
+    return { groups: globalThis.__DELETE_PREVIEW_ENV__.groups };
+  }`,
 );
 const mediaStubUrl = transpileToModuleUrl(
   `export async function releaseMediaAssetCandidates(assetIds) {
@@ -107,7 +113,9 @@ const messageRepositoryUrl = `data:text/javascript;base64,${Buffer.from(messageR
 
 const deleteChatMessageSource = transpileSource(
   'src/features/chat/messages/application/DeleteChatMessage.ts',
-).replaceAll(
+).replaceAll(`from '@platform/persistence'`, `from '${persistenceStubUrl}'`)
+ .replaceAll(`from '../../group/application/ChatGroupRuntime'`, `from '${groupRuntimeStubUrl}'`)
+ .replaceAll(
   `from './ChatMessageRuntime'`,
   `from '${chatMessageRuntimeStubUrl}'`,
 ).replaceAll(
@@ -197,12 +205,16 @@ function createDatabase() {
 function createEnv(db) {
   const groupPreviewCalls = [];
   let writeChain = Promise.resolve();
-  const executor = {
+  const rawExecutor = {
     getFirstAsync: async (sql, params = []) => {
       const rows = db.prepare(sql).all(...params);
+      env.onRead?.(rows[0]);
       return rows.length > 0 ? rows[0] : null;
     },
-    getAllAsync: async (sql, params = []) => db.prepare(sql).all(...params),
+    getAllAsync: async (sql, params = []) => {
+      if (env.readFailure) { const error = env.readFailure; env.readFailure = null; throw error; }
+      return db.prepare(sql).all(...params);
+    },
     runAsync: async (sql, params = []) => {
       const result = db.prepare(sql).run(...params);
       return { changes: Number(result.changes), lastInsertRowId: Number(result.lastInsertRowid) };
@@ -213,7 +225,7 @@ function createEnv(db) {
       const run = writeChain.then(async () => {
         db.exec('BEGIN IMMEDIATE;');
         try {
-          const value = await task(executor);
+          const value = await task(rawExecutor);
           db.exec('COMMIT;');
           return value;
         } catch (error) {
@@ -225,22 +237,27 @@ function createEnv(db) {
       return run;
     },
   };
+  const schedule = (operation) => {
+    const next = writeChain.then(operation);
+    writeChain = next.then(() => undefined, () => undefined);
+    return next;
+  };
+  const executor = {
+    getFirstAsync: (...args) => schedule(() => rawExecutor.getFirstAsync(...args)),
+    getAllAsync: (...args) => schedule(() => rawExecutor.getAllAsync(...args)),
+    runAsync: (...args) => schedule(() => rawExecutor.runAsync(...args)),
+    withExclusiveTransactionAsync: rawExecutor.withExclusiveTransactionAsync,
+  };
   const env = { db, executor, groupPreviewCalls, mediaReleaseCalls: [], runtime: null };
   env.runtime = {
     messages: null, // 每个用例绑定该库对应的真实仓储实例（见 runCase）
-    groupPreview: {
-      // 薄写端口：与真实 SQLiteGroupChatRepository.updatePreview 相同的 UPDATE，
-      // 只替换仓储层，不复制 application 编排逻辑。
-      async updatePreview(groupId, lastMessage, lastTime, lastMessageId) {
+  };
+  env.groups = {
+      async updatePreviewInTransaction(transaction, groupId, lastMessageId, lastMessage, lastTime) {
         groupPreviewCalls.push({ groupId, lastMessage, lastTime, lastMessageId });
-        db.prepare(
-          `UPDATE group_chats
-           SET last_message = ?, last_time = ?, last_message_id = ?, updated_at = ?
-           WHERE id = ?`,
-        ).run(lastMessage, lastTime, lastMessageId, new Date().toISOString(), groupId);
-        return true;
+        await transaction.runAsync('UPDATE group_chats SET last_message = ?, last_time = ?, last_message_id = ? WHERE id = ?',
+          [lastMessage, lastTime, lastMessageId, groupId]);
       },
-    },
   };
   return env;
 }
@@ -536,15 +553,8 @@ await runCase(async ({ db, mediaReleaseCalls }) => {
 });
 
 // ============================================================================
-// Case 6：删除瞬间的媒体候选——application 读到的是过期 snapshot
-//
-//   T1 deleteChatMessage 内部先读到旧 target（legacy URI，没有任何 canonical 引用）
-//   T2 legacy attachment migration 在 T1 读到 target 之后、DELETE 事务之前提交 CAS，
-//      把 metadata 改写成 mediaAssetId=legacy-adopted（asset 行与引用同一个事务）
-//   T1 的 delete transaction 必须看到 T2 的结果，并把 legacy-adopted 作为候选交出去
-//
-// 若候选仍来自 application 的 target snapshot，这条用例的最终现象就是
-// 「message 已删除 + 候选为空 + legacy-adopted 永久留在 catalog / backing」。
+// Case 6：迁移事务先排队、删除随后发起。候选必须来自最终删除的 canonical 引用，
+// 不依赖 application 是否曾在事务外读取 target。反向顺序与共享引用由 Media 验证覆盖。
 // ============================================================================
 await runCase(async ({ db, executor, runtime, mediaReleaseCalls }) => {
   const sessionId = 'session_case6';
@@ -559,31 +569,19 @@ await runCase(async ({ db, executor, runtime, mediaReleaseCalls }) => {
   );
 
   const realRepository = runtime.messages;
-  const originalGetMessageById = realRepository.getMessageById.bind(realRepository);
-  let injected = false;
-  realRepository.getMessageById = async (id) => {
-    const target = await originalGetMessageById(id);
-    if (!injected) {
-      injected = true;
-      // 真实 migration 的 asset 行与 metadata 引用在同一个 exclusive transaction 内提交。
-      await executor.withExclusiveTransactionAsync(async (transaction) => {
-        await transaction.runAsync('INSERT INTO media_assets (id) VALUES (?)', ['legacy-adopted']);
-        await realRepository.compareAndSwapMetadataJsonInTransaction(transaction, {
-          messageId: id,
-          expectedMetadataJson: target.metadataJson,
-          metadataJson: JSON.stringify({
-            kind: 'image',
-            attachments: [{ id: 'att-1', type: 'image', source: 'gallery', mediaAssetId: 'legacy-adopted' }],
-          }),
-        });
-      });
-    }
-    return target;
-  };
+  const target = await realRepository.getMessageById(messageId);
+  const migration = executor.withExclusiveTransactionAsync(async (transaction) => {
+    await transaction.runAsync('INSERT INTO media_assets (id) VALUES (?)', ['legacy-adopted']);
+    await realRepository.compareAndSwapMetadataJsonInTransaction(transaction, {
+      messageId,
+      expectedMetadataJson: target.metadataJson,
+      metadataJson: JSON.stringify({ kind: 'image', attachments: [{ id: 'att-1', type: 'image', source: 'gallery', mediaAssetId: 'legacy-adopted' }] }),
+    });
+  });
 
   const deletedIds = await deleteChatMessage(messageId);
 
-  assert.equal(injected, true, 'fixture：legacy attachment CAS 必须在 target 读取之后提交');
+  await migration;
   assert.deepEqual(deletedIds, [messageId], 'deleteChatMessage 应返回真实删除的消息 id');
   assert.equal(
     db.prepare('SELECT id FROM messages WHERE id = ?').get(messageId),
@@ -673,5 +671,45 @@ await runCase(async ({ db, mediaReleaseCalls }) => {
     '没有真正删除任何消息时不得触发媒体裁决',
   );
 });
+
+await runCase(async (env) => {
+  const { db } = env;
+  const sessionId = 'logical-read-rollback';
+  insertSession(db, sessionId);
+  const reasoning = insertAssistantSegment(db, sessionId, { logicalMessageId: 'logical-rollback', segmentIndex: 0, senderType: 'reasoning', text: 'reasoning' });
+  const assistant = insertAssistantSegment(db, sessionId, { logicalMessageId: 'logical-rollback', segmentIndex: 1, text: 'answer' });
+  setSessionPreview(db, sessionId, 'answer', getMessageCreatedAt(db, assistant));
+  env.readFailure = new Error('injected read failure');
+  await assert.rejects(deleteChatMessage(assistant), /injected read failure/);
+  assert.equal(countMessages(db, sessionId), 2);
+  assert.ok(db.prepare('SELECT id FROM messages WHERE id = ?').get(reasoning));
+  assert.equal(getSessionPreview(db, sessionId), 'answer');
+});
+
+for (const kind of ['direct', 'group']) {
+  await runCase(async (env) => {
+    const { db, runtime, executor } = env;
+    const sessionId = `preview-race-${kind}`;
+    if (kind === 'direct') insertSession(db, sessionId);
+    else insertGroup(db, sessionId);
+    insertUserMessage(db, sessionId, 'old latest');
+    const victim = insertUserMessage(db, sessionId, 'delete me');
+    let concurrentCommit;
+    env.onRead = (row) => {
+      if (row?.text !== 'old latest' || concurrentCommit) return;
+      concurrentCommit = executor.withExclusiveTransactionAsync(async (transaction) => {
+        const message = await runtime.messages.commitMessageInTransaction(transaction, {
+          message: { sessionId, text: 'new latest', isMe: true, senderType: 'user', time: '12:00', createdAt: '2099-01-01T00:00:00Z' },
+          previewText: 'new latest',
+        });
+        if (kind === 'group') await env.groups.updatePreviewInTransaction(transaction, sessionId, message.id, 'new latest', message.createdAt);
+      });
+    };
+    await deleteChatMessage(victim);
+    assert.ok(concurrentCommit, '最新消息快照读取后确实有并发提交');
+    await concurrentCommit;
+    assert.equal(kind === 'direct' ? getSessionPreview(db, sessionId) : getGroupPreview(db, sessionId).last_message, 'new latest');
+  });
+}
 
 console.log('verify-chat-delete-preview-boundary: all assertions passed');

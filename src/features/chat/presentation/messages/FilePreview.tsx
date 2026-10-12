@@ -11,7 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { readPersistentMediaAsText } from '@platform/device/DeviceMediaService';
-import { isChatAttachmentFileSupported } from '../../messages/application/AttachmentParser';
+import { isChatAttachmentFilePreviewable } from '../../messages/application/AttachmentParser';
 import { useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
@@ -78,7 +78,7 @@ export default function FilePreview({
   const [error, setError] = useState<string | null>(null);
   const styles = useThemedStyles(createStyles);
 
-  const isTextFile = isChatAttachmentFileSupported({
+  const isTextFile = isChatAttachmentFilePreviewable({
     fileName: fileName || '',
   });
 

@@ -8,6 +8,8 @@ import type {
 } from '@features/media';
 import { createRuntimeSlot } from '@shared/runtime/RuntimeSlot';
 import type { StickerRepository } from '../domain/StickerRepository';
+import type { AIStickerProcessingRepository } from '../domain/AIStickerProcessing';
+import type { Sticker, StickerAnnotationMetadata } from '../domain/Sticker';
 import type {
   StickerModelConfigRef,
   StickerModelRequirementKind,
@@ -54,6 +56,12 @@ export interface StickerRuntimeDependencies {
   embeddings: StickerEmbeddingGateway;
   generateId: () => string;
   now: () => string;
+  aiProcessing: {
+    repository: AIStickerProcessingRepository;
+    executionId: string;
+    recognize: (sticker: Sticker, signal: AbortSignal) => Promise<StickerAnnotationMetadata>;
+    assertCurrent: (transaction: import('@platform/persistence').DatabaseTransactionExecutor, context: import('@shared/aiTools').AgentToolExecutionContext) => Promise<void>;
+  };
 }
 
 const stickerRuntimeSlot = createRuntimeSlot<StickerRuntimeDependencies>('Sticker');

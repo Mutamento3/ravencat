@@ -13,7 +13,7 @@ import { Legend } from './components/Legend';
 import { CategoryList } from './components/CategoryList';
 import { useHistoryDetail } from './useHistoryDetail';
 import { useStyles } from './styles';
-import { useTheme } from '@shared/theme';
+import { ThemedSurface, useTheme } from '@shared/theme';
 import type { HistoryDetailScreenProps } from './types';
 import AddRecordModal from '../AddRecordModal';
 import { useWalletRecordActions } from '../useWalletRecordActions';
@@ -25,7 +25,7 @@ export default function HistoryDetailScreen({
 }: HistoryDetailScreenProps) {
   const styles = useStyles();
   const theme = useTheme();
-  const { loading, summary, expenseGroups, incomeGroups, pieData, reload } = useHistoryDetail({
+  const { loading, summary, categories, expenseGroups, incomeGroups, pieData, reload } = useHistoryDetail({
     timeRange,
     initialData,
   });
@@ -61,8 +61,7 @@ export default function HistoryDetailScreen({
       <NavigationHeader title="收支详情" onGoBack={onBack} />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Header */}
-        <View style={styles.header}>
+        <ThemedSurface variant="card" style={styles.header}>
           <Text style={styles.headerTitle}>时间范围</Text>
           <Text style={styles.headerDate}>{timeRange.label}</Text>
 
@@ -80,15 +79,15 @@ export default function HistoryDetailScreen({
               </Text>
             </View>
           </View>
-        </View>
+        </ThemedSurface>
 
         <View style={styles.divider} />
 
         {/* 饼图区域 */}
-        <View style={styles.chartSection}>
+        <ThemedSurface variant="card" style={styles.chartSection}>
           <PieChart data={pieData} total={totalAmount} />
           <Legend data={pieData} />
-        </View>
+        </ThemedSurface>
 
         <View style={styles.divider} />
 
@@ -102,6 +101,7 @@ export default function HistoryDetailScreen({
       </ScrollView>
       <AddRecordModal
         visible={recordActions.editingRecord !== null}
+        availableCategories={categories}
         initialRecord={recordActions.editingRecord}
         onClose={recordActions.closeEditor}
         onSave={recordActions.saveRecord}

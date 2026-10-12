@@ -33,6 +33,8 @@ import type {
   GroupAvatarMediaAssetMigrationCandidate,
 } from './group/domain/GroupChatRepository';
 
+export { interruptAbandonedGroupSpeechPlans } from './group/application/GroupSpeechTermination';
+
 export {
   configureAssistantMessageArrivalRuntime,
   applyAssistantMessageArrivalSnapshot,
@@ -40,10 +42,13 @@ export {
 
 export { configureChatSummaryRuntime } from './summary/application/ChatSummaryRuntime';
 export { SQLiteChatSummaryRepository } from './summary/infrastructure/SQLiteChatSummaryRepository';
-export { CHAT_SUMMARY_PROMPT_DEFINITIONS, createChatSummaryPromptBlock } from './summary/application/ChatSummaryPrompt';
+export { CHAT_SUMMARY_PROMPT_DEFINITIONS, createChatSummaryPromptBlock, createSecondaryChatSummaryPromptBlock } from './summary/application/ChatSummaryPrompt';
+export type { ChatSummaryModelInput, SecondaryChatSummaryClaim } from './summary/domain/ChatSummaryRepository';
+export { ChatSummaryGenerationError } from './summary/domain/ChatSummaryRepository';
+export type { ChatSummaryCallDiagnostics, ChatSummaryRequestSettings } from './summary/domain/ChatSummaryRepository';
 export { buildChatSummaryModelInput } from './summary/application/ChatSummary';
 
-export { processChatSummary, listChatSummaryConversationIds, getNextChatSummaryWakeAt } from './summary/application/ChatSummary';
+export { processChatSummary, prepareChatSummaryConversations, getNextChatSummaryWakeAt } from './summary/application/ChatSummary';
 
 // Host runtime 依赖、执行入口与运行时类型。
 export type {
@@ -141,6 +146,7 @@ export interface ChatRuntimeDependencies {
   legacyChatAttachments?: ChatMessageRuntimeDependencies['legacyChatAttachments'];
   database: ChatConversationRuntimeDependencies['database'];
   media: ChatReplyRuntimeDependencies['media'];
+  mutations: ChatReplyRuntimeDependencies['mutations'];
   vision: ChatReplyRuntimeDependencies['vision'];
   agent: ChatReplyRuntimeDependencies['agent'];
   runPreparation: ChatReplyRuntimeDependencies['runPreparation'];
@@ -162,15 +168,6 @@ export function configureChatRuntimeDependencies(
     assistantDirectory: dependencies.assistantDirectory,
     turns: dependencies.repositories.turns,
     legacyChatAttachments: dependencies.legacyChatAttachments,
-    groupPreview: {
-      updatePreview: (groupId, lastMessage, lastTime, lastMessageId) =>
-        dependencies.repositories.groups.updatePreview(
-          groupId,
-          lastMessage,
-          lastTime,
-          lastMessageId,
-        ),
-    },
     canonicalUserMessage: dependencies.canonicalUserMessage,
     regeneration: dependencies.regeneration,
   });
@@ -180,6 +177,7 @@ export function configureChatRuntimeDependencies(
     currentUserDirectory: dependencies.currentUserDirectory,
   });
   configureChatReplyRuntime({
+    mutations: dependencies.mutations,
     assistantDirectory: dependencies.assistantDirectory,
     media: dependencies.media,
     vision: dependencies.vision,
@@ -252,6 +250,8 @@ export type { IConversationTurnRepository } from './reply/domain/ConversationTur
 
 // 具体仓储只由 Host composition 装配。
 export { messageRepository } from './messages/infrastructure/SQLiteMessageRepository';
+export { configureChatFavoriteRuntime } from './favorites/application/ChatFavoriteRuntime';
+export { SQLiteChatFavoriteRepository } from './favorites/infrastructure/SQLiteChatFavoriteRepository';
 export { sessionRepository } from './conversation/infrastructure/SQLiteSessionRepository';
 export { groupChatRepository } from './group/infrastructure/SQLiteGroupChatRepository';
 export { conversationTurnRepository } from './reply/infrastructure/SQLiteConversationTurnRepository';

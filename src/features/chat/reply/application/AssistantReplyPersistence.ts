@@ -115,6 +115,7 @@ export async function persistCompletedAssistantReply({
       completionTokens: response.completionTokens || 0,
       metadataJson: JSON.stringify(buildMessageMetadata(aiConfig, runtimeContext, {
         kind: 'reply',
+        cachedTokens: response.cachedTokens,
       })),
     },
     segments: normalizedResponse.segments,

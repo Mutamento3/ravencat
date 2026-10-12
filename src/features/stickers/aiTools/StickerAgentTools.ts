@@ -10,6 +10,9 @@ import type {
   AgentToolExecutionResult,
 } from '@shared/aiTools';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
+import { mediaImageFailure } from '@features/media';
+import { getStickersRuntimeDependencies } from '../application/StickerRuntime';
+import { getStickerVectorState } from '../application/AIStickerCommands';
 import {
   getStickerById,
   listStickerGroupsForAI,
@@ -39,6 +42,11 @@ export const STICKER_SEARCH_RESULT_DISCRIMINATOR = 'ravencat.sticker.search.v1' 
 
 export interface StickerAISearchSnapshot {
   stickerId: string;
+  mediaAssetId: string;
+  ownedBySelf: boolean;
+  annotationStatus: Sticker['annotationStatus'];
+  annotationError: string | null;
+  vector: Awaited<ReturnType<typeof getStickerVectorState>>;
   name: string;
   description: string | null;
   tags: string[];
@@ -58,6 +66,8 @@ export interface StickerAIGroupSnapshot {
 
 export interface StickerAIGroupItemSnapshot {
   stickerId: string;
+  mediaAssetId: string;
+  vector: Awaited<ReturnType<typeof getStickerVectorState>>;
   name: string;
   tags: string[];
   emotion: string | null;
@@ -90,6 +100,7 @@ export interface SearchStickersArgs {
 
 export interface SelectStickerArgs {
   sticker_id: string;
+  on_success: 'finish' | 'continue';
 }
 
 export interface ListStickersInGroupArgs {
@@ -103,7 +114,7 @@ export const searchStickersDefinition = {
   description: [
     '用自然语言搜索当前 Sticker 库，支持描述使用场景或情绪（例如“被发现做坏事以后装无辜”），不要求关键词精确命中名称或标签。',
     '先用本工具搜索；结果不合适或要按分组浏览时，再用 list_sticker_groups / list_stickers_in_group。',
-    '只返回已经完成结构化标注、可以安全发送的 Sticker；返回的 stickerId 供 select_sticker 使用。',
+    '返回用户可发送的表情与自己的收藏，自己的识别失败项也可按名称查到并修正。缺向量仍可按词面检索及发送；只有自己的收藏可以维护。mediaAssetId 可供 view_image 查看，stickerId 供 select_sticker 或 maintain_own_sticker 使用。',
   ].join(''),
   parameters: {
     type: 'object',
@@ -192,6 +203,7 @@ export const selectStickerDefinition = {
   description: [
     '选择一张 Sticker 作为本轮 assistant 回复的一部分；stickerId 可以来自 search_stickers 或 list_stickers_in_group 的结果。',
     '这一步只产生结构化发送意图，不直接写入聊天记录；成功后不要再次调用其他消息写入能力发送同一张 Sticker。',
+    '表情包本身可以构成完整回复；用 on_success 声明成功后结束或继续。失败会返回错误供你处理。',
   ].join(''),
   parameters: {
     type: 'object',
@@ -202,8 +214,13 @@ export const selectStickerDefinition = {
         minLength: 1,
         maxLength: 120,
       },
+      on_success: {
+        type: 'string',
+        enum: ['finish', 'continue'],
+        description: '成功后意图：本次回复已完整选 finish，系统将结束本轮，不再请求你；还要发送语音、表情包、补充文字或执行其他操作选 continue。同批多个工具按顺序执行，仅最后一个工具的 finish 决定结束；任何工具失败都会继续请求你。仅补充“表情包已发送”等状态说明不构成继续的理由，无需为可能失败选择 continue。',
+      },
     },
-    required: ['sticker_id'],
+    required: ['sticker_id', 'on_success'],
     additionalProperties: false,
   },
 } as const;
@@ -214,6 +231,7 @@ export async function searchStickers(
 ): Promise<AgentToolExecutionResult<StickerSearchResultData>> {
   throwIfAbortSignalAborted(context.abortSignal);
   const input: SearchStickersInput = {
+    assistantId: context.task.assistantId,
     query: args.query?.trim() || undefined,
     tags: args.tags,
     emotion: args.emotion?.trim() || undefined,
@@ -225,14 +243,14 @@ export async function searchStickers(
 
   const data: StickerSearchResultData = {
     discriminator: STICKER_SEARCH_RESULT_DISCRIMINATOR,
-    stickers: stickers.map(toAISearchSnapshot),
+    stickers: await Promise.all(stickers.map(sticker => toAISearchSnapshot(sticker, context.task.assistantId))),
   };
   return {
     status: 'success',
     data,
     modelContent: data.stickers.length > 0
       ? JSON.stringify(data)
-      : '没有找到已经完成结构化标注、可以发送的匹配 Sticker。',
+      : '没有找到匹配的用户可用表情或自己的收藏。',
   };
 }
 
@@ -243,7 +261,7 @@ export async function selectSticker(
   throwIfAbortSignalAborted(context.abortSignal);
   let sticker: Sticker;
   try {
-    sticker = await getStickerById(args.sticker_id);
+    sticker = await getStickerById(args.sticker_id, context.task.assistantId);
   } catch (error) {
     if (!(error instanceof StickerNotFoundError)) {
       throw error;
@@ -262,9 +280,18 @@ export async function selectSticker(
       status: 'error',
       code: 'STICKER_NOT_READY',
       retryable: true,
-      modelContent: '指定的 Sticker 尚未完成结构化标注，当前不能发送；请改选搜索结果中的可用 Sticker。',
+      modelContent: '指定的 Sticker 尚未完成结构化标注，当前不能发送；自己的收藏可调用 maintain_own_sticker 修正语义或显式重新识别，也可改选其他表情。',
     };
   }
+
+  try {
+    await getStickersRuntimeDependencies().media.resolveMediaAsset(sticker.mediaAssetId);
+  } catch (error) {
+    const failure = mediaImageFailure(error);
+    if (failure) return failure;
+    throw error;
+  }
+  const vector = await getStickerVectorState(sticker);
 
   const intent: StickerSendIntent = {
     discriminator: STICKER_SEND_INTENT_DISCRIMINATOR,
@@ -273,13 +300,15 @@ export async function selectSticker(
   return {
     status: 'success',
     data: intent,
-    metadata: { fulfillsUserVisibleOutput: true },
+    metadata: { fulfillsUserVisibleOutput: true, completionIntent: args.on_success },
     modelContent: JSON.stringify({
       discriminator: intent.discriminator,
       sticker: {
         stickerId: intent.sticker.stickerId,
         name: intent.sticker.name,
         emotion: intent.sticker.emotion,
+        mediaAssetId: intent.sticker.mediaAssetId,
+        vector,
       },
     }),
   };
@@ -331,12 +360,14 @@ export async function listStickersInGroup(
 
   const data: StickerGroupPageResultData = {
     discriminator: STICKER_SEARCH_RESULT_DISCRIMINATOR,
-    stickers: page.stickers.map((sticker) => ({
+    stickers: await Promise.all(page.stickers.map(async (sticker) => ({
       stickerId: sticker.id,
+      mediaAssetId: sticker.mediaAssetId,
+      vector: await getStickerVectorState(sticker),
       name: sticker.name,
       tags: [...sticker.tags],
       emotion: sticker.emotion,
-    })),
+    }))),
     nextCursor: page.nextCursor
       ? encodeStickerGroupPageCursor(page.nextCursor)
       : null,
@@ -381,9 +412,14 @@ export function isStickerSendIntent(value: unknown): value is StickerSendIntent 
     && typeof value.sticker.name === 'string';
 }
 
-function toAISearchSnapshot(sticker: Sticker): StickerAISearchSnapshot {
+async function toAISearchSnapshot(sticker: Sticker, assistantId: string): Promise<StickerAISearchSnapshot> {
   return {
     stickerId: sticker.id,
+    mediaAssetId: sticker.mediaAssetId,
+    ownedBySelf: sticker.ownerAssistantId === assistantId,
+    annotationStatus: sticker.annotationStatus,
+    annotationError: sticker.annotationError,
+    vector: await getStickerVectorState(sticker),
     name: sticker.name,
     description: sticker.description,
     tags: [...sticker.tags],

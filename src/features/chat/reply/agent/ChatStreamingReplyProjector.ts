@@ -233,7 +233,9 @@ export class ChatStreamingReplyProjector {
         tokensUsed: turn.usage.totalTokens,
         promptTokens: turn.usage.promptTokens,
         completionTokens: turn.usage.completionTokens,
-        metadataJson: JSON.stringify(this.buildMetadata(state, 'reply', 'assistant', {})),
+        metadataJson: JSON.stringify(this.buildMetadata(state, 'reply', 'assistant', {
+          cachedTokens: turn.usage.cachedTokens,
+        })),
       });
       state.assistantFinalized = true;
       updatedMessageIds.push(state.assistantMessage.id);
@@ -299,6 +301,7 @@ export class ChatStreamingReplyProjector {
       totalTokens: turn.usage.totalTokens,
       promptTokens: turn.usage.promptTokens,
       completionTokens: turn.usage.completionTokens,
+      cachedTokens: turn.usage.cachedTokens,
       isToolCall: turn.toolCalls.length > 0,
       toolCalls: turn.toolCalls.map((toolCall) => ({
         id: toolCall.id,

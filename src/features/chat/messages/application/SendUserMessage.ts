@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'expo-crypto';
 import type { ChatMessage } from '../domain/ChatMessage';
+import type { ChatReplyQuote } from '../domain/chatMessageMetadata';
 import type { ChatAttachment } from '../domain/ChatAttachment';
 import type { SharedChatRecord } from '../domain/SharedChatRecord';
 import type { StickerMessageSnapshot } from '../domain/ChatSticker';
@@ -41,6 +42,7 @@ export interface SendUserMessageParams {
   text: string;
   replyToId?: number | null;
   replyToText?: string | null;
+  replyQuote?: ChatReplyQuote | null;
   clientMessageId?: string | null;
   attachments?: ChatAttachment[];
   sharedRecord?: SharedChatRecord;
@@ -142,6 +144,7 @@ export async function sendUserMessageInternal(
           completionTokens: 0,
           metadataJson: JSON.stringify({
             ...(messageMetadata || {}),
+            ...(isLast && params.replyQuote ? { replyQuote: params.replyQuote } : {}),
             triggerSource: 'chat',
             triggerReason: 'user_message',
             memoryParticipation: 'read_write',
@@ -151,7 +154,7 @@ export async function sendUserMessageInternal(
       };
     });
     const tail = inputs[inputs.length - 1];
-    prepared = await prepareChatAttachments(sharedRecord ? sharedRecord.entries.flatMap((entry) => entry.attachments) : attachments);
+    prepared = await prepareChatAttachments([...(sharedRecord ? sharedRecord.entries.flatMap((entry) => entry.attachments) : attachments), ...(params.replyQuote?.attachments ?? [])]);
     const result = await commitAndDispatchCanonicalUserMessage({
       ...tail,
       precedingMessages: inputs.slice(0, -1),

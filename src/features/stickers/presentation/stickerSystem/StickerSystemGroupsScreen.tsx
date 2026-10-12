@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '@shared/theme';
+import { ThemedSurface, useTheme } from '@shared/theme';
 import { ModalSheet, showAppDialog } from '@shared/ui';
 import {
   createStickerGroup,
@@ -99,7 +99,7 @@ export default function StickerSystemGroupsScreen() {
         <Text style={styles.stateText}>正在加载…</Text>
       ) : (
         <View style={{ marginTop: theme.spacing.sm }}>
-          <View style={styles.card}>
+          <ThemedSurface variant="card" style={styles.card}>
             {groups.length === 0 ? (
               <Text style={styles.stateText}>还没有包含可用表情包的分组。</Text>
             ) : (
@@ -138,7 +138,7 @@ export default function StickerSystemGroupsScreen() {
                 </View>
               ))
             )}
-          </View>
+          </ThemedSurface>
 
           <View style={styles.actionRow}>
             <TouchableOpacity

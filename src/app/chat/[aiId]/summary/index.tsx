@@ -9,5 +9,8 @@ export default function ChatSummaryRoute() {
   return aiId ? <ChatSummaryRouteScreen aiId={aiId}
     onCreateSummary={() => router.push(`/chat/${encodeURIComponent(aiId)}/summary/edit` as Href)}
     onEditSummary={(segmentId) => router.push({ pathname: `/chat/${encodeURIComponent(aiId)}/summary/edit`, params: { segmentId } } as Href)}
+    onEditSecondary={() => router.push({ pathname: `/chat/${encodeURIComponent(aiId)}/summary/edit`, params: { view: 'secondary' } } as Href)}
+    onTask={(taskId) => router.push({ pathname: `/chat/${encodeURIComponent(aiId)}/summary/edit`, params: { taskId } } as Href)}
+    onSettings={() => router.push(`/chat/${encodeURIComponent(aiId)}/summary/settings` as Href)}
   /> : <Redirect href={'/conversations' as Href} />;
 }
