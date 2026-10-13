@@ -1,6 +1,6 @@
 # 文档导航
 
-使用条件与源码入门见[项目介绍](../README.md)，本地环境、开发安装和调试见[开发指南](development.md)。修改代码前阅读 [AGENTS.md](../AGENTS.md)，只运行与修改范围相关的验证。
+使用条件与源码入门见[中文项目介绍](../README.zh-CN.md)（[English](../README.md)），本地环境、开发安装和调试见[开发指南](development.md)。修改代码前阅读 [AGENTS.md](../AGENTS.md)，只运行与修改范围相关的验证。
 
 ## 定位代码
 

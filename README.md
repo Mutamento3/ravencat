@@ -1,67 +1,75 @@
 # RavenCat
 
-RavenCat 是一款 Android 上的 AI 聊天与陪伴应用。你可以为不同的 AI 设置名字、人设和模型，和它们单独聊天，也可以把几个 AI 拉进同一个群。
+**English** | [简体中文](README.zh-CN.md)
 
-除了聊天，它还想让 AI 更自然地参与日常生活：打一次语音或视频电话、一起听歌、在你使用其他应用时通过悬浮球聊两句，或在约定的时间主动来找你。
+**A home for your favorite AIs.**
 
-这是一个个人维护、持续开发中的项目。部分后台行为和跨设备恢复还需要更多真机验证，暂时不把它视为已经在所有手机上稳定运行的正式产品。
+RavenCat is an open-source Android app where you can give each AI its own name, persona, and model. Talk to them individually or bring several AIs into a group conversation, all in one app.
 
-公开安装包以 **Preview / Pre-release（预览版）** 发布，下载见 [GitHub Releases](https://github.com/skylucky163/ravencat/releases)。**固定消息上下文起点属于实验性功能**：固定后，起点至最新消息的全部原文进入上下文，自动生成摘要暂停；对话增长可能增加 Token 消耗并超出模型的上下文额度。取消固定后，自动生成摘要需手动重新开启。当前预览更新说明见 [v2.1.0-preview.1](docs/releases/v2.1.0-preview.1.md)。
+The project grew out of the maintainer's personal creative setting, “AI-Home,” which imagines different LLMs as distinct characters living together. RavenCat brings that idea into a personal AI home: connect the models you enjoy and spend time with them over ongoing conversations. Everyday chats, character writing, friendship, or romantic interactions are all up to you. This personal project is driven primarily by the maintainer's enjoyment of using it and creating with it.
 
-## 可以做什么
+Beyond chat, the project explores ways for AI to take part in everyday life: voice or video calls, listening to music together, a quick conversation through a floating bubble while you use another app, or reaching out at a scheduled time.
 
-- **聊天与群聊**：管理多个 AI，发送文字、图片、文件和语音，使用引用回复、贴纸和消息翻译。
-- **人设与记忆**：设置个人资料和 AI 人设，管理对话记忆与提示词，让交流更贴近自己的习惯。
-- **语音与视频电话**：和 AI 通话，配置语音识别、合成语音和相机画面。
-- **悬浮交互**：在其他应用上方打开悬浮球，快捷聊天、摘录和截图。
-- **主动陪伴与日程**：允许 AI 在后台按计划执行任务、发送主动消息；开启主动陪伴不要求同时开启悬浮球。
-- **生活功能**：时刻、记账、一起听歌，以及按需授权的手机工具和 MCP 外部工具。
-- **本地备份**：导出聊天、媒体和设置，并从备份恢复。
+RavenCat is maintained by one person and is still in active development. Some background behavior and cross-device restoration need more testing on real devices; reliability across all phones has not been established.
 
-使用、开发和各功能的当前架构入口见[文档导航](docs/README.md)。Android 后台、跨设备恢复与真实外部服务的验证范围在对应专项文档说明。
+Public APKs are released as **Preview / Pre-release** builds. Download them from [GitHub Releases](https://github.com/skylucky163/ravencat/releases). **Pinning a message as the context starting point is experimental**: all original message text from the pinned message through the latest message is included in the context, and automatic summary generation pauses. As the conversation grows, this can increase token usage and exceed the model's context limit. After unpinning, automatic summary generation must be re-enabled manually. See the current preview notes for [v2.1.0-preview.1](docs/releases/v2.1.0-preview.1.md).
 
-## 使用前需要知道
+## What you can do
 
-目前只支持 **Android 13 及以上**。项目包含自定义原生模块，不能直接用 Expo Go 运行，也没有 iOS 版本。
+- **Individual and group chats**: manage multiple AIs, send text, images, files, and voice messages, and use quoted replies, stickers, and message translation.
+- **Personas and memory**: customize your profile and AI personas, and manage conversation memories and prompts to suit your preferences.
+- **Voice and video calls**: call your AIs with configurable speech recognition, speech synthesis, and camera input.
+- **Floating interaction**: open a floating bubble over other apps for quick chats, text extraction, and screenshots.
+- **Proactive interaction and schedules**: allow AIs to perform scheduled tasks and send proactive messages in the background. This does not require the floating bubble to be enabled.
+- **Everyday features**: Moments, expense tracking, listening to music together, and phone tools and external MCP tools with permissions you choose to grant.
+- **Local backups**: export and restore chats, media, and settings.
 
-RavenCat 不附带免费的模型服务或 API Key。你需要在应用中配置自己使用的模型服务；通话、翻译等功能还需要对应服务的凭据，费用由服务提供方收取。
+See the [documentation index](docs/README.md) for usage, development, and current architecture references. Detailed technical documents are currently mostly in Chinese. The relevant documents describe the verification boundaries for Android background behavior, cross-device restoration, and real external services.
 
-聊天、媒体和设置保存在手机本地。使用模型和外部工具时，相应内容会发送到你配置的服务；截图、相机和手机工具的使用也取决于你开启的功能与授权。中文 OCR 使用 Google ML Kit，其输入处理在设备上完成，SDK 可能向 Google 发送性能和使用指标，详见[Google 官方条款与隐私说明](https://developers.google.com/ml-kit/terms)。
+## Before you start
 
-本地全量备份**不加密，并包含服务凭据**。请把备份当作私人文件保管，分享日志或提交问题时也不要附上 API Key、聊天数据库、备份或个人截图。
+RavenCat currently supports **Android 13 and later**. It includes custom native modules, so it cannot run directly in Expo Go. There is no iOS version.
 
-## 从源码开始
+RavenCat does not include free model services or API keys. Configure your own model services in the app; calls, translation, and other features also require credentials for the services they use. Service providers charge for usage.
 
-准备 Node.js 22（`>=22.13.0 <23`）、Android 开发环境和一台 Android 13+ 手机或模拟器，然后安装锁定的依赖：
+Chats, media, and settings are stored locally on your phone. When you use models or external tools, the relevant content is sent to the services you configure. Screenshots, camera access, and phone tools also depend on the features you enable and the permissions you grant. Chinese OCR uses Google ML Kit and processes its input on the device; the SDK may send performance and usage metrics to Google. See [Google's terms and privacy information](https://developers.google.com/ml-kit/terms).
+
+Individual chats can use summaries to condense earlier conversations, or load recent messages according to your settings when automatic summaries are off and no starting point is pinned. These context settings do not delete locally stored chat history. See [two-level conversation summaries](docs/architecture/chat-summary.md) for details.
+
+Full local backups are **unencrypted and include service credentials**. Keep them private. When sharing logs or reporting an issue, do not include API keys, chat databases, backups, or personal screenshots.
+
+## Build from source
+
+Prepare Node.js 22 (`>=22.13.0 <23`), an Android development environment, and an Android 13+ phone or emulator. Install the locked dependencies:
 
 ```powershell
 npm ci
 ```
 
-第一次运行需要编译并安装包含原生模块的开发版：
+For the first run, compile and install a development build that includes the native modules:
 
 ```powershell
 $env:EAS_BUILD_PROFILE = 'development'
 npx expo run:android
 ```
 
-以后通过 USB 连接手机时，可以启动开发服务器：
+For subsequent sessions with a phone connected over USB, start the development server:
 
 ```powershell
 adb reverse tcp:8081 tcp:8081
 npm start
 ```
 
-默认通过 localhost 连接，不需要 Tailscale 或维护者的 Expo 账号。该连接参数不限制服务器监听网卡；局域网、Tailscale、开发端口访问限制及 EAS 云构建见[本地开发指南](docs/development.md)。
+The default client connection uses localhost and does not require Tailscale or the maintainer's Expo account. This connection setting does not restrict which network interfaces the server listens on. See the [local development guide](docs/development.md) for LAN and Tailscale connections, development port access restrictions, and EAS cloud builds.
 
-## 参与开发
+## Contributing
 
-欢迎报告问题或提出具体改进。提交问题时请说明手机型号、Android 版本、应用版本、复现步骤和预期结果，并去掉日志里的私人信息。
+Bug reports and specific suggestions are welcome. Include your phone model, Android version, app version, steps to reproduce, and expected behavior, and remove private information from logs.
 
-修改代码前请阅读 [AGENTS.md](AGENTS.md)。项目按业务功能组织，聊天、通话、记忆等模块各自有 README；定位代码可以从[架构导航](docs/architecture-navigation.md)开始。验证时只运行与改动相关的检查，不必为文档修改构建 APK。
+Read [AGENTS.md](AGENTS.md) before changing code. The project is organized by feature, with separate READMEs for chat, calls, memory, and other modules. Start with the [architecture guide](docs/architecture-navigation.md) to find the relevant code. Run only the checks relevant to your changes; documentation changes do not require building an APK.
 
-## 致谢与许可
+## Acknowledgments and license
 
-RavenCat 基于 React Native 和 Expo 构建，使用 Lucide 图标、FlashList、Reanimated 等第三方组件。液态玻璃效果通过本地原生模块封装 [AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView)。完整依赖清单、上游版权及许可原文见[第三方软件声明](docs/third-party-notices.md)。
+RavenCat is built with React Native and Expo, using Lucide icons, FlashList, Reanimated, and other third-party components. The liquid glass effect wraps [AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) in a local native module. See the [third-party software notices](docs/third-party-notices.md) for the full dependency list, upstream copyright notices, and license texts.
 
-项目原创代码、文档与已确认的原创图片采用 [MIT 许可证](LICENSE)，允许使用、修改和商用，分发时请保留版权与许可声明。中文说明见[MIT 许可说明](docs/license-options.md)。第三方组件及 Expo 模板图片遵循各自的许可证，图片来源与授权见[素材说明](docs/asset-sources.md)。
+Original project code, documentation, and images confirmed as original are licensed under the [MIT License](LICENSE), which permits use, modification, and commercial use. Retain the copyright and license notice when distributing them. A [Chinese explanation of the MIT License](docs/license-options.md) is also available. Third-party components and Expo template images follow their own licenses; see [asset sources and permissions](docs/asset-sources.md).
