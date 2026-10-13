@@ -6,7 +6,7 @@
 
 RavenCat is an open-source Android app where you can give each AI its own name, persona, and model. Talk to them individually or bring several AIs into a group conversation, all in one app.
 
-The project grew out of the maintainer's personal creative setting, “AI-Home,” which imagines different LLMs as distinct characters living together. RavenCat brings that idea into a personal AI home: connect the models you enjoy and spend time with them over ongoing conversations. Everyday chats, character writing, friendship, or romantic interactions are all up to you. This personal project is driven primarily by the maintainer's enjoyment of using it and creating with it.
+RavenCat aims to be a personal AI home: connect the models you enjoy and spend time with them over ongoing conversations. Everyday chats, character writing, friendship, or romantic interactions are all up to you. This personal project is driven primarily by the enjoyment of everyday use and creative exploration.
 
 Beyond chat, the project explores ways for AI to take part in everyday life: voice or video calls, listening to music together, a quick conversation through a floating bubble while you use another app, or reaching out at a scheduled time.
 
