@@ -53,6 +53,8 @@ updates = createApplicationUpdates({ ...defaults, installedVersion: '2.1.0-beta.
 assert.equal((await updates.check()).version, '2.1.0-beta.10');
 updates = createApplicationUpdates({ ...defaults, installedVersion: '2.1.0-beta.10', fetchReleases: async () => [makeRelease('2.1.0')] });
 assert.equal((await updates.check()).version, '2.1.0');
+updates = createApplicationUpdates({ ...defaults, installedVersion: '2.1.0-preview.1', fetchReleases: async () => [makeRelease('2.1.1')] });
+assert.equal((await updates.check()).version, '2.1.1', '原预览版能识别本次 2.1.1 更新');
 let resolveQuery;
 let queryCalls = 0;
 updates = createApplicationUpdates({ ...defaults, fetchReleases: () => {

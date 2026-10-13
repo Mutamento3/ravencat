@@ -1,4 +1,4 @@
-/** 记忆空间以恒星呈现，正文和触发词由按需打开的面板管理。 */
+/** 记忆空间以星球呈现，正文和触发词由按需打开的面板管理。 */
 import { showAppDialog } from '@shared/ui';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, Text, View } from 'react-native';
@@ -74,8 +74,8 @@ export default function MemoryScreen({ onBack, onOpenSettings, onCreateMemory, o
   const finishSplash = useCallback(() => setSplashDone(true), []);
 
   return <View style={styles.screen} onLayout={({ nativeEvent: { layout } }) => setViewport({ width: layout.width, height: layout.height })}>
-    {/* 固定预算的静态银河背景 */}
-    {viewport.width > 0 && <GalaxyBackground width={viewport.width} height={viewport.height} />}
+    {/* 星云动效与前景共用 Screen 的前台生命周期。 */}
+    {viewport.width > 0 && <GalaxyBackground width={viewport.width} height={viewport.height} paused={!ambientActive || !splashDone} />}
     <SafeAreaView style={{ flex: 1 }}>
       <View style={styles.navigation}>
         <Pressable accessibilityRole="button" accessibilityLabel="返回" style={styles.iconButton} disabled={busy} onPress={onBack}><ChevronLeft size={23} color={starlight} /></Pressable>
@@ -88,7 +88,7 @@ export default function MemoryScreen({ onBack, onOpenSettings, onCreateMemory, o
       </View>
       {error && !panelOpen && <><Text style={styles.error}>{error}</Text><Pressable accessibilityRole="button" accessibilityLabel="重新读取记忆空间" onPress={refresh}><Text style={[styles.subtitle, { textAlign: 'center' }]}>重新读取</Text></Pressable></>}
       {!snapshot && !error && !panelOpen && <ActivityIndicator color={starlight} style={{ marginTop: 24 }} />}
-      {snapshot?.spaces.length === 0 && <Text style={styles.empty}>创建 AI 助手后，这里会亮起属于你们的星星。</Text>}
+      {snapshot?.spaces.length === 0 && <Text style={styles.empty}>创建 AI 助手后，这里会亮起属于你们的星球。</Text>}
       {snapshot && snapshot.spaces.length > 0 && <MemoryGalaxy spaces={snapshot.spaces} paused={!focused || !appActive || panelOpen || !splashDone} disabled={busy} onSelect={openSpace} />}
     </SafeAreaView>
     {/* 流星 */}

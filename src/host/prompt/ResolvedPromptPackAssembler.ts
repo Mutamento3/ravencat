@@ -13,6 +13,8 @@ import type {
 import { promptPackAssembler } from './PromptPackAssembler';
 import { promptPackCompiler } from './compiler';
 import { createDeviceBatteryPromptBlocks } from './DeviceBatteryPromptBlock';
+import { getCurrentUserProfile } from '@features/profile';
+import { promptPackBlockFactory } from './PromptPackBlockFactory';
 
 const BATTERY_PRESET_ITEM = {
   definitionId: 'context.device_battery', slot: 'dynamic_context' as const,
@@ -48,11 +50,16 @@ export async function assembleResolvedStandalonePromptPack(
     resolved.preset.items.map((item) => item.definitionId)
   );
   const currentInput = { role: 'user' as const, content: params.currentInput };
+  const includeNickname = params.assistantId && ['call.post_user_hangup', 'together_listening.post_user_decline', 'raven_cat.ai_schedule_trigger'].includes(params.scenarioId);
+  const nicknameBlocks = includeNickname ? [await promptPackBlockFactory.createAssistantNicknameBlock(
+    params.assistantId!, (await getCurrentUserProfile()).name, false,
+  )] : [];
   return promptPackCompiler.compile({
     scenario: params.scenarioId,
     blocks: [
       ...params.blocks,
       ...customBlocks,
+      ...nicknameBlocks,
       {
         key: 'current_input',
         title: '当前任务输入',
@@ -67,7 +74,10 @@ export async function assembleResolvedStandalonePromptPack(
     ],
     recentMessages: [],
     currentInput,
-    preset: resolved.preset,
+    preset: { ...resolved.preset, items: [...resolved.preset.items,
+      ...(includeNickname ? [{ definitionId: 'context.assistant_nickname', slot: 'dynamic_context' as const,
+        sortOrder: 190, enabled: true, required: false, protection: 'locked' as const }] : []),
+    ] },
   });
 }
 

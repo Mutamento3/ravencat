@@ -1,13 +1,14 @@
+import { getAssistantDisplayName } from '../../../AssistantNickname';
 // AI 模型设置 - 主组件（组装层）
 
 import React, { useCallback, useMemo, type ReactNode } from 'react';
-import { View, ScrollView, KeyboardAvoidingView } from 'react-native';
+import { View, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { AIProfile } from '../../../domain/AIProfile';
 
 import { useTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
-import { ModelPickerModal, Button, InputField, ToggleField, AIInfoCard, SliderField, showAppDialog, type AppDialogButton, type AppDialogTone } from '@shared/ui';
+import { KeyboardAvoidingContainer, ModelPickerModal, Button, InputField, ToggleField, AIInfoCard, SliderField, showAppDialog, type AppDialogButton, type AppDialogTone } from '@shared/ui';
 import useModelSettings from './useModelSettings';
 import { useAutoSaveNavigation } from '@shared/ui/useAutoSaveDraft';
 import { useAutoSaveFeedback } from '@shared/ui/useAutoSaveFeedback';
@@ -19,6 +20,7 @@ import MaxTokensSection from './MaxTokensSection';
 
 import { createModelSettingsStyles } from './styles';
 import { createCommonStyles } from '@shared/ui/commonStyles';
+import CopyToGeneralModel from '../../auxiliaryModels/CopyToGeneralModel';
 
 interface AIModelSettingsProps {
   aiAssistant: AIProfile;
@@ -85,7 +87,7 @@ export default function AIModelSettings({
     handleSelectModel,
     handleTestConnection,
     handleHostAIToggle,
-    errors, saveError, flush, restore, getSnapshot,
+    errors, saveError, flush, restore, getSnapshot, validateAll,
     handleReset,
   } = useModelSettings({ aiAssistant, onUpdated, onShowAlert: showAlert });
 
@@ -97,9 +99,8 @@ export default function AIModelSettings({
 
   return (
     <SafeAreaView style={commonStyles.screenContainer} edges={['top', 'left', 'right']}>
-      <KeyboardAvoidingView
+      <KeyboardAvoidingContainer
         style={commonStyles.screenContainer}
-        behavior="padding"
         keyboardVerticalOffset={0}
       >
         <NavigationHeader title="模型设置" onGoBack={back} rightButton={feedback.blocked && (saveError || Object.keys(errors).length > 0) ? <Button title="恢复" variant="text" onPress={restoreDraft} /> : undefined} />
@@ -117,7 +118,7 @@ export default function AIModelSettings({
           {/* AI 信息卡片 */}
           <View style={styles.section}>
             <AIInfoCard
-              name={aiAssistant.name}
+              name={getAssistantDisplayName(aiAssistant)}
               model={aiAssistant.model}
               avatarUrl={aiAssistant.avatar}
             />
@@ -248,13 +249,22 @@ export default function AIModelSettings({
             />
           </View>
 
+          <View style={styles.section}>
+            <CopyToGeneralModel readConfig={() => {
+              const config = validateAll();
+              if (!config) { feedback.revealErrors(getSnapshot().errors); return null; }
+              return { apiBaseUrl: config.apiBaseUrl!, apiKey: config.apiKey!, model: config.model!,
+                temperature: config.temperature!, topP: config.topP!, maxTokens: config.maxTokens! };
+            }} />
+          </View>
+
           <View style={[styles.section, styles.sectionLightBorder]}>
             {auxiliaryModelSettings(navigate)}
             <AssistantVoiceModelPicker assistantId={aiAssistant.id} onManageModels={() => navigate(onManageVoiceModels)} />
           </View>
 
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingContainer>
 
       {/* 模型选择弹窗 */}
       <ModelPickerModal

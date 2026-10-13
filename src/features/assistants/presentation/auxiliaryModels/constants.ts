@@ -1,4 +1,10 @@
 export const CAPABILITY_META = {
+  general: {
+    label: '通用辅助模型',
+    description: '管理可复用的连接与模型参数，创建角色或管理员时可复制填入，各自独立修改',
+    icon: 'options-outline',
+    iconColor: '#5C6BC0',
+  },
   embedding: {
     label: '向量化模型',
     description: '用于记忆与表情包等系统的向量化，各系统分别选择实际使用的配置',

@@ -1,4 +1,5 @@
 /** Wallet settings sheet for selecting the ledger assistant. */
+import { getAssistantDisplayName } from '@features/assistants';
 // 设置弹窗（记账AI选择）
 
 import React, { useState, useEffect } from 'react';
@@ -147,13 +148,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                 accessibilityState={{ checked: selectedId === ai.id }}
               >
                 <AIAvatar
-                  name={ai.name}
+                  name={getAssistantDisplayName(ai)}
                   avatarUrl={ai.avatar}
                   size="small"
                   style={styles.aiAvatar}
                 />
                 <Text style={[styles.aiText, selectedId === ai.id && styles.aiTextActive]}>
-                  {ai.name}
+                  {getAssistantDisplayName(ai)}
                 </Text>
                 {selectedId === ai.id && <Text style={styles.check}>✓</Text>}
               </TouchableOpacity>

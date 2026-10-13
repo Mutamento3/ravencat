@@ -357,6 +357,7 @@ function MessageBubble({
       ) : null}
 
       {!voice ? <BubbleTextContent
+        selectable={isReasoning}
         hasTextContent={hasTextContent}
         shouldUseMarkdown={shouldUseMarkdown}
         text={text}

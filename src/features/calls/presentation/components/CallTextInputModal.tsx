@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { AppTextInput } from '@shared/ui';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme, useThemedStyles } from '@shared/theme';
@@ -135,7 +136,7 @@ export default function CallTextInputModal({
         <Pressable style={styles.textInputModalBackdrop} onPress={handleClose} />
         <View style={[styles.textInputModalDock, { paddingBottom: dynamicPaddingBottom }]}>
           <View style={styles.textInputModalRow}>
-            <TextInput
+            <AppTextInput
               ref={inputRef}
               style={styles.textInputModalInput}
               value={text}
@@ -144,8 +145,8 @@ export default function CallTextInputModal({
               placeholderTextColor={theme.colors.text.tertiary}
               accessibilityLabel={title}
               editable={!disabled}
-              multiline={false}
-              blurOnSubmit={false}
+              autoGrow
+              submitBehavior="submit"
               textAlignVertical="center"
               returnKeyType="send"
               onSubmitEditing={() => {

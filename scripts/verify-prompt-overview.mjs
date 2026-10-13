@@ -244,7 +244,9 @@ native.PanResponder = { create: (handlers) => ({ panHandlers: {
   onResponderRelease: handlers.onPanResponderRelease,
   onResponderTerminate: handlers.onPanResponderTerminate,
 } }) };
-const customRows = load('src/features/prompting/presentation/CustomPromptRow.tsx', { 'react-native': native, '@shared/ui': { Toggle: 'Switch' } });
+const customRows = load('src/features/prompting/presentation/CustomPromptRow.tsx', {
+  'react-native': native, '@shared/ui': { Toggle: 'Switch' }, '@shared/theme': { ThemedSurface: 'View' },
+});
 const fixture = { overrides: { 'foundation.default_core': '私密正文不会出现在首页' }, userPrompts: [], toolPermissions: {},
   tools: [{ name: 'read_memory', owner: 'memory', hostOnly: false, defaultEnabled: true, enabled: true, mutating: false, callOnly: false, description: '完整工具说明' },
     { name: 'schedule_self_wake', owner: 'companion', hostOnly: true, defaultEnabled: true, enabled: true, mutating: true, callOnly: false, description: '完整主理工具说明' }] };
@@ -260,10 +262,11 @@ const detailsFor = (id) => id === ai.id ? aiDetails : otherDetails;
 const globalSnapshots = [];
 let definitionSaveGate;
 const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx', {
+  '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname ?? assistant.name },
   '@shared/ui': { Toggle: 'Switch', showAppDialog: ({ title, message, buttons }) => alerts.push([title, message, buttons]) },
   'react-native': native, 'lucide-react-native': { ChevronDown: 'ChevronDown', ChevronRight: 'ChevronRight', Star: 'Star' },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
-  '@shared/theme': { useTheme: () => ({ colors: { text: { tertiary: '#666' }, brand: { primary: '#f90' } } }), useThemedStyles: () => ({}) },
+  '@shared/theme': { ThemedSurface: 'View', useTheme: () => ({ colors: { text: { tertiary: '#666' }, brand: { primary: '#f90' } } }), useThemedStyles: () => ({}) },
   '@shared/ui/NavigationHeader': { default: ({ title, onGoBack, rightButton }) => React.createElement('Header', { title, onGoBack }, rightButton), __esModule: true },
   '@shared/ui/ModalSheet': { default: ({ children, onClose }) => React.createElement('ModalSheet', { onClose }, children), __esModule: true },
   '../application/GetPromptCenterSnapshot': { getPromptCenterSnapshot: () => ({ definitions: [

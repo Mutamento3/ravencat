@@ -1,3 +1,4 @@
+import { getAssistantDisplayName } from '@features/assistants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -290,14 +291,14 @@ export default function TogetherListeningInAppIndicator({
           <GestureDetector key="expanded" gesture={panGesture}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`返回与${viewModel.ai.name}的聊天`}
+              accessibilityLabel={`返回与${getAssistantDisplayName(viewModel.ai)}的聊天`}
               style={styles.body}
               onPressIn={() => { swipeConsumedRef.current = false; }}
               onPress={handleBodyPress}
             >
               <View style={styles.avatars}>
                 <AIAvatar
-                  name={viewModel.ai.name}
+                  name={getAssistantDisplayName(viewModel.ai)}
                   avatarUrl={viewModel.ai.avatar}
                   size="small"
                   shape={AVATAR_SHAPE.circle}

@@ -59,6 +59,9 @@ export function useEffect() {}
 const sharedUiStubUrl = transpileToModuleUrl(`
 export function showAppDialog(input) { globalThis.__ENTRY_ENV__.alerts.push(input); }
 `);
+const assistantStubUrl = transpileToModuleUrl(`
+export function getAssistantDisplayName(assistant) { return assistant.nickname ?? assistant.name; }
+`);
 const reactNativeStubUrl = transpileToModuleUrl(`
 export const Alert = {
   alert: (...args) => { globalThis.__ENTRY_ENV__.alerts.push(args); },
@@ -150,6 +153,7 @@ const { useChatEntryPreload } = await import(preloadHookUrl);
 
 const entryHookUrl = transpileToModuleUrl(
   read('src/features/chat/presentation/shell/useChatConversationEntry.ts')
+    .replaceAll(`from '@features/assistants'`, `from '${assistantStubUrl}'`)
     .replaceAll(`from 'react'`, `from '${reactStubUrl}'`)
     .replaceAll(`from '@shared/ui'`, `from '${sharedUiStubUrl}'`)
     .replaceAll(`from 'react-native'`, `from '${reactNativeStubUrl}'`),
@@ -793,7 +797,10 @@ function createPreloadHarness() {
   const pendingRead = new Promise((resolve) => { finishRead = resolve; });
   let readCount = 0;
   let viewedCount = 0;
-  const entry = load('src/features/chat/presentation/shell/useChatConversationEntry.ts', { '@shared/ui': { showAppDialog() {} } });
+  const entry = load('src/features/chat/presentation/shell/useChatConversationEntry.ts', {
+    '@shared/ui': { showAppDialog() {} },
+    '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname ?? assistant.name },
+  });
   const navigation = load('src/features/chat/presentation/shell/useChatNavigation.ts', { 'react-native': { Keyboard: { dismiss() {} } } });
   const screen = load('src/features/chat/presentation/shell/useChatScreen.ts', {
     './useAIAssistants': { __esModule: true, default: () => ({ aiList: [ai], aiListReady: false, loadAIAssistants: async () => [ai], removeAIAssistant: async () => {} }) },

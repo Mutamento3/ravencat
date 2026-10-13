@@ -276,42 +276,6 @@ function buildTurnCommitUrl(groupRuntimeUrl) {
   // ChatReplyRunCancelledError 拒绝），只有落库成功才记录 commits。
   // segmentIndex/segmentTotal 模拟真实分段事实：mention 所在气泡的事务裁决
   // AI @ AI scheduling consequence，非最终气泡也必须参与裁决。
-  const legacyUrl = transpileToModuleUrl(`
-    export function createLegacySegmentedReplyPersistence() {
-      return {
-        persistsIntermediates: true,
-        persistCompletedAssistantReply: async (params) => {
-          const state = globalThis.__SUPERSEDE_STATE__;
-          const segments = params.response.testSegments || [params.response.text];
-          for (const [segmentIndex, text] of segments.entries()) {
-            if (params.response.beforeSegment) {
-              await params.response.beforeSegment(segmentIndex);
-            }
-            await params.repository.commitMessage({
-              message: {
-                sessionId: params.runtimeContext?.groupChat?.groupId ?? 'g1',
-                text,
-                metadataJson: JSON.stringify({
-                  groupChat: {
-                    mentions: params.runtimeContext?.groupChat?.mentions ?? [],
-                  },
-                }),
-                senderType: 'assistant',
-                segmentIndex,
-                segmentTotal: segments.length,
-              },
-              previewText: text,
-            });
-            state.commits.push(text);
-            state.commitResolve?.();
-          }
-        },
-        persistAssistantPrelude: async () => {},
-      };
-    }
-  `);
-  // 提交接缝的事务内 fence 与气泡 INSERT 共用协调器：桩转发到当前测试床的
-  // 协调器全局句柄（与 loadGroupChatRepository 同一模式）。
   const persistenceUrl = transpileToModuleUrl(`
     export const databaseCoordinator = {
       transaction(...args) {
@@ -347,14 +311,14 @@ function buildTurnCommitUrl(groupRuntimeUrl) {
   const appendSource = read('src/features/chat/group/application/GroupSpeechTaskAppend.ts')
     .replace(/from ['"]\.\/ChatGroupRuntime['"]/g, `from '${groupRuntimeUrl}'`);
   const source = read('src/features/chat/group/application/GroupAssistantTurnCommit.ts')
+    .replace(/from ['"]\.\.\/\.\.\/messages\/domain\/chatMessageMetadata['"]/g,
+      `from '${transpileToModuleUrl('export function buildSessionPreviewTextFromMessage(message) { return message.text; }')}'`)
+    .replace(/from ['"]\.\.\/\.\.\/reply\/application\/CommittedAssistantSegmentDelivery['"]/g,
+      `from '${transpileToModuleUrl('export async function deliverCommittedAssistantSegment() {}')}'`)
     .replace(/from ['"]@platform\/persistence['"]/g, `from '${persistenceUrl}'`)
     .replace(
       /from ['"]\.\.\/\.\.\/messages\/application\/ChatMessageRuntime['"]/g,
       `from '${messageRuntimeUrl}'`,
-    )
-    .replace(
-      /from ['"]\.\.\/\.\.\/reply\/application\/AssistantTurnCommit['"]/g,
-      `from '${legacyUrl}'`,
     )
     .replace(
       /from ['"]\.\.\/\.\.\/reply\/application\/ChatReplyAbort['"]/g,
@@ -395,7 +359,8 @@ function loadGroupTaskExecution(groupRuntimeUrl, turnCommitUrl, abortRegistryUrl
           if (index === script.gateBeforeIndex) {
             await script.gate;
           }
-          await persistence.persistCompletedAssistantReply({
+          await persistence.commitAgentTimeline({
+            items: [{message:{sessionId:runtimeContext.groupChat.groupId,text,senderType:'assistant',metadataJson:JSON.stringify({groupChat:runtimeContext.groupChat})}}],
             response: {
               text,
               segmentIndex: index,
@@ -404,6 +369,7 @@ function loadGroupTaskExecution(groupRuntimeUrl, turnCommitUrl, abortRegistryUrl
             runtimeContext,
             repository: _repo,
           });
+          state.commits.push(text);state.commitResolve?.();
           callbacks?.onFinalReply?.({ text });
         }
       } catch (error) {
@@ -2129,23 +2095,19 @@ async function verifyPerBubbleCommitFence(GroupChatRepository) {
   }
 
   function persistBubble(persistence, text, extraResponse = {}) {
-    return persistence.persistCompletedAssistantReply({
+    return persistence.commitAgentTimeline({
+      items: [{message:{sessionId:'g1',text,senderType:'assistant',metadataJson:JSON.stringify({groupChat:{mentions:[]}}),...extraResponse}}],
       response: { text, ...extraResponse },
       repository: {},
       runtimeContext: { groupChat: { groupId: 'g1' } },
     });
   }
 
-  function persistSegments(persistence, segments, beforeSegment) {
-    return persistence.persistCompletedAssistantReply({
-      response: {
-        text: segments.join('\n'),
-        testSegments: segments,
-        beforeSegment,
-      },
-      repository: {},
-      runtimeContext: { groupChat: { groupId: 'g1' } },
-    });
+  async function persistSegments(persistence, segments, beforeSegment) {
+    for(const [segmentIndex,text] of segments.entries()) {
+      await beforeSegment?.(segmentIndex);
+      await persistBubble(persistence,text,{segmentIndex,segmentTotal:segments.length});
+    }
   }
 
   // 逐泡 fence：气泡 INSERT 与 visible_reply_committed 标记同事务落库；
@@ -2504,6 +2466,49 @@ async function verifyPerBubbleCommitFence(GroupChatRepository) {
 
 // planning 中途用户插话：召唤已接管 plan（preparing，输入窗口已关闭）后到达的
 // 用户消息必须触发换代而不是窗口扩展；规划结果晚到时激活失败、安静退出。
+/** 公共Agent timeline的媒体条目进入同一群提交接缝，物化与消息共享fence和事务。 */
+async function verifyGroupMediaTimeline(GroupChatRepository) {
+  const groupRuntimeUrl=transpileToModuleUrl(`export function getChatGroupRuntimeDependencies(){return globalThis.__GROUP_MEDIA_DEPS__;}`);
+  const {createGroupSegmentedReplyPersistence}=await import(buildTurnCommitUrl(groupRuntimeUrl));
+  const db=createSpeechPlanDatabase();insertGroupChat(db,'g1');
+  globalThis.__SUPERSEDE_COORDINATOR__=createCoordinator(db);
+  const repository=new GroupChatRepository();
+  globalThis.__GROUP_MEDIA_DEPS__={groups:repository};
+  const directory={groupId:'g1',currentUser:{targetType:'user',userProfileId:'self',displayName:'用户'},assistants:[]};
+  db.exec('CREATE TABLE prepared_voice_assets(id TEXT PRIMARY KEY);');
+  const seed=(planId,taskId)=>{
+    insertPlan(db,{id:planId,groupId:'g1',status:'running',lastIncludedMessageId:100,createdAt:NOW});
+    insertTask(db,{id:taskId,planId,groupId:'g1',aiAssistantId:'ai-A',agentId:'agent-ai-A',sequenceOrder:0,source:'admin',status:'running',createdAt:NOW});
+    return createGroupSegmentedReplyPersistence({directory,task:{id:taskId,planId,groupId:'g1',aiAssistantId:'ai-A',sequenceOrder:0}});
+  };
+  let finalized=0,discarded=0,materialized=0;
+  const voice=(id)=>({message:{sessionId:'g1',text:'语音正文',senderType:'assistant',metadataJson:JSON.stringify({groupChat:{mentions:[]},type:'voice',transcript:'语音正文'})},
+    materializeInTransaction:async(tx,message)=>{materialized++;await tx.runAsync('INSERT INTO prepared_voice_assets VALUES (?)',[id]);return {...message,metadataJson:JSON.stringify({...JSON.parse(message.metadataJson),mediaAssetId:id})};},
+    finalizeAfterCommit:async()=>{finalized++;},discardAfterRollback:async()=>{discarded++;}});
+  const params=(items,callbacks={})=>({sessionId:'g1',items,repository:{},response:{text:''},runtimeContext:{groupChat:{groupId:'g1'}},callbacks});
+  const commit=seed('p-media','t-media');
+  let final;
+  const result=await commit.commitAgentTimeline(params([voice('voice-one'),{message:{sessionId:'g1',text:'',senderType:'assistant',metadataJson:JSON.stringify({groupChat:{mentions:[]},type:'sticker',sticker:{stickerId:'s'}})}}],{onFinalReply:value=>{final=value;}}));
+  assert.equal(result.outcome,'committed');assert.ok(result.messages.every(message=>message.sessionId==='g1'));
+  assert.equal(final.sessionId,'g1');assert.equal(final.segmentTotal,2);assert.equal(finalized,1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM prepared_voice_assets').get().count,1);
+  assert.equal(db.prepare("SELECT visible_reply_committed AS flag FROM group_speech_tasks WHERE id='t-media'").get().flag,1);
+  await repository.updateSpeechPlanStatus('p-media','completed',{expectedStatus:['running']});
+  const stopped=seed('p-stopped','t-stopped');await repository.terminateActiveSpeechPlan('g1');
+  await assert.rejects(stopped.commitAgentTimeline(params([voice('late-voice')])),error=>error.name==='ChatReplyRunCancelledError');
+  assert.equal(materialized,1,'取消后的媒体不能物化');assert.equal(discarded,1);
+  const rollback=seed('p-rollback','t-rollback');
+  db.exec("CREATE TRIGGER reject_group_voice BEFORE INSERT ON messages WHEN NEW.text='语音正文' BEGIN SELECT RAISE(ABORT,'消息提交失败'); END;");
+  await assert.rejects(rollback.commitAgentTimeline(params([voice('rollback-voice')])),/消息提交失败/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM prepared_voice_assets WHERE id='rollback-voice'").get().count,0,'消息失败时媒体在同一事务回滚');
+  assert.equal(finalized,1);assert.equal(discarded,2);
+  db.exec('DROP TRIGGER reject_group_voice;');await repository.updateSpeechPlanStatus('p-rollback','completed',{expectedStatus:['running']});
+  const midStop=seed('p-middle','t-middle');let notifications=0;
+  await assert.rejects(midStop.commitAgentTimeline(params([voice('before-stop'),voice('after-stop')],{notifyUI:async()=>{notifications++;await repository.terminateActiveSpeechPlan('g1');}})),error=>error.name==='ChatReplyRunCancelledError');
+  assert.equal(notifications,1);assert.equal(db.prepare("SELECT COUNT(*) AS count FROM prepared_voice_assets WHERE id='after-stop'").get().count,0,'终止后不提交后续结果');
+  db.close();
+}
+
 async function verifyPlanningInterruption(GroupChatRepository) {
   const { db, invokeGroupChat, commitGroupUserMessage, state } = await loadInvokeTestBed(
     GroupChatRepository,
@@ -2703,6 +2708,7 @@ await verifyTerminalCasGuards(GroupChatRepository);
 await verifyForceTermination(GroupChatRepository);
 await verifyForceTerminationCommand(GroupChatRepository);
 await verifyPerBubbleCommitFence(GroupChatRepository);
+await verifyGroupMediaTimeline(GroupChatRepository);
 await verifyPlanningInterruption(GroupChatRepository);
 await verifyCurrentPreviewBinding(GroupChatRepository);
 

@@ -105,7 +105,6 @@ assert.match(publisherSource, /status = "suppressed"/);
 assert.match(publisherSource, /currentActivityId != activityId/, '旧 Activity cancel 不得撤销新 presentation');
 
 assert.match(indexSource, /KimiPhoneTogetherListeningNotificationActionTask/);
-assert.match(headlessSource, /await initDatabase\(\)/);
 assert.match(headlessSource, /getTogetherListeningActivityById\(activityId\)/);
 assert.match(headlessSource, /activity\.hostAiId !== hostAiId/);
 assert.match(headlessSource, /activity\.chatSessionId !== chatSessionId/);

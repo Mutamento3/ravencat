@@ -201,6 +201,26 @@ try {
     INSERT INTO chat_conversations (id, kind) VALUES ('conversation', 'direct');
     INSERT INTO sessions (id, ai_assistant_id, name, created_at, updated_at) VALUES ('conversation', 'a', 'A', '${now}', '${now}');
     INSERT INTO conversation_turn_state (session_id, reply_cursor, revision, updated_at) VALUES ('conversation', 100, 0, '${now}');`);
+  // 首页聚合保留每个空间的真实数量，超过视觉上限仍完整统计，增删后不缓存旧值。
+  {
+    const queries = load('src/features/memory/application/MemoryQueries.ts');
+    const dependencies = runtime.getMemoryRuntimeDependencies();
+    runtime.configureMemoryRuntimeDependencies({ ...dependencies, listMemorySpaces: async () => [
+      { poolId: 'pool-a', assistantId: 'a', assistantName: 'A', assistantAvatar: null, isHost: true },
+      { poolId: 'pool-b', assistantId: 'b', assistantName: 'B', assistantAvatar: null, isHost: false },
+    ] });
+    const counts = async () => (await queries.getMemoryManagementSnapshot('a')).spaces.map(space => space.memoryCount);
+    assert.deepEqual(await counts(), [0, 0]);
+    for (let i = 0; i < 12; i++) await create(`galaxy-${i}`, `星空计数 ${i}`);
+    await create('galaxy-foreign', '另一个空间', now, 'pool-b');
+    assert.deepEqual(await counts(), [12, 1]);
+    await commands.forgetMemory('a', 'galaxy-0');
+    assert.deepEqual(await counts(), [11, 1]);
+    for (let i = 1; i < 12; i++) await commands.forgetMemory('a', `galaxy-${i}`);
+    await commands.forgetMemory('b', 'galaxy-foreign');
+    assert.deepEqual(await counts(), [0, 0]);
+    runtime.configureMemoryRuntimeDependencies(dependencies);
+  }
   assert.equal(domain.requireMemoryContent('  ' + '猫'.repeat(500) + '  ').length, 500);
   assert.equal(Array.from(domain.requireMemoryContent('🐈'.repeat(500))).length, 500);
   assert.throws(() => domain.requireMemoryContent('猫'.repeat(501)), domain.MemoryInputError);
@@ -466,31 +486,31 @@ try {
   const remaining = await raw.getFirstAsync(timelineOrderedMessagesCte("m.session_id = 'conversation'") + ' SELECT * FROM ordered_messages WHERE id = 48');
   assert.equal(remaining.timeline_order_anchor_id, anchor);
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1,
-    generateAddition: async () => '{"content":"10 月 4 日讨论 10 月 10 日考试"}' });
-  assert.throws(() => summaryApplication.parseChatSummaryAddition('{"content":"新增","replace":[]}'));
-  assert.equal(summaryApplication.parseChatSummaryAddition('{"content":"新增"}'), '新增');
-  assert.equal(summaryApplication.parseChatSummaryAddition(JSON.stringify({ content: '  ' + '🐈'.repeat(500) + '  ' })), '🐈'.repeat(500));
-  assert.equal(summaryApplication.parseChatSummaryAddition(JSON.stringify({ content: '猫'.repeat(501) })), '猫'.repeat(501));
-  assert.equal(summaryApplication.parseChatSummaryAddition(JSON.stringify({ content: '🐈'.repeat(501) })), '🐈'.repeat(501));
+    generateAddition: async () => '10 月 4 日讨论 10 月 10 日考试' });
   const dates = buildSummaryInput({ ...summaryClaim, messages: [{ ...summaryClaim.messages[0], content: '10 月 10 日考试' }] });
   assert.ok(JSON.parse(dates).newMessagesOnly[0].localDateTime.startsWith('2026-10-04'));
 
   // 失败、取消和插入失败都不能推进摘要范围；成功只追加一段。
   database.prepare('UPDATE conversation_turn_state SET reply_cursor = 100').run();
   const beforeFailure = await summary.readContext('conversation', [], []);
-  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => '{"content":"新增","replace":[]}' });
+  const { ChatSummaryGenerationError } = load('src/features/chat/summary/domain/ChatSummaryRepository.ts');
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => {
+    throw new ChatSummaryGenerationError({ kind: 'empty_output', message: '模型没有返回摘要正文。', retryable: true });
+  } });
   assert.equal(await summaryApplication.processChatSummary('conversation', signal),false);
   assert.deepEqual((await summary.readContext('conversation', [], [])).raw, beforeFailure.raw);
   assert.equal(database.prepare('SELECT claim_id FROM chat_summary_state WHERE conversation_id = ?').get('conversation').claim_id, null);
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1,
-    generateAddition: async () => '{"content":"不完整的 JSON' });
+    generateAddition: async () => {
+      throw new ChatSummaryGenerationError({ kind: 'output_limit', message: '模型因输出 token 上限停止。', retryable: false });
+    } });
   await retryPending('conversation','primary');
   assert.equal(await summaryApplication.processChatSummary('conversation', signal),false);
-  assert.deepEqual(withoutTasks(await summary.readContext('conversation', [], [])), withoutTasks(beforeFailure), '无法解析的输出不能追加摘要或推进原文范围');
+  assert.deepEqual(withoutTasks(await summary.readContext('conversation', [], [])), withoutTasks(beforeFailure), '截断输出不能追加摘要或推进原文范围');
   assert.equal(database.prepare('SELECT claim_id FROM chat_summary_state WHERE conversation_id = ?').get('conversation').claim_id, null);
   const cancelledSummary = new AbortController();
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => {
-    cancelledSummary.abort(); return '{"content":"取消后不能提交"}';
+    cancelledSummary.abort(); return '取消后不能提交';
   } });
   await retryPending('conversation','primary');
   assert.equal(await summaryApplication.processChatSummary('conversation', cancelledSummary.signal),false);
@@ -500,15 +520,16 @@ try {
   await assert.rejects(appendSummary(atomicClaim, 'collision', '不能覆盖', later));
   assert.deepEqual((await summary.readContext('conversation', [], [])).raw, beforeFailure.raw);
   await summary.releaseClaim(atomicClaim);
-  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => '{"content":"成功的新摘要"}' });
+  const plainSummary = '成功的新摘要，约好"明天"复习。\n我负责整理 {重点}。';
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => plainSummary });
   assert.equal(await summaryApplication.processChatSummary('conversation', signal), true);
   const afterSuccess = await summary.readContext('conversation', [], []);
   assert.equal(afterSuccess.raw.length, beforeFailure.raw.length - 1);
-  assert.deepEqual(afterSuccess.segments.map((item) => item.content), ['用户维护的内容', '成功的新摘要']);
+  assert.deepEqual(afterSuccess.segments.map((item) => item.content), ['用户维护的内容', plainSummary], '纯正文中的引号、换行与大括号完整保存');
   let longSummaryCalls = 0;
   const longSummary = '猫'.repeat(1000);
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1,
-    generateAddition: async () => { longSummaryCalls++; return JSON.stringify({ content: longSummary }); } });
+    generateAddition: async () => { longSummaryCalls++; return longSummary; } });
   assert.equal(await summaryApplication.processChatSummary('conversation',signal),true);
   const afterLongSummary = await summary.readContext('conversation',[]);
   assert.equal(longSummaryCalls,1,'有效正文超过500字直接保存，不为了字数重复请求');
@@ -534,7 +555,7 @@ try {
   });
   let modelInputs = [];
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 20,
-    generateAddition: async (input) => { modelInputs.push(input); return '{"content":"我们在电话里聊了复习计划。"}'; } });
+    generateAddition: async (input) => { modelInputs.push(input); return '我们在电话里聊了复习计划。'; } });
   assert.equal(await summaryApplication.processChatSummary('call-summary', signal), false, '四条对话不足 N，挂断不额外调用 AI');
   assert.equal(modelInputs.length, 0);
   let callContext = await summaryApplication.getChatSummaryContext('call-summary');
@@ -593,7 +614,7 @@ try {
     modelInputs.push(input);
     assert.ok(input.messages.reduce((count, item) => count + Array.from(item.content).length, 0) <= 5000);
     assert.equal(input.earlierAdditionsReadOnly.length, input.part.index - 1);
-    return JSON.stringify({ content: '长通话第' + input.part.index + '段。' });
+    return '长通话第' + input.part.index + '段。';
   } });
   assert.equal(await summaryApplication.processChatSummary('call-summary', signal), true);
   assert.ok(modelInputs.length > 1);
@@ -668,7 +689,7 @@ try {
   const partialCall = (await summaryApplication.getChatSummaryContext('call-summary')).pendingCalls[0];
   assert.deepEqual(partialCall.transcripts.map((item) => item.content), ['清空后的约定']);
   assert.equal(partialCall.historyStartsAfter, boundaryAt);
-  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => '{"content":"清空后约好继续复习。"}' });
+  summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1, generateAddition: async () => '清空后约好继续复习。' });
   assert.equal(await summaryApplication.processChatSummary('call-summary', signal), true);
   database.prepare("UPDATE sessions SET visible_after_at = ? WHERE id = 'call-summary'").run(postClearEndedAt);
   assert.equal((await summaryApplication.getChatSummaryContext('call-summary')).segments.length, 1, '清消息保留已有摘要');
@@ -811,7 +832,7 @@ try {
   database.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updated_at) VALUES ('secondary-ai','secondary-actor','二级测试','chat','${now}','${now}');
     INSERT INTO chat_conversations VALUES ('secondary-test', 'direct');
     INSERT INTO sessions (id, ai_assistant_id, name, created_at, updated_at) VALUES ('secondary-test', 'secondary-ai', '二级测试', '${now}', '${now}');`);
-  const secondarySettings = { generationEnabled: true, injectEnabled: true, fixedMessageId: null, secondaryEnabled: true, secondaryTokenThreshold: 8000, requestTimeoutSeconds: 300, maxOutputTokens: null };
+  const secondarySettings = { generationEnabled: true, injectEnabled: true, fixedMessageId: null, secondaryEnabled: true, secondaryTokenThreshold: 8000, requestTimeoutSeconds: 300, maxOutputTokens: null, modelConfigId: null, groupTriggerCount: 40 };
   assert.deepEqual(await summary.readSettings('secondary-test'), secondarySettings);
   for (let index = 1; index <= 5; index++) await summary.create('secondary-test', 'primary-' + index,
     '猫'.repeat(index === 5 ? 1599 : 1600), now, 'Asia/Shanghai');
@@ -873,20 +894,20 @@ try {
   assert.deepEqual(withoutTasks(await summary.readContext('secondary-test', [])), withoutTasks(secondarySnapshot), '失败保留原一级摘要上下文');
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 99,
     generateAddition: async () => { throw new Error('不应该读取原文'); },
-    generateSecondary: async () => JSON.stringify({summaries: []}) });
+    generateSecondary: async () => { throw new ChatSummaryGenerationError({kind:'empty_output',message:'模型没有返回摘要正文。',retryable:true}); } });
   await retryPending('secondary-test','secondary');
   assert.equal(await summaryApplication.processChatSummary('secondary-test', signal),false);
-  assert.deepEqual(withoutTasks(await summary.readContext('secondary-test', [])), withoutTasks(secondarySnapshot), '非法模型结果不交接');
+  assert.deepEqual(withoutTasks(await summary.readContext('secondary-test', [])), withoutTasks(secondarySnapshot), '空正文不交接');
   const secondaryAbort = new AbortController();
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 99,
     generateAddition: async () => { throw new Error('不应该读取原文'); },
-    generateSecondary: async () => { secondaryAbort.abort(); return JSON.stringify({content: '取消不提交'}); } });
+    generateSecondary: async () => { secondaryAbort.abort(); return '取消不提交'; } });
   await retryPending('secondary-test','secondary');
   assert.equal(await summaryApplication.processChatSummary('secondary-test', secondaryAbort.signal),false);
   assert.deepEqual(withoutTasks(await summary.readContext('secondary-test', [])), withoutTasks(secondarySnapshot));
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 99,
     generateAddition: async () => { throw new Error('不应该读取原文'); },
-    generateSecondary: async () => JSON.stringify({content: '持久归纳'}) });
+    generateSecondary: async () => '持久归纳' });
   assert.equal(await summaryApplication.processChatSummary('secondary-test', signal), true);
   const retainedSecondary = await summary.readContext('secondary-test', []);
   await summary.create('secondary-test', 'deleted-source', '待删除'.repeat(100), now, 'Asia/Shanghai');
@@ -902,7 +923,7 @@ try {
   assert.equal((await searchTool.execute({ from: '无效时间' }, searchContext)).status, 'error');
   await Promise.all([summary.updateSettings('secondary-test', {secondaryTokenThreshold: 200}),
     summary.updateSettings('secondary-test', {secondaryEnabled: false})]);
-  assert.deepEqual(await summary.readSettings('secondary-test'), {generationEnabled:true,injectEnabled:true,fixedMessageId:null,secondaryEnabled:false,secondaryTokenThreshold:200,requestTimeoutSeconds:300,maxOutputTokens:null}, '独立字段保存不覆盖其他设置');
+  assert.deepEqual(await summary.readSettings('secondary-test'), {...secondarySettings,secondaryEnabled:false,secondaryTokenThreshold:200}, '独立字段保存不覆盖其他设置');
   await summary.updateSettings('secondary-test', {secondaryTokenThreshold:100,secondaryEnabled:true});
 
   // backlog 沿用一条持久摘要任务链：二级在途时新原文只累计，不能并行启动一级。
@@ -920,7 +941,7 @@ try {
   const secondaryStartedPromise = new Promise(resolve => { secondaryStarted = resolve; });
   const secondaryResponse = new Promise(resolve => { completeSecondary = resolve; });
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1,
-    generateAddition: async () => { modelOrder.push('primary'); return JSON.stringify({content:'考试'}); },
+    generateAddition: async () => { modelOrder.push('primary'); return '考试'; },
     generateSecondary: async input => { modelOrder.push('secondary');
       assert.equal(input.segments.length,2,'阈值批次包含刚完成的一级摘要');
       secondaryStarted(); return secondaryResponse; } });
@@ -933,7 +954,7 @@ try {
   assert.equal(await summaryApplication.processChatSummary('queue-summary',signal),false,'持久 claim 拒绝并发领取');
   assert.deepEqual(modelOrder,['primary','secondary']);
   assert.ok((await summary.readContext('queue-summary',[])).raw.some(item=>item.messageId===3003),'二级期间新原文保留');
-  completeSecondary(JSON.stringify({content:'重要考试事项'}));
+  completeSecondary('重要考试事项');
   assert.equal(await ongoingSummary,true);
   await summaryApplication.processChatSummary('queue-summary',signal);
   await summaryApplication.processChatSummary('queue-summary',signal);
@@ -1144,7 +1165,78 @@ try {
   assert.ok(database.prepare("SELECT id FROM auxiliary_model_configs WHERE id = 'retired-asset'").get());
   assert.equal(await repository.getEmbeddingModelId(), 'retained-choice');
   await summary.create('conversation', 'durable-summary', '长期保留的摘要', now, 'Asia/Shanghai');
+  // 群摘要沿用两级交接与generation；背景读取按每群额度，不改变来源处理状态。
+  for (const id of ['context-group-a','context-group-b']) {
+    database.prepare("INSERT INTO chat_conversations VALUES (?,'group')").run(id);
+    database.prepare('INSERT INTO group_chats(id,name,created_at,updated_at) VALUES (?,?,?,?)').run(id,id,now,now);
+    database.prepare('INSERT INTO group_chat_members(id,group_id,ai_assistant_id,agent_id,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(id+'-member',id,'a','actor-a',now,now);
+    database.prepare('INSERT INTO group_speech_plans(id,group_id,status,last_included_message_id,created_at,updated_at) VALUES (?,?,?,99999,?,?)').run(id+'-plan',id,'completed',now,now);
+    for (let index=0;index<4;index++) database.prepare('INSERT INTO messages(id,session_id,text,is_me,sender_type,metadata_json,created_at) VALUES (?,?,?,?,?,?,?)')
+      .run((id.endsWith('a')?80000:80010)+index,id,'群讨论'+index,index%2===0?1:0,index%2===0?'user':'assistant',
+        JSON.stringify({actorAIId:'a',actorAgentId:'actor-a',actorName:'公开名称'}),now);
+  }
+  await summary.updateSettings('context-group-a',{groupTriggerCount:2});
+  const groupClaim=await summary.claim('context-group-a',99,'group-claim',now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.ok(groupClaim);
+  assert.equal(groupClaim.batchSize,2,'群门槛只取群设置，不使用管理员或成员窗口');
+  assert.equal(groupClaim.messages[1].actor.assistantId,'a');
+  const groupSourceIds=groupClaim.messages.map(item=>item.messageId);
+  await summary.updateSettings('context-group-a',{modelConfigId:'continuous-reference',groupTriggerCount:2});
+  assert.equal(await appendSummary(groupClaim,'late-group','旧模型结果',later),false,'切换模型撤销旧任务资格');
+  const freshGroup=await summary.claim('context-group-a',2,'fresh-group',now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.equal(freshGroup.requestSettings.modelConfigId,'continuous-reference','请求选择来自领取事务');
+  assert.deepEqual(freshGroup.messages.map(item=>item.messageId),groupSourceIds,'切换不回退或丢失处理范围');
+  assert.equal(await appendSummary(freshGroup,'group-primary','个人分歧与共同分工',later),true);
+  await summary.updateSettings('context-group-a',{secondaryTokenThreshold:1});
+  const groupSecondary=await summary.claimSecondary('context-group-a','group-secondary-claim',now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+  assert.ok(groupSecondary);
+  assert.equal(await summary.appendSecondary(groupSecondary,'group-secondary','群共识与未完成分工',later),true);
+  const beforeGuest=database.prepare("SELECT * FROM chat_summary_state WHERE conversation_id='context-group-a'").get();
+  let guest=await summary.readBackgroundContexts('a','not-a-source',{privateLimit:0,groupLimit:2,upperBound:{messageId:80012,createdAt:later}});
+  assert.deepEqual(guest.map(item=>item.conversationId),['context-group-a','context-group-b']);
+  assert.deepEqual(guest.map(item=>item.timeline.length),[2,2],'每群单独窗口，并排除执行上界后的消息');
+  assert.equal(guest[0].contextSegments[0].id,'group-secondary');
+  assert.deepEqual(database.prepare("SELECT * FROM chat_summary_state WHERE conversation_id='context-group-a'").get(),beforeGuest,'客视角不推进或改写摘要状态');
+  assert.deepEqual(await summary.readBackgroundContexts('a','not-a-source',{privateLimit:0,groupLimit:0}),[],'0不带入原文或摘要');
+  guest=await summary.readBackgroundContexts('a','context-group-a',{privateLimit:0,groupLimit:2});
+  assert.deepEqual(guest.map(item=>item.conversationId),['context-group-b'],'当前群不能重复注入');
+  await summary.updateSettings('context-group-a',{injectEnabled:false});
+  guest=await summary.readBackgroundContexts('a','not-a-source',{privateLimit:0,groupLimit:2});
+  assert.equal(guest[0].contextSegments.length,0,'客窗口遵循来源注入开关');
+  assert.equal(guest[0].timeline.length,2);
+  database.prepare("UPDATE group_chat_members SET enabled=0 WHERE group_id='context-group-b'").run();
+  guest=await summary.readBackgroundContexts('a','not-a-source',{privateLimit:0,groupLimit:2});
+  assert.deepEqual(guest.map(item=>item.conversationId),['context-group-a'],'退出后不再带入');
+  assert.equal((await summary.search('b',{conversationId:'context-group-a'})).entries.length,0,'未参加群的AI不能查询共享摘要');
+  assert.ok((await summary.search('a',{conversationId:'context-group-a'})).entries.some(item=>item.id==='group-secondary'));
+  const groupCursor=database.prepare("SELECT processed_cursor FROM chat_summary_state WHERE conversation_id='context-group-a'").get().processed_cursor;
+  await summary.updateSettings('context-group-a',{modelConfigId:null});
+  assert.equal(database.prepare("SELECT processed_cursor FROM chat_summary_state WHERE conversation_id='context-group-a'").get().processed_cursor,groupCursor);
+  assert.equal((await summary.readContext('context-group-a',[])).segments.length,2,'切换保留两级正文');
+
+  // 群读取自己单聊的客窗口，不能读取其他角色的私聊；固定起点不替代客近期范围。
+  database.exec(`INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated_at) VALUES ('guest-owner','guest-agent','客来源','chat','${now}','${now}');
+    INSERT INTO chat_conversations VALUES ('private-guest','direct');
+    INSERT INTO sessions(id,ai_assistant_id,name,created_at,updated_at) VALUES ('private-guest','guest-owner','客来源','${now}','${now}');
+    INSERT INTO conversation_turn_state(session_id,reply_cursor,revision,updated_at) VALUES ('private-guest',90003,0,'${now}');`);
+  for (let index=1; index<=3; index++) database.prepare('INSERT INTO messages(id,session_id,text,is_me,sender_type,created_at) VALUES (?,?,?,?,?,?)')
+    .run(90000+index,'private-guest','私聊背景'+index,index===1?1:0,index===1?'user':'assistant',now);
+  await summary.create('private-guest','private-guest-summary','自己的摘要',now,'Asia/Shanghai');
+  await summary.setFixedStart('private-guest',90003);
+  let privateGuest=await summary.readBackgroundContexts('guest-owner','context-group-a',{privateLimit:2,groupLimit:0,upperBound:{messageId:90002,createdAt:later}});
+  assert.deepEqual(privateGuest.map(item=>item.conversationId),['private-guest']);
+  assert.deepEqual(privateGuest[0].timeline.map(item=>item.messageId),[90001,90002],'客窗口按近期原文与执行上界读取，不被来源固定起点截掉');
+  assert.equal(privateGuest[0].contextSegments[0].id,'private-guest-summary');
+  assert.equal((await summary.readBackgroundContexts('b','context-group-a',{privateLimit:2,groupLimit:0})).some(item=>item.conversationId==='private-guest'),false,'其他AI不能自动读取此单聊');
+  await summary.updateSettings('private-guest',{injectEnabled:false});
+  privateGuest=await summary.readBackgroundContexts('guest-owner','context-group-a',{privateLimit:2,groupLimit:0});
+  assert.equal(privateGuest[0].contextSegments.length,0);
+  assert.equal(privateGuest[0].timeline.length,2);
+  assert.deepEqual(await summary.readBackgroundContexts('guest-owner','context-group-a',{privateLimit:0,groupLimit:0}),[]);
+
   const backupGroupId = await commands.addMemoryTrigger('a', '备份绑定词、备份同义词', ['vector-only']);
+  await summary.updateSettings('context-group-a', { modelConfigId: 'continuous-reference' });
+  const retainedGroupSummary = await summary.readContext('context-group-a', []);
   await commands.setMemoryRecallSettings('a', { passiveLimit: 5, activePageSize: 10 });
   await bootstrap();
   assert.ok(await repository.getEntry('pool-a', 'vector-only'));
@@ -1171,6 +1263,7 @@ try {
   assert.deepEqual(await summary.readContext('logical', []), retainedFixed, '备份恢复保留固定起点与独立开关');
   assert.deepEqual((await summary.readContext('retry-summary',[])).tasks.find(value=>value.id===retryTaskId),retainedRetry,'重启和恢复保留失败次数与调用诊断');
   assert.deepEqual(await summary.readContext('merge-summary',[]),deletedMerged,'合并及删除后的来源、调用事实随备份恢复');
+  assert.deepEqual(await summary.readContext('context-group-a', []), retainedGroupSummary, '恢复保留群正文、归纳标记、触发条数与模型选择');
   assert.deepEqual(await raw.getAllAsync('PRAGMA foreign_key_check'), []);
   {
     // 摘要检索、摘要编辑 fence 与工具省略／清空摘要都使用正式链路。

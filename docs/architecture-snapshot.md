@@ -52,7 +52,9 @@
                 ├── [groupId]
                     ├── admin-settings.tsx
                     ├── file-preview.tsx
-                    └── menu.tsx
+                    ├── menu.tsx
+                    └── summary
+                        └── index.tsx
                 ├── [groupId].tsx
                 └── new.tsx
         ├── favorites.tsx
@@ -116,6 +118,7 @@
                 ├── HostAuthorityCoordinator.ts
                 ├── index.ts
                 └── modelTypes.ts
+            ├── AssistantNickname.ts
             ├── AuxiliaryModelAvailability.ts
             ├── AuxiliaryModelsChanged.ts
             ├── composition.ts
@@ -126,7 +129,9 @@
                 ├── AssistantVoiceSettingsRepository.ts
                 ├── AuxiliaryModel.ts
                 ├── AuxiliaryModelRepository.ts
-                └── HostRepository.ts
+                ├── HostRepository.ts
+                └── ModelCallConfig.ts
+            ├── GeneralModelCopies.ts
             ├── index.ts
             ├── infrastructure
                 ├── SQLiteAssistantRepository.ts
@@ -144,6 +149,8 @@
                     ├── AuxiliaryModelNavigator.tsx
                     ├── AuxiliaryModelPoolScreen.tsx
                     ├── constants.ts
+                    ├── CopyToGeneralModel.tsx
+                    ├── GeneralModelPrefill.tsx
                     ├── index.ts
                     ├── speechModelDraft.ts
                     ├── SpeechModelEditScreen.tsx
@@ -165,6 +172,7 @@
                         ├── useModelSettings.ts
                         └── useModelSettingsForm.ts
                     ├── AssistantVoiceModelPicker.tsx
+                    ├── ContextLimitsApply.tsx
                     ├── ConversationList.tsx
                     ├── conversationListItems.ts
                     ├── FormFields.tsx
@@ -314,6 +322,7 @@
                     ├── GroupAutoInvocationScheduler.ts
                     ├── GroupChatManagement.ts
                     ├── GroupChatMessaging.ts
+                    ├── GroupMentionModelText.ts
                     ├── GroupMessageCommit.ts
                     ├── GroupMessageMentionParser.ts
                     ├── GroupParticipantDirectory.ts
@@ -484,6 +493,7 @@
                         ├── paperNoteStyles.ts
                         ├── ReasoningHeader.tsx
                         ├── ReplyQuote.tsx
+                        ├── selectableMarkdownRenderer.tsx
                         ├── StickerMessageCard.tsx
                         ├── styles.ts
                         ├── supplementStyles.ts
@@ -798,6 +808,7 @@
                 ├── MemoryEmbeddingModelPicker.tsx
                 ├── MemoryGalaxy.tsx
                 ├── memoryGalaxyStyles.ts
+                ├── MemoryPlanet.tsx
                 ├── MemoryScreen.tsx
                 ├── memoryScreenStyles.ts
                 ├── MemorySettingsScreen.tsx
@@ -893,6 +904,7 @@
             ├── application
                 ├── CurrentProtectedAppsPolicy.ts
                 ├── ForegroundAppRuntimeDependencies.ts
+                ├── NetEaseCurrentLyric.ts
                 ├── NetEaseExactSongRoute.ts
                 ├── NetEaseMusicRuntimeDependencies.ts
                 ├── NetEasePlayback.ts
@@ -1454,6 +1466,7 @@
             ├── AIInfoCard.tsx
             ├── AppDialogHost.tsx
             ├── appDialogStore.ts
+            ├── AppTextInput.tsx
             ├── AutoSaveDraftEditor.ts
             ├── AutoSaveErrors.tsx
             ├── AvatarImage.d.ts
@@ -1472,6 +1485,7 @@
             ├── GroupAvatar.tsx
             ├── index.ts
             ├── InputField.tsx
+            ├── KeyboardAvoidingContainer.tsx
             ├── ListItem.tsx
             ├── ModalSheet.tsx
             ├── ModelPickerModal.tsx
@@ -1663,6 +1677,7 @@
                                     ├── controller
                                         ├── ExactPackageMediaSessionResolverTest.kt
                                         ├── FakeMediaSessionControllerSource.kt
+                                        ├── MediaSessionAudioOutputTest.kt
                                         ├── MediaSessionSnapshotReaderTest.kt
                                         ├── MediaSessionTransportControllerTest.kt
                                         ├── NotificationListenerAccessReaderTest.kt

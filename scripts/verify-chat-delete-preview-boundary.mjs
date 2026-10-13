@@ -90,13 +90,14 @@ const timeSeparatorUrl = transpileToModuleUrl(
 const chatStickerUrl = transpileToModuleUrl(
   read('src/features/chat/messages/domain/ChatSticker.ts'),
 );
+const sharedChatRecordUrl = transpileToModuleUrl(read('src/features/chat/messages/domain/SharedChatRecord.ts'));
 
 const chatMessageMetadataSource = transpileSource(
   'src/features/chat/messages/domain/chatMessageMetadata.ts',
 ).replaceAll(
   `from './ChatSticker'`,
   `from '${chatStickerUrl}'`,
-);
+).replaceAll(`from './SharedChatRecord'`, `from '${sharedChatRecordUrl}'`);
 const chatMessageMetadataUrl = `data:text/javascript;base64,${Buffer.from(chatMessageMetadataSource).toString('base64')}`;
 const chatEventsUrl = transpileToModuleUrl(read('src/features/chat/messages/events/ChatEvents.ts'));
 
@@ -265,13 +266,22 @@ function createEnv(db) {
 // 生产模块本身无内部可变状态，只需装配一次；环境通过 globalThis 按用例切换。
 const messageRepositoryModule = await import(messageRepositoryUrl);
 const { deleteChatMessage } = await import(deleteChatMessageUrl);
+const { setChatEventBus } = await import(chatEventsUrl);
 
 async function runCase(fn) {
   const db = createDatabase();
   const env = createEnv(db);
   globalThis.__DELETE_PREVIEW_ENV__ = env;
   env.runtime.messages = new messageRepositoryModule.MessageRepository();
-  await fn(env);
+  env.events = [];
+  const unsubscribe = setChatEventBus({ emit: (name, payload) => {
+    env.events.push({ name, ...payload });
+  } });
+  try {
+    await fn(env);
+  } finally {
+    unsubscribe();
+  }
 }
 
 // ============================================================================
@@ -602,7 +612,7 @@ await runCase(async ({ db, executor, runtime, mediaReleaseCalls }) => {
 // - 非最后一段正文不得误删 reasoning；
 // - 已不存在的 id 返回空，且不得触发任何媒体裁决（幂等）。
 // ============================================================================
-await runCase(async ({ db, mediaReleaseCalls }) => {
+await runCase(async ({ db, mediaReleaseCalls, events }) => {
   const sessionId = 'session_case7';
   insertSession(db, sessionId);
   const reasoningId = insertAssistantSegment(db, sessionId, {
@@ -648,6 +658,10 @@ await runCase(async ({ db, mediaReleaseCalls }) => {
     [reasoningId, segment1].sort(),
     '删除最后一段正文必须连带删除 reasoning',
   );
+  assert.deepEqual(events, [
+    { name: 'messagesDeleted', sessionId, deletedMessageIds: firstDeleted },
+    { name: 'messagesDeleted', sessionId, deletedMessageIds: secondDeleted },
+  ], '单条及推理联删发布精确删除事实，不请求重载');
   assert.deepEqual(
     [...mediaReleaseCalls.at(-1)].sort(),
     ['asset-reasoning', 'asset-seg1'],

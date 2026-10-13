@@ -360,16 +360,6 @@ export class AICallRuntimeService {
       requestedMode = 'video',
     } = params;
     const visibleMessages: ChatMessage[] = [];
-    const activeCall = await this.getCallRepository().getActiveSession();
-    if (activeCall) {
-      const ended = await this.endCall(activeCall.id, 'userEnded');
-      return {
-        status: 'endedActive',
-        call: ended.call,
-        visibleMessages: ended.visibleMessages,
-      };
-    }
-
     const preflight = await this.preflightCall(aiConfig, 'outgoing');
 
     if (!preflight.ok) {
@@ -801,7 +791,7 @@ export class AICallRuntimeService {
   private async readEndedOutgoingCall(callId: string): Promise<StartOutgoingCallResult> {
     const call = await this.getCallRepository().getSessionById(callId);
     if (!call) throw new Error(`Call ${callId} disappeared while deciding`);
-    return { status: 'endedActive', call, visibleMessages: [] };
+    return { status: 'ended', call, visibleMessages: [] };
   }
 
   private notifyCallTerminated(call: CallSession): void {

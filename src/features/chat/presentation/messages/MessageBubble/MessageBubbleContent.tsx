@@ -1,6 +1,6 @@
 /** 消息气泡中的文本、附件与翻译展示协作者。 */
 
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Markdown, { MarkdownIt, hasParents } from 'react-native-markdown-renderer';
 import { useMappingHelper } from '@shopify/flash-list';
@@ -11,6 +11,7 @@ import { isMoonKimiTheme, isPaperNoteTheme } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import AttachmentCard from './AttachmentCard';
 import { createMessageBubbleStyles } from './styles';
+import { createSelectableMarkdownRenderer } from './selectableMarkdownRenderer';
 
 export type BubbleVariant = 'me' | 'ai' | 'reasoning' | 'system';
 export type BubbleStyles = ReturnType<typeof createMessageBubbleStyles>;
@@ -255,22 +256,25 @@ const PlainTextBubbleText = memo(function PlainTextBubbleText({
   textStyle,
   paragraphSpacing,
   onTextLayout,
+  selectable,
 }: {
   text: string;
   textStyle: TextStyleProp;
   paragraphSpacing?: number | null;
+  selectable: boolean;
   /** 开发态布局探针：纯文本行数/文本高度。是 prop 而不是包装层，不改变布局。 */
   onTextLayout?: (event: import('react-native').NativeSyntheticEvent<import('react-native').TextLayoutEventData>) => void;
 }) {
   // 纯文本路径没有 Markdown 段落概念，moonKimi 下按连续换行手动分段以获得相同的段落间距。
   // 段间距由父容器 rowGap 统一承担，最后一个段落自然没有尾部间距，也不需要“最后一段不加 margin”的特例。
-  if (paragraphSpacing) {
+  // 可选思维链保留原文换行在同一个 Text 中，避免段落切断 Android 选区。
+  if (paragraphSpacing && !selectable) {
     const paragraphs = splitPlainTextParagraphs(text);
     if (paragraphs.length > 1) {
       return (
         <View style={{ rowGap: paragraphSpacing }}>
           {paragraphs.map((paragraph, index) => (
-            <Text key={index} style={textStyle} onTextLayout={index === 0 ? onTextLayout : undefined}>
+            <Text key={index} selectable={selectable} style={textStyle} onTextLayout={index === 0 ? onTextLayout : undefined}>
               {paragraph}
             </Text>
           ))}
@@ -279,12 +283,13 @@ const PlainTextBubbleText = memo(function PlainTextBubbleText({
     }
   }
 
-  return <Text style={textStyle} onTextLayout={onTextLayout}>{text}</Text>;
+  return <Text selectable={selectable} style={textStyle} onTextLayout={onTextLayout}>{text}</Text>;
 }, (previous, next) => (
   previous.text === next.text
   && previous.textStyle === next.textStyle
   && previous.paragraphSpacing === next.paragraphSpacing
   && previous.onTextLayout === next.onTextLayout
+  && previous.selectable === next.selectable
 ));
 
 /**
@@ -378,12 +383,21 @@ const MarkdownBubbleText = memo(function MarkdownBubbleText({
   text,
   markdownStyle,
   probeHandlers,
+  selectable,
 }: {
   text: string;
   markdownStyle: MarkdownStylePreset;
+  selectable: boolean;
   /** 开发态布局探针 handlers；关闭时为 undefined。 */
   probeHandlers?: MarkdownProbeHandlers;
 }) {
+  const selectableRenderer = useMemo(
+    () => selectable ? createSelectableMarkdownRenderer(markdownStyle) : undefined,
+    [markdownStyle, selectable]
+  );
+  if (selectableRenderer) {
+    return <Markdown markdownit={SHARED_MARKDOWN_IT} renderer={selectableRenderer}>{text}</Markdown>;
+  }
   const debugRules = probeHandlers?.listOuter && probeHandlers.listItemContent
     ? buildMarkdownListProbeRules(probeHandlers.listOuter, probeHandlers.listItemContent)
     : undefined;
@@ -401,6 +415,7 @@ const MarkdownBubbleText = memo(function MarkdownBubbleText({
   previous.text === next.text
   && previous.markdownStyle === next.markdownStyle
   && previous.probeHandlers === next.probeHandlers
+  && previous.selectable === next.selectable
 ));
 
 export const BubbleTextContent = memo(function BubbleTextContent({
@@ -411,6 +426,7 @@ export const BubbleTextContent = memo(function BubbleTextContent({
   plainTextStyle,
   paragraphSpacing,
   probeHandlers,
+  selectable = false,
 }: {
   hasTextContent: boolean;
   shouldUseMarkdown: boolean;
@@ -418,6 +434,8 @@ export const BubbleTextContent = memo(function BubbleTextContent({
   markdownStyles: MarkdownStylePreset | null;
   plainTextStyle: TextStyleProp;
   paragraphSpacing?: number | null;
+  /** 思维链让 Android 原生文本选择拥有长按与复制菜单。 */
+  selectable?: boolean;
   /** 开发态布局探针 handlers；关闭时为 undefined。 */
   probeHandlers?: MarkdownProbeHandlers;
 }) {
@@ -430,6 +448,7 @@ export const BubbleTextContent = memo(function BubbleTextContent({
       text={text}
       markdownStyle={markdownStyles}
       probeHandlers={probeHandlers}
+      selectable={selectable}
     />
   ) : (
     <PlainTextBubbleText
@@ -437,6 +456,7 @@ export const BubbleTextContent = memo(function BubbleTextContent({
       textStyle={plainTextStyle}
       paragraphSpacing={paragraphSpacing}
       onTextLayout={probeHandlers?.plainTextLines}
+      selectable={selectable}
     />
   );
 }, (previous, next) => (
@@ -447,6 +467,7 @@ export const BubbleTextContent = memo(function BubbleTextContent({
   && previous.plainTextStyle === next.plainTextStyle
   && previous.paragraphSpacing === next.paragraphSpacing
   && previous.probeHandlers === next.probeHandlers
+  && previous.selectable === next.selectable
 ));
 
 export const BubbleAttachmentList = memo(function BubbleAttachmentList({

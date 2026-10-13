@@ -8,6 +8,7 @@ import {
   readCurrentActivity,
   readCurrentHostAuthority,
   observeLatestNetEase,
+  readLatestCurrentLyric,
   typedResult,
   unavailable,
 } from './TogetherListeningToolRuntime';
@@ -52,6 +53,7 @@ export async function execute(_args: Record<string, never>, context: ToolContext
   const result = await createAITogetherListeningInvitation({
     hostAiId: authority.hostAiId,
     chatSessionId: context.sessionId,
+    groupSpeechTaskId: (context.sharedState?.groupChat as { taskId?: string } | undefined)?.taskId,
     // Chat 把当前 Agent run 标识放在 sharedState.replyRunId；首张邀请卡借此
     // 获得 run 内排序身份。非 Chat run（无该标识）退化为普通历史键排序。
     timelineRunId: typeof context.sharedState?.replyRunId === 'string'
@@ -82,6 +84,7 @@ export async function execute(_args: Record<string, never>, context: ToolContext
     activityId: result.activity.id,
     phase: result.activity.phase,
     projectionStatus: result.projectionStatus,
+    currentLyric: await readLatestCurrentLyric(availability),
   }, 'Together Listening 邀请已创建，正在等待用户回应。');
 }
 

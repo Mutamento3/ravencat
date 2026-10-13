@@ -1,15 +1,17 @@
-/** Chat 拥有摘要任务；Host 复用聊天静态前缀与同一模型，只提供固定来源。 */
-import { aiAssistantRepository } from '@features/assistants';
+/** Chat拥有摘要与任务规则；Host解析实际模型，默认单聊复用稳定前缀，其余只装配专用请求。 */
+import { aiAssistantRepository, resolveAuxiliaryModel } from '@features/assistants';
 import { callRepository } from '@features/calls/composition';
 import { userProfileRepository } from '@features/profile';
 import { protocolRepository } from '@features/protocol';
-import { configureChatSummaryRuntime, SQLiteChatSummaryRepository, sessionRepository, createChatSummaryPromptBlock,
+import { configureChatSummaryRuntime, SQLiteChatSummaryRepository, sessionRepository, groupChatRepository, createChatSummaryPromptBlock,
   createSecondaryChatSummaryPromptBlock, buildChatSummaryModelInput, type ChatSummaryModelInput,
   type SecondaryChatSummaryClaim, ChatSummaryGenerationError, type ChatSummaryCallDiagnostics,
   type ChatSummaryRequestSettings } from '@features/chat/composition';
+import { getChatSummarySettings } from '@features/chat';
 import { assembleResolvedSummaryPromptPack } from '@host/prompt';
 import { createAIClient } from '@platform/ai';
 import { ToolContext } from '@shared/aiTools';
+import type { PromptPackRequestMessage } from '@shared/prompt';
 import { configureChatSummaryQueue } from '../runtime/ChatSummaryQueueCoordinator';
 import { buildToolsDescription, resolveAllowedToolNames, getRuntimeAllowedToolNamesForAI,
   createAgentToolRegistry, getToolPackageRuntimeBindings, readDirectToolNamesForHostRun } from './agent/createAgentToolRegistry';
@@ -24,11 +26,15 @@ export function configureChatSummary(): void {
       chatSessionId: conversationId, excludedCallIds: boundary.processedCallIds, after: boundary.historyStartsAfter,
     })),
     async getBatchSize(conversationId) {
-      const session = await sessionRepository.getSession(conversationId);
-      if (!session) return null;
-      const assistant = await aiAssistantRepository.getById(session.aiAssistantId);
-      if (!assistant || !assistant.apiKey || !assistant.apiBaseUrl || !assistant.model) return null;
-      return assistant.privateContextPrimaryLimit;
+      const settings = await getChatSummarySettings(conversationId);
+      const group = await groupChatRepository.getById(conversationId);
+      const session = group ? null : await sessionRepository.getSession(conversationId);
+      const assistant = session ? await aiAssistantRepository.getById(session.aiAssistantId) : null;
+      if (!group && !assistant) return null;
+      const model = settings.modelConfigId === null ? group?.adminConfig ?? assistant!
+        : await resolveAuxiliaryModel({ modelConfigId: settings.modelConfigId, capabilityKind: 'general' });
+      if (!model || !model.apiKey || !('baseURL' in model ? model.baseURL : model.apiBaseUrl) || !model.model) return null;
+      return group ? settings.groupTriggerCount : assistant!.privateContextPrimaryLimit;
     },
     generateAddition: (input, signal, report, settings) => generateSummary(input, signal, report, settings),
     generateSecondary: (input, signal, report, settings) => generateSummary(input, signal, report, settings),
@@ -37,51 +43,72 @@ export function configureChatSummary(): void {
 }
 async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSummaryClaim, signal: AbortSignal,
   report: (diagnostics: ChatSummaryCallDiagnostics) => Promise<void>, settings: ChatSummaryRequestSettings) {
-  const session = await sessionRepository.getSession(input.conversationId);
-  if (!session) throw new Error('摘要会话已删除');
-  const assistant = await aiAssistantRepository.getById(session.aiAssistantId);
-  if (!assistant) throw new Error('摘要所属 AI 已删除');
+  const group = await groupChatRepository.getById(input.conversationId);
+  const session = group ? null : await sessionRepository.getSession(input.conversationId);
+  const assistant = session ? await aiAssistantRepository.getById(session.aiAssistantId) : null;
+  if (!group && !assistant) throw new Error('摘要会话已删除');
+  const auxiliary = settings.modelConfigId === null ? null
+    : await resolveAuxiliaryModel({ modelConfigId: settings.modelConfigId, capabilityKind: 'general' });
+  if (settings.modelConfigId !== null && !auxiliary) throw new ChatSummaryGenerationError({
+    kind: 'request', message: '所选通用辅助模型不可用，请检查摘要模型配置。', retryable: false });
+  const owner = group?.adminConfig ?? assistant!;
+  const model = auxiliary ? { ...auxiliary, apiBaseUrl: auxiliary.baseURL, disableThinking: false } : owner;
+  if (!auxiliary && (!model.apiKey || !model.apiBaseUrl || !model.model)) throw new ChatSummaryGenerationError({
+    kind: 'request', message: '当前聊天模型或群管理员连接不完整，摘要任务已暂停。', retryable: false });
   const controller = new AbortController();
   const forward = () => controller.abort();
   signal.addEventListener('abort', forward, { once: true });
   if (signal.aborted) controller.abort();
   let timedOut = false;
   const startedAt = Date.now();
-  const maxTokens = settings.maxOutputTokens ?? assistant.maxTokens;
-  const diagnostics: ChatSummaryCallDiagnostics = { model: assistant.model, requestedMaxTokens: maxTokens,
+  const maxTokens = settings.maxOutputTokens ?? model.maxTokens;
+  const diagnostics: ChatSummaryCallDiagnostics = { model: model.model, requestedMaxTokens: maxTokens,
     timeoutSeconds: settings.requestTimeoutSeconds, durationMs: 0, promptTokens: null, completionTokens: null,
     totalTokens: null, cachedTokens: null, finishReason: null, contentCharacters: 0, reasoningCharacters: 0, serverError: null };
-  const redact = (text: string) => text.replaceAll(assistant.apiKey!, '[凭据已隐藏]');
+  const redact = (text: string) => text.replaceAll(model.apiKey!, '[凭据已隐藏]');
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, settings.requestTimeoutSeconds * 1000);
   try {
-    const aiConfig = { ...assistant, systemPrompt: assistant.systemPrompt ?? undefined };
-    const toolContext = new ToolContext({ aiConfig, sessionId: input.conversationId, triggerSource: 'chat',
-      repositories: { protocol: protocolRepository, profile: userProfileRepository, moment: null, ledger: null } });
-    const persistentNames = await resolveAllowedToolNames(assistant.id);
-    const toolPolicy = { isHostAI: assistant.isHostAI, enableTools: assistant.enableTools, triggerSource: 'chat',
-      memoryParticipation: 'read_write' as const, allowedToolNames: persistentNames };
-    const allowedToolNames = getRuntimeAllowedToolNamesForAI(toolPolicy);
-    const toolsDescription = buildToolsDescription(toolPolicy);
-    const mcp = assistant.enableTools ? await resolveMcpExposure(assistant.id) : { services: [] };
     const secondary = 'segments' in input;
     const currentInput = secondary ? JSON.stringify({
       summaries: input.segments.map((segment) => ({ content: segment.content,
         discussionStart: segment.sourceStartAt, discussionEnd: segment.sourceEndAt, timeZone: segment.timeZone })),
-    }) : buildChatSummaryModelInput(input, assistant.agentId);
-    const pack = await assembleResolvedSummaryPromptPack({ sessionId: input.conversationId, aiConfig, toolContext,
-      currentInput, allowedToolNames, toolsDescription, mcpServices: mcp.services },
-    secondary ? createSecondaryChatSummaryPromptBlock() : createChatSummaryPromptBlock());
-    // 工具目录沿用同一注册与分包规则，只复用稳定说明，不建立 Agent run 或执行工具。
-    const registry = createAgentToolRegistry({ createLegacyContext: () => toolContext });
-    const packages = registerToolPackagesForHostRun({ registry, allowedToolNames,
-      bindings: getToolPackageRuntimeBindings(registry), openPackageIds: [],
-      directToolNames: await readDirectToolNamesForHostRun(assistant.id) });
-    const slot = pack.toolInstructionsSlot;
-    const systemPrompt = slot ? [slot.before, packages.instructions().catalog, slot.after].filter(Boolean).join('\n\n') : pack.systemPrompt;
-    const response = await createAIClient({ baseURL: assistant.apiBaseUrl!, apiKey: assistant.apiKey!, model: assistant.model,
-      temperature: assistant.temperature, topP: assistant.topP, disableThinking: assistant.disableThinking,
+    }) : buildChatSummaryModelInput(input, assistant?.agentId);
+    let systemPrompt: string;
+    let modelMessages: PromptPackRequestMessage[];
+    if (!group && settings.modelConfigId === null) {
+      const aiConfig = { ...assistant!, systemPrompt: assistant!.systemPrompt ?? undefined };
+      const toolContext = new ToolContext({ aiConfig, sessionId: input.conversationId, triggerSource: 'chat',
+        repositories: { protocol: protocolRepository, profile: userProfileRepository, moment: null, ledger: null } });
+      const persistentNames = await resolveAllowedToolNames(assistant!.id);
+      const toolPolicy = { isHostAI: assistant!.isHostAI, enableTools: assistant!.enableTools, triggerSource: 'chat',
+        memoryParticipation: 'read_write' as const, allowedToolNames: persistentNames };
+      const allowedToolNames = getRuntimeAllowedToolNamesForAI(toolPolicy);
+      const toolsDescription = buildToolsDescription(toolPolicy);
+      const mcp = assistant!.enableTools ? await resolveMcpExposure(assistant!.id) : { services: [] };
+      const pack = await assembleResolvedSummaryPromptPack({ sessionId: input.conversationId, aiConfig, toolContext,
+        currentInput, allowedToolNames, toolsDescription, mcpServices: mcp.services },
+      secondary ? createSecondaryChatSummaryPromptBlock() : createChatSummaryPromptBlock());
+      // 工具目录沿用同一注册与分包规则，只复用稳定说明，不建立 Agent run 或执行工具。
+      const registry = createAgentToolRegistry({ createLegacyContext: () => toolContext });
+      const packages = registerToolPackagesForHostRun({ registry, allowedToolNames,
+        bindings: getToolPackageRuntimeBindings(registry), openPackageIds: [],
+        directToolNames: await readDirectToolNamesForHostRun(assistant!.id) });
+      const slot = pack.toolInstructionsSlot;
+      systemPrompt = slot ? [slot.before, packages.instructions().catalog, slot.after].filter(Boolean).join('\n\n') : pack.systemPrompt;
+      modelMessages = pack.modelMessages;
+    } else {
+      const kind = group ? 'group' : 'private';
+      const rules = secondary ? createSecondaryChatSummaryPromptBlock(kind).content : createChatSummaryPromptBlock(kind).content;
+      const identity = group ? { sourceKind: 'group', groupId: group.group.id, groupName: group.group.name }
+        : { sourceKind: 'private', assistant: { id: assistant!.id, agentId: assistant!.agentId, name: assistant!.name } };
+      systemPrompt = group ? rules
+        : ['你是专用总结模型，只整理提供的来源，不执行工具。', rules].join('\n\n');
+      modelMessages = [{ role: 'user', content: JSON.stringify(identity) + '\n' + currentInput }];
+    }
+    const response = await createAIClient({ baseURL: model.apiBaseUrl!, apiKey: model.apiKey!, model: model.model,
+      temperature: model.temperature, topP: model.topP, disableThinking: 'disableThinking' in model ? model.disableThinking : false,
       maxTokens }).chat([
-      { role: 'system', content: systemPrompt }, ...pack.modelMessages,
+      { role: 'system', content: systemPrompt }, ...modelMessages,
     ], { signal: controller.signal, includeSystemPrompt: false, allowReasoningLengthRetry: false });
     diagnostics.finishReason = response.finishReason ?? null;
     diagnostics.httpStatus = response.httpStatus ?? null;
@@ -99,9 +126,10 @@ async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSumma
     }
     if (response.finishReason === 'length') throw new ChatSummaryGenerationError({ kind: 'output_limit',
       message: '模型因输出 token 上限停止，摘要可能被截断。请在摘要设置中提高输出额度后重试。', retryable: false });
-    if (!response.text.trim()) throw new ChatSummaryGenerationError({ kind: 'empty_output',
+    const content = response.text.trim();
+    if (!content) throw new ChatSummaryGenerationError({ kind: 'empty_output',
       message: diagnostics.reasoningCharacters > 0 ? '模型只返回思考内容，没有摘要正文。请检查输出额度与模型配置。' : '模型没有返回摘要正文。', retryable: true });
-    return response.text;
+    return content;
   } catch (error) {
     if (signal.aborted) throw error;
     if (timedOut) throw new ChatSummaryGenerationError({ kind: 'timeout', message: `摘要请求超过 ${settings.requestTimeoutSeconds} 秒，已中止。`, retryable: true });

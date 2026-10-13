@@ -473,7 +473,15 @@ assert.ok(regularChatNames.includes('send_voice_message'), '普通单聊必须�
 const autonomousNames = availableNames({ triggerSource: 'raven_cat_wake', capabilities: ['raven_cat.autonomous'] });
 assert.ok(autonomousNames.includes('send_voice_message'), '自主执行已接入同事务媒体存档，必须使用正常授权的语音工具');
 assert.ok(autonomousNames.includes('select_sticker'), '自主执行必须使用正常授权的贴纸工具');
-for (const triggerSource of ['group_chat', 'call', 'ledger', 'internal_feature', 'raven_cat_wake']) {
+const groupNames=availableNames({triggerSource:'group_chat',memoryParticipation:'read_write'});
+for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_summaries','download_image','view_image','change_own_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
+  assert.ok(groupNames.includes(name),`群聊应提供已授权工具：${name}`);
+}
+assert.ok(!groupNames.includes('requestVideoCall'),'群聊不能发起视频通话');
+assert.ok(!groupNames.includes('get_current_location'),'群聊不绕过主理身份');
+assert.ok(availableNames({triggerSource:'group_chat',isHostAI:true,memoryParticipation:'read_write'}).includes('get_current_location'));
+assert.deepEqual(availableNames({triggerSource:'group_chat',allowedToolNames:[]}),[],'群聊不绕过原授权');
+for (const triggerSource of ['call', 'ledger', 'internal_feature', 'raven_cat_wake']) {
   const names = availableNames({ triggerSource });
   assert.ok(!names.includes('search_stickers'), `${triggerSource} 不得暴露 Sticker 搜索工具`);
   assert.ok(!names.includes('select_sticker'), `${triggerSource} 不得暴露 Sticker 选择工具`);

@@ -1,4 +1,5 @@
 /** 默认页只表达注入顺序；正文、权限和列表留在各自详情页。 */
+import { getAssistantDisplayName } from '@features/assistants';
 import { Toggle, showAppDialog } from '@shared/ui';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
@@ -187,9 +188,9 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
     <NavigationHeader title={title} onGoBack={onBack} rightButton={rightButton} />
     {assistantListError ? <Text style={styles.description}>未能读取 AI 列表，请返回后重新打开。</Text> : !snapshot ? loadError ? <Text style={styles.description}>未能读取提示词配置，请返回后重新打开。</Text> : <ActivityIndicator style={styles.loading} /> : <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
       {page.kind === 'overview' && <>
-        <View style={styles.hero}><Text style={styles.eyebrow}>{assistant ? assistant.name : '全局默认'} · 中文</Text><Text style={styles.heading}>从身份，到此刻</Text><Text style={styles.description}>沿着模型阅读的顺序，了解每一段上下文。
+        <View style={styles.hero}><Text style={styles.eyebrow}>{assistant ? getAssistantDisplayName(assistant) : '全局默认'} · 中文</Text><Text style={styles.heading}>从身份，到此刻</Text><Text style={styles.description}>沿着模型阅读的顺序，了解每一段上下文。
 进入条目，再查看和调整具体内容。</Text></View>
-        {row('编辑对象', assistant ? `${assistant.name}${assistant.isHostAI ? ' · 主理 AI' : ''} · 本页改动只对这位 AI 生效` : '暂无 AI', () => setSelectorOpen(true), undefined, !assistants.length)}
+        {row('编辑对象', assistant ? `${getAssistantDisplayName(assistant)}${assistant.isHostAI ? ' · 主理 AI' : ''} · 本页改动只对这位 AI 生效` : '暂无 AI', () => setSelectorOpen(true), undefined, !assistants.length)}
         <Text style={styles.section}>先认识彼此</Text>
         {row('系统基础规则', '运行环境、行为边界与视觉真实性', () => openDefinition('foundation.default_core'), 1)}
         <ThemedSurface variant="card" style={styles.card}>
@@ -231,7 +232,7 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
         <TouchableOpacity disabled={busy} style={styles.button} onPress={saveEditor}><Text style={styles.buttonText}>{busy ? '保存中…' : '保存'}</Text></TouchableOpacity>
       </>}
       {page.kind === 'custom' && <>
-        <Text style={styles.description}>长按卡片上下移动，列表顺序就是这些提示词的拼接顺序。{assistant ? `下面的修改只对 ${assistant.name} 生效。` : '这里是无 AI 时添加的全局常驻提示词，修改、关闭或删除会影响所有 AI。'}</Text>
+        <Text style={styles.description}>长按卡片上下移动，列表顺序就是这些提示词的拼接顺序。{assistant ? `下面的修改只对 ${getAssistantDisplayName(assistant)} 生效。` : '这里是无 AI 时添加的全局常驻提示词，修改、关闭或删除会影响所有 AI。'}</Text>
         {assistant && row('全局常驻提示词', `${snapshot.userPrompts.length} 条 · 单独管理对所有 AI 生效的提示词`, onOpenGlobalPrompts)}
         {!prompts.length && <ThemedSurface variant="card" style={styles.card}><Text style={styles.title}>留一点空间给你的想法</Text><Text style={styles.body}>还没有自定义提示词，点击右上角添加。</Text></ThemedSurface>}
         {prompts.map((prompt, index) => <CustomPromptRow key={prompt.id} prompt={prompt} index={index} disabled={busy} styles={styles}
@@ -264,7 +265,7 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
         {packages.map((id) => row(PACKAGE_NAMES[id] ?? id, `${tools.filter((tool) => (tool.hostOnly ? 'host' : tool.owner) === id).length} 个工具`, () => onOpenPage({ kind: 'package', id })))}
       </>}
       {page.kind === 'package' && <>
-        <Text style={styles.description}>{assistant ? `点亮星标，将工具设为 ${assistant.name} 的用户特批工具，直接注入说明与调用参数，无需拆包。右侧开关仍控制调用权限。` : '选择 AI 后可配置星标特批工具；这里仅管理全局默认调用权限。'}</Text>
+        <Text style={styles.description}>{assistant ? `点亮星标，将工具设为 ${getAssistantDisplayName(assistant)} 的用户特批工具，直接注入说明与调用参数，无需拆包。右侧开关仍控制调用权限。` : '选择 AI 后可配置星标特批工具；这里仅管理全局默认调用权限。'}</Text>
         {tools.filter((tool) => (tool.hostOnly ? 'host' : tool.owner) === page.id).map((tool) => <ThemedSurface variant="card" nativeGlass={false} key={tool.name} style={styles.card}>
           <View style={styles.cardHeader}><Text style={[styles.title, styles.copy]}>{tool.name}</Text>
             {assistantId && <TouchableOpacity accessibilityRole="switch" accessibilityLabel={`直接暴露 ${tool.name}`} accessibilityState={{ checked: directToolNames.has(tool.name), disabled: busy || (tool.hostOnly && !assistant?.isHostAI) }}

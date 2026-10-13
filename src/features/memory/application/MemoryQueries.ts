@@ -4,7 +4,10 @@ import { getMemoryRuntimeDependencies } from './MemoryRuntimeDependencies';
 
 export async function getMemoryManagementSnapshot(assistantId?: string) {
   const runtime = getMemoryRuntimeDependencies();
-  const [spaces, preferred] = await Promise.all([runtime.listMemorySpaces(), runtime.repository.getPreferredAssistantId()]);
+  const [descriptors, preferred, counts] = await Promise.all([
+    runtime.listMemorySpaces(), runtime.repository.getPreferredAssistantId(), runtime.repository.listEntryCounts(),
+  ]);
+  const spaces = descriptors.map(space => ({ ...space, memoryCount: counts.get(space.poolId) ?? 0 }));
   const selectedSpace = spaces.find((space) => space.assistantId === assistantId)
     ?? spaces.find((space) => space.assistantId === preferred)
     ?? spaces.find((space) => space.isHost) ?? spaces[0] ?? null;

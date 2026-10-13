@@ -45,9 +45,34 @@ exports.commitAndDispatchCanonicalUserMessage = (...args) => globalThis.__listen
 write('src/features/chat/messages/application/UpsertStatefulTimelineEntry.js', `
 exports.upsertStatefulTimelineEntry = (...args) => globalThis.__listenCardFakes.upsert(...args);
 `);
+write('src/features/chat/messages/application/ChatMessageRuntime.js', `
+exports.getChatMessageRuntimeDependencies = () => ({ messages: {
+  upsertStatefulTimelineEntryInTransaction: (_, input) => globalThis.__listenCardFakes.upsert(input),
+} });
+`);
+write('src/features/chat/messages/events/ChatEvents.js', `
+exports.emitChatMessagesUpdated = () => {};
+exports.emitChatMessagesPatched = () => {};
+`);
+write('src/features/chat/group/application/ChatGroupRuntime.js', `
+exports.getChatGroupRuntimeDependencies = () => ({ groups: {
+  getById: async () => globalThis.__listenCardGroup ?? null,
+  isSpeechTaskRunCurrentInTransaction: async () => globalThis.__listenCardGroupCurrent,
+  updatePreviewInTransaction: async (_, ...args) => { globalThis.__listenCardGroupPreview = args; },
+} });
+`);
+write('src/features/chat/reply/application/ChatReplyAbort.js', `
+exports.ChatReplyRunCancelledError = class extends Error {};
+`);
+write('node_modules/@platform/persistence/index.js', `
+exports.databaseCoordinator = { transaction: (_, work) => work({}), openTaskExecutor: () => ({ withExclusiveTransactionAsync: (work) => work({}) }) };
+`);
 
 for (const file of [
   'src/features/chat/messages/domain/chatMessageMetadata.ts',
+  'src/features/chat/summary/domain/ChatContext.ts',
+  'src/features/chat/messages/domain/ChatSticker.ts',
+  'src/features/chat/messages/domain/SharedChatRecord.ts',
   'src/features/chat/messages/application/UpsertTogetherListeningTimelineEntry.ts',
   'src/features/chat/presentation/messages/components/togetherListeningCardViewModel.ts',
 ]) compile(file);
@@ -89,13 +114,13 @@ globalThis.__listenCardFakes = {
         updatedAt: message.updatedAt,
       };
       rows.set(message.clientMessageId, patched);
-      if (latestMessageId === patched.id) sessionPreview = previewText;
+      if (latestMessageId === patched.id && previewText !== null) sessionPreview = previewText;
       return { message: patched, inserted: false };
     }
     const committed = { ...message, id: nextId++ };
     rows.set(message.clientMessageId, committed);
     latestMessageId = committed.id;
-    sessionPreview = previewText;
+    if (previewText !== null) sessionPreview = previewText;
     return { message: committed, inserted: true };
   },
   async commit(params) {
@@ -159,6 +184,41 @@ const independent = await timeline.upsertTogetherListeningTimelineEntry(
 assert.notEqual(independent.message.id, first.message.id);
 
 const persistedMetadata = JSON.parse(ended.message.metadataJson);
+const { projectChatContextMessage } = require(path.join(tempRoot, 'src/features/chat/summary/domain/ChatContext.js'));
+// 结束事件在结束时追加；即使旧卡已被摘要游标越过，新事件仍进入下一段原文。
+assert.equal(projectChatContextMessage(ended.message, ['time', 1, 0, 1]), null);
+const endedMessage = rows.get('together-listening-ended:activity-a');
+assert.equal(endedMessage.senderType, 'system');
+assert.equal(endedMessage.createdAt, new Date(4).toISOString());
+assert.equal(endedMessage.turnRunId, null);
+assert.equal(endedMessage.text, '你已退出一起听，本次一起听已结束。');
+const endedContext = projectChatContextMessage(endedMessage, ['time', 1, 0, 1]);
+assert.equal(endedContext.kind, 'app_event');
+assert.equal(endedContext.role, 'user');
+assert.equal(endedContext.logicalMessageId, null);
+const endedEvent = JSON.parse(endedContext.content.split('\n')[1]);
+assert.equal(endedEvent.phase, 'ended');
+assert.equal(endedEvent.endReason, 'user_left');
+assert.equal(endedEvent.endedAtEpochMs, 757_000);
+assert.equal(endedEvent.text, '用户已退出一起听，本次一起听已结束。');
+const rowsBeforeRepeat = rows.size;
+await timeline.upsertTogetherListeningTimelineEntry(activity('activity-a', 'ai', 'ended', 'user_left', 4, 1_000, 757_000));
+assert.equal(rows.size, rowsBeforeRepeat, '重复终态投影不得追加第二条事件');
+await timeline.upsertTogetherListeningTimelineEntry({
+  ...activity('activity-ai-exit', 'ai', 'ended', 'ai_left', 8, 1_000, 757_000), hostAiName: '小羽',
+});
+const aiExitMessage = rows.get('together-listening-ended:activity-ai-exit');
+assert.equal(aiExitMessage.text, '小羽已退出一起听，本次一起听已结束。');
+assert.equal(JSON.parse(projectChatContextMessage(aiExitMessage, ['time', 1, 0, 1]).content.split('\n')[1]).endReason, 'ai_left');
+for (const initiator of ['user', 'ai']) {
+  for (const phase of ['active', 'declined_by_user', 'declined_by_ai']) {
+    const message = { ...ended.message, isMe: initiator === 'user', senderType: initiator === 'user' ? 'user' : 'assistant',
+      metadataJson: JSON.stringify({ ...persistedMetadata, initiator, phase }) };
+    const context = projectChatContextMessage(message, ['time', 1, 0, 1]);
+    assert.equal(context.kind, 'app_event');
+    assert.equal(JSON.parse(context.content.split('\n')[1]).phase, phase);
+  }
+}
 assert.deepEqual(Object.keys(persistedMetadata).sort(), [
   'activatedAtEpochMs',
   'activityId',
@@ -377,6 +437,20 @@ assert.equal(
   }),
   false,
 );
+
+// 群邀请沿用卡片投影；当前群归属与终止资格由群任务 owner 保证。
+globalThis.__listenCardGroup = { group: { id: 'group-target', name: '群' }, members: [{ aiAssistantId: 'host-ai', agentId: 'host-agent', name: '公开名字' }] };
+globalThis.__listenCardGroupCurrent = true;
+const groupActivity = { id: 'group-invite', chatSessionId: 'group-target', hostAiId: 'host-ai', initiator: 'ai',
+  phase: 'pending_user_response', createdAtEpochMs: 1_000, updatedAtEpochMs: 1_000, endReason: null, activatedAtEpochMs: null, endedAtEpochMs: null };
+const groupCard = await timeline.upsertTogetherListeningTimelineEntry(groupActivity, { groupSpeechTaskId: 'group-task', timelineRunId: 'group-task' });
+assert.equal(groupCard.message.sessionId, 'group-target');
+assert.equal(groupCard.message.agentId, 'host-agent');
+assert.equal(JSON.parse(groupCard.message.metadataJson).actorName, '公开名字');
+assert.equal(globalThis.__listenCardGroupPreview[0], 'group-target');
+globalThis.__listenCardGroupCurrent = false;
+await assert.rejects(timeline.upsertTogetherListeningTimelineEntry({ ...groupActivity, id: 'canceled-invite' }, { groupSpeechTaskId: 'group-task' }));
+assert.equal(rows.has('together-listening:canceled-invite'), false);
 
 fs.rmSync(tempRoot, { recursive: true, force: true });
 console.log('LISTEN-4 Chat 卡片 metadata、稳定 timeline identity、preview 与展示矩阵检查通过。');

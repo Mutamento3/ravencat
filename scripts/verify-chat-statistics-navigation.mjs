@@ -39,6 +39,7 @@ const shared = {
   '@shared/ui/NavigationHeader': { __esModule: true, default: 'NavigationHeader' },
   'lucide-react-native': { HeartHandshake: 'HeartHandshake', BookOpen: 'BookOpen' },
   '@expo/vector-icons': { Ionicons: 'Ionicons' },
+  '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname || assistant.name },
 };
 const parts = load('src/features/chat/presentation/conversation/AIOptionsParts.tsx', shared);
 const menu = load('src/features/chat/presentation/conversation/AIOptions.tsx', { ...shared, './AIOptionsParts': parts });

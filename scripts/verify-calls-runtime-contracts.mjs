@@ -124,6 +124,7 @@ for (const relativePath of [
   'src/features/chat/messages/application/MessagePersistence.ts',
   'src/features/chat/messages/domain/ChatMessage.ts',
   'src/features/chat/messages/domain/ChatSticker.ts',
+  'src/features/chat/messages/domain/SharedChatRecord.ts',
   'src/features/chat/messages/domain/MessageRepository.ts',
   'src/features/chat/messages/domain/MessageTimeSeparator.ts',
   'src/features/chat/messages/domain/chatMessageMetadata.ts',
@@ -2171,6 +2172,26 @@ scenario('重复接听不会重复写入通话状态消息', async () => {
   );
 });
 
+scenario('已有通话时再次拨号只返回占线，不挂断或替换通话', async () => {
+  for (const chatSessionId of ['session-1', 'other-session']) {
+    const call = createCall({ state: 'active', endedAt: null });
+    const repository = createCallRepository([call]);
+    const runtime = resetRuntime(repository);
+    const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+    const result = await service.startOutgoingCall({
+      chatSessionId,
+      aiConfig: createAIConfig(),
+    });
+    assert.equal(result.status, 'failed');
+    assert.equal(result.errorMessage, '当前已有通话正在进行');
+    assert.equal(result.call, null);
+    assert.deepEqual(result.visibleMessages, []);
+    assert.deepEqual([...repository.sessions.values()], [call], '原通话状态与身份保持不变');
+    assert.deepEqual(fakeRuntime.messageRepository.messages, []);
+    assert.deepEqual(runtime.endedAudioCalls, [], '重复拨号不释放当前通话媒体');
+  }
+});
+
 scenario('去电决策晚到不能复活已挂断会话', async () => {
   for (const decision of ['accept', 'reject']) {
     const repository = createCallRepository([]);
@@ -2187,6 +2208,7 @@ scenario('去电决策晚到不能复活已挂断会话', async () => {
     assert.equal(signal.aborted, true, '挂断取消去电网络请求');
     response.resolve({ success: true, text: JSON.stringify({ decision, spokenText: '接通', rejectionReason: '拒接' }) });
     const result = await starting;
+    assert.equal(result.status, 'ended');
     assert.equal(result.call.state, 'ended');
     assert.equal((await repository.getSessionById(callId)).state, 'ended');
     assert.deepEqual(runtime.startedAudioCalls, [], '晚到决策不能启动 Telecom');

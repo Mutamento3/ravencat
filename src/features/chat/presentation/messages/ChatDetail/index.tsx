@@ -1,4 +1,5 @@
 /** 单聊消息详情页，协调时间线、输入区与消息操作。 */
+import { getAssistantDisplayName } from '@features/assistants';
 import { showAppDialog } from '@shared/ui';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, ActivityIndicator, Text, TouchableOpacity, ToastAndroid } from 'react-native';
@@ -104,7 +105,7 @@ export default function ChatDetailModule({
   const sessionId = session?.id;
   const chatBackgroundKey = sessionId ? `single:${sessionId}` : aiAssistant?.id ? `single:${aiAssistant.id}` : null;
   const headerPaddingTop = Math.max(insets.top, 8);
-  const headerTitle = aiAssistant?.name || 'AI助手';
+  const headerTitle = (aiAssistant ? getAssistantDisplayName(aiAssistant) : null) || 'AI助手';
   const [inputText, setInputText] = useState('');
   const [replyTo, setReplyTo] = useState<ChatReplyTarget | null>(null);
   const [actionMenuVisible, setActionMenuVisible] = useState(false);
@@ -125,7 +126,7 @@ export default function ChatDetailModule({
     void load();
     const unsubscribe = subscribeChatSummaryChanged((id) => { if (id === sessionId) void load(); });
     const unsubscribeMessages = setChatEventBus({ emit(name, payload) {
-      if (payload.sessionId === sessionId && ['messagesReloadRequested', 'messagesPatched', 'regenerationChanged'].includes(name)) void load();
+      if (payload.sessionId === sessionId && ['messagesReloadRequested', 'messagesPatched', 'messagesDeleted', 'regenerationChanged'].includes(name)) void load();
     } });
     return () => { active = false; unsubscribe(); unsubscribeMessages(); };
   }, [sessionId, isActive]);
@@ -149,6 +150,9 @@ export default function ChatDetailModule({
 
     return assistants;
   }, [aiAssistant, aiAssistants]);
+  const publicMentionMembers = useMemo(() => availableAssistants.map((assistant) => ({
+    aiAssistantId: assistant.id, name: assistant.name,
+  })), [availableAssistants]);
 
   const {
     activeSurface,
@@ -230,9 +234,8 @@ export default function ChatDetailModule({
 
   const handleSelectionDeleted = useCallback((ids: readonly number[]) => {
     const deleted = new Set(ids);
-    setMessages((previous) => previous.filter((message) => !deleted.has(message.id)));
     setReplyTo((previous) => previous && deleted.has(previous.id) ? null : previous);
-  }, [setMessages]);
+  }, []);
   const selection = useChatMessageSelection({
     sessionId, isActive, messages,
     hiddenRunId: regeneration.sourceRunId,
@@ -338,8 +341,8 @@ export default function ChatDetailModule({
       delete next[edited.id];
       return next;
     });
-    setReplyTo((previous) => previous?.id === edited.id ? createChatReplyTarget(edited) : previous);
-  }, [setMessages]);
+    setReplyTo((previous) => previous?.id === edited.id ? createChatReplyTarget(edited, publicMentionMembers) : previous);
+  }, [publicMentionMembers, setMessages]);
 
   const handleDeleteMessage = useCallback(() => {
     if (!selectedMessage) return;
@@ -355,7 +358,7 @@ export default function ChatDetailModule({
           onPress: async () => {
             try {
               const deletedIds = await deleteChatMessage(selectedMessage.id);
-              setMessages((prev) => prev.filter((m) => !deletedIds.includes(m.id)));
+              handleSelectionDeleted(deletedIds);
             } catch (error) {
               showAppDialog({ title: '删除失败', message: error instanceof Error ? error.message : '删除消息失败', tone: 'error' });
             }
@@ -363,12 +366,12 @@ export default function ChatDetailModule({
         },
       ],
     });
-  }, [selectedMessage, setMessages]);
+  }, [selectedMessage, handleSelectionDeleted]);
 
   const handleQuoteMessage = useCallback(() => {
     if (!selectedMessage) return;
-    setReplyTo(createChatReplyTarget(selectedMessage));
-  }, [selectedMessage]);
+    setReplyTo(createChatReplyTarget(selectedMessage, publicMentionMembers));
+  }, [publicMentionMembers, selectedMessage]);
 
   const handleToggleVoiceTranscript = useCallback(() => {
     if (!selectedMessage || !getMessageVoice(selectedMessage)) return;

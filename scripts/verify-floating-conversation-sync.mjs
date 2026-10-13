@@ -48,6 +48,7 @@ const { MessageRepository } = load(`${messagesRoot}infrastructure/SQLiteMessageR
 });
 const messages = new MessageRepository();
 const metadata = load(`${messagesRoot}domain/chatMessageMetadata.ts`, {
+  './SharedChatRecord': load(`${messagesRoot}domain/SharedChatRecord.ts`),
   './ChatSticker': load(`${messagesRoot}domain/ChatSticker.ts`),
 });
 let pendingMessageIds = [];
@@ -91,6 +92,7 @@ try {
   const published = [];
   const coordinator = load('src/host/runtime/FloatingConversationProjection.ts', {
     '@features/assistants': {
+      ...load('src/features/assistants/AssistantNickname.ts', { './infrastructure/SQLiteAssistantRepository': { aiAssistantRepository: {} } }),
       aiAssistantRepository: { getHostAI: async () => host },
       subscribeAIAssistantUpdated: subscribe('assistant'),
     },
@@ -146,7 +148,7 @@ try {
   await coordinator.syncFloatingConversation();
   assert.equal(published.at(-1).messages.at(-1).text, 'App 改写');
   db.prepare('DELETE FROM messages WHERE id = ?').run(userId);
-  listeners.chat('messagesReloadRequested', { sessionId: 'a' });
+  listeners.chat('messagesDeleted', { sessionId: 'a', deletedMessageIds: [userId] });
   await coordinator.syncFloatingConversation();
   assert.ok(!published.at(-1).messages.some((message) => message.messageId === userId));
 

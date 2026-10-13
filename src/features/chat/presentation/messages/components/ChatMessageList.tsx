@@ -1,4 +1,5 @@
 /** 构建并渲染聊天消息时间线，处理分段投影、分页加载、滚动跟随与消息交互。 */
+import { getAssistantDisplayName } from '@features/assistants';
 
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -228,7 +229,7 @@ function resolveMessageAIIdentity(
   const primaryIdentity: ResolvedMessageAIIdentity = {
     aiId: aiAssistant?.id || null,
     agentId: aiAssistant?.agentId || null,
-    name: aiAssistant?.name || null,
+    name: aiAssistant ? getAssistantDisplayName(aiAssistant) : null,
     avatar: aiAssistant?.avatar || null,
   };
 
@@ -266,7 +267,7 @@ function resolveMessageAIIdentity(
   return {
     aiId: matchedAssistant?.id || resolvedAIId,
     agentId: matchedAssistant?.agentId || resolvedAgentId,
-    name: matchedAssistant?.name || null,
+    name: matchedAssistant ? getAssistantDisplayName(matchedAssistant) : null,
     avatar: matchedAssistant?.avatar || null,
   };
 }

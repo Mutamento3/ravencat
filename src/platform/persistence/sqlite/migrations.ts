@@ -3,11 +3,11 @@ import type { DatabaseWriteExecutor } from '../runtime';
 import { SCHEMAS, INDEXES } from './schema';
 import { DEFAULT_RECORDS_SQL } from './defaultRecords';
 import { migrateMemoryTriggerGroups } from './memoryV3Schema';
-import { migrateSecondaryChatSummary, migrateFixedChatContext } from './chatSummarySchema';
+import { migrateSecondaryChatSummary, migrateFixedChatContext, migrateChatSummaryModels } from './chatSummarySchema';
 import { migrateStickerOwnership } from './stickerOwnershipMigration';
 
 /** 114/115 是旧代码里的迁移编号；已发布数据库实际停在 user_version=108。 */
-export const DATABASE_SCHEMA_VERSION = 124;
+export const DATABASE_SCHEMA_VERSION = 126;
 const PUBLIC_RELEASE_VERSION = 108;
 
 /** 当前公开版的关键结构。拒绝旧开发库，避免把不完整库误标为新基线。 */
@@ -50,14 +50,14 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
     }
     return;
   }
-  if (version !== 0 && version !== PUBLIC_RELEASE_VERSION && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123) {
+  if (version !== 0 && version !== PUBLIC_RELEASE_VERSION && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125) {
     throw new Error(`数据库版本 ${version} 不受当前版本支持，请使用匹配的 RavenCat 版本。`);
   }
   const tables = await db.getAllAsync<{ name: string }>(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'android_metadata'",
   );
   const fresh = tables.length === 0;
-  if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123) {
+  if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125) {
     // 在任何 DDL/default 写入之前检查；失败不修改旧库。
     await assertPublicReleaseSchema(db);
     const retiredTables = new Set(['raven_cat_self_wakes', 'capability_bindings', 'assistant_capability_bindings', 'memory_entries']);
@@ -75,9 +75,13 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
     if (!fresh && version < 122) {
       await db.execAsync('ALTER TABLE ai_assistants ADD COLUMN show_token_usage INTEGER NOT NULL DEFAULT 1;');
     }
+    if (!fresh && version < 125) {
+      await db.execAsync('ALTER TABLE ai_assistants ADD COLUMN nickname TEXT;');
+    }
+    if (!fresh && version < 126) await migrateChatSummaryModels(db);
     for (const sql of Object.values(SCHEMAS)) await db.execAsync(sql);
     for (const sql of Object.values(INDEXES)) await db.execAsync(sql);
-    if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123) {
+    if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125) {
       // 纳入公开版115的定向修复：只清理无有效主体的 MCP 授权，正常授权原样保留。
       await db.execAsync(`
         DELETE FROM mcp_server_assistants

@@ -447,6 +447,8 @@ android/
 
 * 主题从 `@shared/theme` 获取；
 * 通用组件优先使用 `@shared/ui`；
+* 新增或修改输入区域时，表单字段复用 `InputField`，自定义输入控件复用 `AppTextInput`；换行与增长在公共输入基础中维护，不在各页面复制高度计算。
+* 表单窗口的键盘避让复用 `KeyboardAvoidingContainer` 或 `ModalSheet avoidKeyboard`；同一窗口只保留一个避让所有者。聊天面板互斥和原生悬浮窗的窗口控制留在各自负责层，不通过叠加避让修补。
 * Feature 私有 UI 留在 Feature `presentation/`；
 * 不创建新的 Feature 私有主题系统；
 * 大型 `styles.ts` 应按真实 UI 职责拆分。

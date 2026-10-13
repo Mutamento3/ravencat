@@ -1,3 +1,4 @@
+import { getAssistantDisplayName } from '@features/assistants';
 import React from 'react';
 import { Text, useWindowDimensions, View } from 'react-native';
 
@@ -36,7 +37,7 @@ export default function CallAvatarHeader({ aiProfile, stateText }: CallAvatarHea
         textStyle={[styles.avatarText, { fontSize: Math.round(avatarSize * 0.38) }]}
       />
       <Text style={styles.aiName} numberOfLines={1}>
-        {aiProfile?.name || 'AI'}
+        {(aiProfile ? getAssistantDisplayName(aiProfile) : null) || 'AI'}
       </Text>
       <Text style={styles.stateText} numberOfLines={1}>
         {stateText}

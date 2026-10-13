@@ -1,38 +1,12 @@
-/**
- * 群聊在 legacy 分段提交上的最小扩展。
- *
- * processAIReply 仍是唯一回复执行宿主，逐泡落库与投递继续委托给
- * createLegacySegmentedReplyPersistence（群聊保持真实逐泡提交，不接 canonical
- * T3 全量落库）。这里在其之上承担群聊自己的事实：
- *
- * 1. 逐泡提交 fence：每个气泡（含 reasoning）的落库都是
- *    { fence 裁决 + 消息 INSERT + 可见回复标记 } 的单一事务——只有所属 plan
- *    仍 active 且任务仍 running 时该气泡才落库，fence 与 INSERT 之间不可能
- *    插入换代事务。fence 失败抛 ChatReplyRunCancelledError('superseded')，
- *    由投递链路安静收尾：已 commit 的气泡保留，未 commit 的永远不入库。
- *    AbortSignal 只节约请求资源（由执行器经 runtimeContext.abortSignal
- *    接入），落库资格永远以事务内 fence 为准。
- * 2. 首个可见气泡落库与 visible_reply_committed 标记在同一事务完成：用户
- *    消息换代事务据此把该 running 任务视为已发言，不再进入继承队列。
- * 3. 提交前用本轮固定的参与者目录预解析结构化称呼：把同一份 mentions
- *    放入运行时元数据，并把其中有效的 AI @ AI 预解析为待物化任务输入。
- *    物化发生在"mention 所在气泡"自己的提交事务内——"@AI" 可见事实与
- *    scheduling consequence 共享同一个 commit 边界：含 @ 的气泡 commit
- *    成功后，要么已有 future turn 覆盖，要么在事务内新增任务；该气泡被
- *    fence 拒绝（未说出口）则两者都不成立。同一目标在一次回复中被多个
- *    气泡 @ 只裁决一次，不做全局 dedupe。
- * 4. confirmCommitEligible 是错误气泡落库前的持久 fence 探针，
- *    decorateCommitRepository 让错误气泡与正常气泡走同一个 fence 事务：
- *    plan 被换代后旧执行上下文的晚到异常不得再写属于旧 plan 的灰色错误气泡。
- */
-
+/** 群聊消费共享Agent timeline，以逐条事务提交正文、媒体与mention调度；取消后保留已提交事实。 */
 import { databaseCoordinator } from '@platform/persistence';
-import {
-  createLegacySegmentedReplyPersistence,
-  type AssistantTurnCommitPort,
-} from '../../reply/application/AssistantTurnCommit';
-import { ChatReplyRunCancelledError } from '../../reply/application/ChatReplyAbort';
-import type { AIReplyRuntimeContext } from '../../reply/application/ChatReplyTypes';
+import type { ConversationTurnCommitItem } from '../../reply/domain/ConversationTurn';
+import type { ChatMessage } from '../../messages/domain/ChatMessage';
+import { buildSessionPreviewTextFromMessage } from '../../messages/domain/chatMessageMetadata';
+import { deliverCommittedAssistantSegment } from '../../reply/application/CommittedAssistantSegmentDelivery';
+import { assertChatReplyNotAborted , ChatReplyRunCancelledError } from '../../reply/application/ChatReplyAbort';
+import type { AssistantTurnCommitPort } from '../../reply/application/AssistantTurnCommit';
+
 import type { IMessageRepository } from '../../messages/domain/MessageRepository';
 import { getChatMessageRuntimeDependencies } from '../../messages/application/ChatMessageRuntime';
 import type { GroupMessageMention } from '../../messages/domain/chatMessageMetadata';
@@ -42,6 +16,11 @@ import { getChatGroupRuntimeDependencies } from './ChatGroupRuntime';
 import type { GroupParticipantDirectory } from '../domain/GroupParticipantDirectory';
 import type { AppendGroupSpeechTaskInput, GroupSpeechTask } from '../domain/GroupChat';
 
+/** 通用端口仍描述两种投影，群聊只能消费共享Agent timeline，误用应暴露内部契约错误。 */
+async function rejectLegacyProjection(): Promise<void> {
+  throw new Error('群聊回复必须经共享Agent timeline提交');
+}
+
 export function createGroupSegmentedReplyPersistence(params: {
   directory: GroupParticipantDirectory;
   task: Pick<
@@ -49,10 +28,51 @@ export function createGroupSegmentedReplyPersistence(params: {
     'id' | 'planId' | 'groupId' | 'aiAssistantId' | 'sequenceOrder'
   >;
 }): AssistantTurnCommitPort {
-  const legacy = createLegacySegmentedReplyPersistence();
-
   return {
-    ...legacy,
+    persistAssistantPrelude: rejectLegacyProjection,
+    // 共用 Agent timeline 消费语音／贴纸 intent；仍由群逐泡事务裁决提交资格。
+    persistsIntermediates: false,
+    async commitAgentTimeline(commitParams) {
+      const items = commitParams.items;
+      if (items.length === 0) return { outcome: 'empty_items', messages: [] };
+      const mentions = parseGroupMessageMentions({ text: items.filter((item) => item.message.senderType === 'assistant').map((item) => item.message.text).join('\n'),
+        directory: params.directory, actorAssistantId: params.task.aiAssistantId });
+      const inputs = await resolveGroupAIMentionSpeechTaskInputs({ groupId: params.task.groupId, mentions });
+      const mentionTasks = createMentionTaskMaterialization({ mentions, inputs, directory: params.directory, actorAssistantId: params.task.aiAssistantId });
+      const messages: ChatMessage[] = [];
+      const total = items.filter((item) => item.message.senderType === 'assistant').length;
+      let delivered = 0;
+      try {
+        for (const [index, item] of items.entries()) {
+          assertChatReplyNotAborted(commitParams.runtimeContext ?? {});
+          const fenced = withCommitFence(commitParams.repository, params.task, mentionTasks, item.materializeInTransaction);
+          const message = await fenced.commitMessage({ message: { ...item.message, turnRunId: params.task.id, turnItemIndex: index + 1 },
+            previewText: item.message.senderType === 'assistant' ? buildSessionPreviewTextFromMessage(item.message) : null });
+          messages.push(message);
+          try { await item.finalizeAfterCommit?.(); }
+          catch (error) { console.warn('[GroupAssistantTurnCommit] 已提交媒体的暂存清理失败', error); }
+          commitParams.callbacks?.notifyUI?.(message.sessionId);
+          if (message.senderType === 'assistant') {
+            await deliverCommittedAssistantSegment({ sessionId: message.sessionId, text: message.text, metadataJson: message.metadataJson,
+              messageId: message.id, logicalMessageId: message.logicalMessageId ?? null, segmentIndex: delivered++, segmentTotal: total,
+              aiConfig: commitParams.aiConfig, runtimeContext: commitParams.runtimeContext ?? {}, callbacks: commitParams.callbacks ?? {} });
+          }
+        }
+      } catch (error) {
+        await Promise.all(items.slice(messages.length).map((item) => item.discardAfterRollback?.()));
+        throw error;
+      }
+      const visible = messages.filter((message) => message.senderType === 'assistant');
+      if (visible.length) {
+        const joinedText = visible.map(buildSessionPreviewTextFromMessage).join('\n\n');
+        commitParams.callbacks?.onFinalReply?.({ status: 'completed', sessionId: params.task.groupId,
+          correlationId: commitParams.runtimeContext?.correlationId ?? params.task.id, text: joinedText, previewText: joinedText, joinedText,
+          logicalMessageId: visible[0].logicalMessageId ?? null, firstSegmentMessageId: visible[0].id, lastSegmentMessageId: visible.at(-1)!.id,
+          segmentTotal: visible.length, segments: visible.map((message, segmentIndex) => ({ messageId: message.id, segmentIndex, text: buildSessionPreviewTextFromMessage(message) })) });
+      }
+      commitParams.callbacks?.onReplyCommitted?.();
+      return { outcome: 'committed', messages };
+    },
     confirmCommitEligible: () => getChatGroupRuntimeDependencies()
       .groups.isSpeechTaskCommitEligible(
         params.task.planId,
@@ -63,43 +83,7 @@ export function createGroupSegmentedReplyPersistence(params: {
       params.task,
       null,
     ),
-    persistCompletedAssistantReply: async (commitParams) => {
-      // 开头短路 fence：失去资格时省去 mention 解析与整段投递；真正的裁决在
-      // 每个气泡的提交事务内。
-      const eligible = await getChatGroupRuntimeDependencies()
-        .groups.isSpeechTaskCommitEligible(
-          params.task.planId,
-          params.task.id,
-        );
-      if (!eligible) {
-        throw new ChatReplyRunCancelledError('superseded');
-      }
-
-      const mentions = parseGroupMessageMentions({
-        text: commitParams.response.text,
-        directory: params.directory,
-        actorAssistantId: params.task.aiAssistantId,
-      });
-      // 只做成员资格读取校验；物化发生在各 mention 所在气泡的 fence 事务内。
-      const mentionTaskInputs = await resolveGroupAIMentionSpeechTaskInputs({
-        groupId: params.task.groupId,
-        mentions,
-      });
-      await legacy.persistCompletedAssistantReply({
-        ...commitParams,
-        repository: withCommitFence(
-          commitParams.repository,
-          params.task,
-          createMentionTaskMaterialization({
-            mentions,
-            inputs: mentionTaskInputs,
-            directory: params.directory,
-            actorAssistantId: params.task.aiAssistantId,
-          }),
-        ),
-        runtimeContext: withGroupMentions(commitParams.runtimeContext, mentions),
-      });
-    },
+    persistCompletedAssistantReply: rejectLegacyProjection,
   };
 }
 
@@ -148,6 +132,7 @@ function withCommitFence(
     'id' | 'planId' | 'aiAssistantId' | 'sequenceOrder'
   >,
   mentionTasks: MentionTaskMaterialization | null,
+  materialize?: ConversationTurnCommitItem['materializeInTransaction'],
 ): IMessageRepository {
   return {
     ...repository,
@@ -171,6 +156,7 @@ function withCommitFence(
           if (!eligible) {
             throw new ChatReplyRunCancelledError('superseded');
           }
+          if (materialize) input = { ...input, message: await materialize(transaction, input.message) };
           const segmentMentions = mentionTasks && input.message.senderType === 'assistant'
             ? parseGroupMessageMentions({
               text: input.message.text,
@@ -204,7 +190,7 @@ function withCommitFence(
               message.createdAt,
             );
           }
-          await groups.markSpeechTaskReplyCommittedInTransaction(transaction, task.id);
+          if (message.senderType === 'assistant') await groups.markSpeechTaskReplyCommittedInTransaction(transaction, task.id);
           // mention 所在气泡的 commit 边界即调度事实边界：该气泡说出口，
           // 对应 scheduling consequence 必须在同一事务裁决；该气泡未 commit，
           // 既不能覆盖未来任务，也不能追加新任务。
@@ -261,21 +247,4 @@ function replaceGroupChatMentions(
       mentions,
     },
   });
-}
-
-function withGroupMentions(
-  runtimeContext: AIReplyRuntimeContext | undefined,
-  mentions: GroupMessageMention[],
-): AIReplyRuntimeContext {
-  if (!runtimeContext?.groupChat) {
-    throw new Error('群聊提交接缝需要 runtimeContext.groupChat');
-  }
-
-  return {
-    ...runtimeContext,
-    groupChat: {
-      ...runtimeContext.groupChat,
-      mentions,
-    },
-  };
 }

@@ -30,6 +30,12 @@ export type TogetherListeningNetEaseObservation =
       title: string | null;
       artist: string | null;
       album: string | null;
+      positionMs: number | null;
+      speed: number | null;
+      updatedAtEpochMs: number | null;
+      durationMs: number | null;
+      /** 系统当前媒体输出名称；不通过名称推断蓝牙设备类别。 */
+      audioOutput: { playbackType: 'local' | 'remote'; deviceNames: string[] } | null;
     }
   | {
       status:
@@ -49,6 +55,7 @@ export type TogetherListeningNetEaseObservation =
  */
 export interface TogetherListeningChatProjectionHint {
   timelineRunId?: string;
+  groupSpeechTaskId?: string;
 }
 
 /**
@@ -132,11 +139,23 @@ export interface TogetherListeningRuntimeDependencies {
   generateId: () => string;
   nowEpochMs: () => number;
   observeNetEasePlayback: () => Promise<TogetherListeningNetEaseObservation>;
+  readCurrentNetEaseLyric: (
+    playback: Pick<Extract<TogetherListeningNetEaseObservation, { status: 'snapshot_available' }>,
+      'mediaId' | 'playbackState' | 'positionMs' | 'speed' | 'updatedAtEpochMs' | 'durationMs'>,
+    capturedAtEpochMs: number,
+  ) => Promise<TogetherListeningCurrentLyric | null>;
   /** Host authority 属于 Assistants，由 Host composition 注入当前权威身份。 */
   getCurrentHostAIId: () => Promise<string | null>;
   resolveSystemPresentationAIIdentity: (
     aiId: string,
   ) => Promise<{ name: string; avatar: string | null } | null>;
+}
+
+/** 仅承载当前一句，不允许把完整歌词交给 Prompt 或写入 Activity。 */
+export interface TogetherListeningCurrentLyric {
+  text: string;
+  startTimeMs: number;
+  positionMs: number;
 }
 
 const runtimeSlot = createRuntimeSlot<TogetherListeningRuntimeDependencies>(

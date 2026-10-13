@@ -1,6 +1,6 @@
 /** 跨 Feature 初始选择只在 Host 装配；SQL 与用户选择保护留在各 owner。 */
 import { configureAuxiliaryModelInitialization, initializeAssistantVoiceModelInTransaction } from '@features/assistants/composition';
-import { initializeChatImageModelInTransaction } from '@features/chat/composition';
+import { initializeChatImageModelInTransaction, invalidateChatSummaryModelReferencesInTransaction } from '@features/chat/composition';
 import { initializeMemoryEmbeddingModelInTransaction } from '@features/memory/composition';
 import { initializeSpeechRecognitionModelInTransaction } from '@features/speech/composition';
 import { initializeTranslationModelInTransaction } from '@features/integrations/composition';
@@ -10,6 +10,7 @@ import { SQLiteStickerRepository, emitStickerAnnotationPending, emitStickerEmbed
 export function configureAuxiliaryModelInitializationRuntime(): void {
   const stickers = new SQLiteStickerRepository();
   configureAuxiliaryModelInitialization({
+    invalidateModelReferencesInTransaction: invalidateChatSummaryModelReferencesInTransaction,
     async initializeModelSelections(transaction, model) {
       switch (model.capabilityKind) {
         case 'ocr':

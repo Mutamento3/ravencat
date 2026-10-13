@@ -21,6 +21,9 @@ const PROVIDERS: Record<string, PromptBlockProvider<HostPromptProviderContext, P
   'assistants.agent_registry': ({ params }) => promptPackBlockFactory.createAgentRegistrySummaryBlock(params.aiConfig),
   'assistants.moment_audience_candidates': ({ params }) => promptPackBlockFactory.createMomentAudienceCandidatesBlock(params.aiConfig),
   'moments.social_inbox': ({ params }) => promptPackBlockFactory.createMomentSocialInboxBlock(params.aiConfig, params.toolContext),
+  'assistants.nickname': ({ params, scenario }) => promptPackBlockFactory.createAssistantNicknameBlock(
+    params.aiConfig.id, params.runtimeContext!.userDisplayName!, scenario === 'chat.private_reply',
+  ),
   'chat.group_context': ({ params }) => promptPackBlockFactory.createGroupChatContextBlock(params.runtimeContext || {}),
   'tools.description': ({ params }) => promptPackBlockFactory.createToolsDescriptionBlock(
     params.toolsDescription || '',

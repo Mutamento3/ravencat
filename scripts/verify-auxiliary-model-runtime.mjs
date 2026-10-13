@@ -77,10 +77,15 @@ function configureInitialSelections(persistence) {
   const initialization = loadCommonJS('src/features/assistants/application/AuxiliaryModelInitialization.ts');
   mocks['../application/AuxiliaryModelInitialization'] = initialization;
   const owner = (file) => loadCommonJS(file, mocks);
+  const { SQLiteChatSummaryRepository } = loadCommonJS('src/features/chat/summary/infrastructure/SQLiteChatSummaryRepository.ts', {
+    ...mocks, '@shared/prompt': { estimateTextTokens: (text) => text.length },
+  });
+  const summaryRepository = new SQLiteChatSummaryRepository(async () => []);
   const notifications = [];
   loadCommonJS('src/host/composition/configureAuxiliaryModelInitialization.ts', {
     '@features/assistants/composition': { ...initialization, ...owner('src/features/assistants/infrastructure/SQLiteAssistantVoiceSettingsRepository.ts') },
-    '@features/chat/composition': owner('src/features/chat/reply/infrastructure/SQLiteChatImageSettingsRepository.ts'),
+    '@features/chat/composition': { ...owner('src/features/chat/reply/infrastructure/SQLiteChatImageSettingsRepository.ts'),
+      invalidateChatSummaryModelReferencesInTransaction: (transaction, id) => summaryRepository.invalidateModelReferencesInTransaction(transaction, id) },
     '@features/memory/composition': owner('src/features/memory/infrastructure/SQLiteMemoryEntryRepository.ts'),
     '@features/speech/composition': owner('src/features/speech/infrastructure/SQLiteSpeechSettingsRepository.ts'),
     '@features/integrations/composition': owner('src/features/integrations/infrastructure/SQLiteTranslationSettingsRepository.ts'),
@@ -88,7 +93,7 @@ function configureInitialSelections(persistence) {
     '@features/stickers/composition': { ...owner('src/features/stickers/infrastructure/SQLiteStickerRepository.ts'),
       emitStickerAnnotationPending: () => notifications.push('ocr'), emitStickerEmbeddingPending: () => notifications.push('embedding') },
   }).configureAuxiliaryModelInitializationRuntime();
-  return { mocks, notifications };
+  return { mocks, notifications, summaryRepository };
 }
 
 function initialModelRuntime(db) {
@@ -120,10 +125,51 @@ function initialModelRuntime(db) {
     baseUrl: 'https://example.invalid/v1', apiKey: 'test', model: kind,
     metadataJson: kind === 'translation' ? JSON.stringify({ provider: 'aiModel', source: 'auto', target: 'zh' })
       : kind === 'stt' ? JSON.stringify({ provider: 'tencentRealtimeAsr', appId: '123', secretId: 'test' }) : null, ...extra });
-  const createAssistant = (id) => assistants.insert({ id, agentId: `actor-${id}`, name: id, model: 'chat',
+  const createAssistant = (id) => assistants.insert({ id, agentId: `actor-${id}`, name: id, nickname: null, model: 'chat',
     temperature: null, topP: null,
     privateContextPrimaryLimit: 30, privateContextSecondaryLimit: 10, groupContextPrimaryLimit: 40, groupContextSecondaryLimit: 5 });
-  return { ...initial, persistence, commands, repository, create, createAssistant };
+  return { ...initial, persistence, commands, repository, assistants, create, createAssistant };
+}
+
+// 配置资产与摘要资格在同一事务交接；修改、停用、删除保留引用和已提交进度。
+{
+  const db = await createDatabase();
+  const runtime = initialModelRuntime(db);
+  await runtime.createAssistant('summary-owner');
+  const model = await runtime.create('general');
+  const summary = runtime.summaryRepository;
+  const now = '2026-10-13T01:00:00.000Z';
+  db.exec(`INSERT INTO chat_conversations VALUES ('model-ref','direct');
+    INSERT INTO sessions (id,ai_assistant_id,name,created_at,updated_at) VALUES ('model-ref','summary-owner','A','${now}','${now}');
+    INSERT INTO conversation_turn_state (session_id,reply_cursor,revision,updated_at) VALUES ('model-ref',2,0,'${now}');
+    INSERT INTO messages (id,session_id,text,is_me,sender_type,time,created_at,updated_at,status,delivery_status)
+      VALUES (1,'model-ref','first',1,'user','09:00','${now}','${now}','sent','delivered'),
+      (2,'model-ref','second',0,'assistant','09:00','${now}','${now}','sent','delivered');`);
+  await summary.updateSettings('model-ref', { modelConfigId: model.id });
+  const claim = (id) => summary.claim('model-ref', 1, id, now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  const append = (task, id) => summary.appendClaim(task, [{ id, content: 'summary', messages: task.messages }], now);
+  const first = await claim('first');
+  await runtime.commands.updateAuxiliaryModelConfig({ id: model.id, settings: { name: 'new label' } });
+  assert.equal(await append(first, 'committed'), true, '仅名称修改不撤销请求');
+  const cursor = db.prepare("SELECT processed_cursor FROM chat_summary_state WHERE conversation_id='model-ref'").get().processed_cursor;
+  const second = await claim('second');
+  await runtime.commands.updateAuxiliaryModelConfig({ id: model.id, settings: { model: 'next-model' } });
+  assert.equal(await append(second, 'stale'), false, '调用配置改变后旧任务不得提交');
+  assert.equal((await summary.readSettings('model-ref')).modelConfigId, model.id);
+  assert.equal(db.prepare("SELECT processed_cursor FROM chat_summary_state WHERE conversation_id='model-ref'").get().processed_cursor, cursor);
+  assert.equal((await summary.readContext('model-ref', [])).segments.length, 1);
+  const third = await claim('third');
+  db.exec("CREATE TRIGGER deny_summary_invalidation BEFORE UPDATE ON chat_summary_state BEGIN SELECT RAISE(ABORT,'invalidation rejected'); END;");
+  await assert.rejects(runtime.commands.updateAuxiliaryModelConfig({ id: model.id, settings: { model: 'rolled-back' } }), /invalidation rejected/);
+  assert.equal((await runtime.repository.getModelConfigById(model.id)).model, 'next-model', '资格失效失败时配置编辑回滚');
+  db.exec('DROP TRIGGER deny_summary_invalidation');
+  await runtime.commands.updateAuxiliaryModelConfig({ id: model.id, settings: { enabled: false } });
+  assert.equal(await append(third, 'disabled'), false);
+  await runtime.commands.deleteAuxiliaryModelConfig({ id: model.id });
+  assert.equal((await summary.readSettings('model-ref')).modelConfigId, model.id, '删除资产不替换持续引用');
+  assert.equal((await summary.readContext('model-ref', [])).segments.length, 1);
+  assert.equal(db.prepare("SELECT status FROM chat_summary_tasks WHERE conversation_id='model-ref' AND status<>'completed'").get().status, 'waiting');
+  db.close();
 }
 
 // 角色先于模型、模型先于角色，两种入口都固化选择；取消与手动改选不被其他资产覆盖。
@@ -135,6 +181,18 @@ function initialModelRuntime(db) {
   const vision = await runtime.create('ocr');
   const voice = await runtime.create('tts');
   await runtime.createAssistant('after');
+  const limits={privateContextPrimaryLimit:20,privateContextSecondaryLimit:0,groupContextPrimaryLimit:30,groupContextSecondaryLimit:100};
+  await runtime.assistants.applyContextLimits(['before','after'],limits);
+  for(const id of ['before','after']) {
+    const profile=await runtime.assistants.getById(id);
+    for(const [key,value] of Object.entries(limits)) assert.equal(profile[key],value);
+    assert.equal(profile.name,id,'快捷应用不复制角色资料');
+  }
+  await runtime.assistants.updateSettings('before',{groupContextSecondaryLimit:99});
+  assert.equal((await runtime.assistants.getById('after')).groupContextSecondaryLimit,100,'应用后独立编辑');
+  const beforeMissing=db.prepare("SELECT * FROM ai_assistants WHERE id='before'").get();
+  await assert.rejects(runtime.assistants.applyContextLimits(['before','missing'],{...limits,privateContextPrimaryLimit:77}),/已删除/);
+  assert.deepEqual(db.prepare("SELECT * FROM ai_assistants WHERE id='before'").get(),beforeMissing,'所选AI消失时整批回滚');
   for (const id of ['before', 'after']) {
     assert.equal(db.prepare('SELECT recognition_model_config_id AS id FROM chat_assistant_image_settings WHERE assistant_id = ?').get(id).id, vision.id);
     assert.equal(db.prepare('SELECT model_config_id AS id FROM assistant_voice_settings WHERE assistant_id = ?').get(id).id, voice.id);

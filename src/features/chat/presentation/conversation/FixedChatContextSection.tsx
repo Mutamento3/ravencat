@@ -36,7 +36,7 @@ export default function FixedChatContextSection({ conversationId, onChoose, onFi
     void load();
     const unsubscribeSummary = subscribeChatSummaryChanged((id) => { if (id === conversationId) void load(); });
     const unsubscribeMessages = setChatEventBus({ emit(name, payload) {
-      if (payload.sessionId === conversationId && ['messagesUpdated', 'messagesPatched', 'messagesReloadRequested'].includes(name)) void load();
+      if (payload.sessionId === conversationId && ['messagesUpdated', 'messagesPatched', 'messagesDeleted', 'messagesReloadRequested'].includes(name)) void load();
     } });
     return () => { active = false; unsubscribeSummary(); unsubscribeMessages(); };
   }, [conversationId, onFixedChange]));

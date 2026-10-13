@@ -42,6 +42,8 @@ async function loadSendGroupUserMessage() {
   );
   const metadataUrl = transpileToModuleUrl(
     read('src/features/chat/messages/domain/chatMessageMetadata.ts')
+      .replace(/from ['"]\.\/SharedChatRecord['"]/g,
+        `from '${transpileToModuleUrl(read('src/features/chat/messages/domain/SharedChatRecord.ts'))}'`)
       .replace(/from ['"]\.\/ChatSticker['"]/g, `from '${chatStickerUrl}'`),
   );
   // 事务协调器桩：本测试只关心消息事实与 metadata，事务直接透传。
@@ -129,6 +131,8 @@ async function loadBuildChatBatchAIInput() {
   );
   const metadataUrl = transpileToModuleUrl(
     read('src/features/chat/messages/domain/chatMessageMetadata.ts')
+      .replace(/from ['"]\.\/SharedChatRecord['"]/g,
+        `from '${transpileToModuleUrl(read('src/features/chat/messages/domain/SharedChatRecord.ts'))}'`)
       .replace(/from ['"]\.\/ChatSticker['"]/g, `from '${chatStickerUrl}'`),
   );
   const imageInputUrl = transpileToModuleUrl(`

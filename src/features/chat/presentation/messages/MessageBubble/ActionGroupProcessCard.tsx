@@ -166,6 +166,7 @@ function ActionGroupProcessCard({
           </View>
         ) : (
           <BubbleTextContent
+            selectable={message.senderType === 'reasoning'}
             hasTextContent={Boolean(message.text.trim())}
             shouldUseMarkdown={shouldRenderMarkdownText(message.text)}
             text={message.text}
@@ -215,7 +216,9 @@ function ActionGroupProcessCard({
           <Text style={actionStyles.defaultLabel}>{title}</Text>
         </TouchableOpacity>
         {isExpanded ? (
-          <View style={actionStyles.defaultBody}>{childrenContent}</View>
+          <View style={actionStyles.defaultBody}>
+            {childrenContent}
+          </View>
         ) : null}
       </View>
     </View>

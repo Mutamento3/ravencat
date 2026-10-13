@@ -12,6 +12,7 @@ import {
   configureNetEaseMusicRuntimeDependencies,
   configureNetEasePlaybackRuntimeDependencies,
   configureProtectedAppsRuntimeDependencies,
+  nativeNetEasePublicDataBackend,
 } from '@features/phoneTools/composition';
 
 let configured = false;
@@ -32,6 +33,7 @@ export function configurePhoneToolsRuntime(): void {
   // 不写任何网易云业务逻辑。
   configureNetEaseMusicRuntimeDependencies({ dispatchBrowsableUriToPackage });
   configureNetEasePlaybackRuntimeDependencies({
+    getSongLyrics: nativeNetEasePublicDataBackend.getSongLyrics,
     getMediaSessionSnapshot,
     dispatchMediaSessionCommand,
   });

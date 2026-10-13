@@ -4,7 +4,9 @@ import type { ChatSummaryModelInput, ChatSummaryRepository, SecondaryChatSummary
 export interface ChatSummaryRuntime {
   repository: ChatSummaryRepository;
   getBatchSize(conversationId: string): Promise<number | null>;
+  /** 模型边界只返回已去除首尾空白的非空、未截断正文；Chat 直接提交，不再解析输出结构。 */
   generateAddition(input: ChatSummaryModelInput, signal: AbortSignal, report: (diagnostics: ChatSummaryCallDiagnostics) => Promise<void>, settings: ChatSummaryRequestSettings): Promise<string>;
+  /** 与一级相同的纯正文契约。 */
   generateSecondary(input: SecondaryChatSummaryClaim, signal: AbortSignal, report: (diagnostics: ChatSummaryCallDiagnostics) => Promise<void>, settings: ChatSummaryRequestSettings): Promise<string>;
 }
 const slot = createRuntimeSlot<ChatSummaryRuntime>('ChatSummary');

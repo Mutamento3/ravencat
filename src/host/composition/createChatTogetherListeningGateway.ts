@@ -9,6 +9,7 @@
 import type {
   AIAssistantConfig,
 } from '@features/chat';
+import { aiAssistantRepository, getAssistantDisplayName } from '@features/assistants';
 import {
   commitTogetherListeningUserInvitation,
   upsertTogetherListeningTimelineEntry,
@@ -45,8 +46,8 @@ function toChatActivity(activity: TogetherListeningActivity): ChatTogetherListen
   };
 }
 
-function toTimelineActivity(activity: TogetherListeningActivity): TogetherListeningTimelineActivity {
-  return {
+async function toTimelineActivity(activity: TogetherListeningActivity): Promise<TogetherListeningTimelineActivity> {
+  const projection = {
     id: activity.id,
     chatSessionId: activity.chatSessionId,
     hostAiId: activity.hostAiId,
@@ -54,10 +55,15 @@ function toTimelineActivity(activity: TogetherListeningActivity): TogetherListen
     phase: activity.phase,
     createdAtEpochMs: activity.createdAtEpochMs,
     updatedAtEpochMs: activity.updatedAtEpochMs,
-    endReason: activity.endReason,
     activatedAtEpochMs: activity.activatedAtEpochMs,
     endedAtEpochMs: activity.endedAtEpochMs,
   };
+  if (activity.endReason === 'ai_left') {
+    const assistant = await aiAssistantRepository.getById(activity.hostAiId);
+    if (!assistant) throw new Error(`一起听退出事件的 AI 身份不存在：${activity.hostAiId}`);
+    return { ...projection, endReason: 'ai_left', hostAiName: getAssistantDisplayName(assistant) };
+  }
+  return { ...projection, endReason: activity.endReason };
 }
 
 function resultWithActivity(
@@ -122,7 +128,7 @@ function unavailableFromSnapshot(
   return resultWithActivity('unavailable', activity, message, reason);
 }
 
-function isCurrentHost(snapshot: TogetherListeningRuntimeSnapshot, aiConfig: AIAssistantConfig): boolean {
+function isCurrentHost(snapshot: TogetherListeningRuntimeSnapshot, aiConfig: Pick<AIAssistantConfig, 'id'>): boolean {
   return snapshot.currentHostAiId !== null
     && snapshot.currentHostAiId === aiConfig.id;
 }
@@ -217,7 +223,7 @@ export function createChatTogetherListeningGateway(): ChatTogetherListeningGatew
 } {
   return {
     async projectActivityToChat(activity, hint) {
-      await upsertTogetherListeningTimelineEntry(toTimelineActivity(activity), hint);
+      await upsertTogetherListeningTimelineEntry(await toTimelineActivity(activity), hint);
     },
 
     async invite(params) {
@@ -260,7 +266,7 @@ export function createChatTogetherListeningGateway(): ChatTogetherListeningGatew
 
       try {
         const committed = await commitTogetherListeningUserInvitation(
-          toTimelineActivity(created.activity),
+          await toTimelineActivity(created.activity),
           params.aiConfig,
         );
         if (committed.userMessage) {

@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { useTheme } from '@shared/theme';
+import { ThemedSurface, useTheme } from '@shared/theme';
 import { AIAvatar } from '@shared/ui';
 import { getGroupSpeechQueue } from '../../group/application';
 import type {
@@ -108,7 +108,6 @@ export default function GroupSpeechQueueOverlay({
       marginBottom: 96,
       maxHeight: 320,
       borderRadius: theme.radius.lg,
-      backgroundColor: theme.colors.background.app,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: theme.colors.border.light,
       paddingVertical: theme.spacing.sm,
@@ -154,13 +153,21 @@ export default function GroupSpeechQueueOverlay({
     <Modal
       visible={visible}
       transparent
+      statusBarTranslucent
+      navigationBarTranslucent
       animationType="fade"
       onRequestClose={onClose}
     >
       <TouchableWithoutFeedback onPress={onClose}>
         <View style={styles.backdrop}>
           <TouchableWithoutFeedback>
-            <View style={styles.panel}>
+            {/* 队列覆盖聊天消息，玻璃主题需要独立材质，不能沿用透明页面底色。 */}
+            <ThemedSurface
+              variant="modal"
+              cornerRadius={theme.radius.lg}
+              backgroundColor={theme.colors.background.app}
+              style={styles.panel}
+            >
               <View style={styles.header}>
                 <Ionicons name="list" size={16} color={theme.colors.text.primary} />
                 <Text style={styles.headerText}>发言队列</Text>
@@ -176,12 +183,12 @@ export default function GroupSpeechQueueOverlay({
                   return (
                     <View key={task.id} style={styles.taskRow}>
                       <AIAvatar
-                        name={participant?.displayName || 'AI'}
+                        name={participant?.nickname ?? participant?.displayName ?? 'AI'}
                         avatarUrl={participant?.avatar ?? null}
                         size="small"
                       />
                       <Text style={styles.taskName} numberOfLines={1}>
-                        {participant?.displayName || 'AI'}
+                        {participant?.nickname ?? participant?.displayName ?? 'AI'}
                       </Text>
                       <Text style={[styles.statusText, { color: status.color }]}>
                         {status.label}
@@ -190,7 +197,7 @@ export default function GroupSpeechQueueOverlay({
                   );
                 })
               )}
-            </View>
+            </ThemedSurface>
           </TouchableWithoutFeedback>
         </View>
       </TouchableWithoutFeedback>

@@ -55,6 +55,7 @@ let projectionCount = 0;
 let modelRunsAdded = 0;
 let followUpCount = 0;
 const leaveCalls = [];
+const projectedActivities = [];
 
 function transition(phase, endReason = null) {
   snapshot.activity = {
@@ -78,7 +79,8 @@ globalThis.__listenInteraction = {
       modelRunsAdded += 1;
       return { userMessage: { id: 1, activity }, success: true, error: null };
     },
-    async upsert() {
+    async upsert(activity) {
+      projectedActivities.push(activity);
       projectionCount += 1;
       return { message: { id: 1 }, inserted: projectionCount === 1 };
     },
@@ -148,6 +150,12 @@ exports.upsertTogetherListeningTimelineEntry = (...args) => globalThis.__listenI
 write('node_modules/@features/togetherListening/index.js', `
 module.exports = globalThis.__listenInteraction.together;
 `);
+write('src/features/assistants/infrastructure/SQLiteAssistantRepository.js', 'exports.aiAssistantRepository = {};');
+compile('src/features/assistants/AssistantNickname.ts');
+write('node_modules/@features/assistants/index.js', `
+exports.aiAssistantRepository = { getById: async () => ({ name: '原名', nickname: '小羽' }) };
+exports.getAssistantDisplayName = require(${JSON.stringify(path.join(tempRoot, 'src/features/assistants/AssistantNickname.js'))}).getAssistantDisplayName;
+`);
 
 compile('src/host/composition/createChatTogetherListeningGateway.ts');
 compile('src/features/chat/conversation/application/ChatTogetherListeningGateway.ts');
@@ -186,7 +194,30 @@ assert.equal(
 // ChatDetail/InputArea callback propagation → ChatToolPanel visibility 的完整纯链路：
 // 非 Host（callback 为 undefined）经 wrapper 解析后仍无入口，Host 才有「一起听」。
 const togetherTool = { id: 'togetherListening' };
-const defaultTools = [{ id: 'image' }, { id: 'videoCall' }];
+const defaultTools = [{ id: 'image' }];
+const videoCallTool = { id: 'videoCall' };
+assert.deepEqual(
+  panelCapability.resolveChatToolPanelTools({
+    defaultTools,
+    videoCallTool,
+    videoCallHandler: undefined,
+    togetherListeningTool: togetherTool,
+    togetherListeningHandler: undefined,
+  }),
+  defaultTools,
+  '群聊未接入通话能力时只展示附件入口',
+);
+assert.deepEqual(
+  panelCapability.resolveChatToolPanelTools({
+    defaultTools,
+    videoCallTool,
+    videoCallHandler: () => {},
+    togetherListeningTool: togetherTool,
+    togetherListeningHandler: undefined,
+  }),
+  [...defaultTools, videoCallTool],
+  '单聊已接入通话能力时保留视频电话入口',
+);
 for (const aiAssistant of [{ isHostAI: false }, null]) {
   const capability = entryPolicy.shouldShowTogetherListeningChatEntry(aiAssistant)
     ? () => {}
@@ -197,6 +228,8 @@ for (const aiAssistant of [{ isHostAI: false }, null]) {
   );
   const tools = panelCapability.resolveChatToolPanelTools({
     defaultTools,
+    videoCallTool,
+    videoCallHandler: () => {},
     togetherListeningTool: togetherTool,
     togetherListeningHandler: panelHandler,
   });
@@ -216,6 +249,8 @@ for (const aiAssistant of [{ isHostAI: false }, null]) {
   );
   const tools = panelCapability.resolveChatToolPanelTools({
     defaultTools,
+    videoCallTool,
+    videoCallHandler: () => {},
     togetherListeningTool: togetherTool,
     togetherListeningHandler: panelHandler,
   });
@@ -311,6 +346,10 @@ assert.deepEqual(
   'Chat card leave 必须只委托 shared canonical user-leave command',
 );
 assert.ok(projectionCount >= 4);
+await gateway.projectActivityToChat({
+  ...snapshot.activity, phase: 'ended', endReason: 'ai_left',
+});
+assert.equal(projectedActivities.at(-1).hostAiName, '小羽', 'AI 退出时 Host 提供当前显示名字，Chat 不猜身份');
 
 fs.rmSync(tempRoot, { recursive: true, force: true });
 console.log('LISTEN-4 Host-only 入口、用户 invite/accept/reject/leave 重校验与 LISTEN-5 follow-up 单次触发检查通过。');

@@ -13,7 +13,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cache = new Map();
 const writes = [];
 let summaryTasks = [], summaryPageListener, finishRetry;
-const settings = { generationEnabled: true, injectEnabled: true, fixedMessageId: null, secondaryEnabled: true, secondaryTokenThreshold: 8000, requestTimeoutSeconds: 300, maxOutputTokens: null };
+const settings = { generationEnabled: true, injectEnabled: true, fixedMessageId: null, secondaryEnabled: true, secondaryTokenThreshold: 8000, requestTimeoutSeconds: 300, maxOutputTokens: null, modelConfigId: null, groupTriggerCount: 40 };
 let segments = [
   { id: 'p', level: 'primary', sequence:1, contextSequence:1, compactionId: 's', content: '一级原记录', createdAt: '2026-10-11T00:00:00.000Z', updatedAt:'2026-10-11T00:00:00.000Z', sourceStartAt: null },
   { id: 's', level: 'secondary', sequence:2, contextSequence:1, compactionId: null, content: '二级归纳', createdAt: '2026-10-11T00:00:00.000Z', updatedAt:'2026-10-11T00:00:00.000Z', sourceStartAt: null },
@@ -33,7 +33,8 @@ const mocks = {
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
   'lucide-react-native': Object.fromEntries(['Plus','Settings','Pin','PinOff','ChevronRight','ChevronDown','Layers3'].map(name=>[name,name])),
   '@shared/theme': { ThemedSurface:'ThemedSurface', useTheme: () => ({ colors: { brand: { primary: 'blue' }, text: { tertiary: 'gray',secondary:'gray' }, feedback: { error: 'red' }, border:{strong:'gray'} } }), useThemedStyles: () => ({}) },
-  '@shared/ui': { NavigationHeader: 'NavigationHeader', Toggle: 'Toggle', useBusyBackHandler() {}, showAppDialog() {} },
+  '@shared/ui': { AppTextInput: 'TextInput', KeyboardAvoidingContainer: 'KeyboardAvoidingContainer', NavigationHeader: 'NavigationHeader', Toggle: 'Toggle', ConfiguredModelPicker: 'ConfiguredModelPicker', useBusyBackHandler() {}, showAppDialog() {} },
+  '@features/assistants': { getAuxiliaryModelSelection: async () => ({}), requireAuxiliaryModel: async () => {}, subscribeAuxiliaryModelsChanged: () => () => {} },
   '@shared/ui/AutoSaveErrors': {AutoSaveErrors:'AutoSaveErrors'},
   '@shared/prompt': { estimateTextTokens: text => text.length },
   './chatSummaryStyles': {},
@@ -240,6 +241,9 @@ assert.ok(renderer.root.findAllByType('Text').some(node=>node.children.join('').
 fixedSnapshot={...fixedSnapshot,fixedStart:{...fixedSnapshot.fixedStart,messageCount:8}};
 await act(async () => {fixedMessageBus.emit('messagesUpdated',{sessionId:'only-this-ai'});});
 assert.ok(renderer.root.findAllByType('Text').some(node=>node.children.join('').includes('8 条逻辑对话')));
+fixedSnapshot={...fixedSnapshot,fixedStart:{...fixedSnapshot.fixedStart,messageCount:7}};
+await act(async () => {fixedMessageBus.emit('messagesDeleted',{sessionId:'only-this-ai',deletedMessageIds:[43]});});
+assert.ok(renderer.root.findAllByType('Text').some(node=>node.children.join('').includes('7 条逻辑对话')),'删除后固定窗口计数同步减少');
 await act(async () => {renderer.root.findAllByType('Pressable')[1].props.onPress();});
 assert.deepEqual(fixedWrites,[['only-this-ai',null]],'取消只提交当前会话起点');
 await act(async () => {renderer.unmount();});

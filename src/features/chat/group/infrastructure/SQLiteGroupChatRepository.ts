@@ -50,6 +50,7 @@ interface GroupChatMemberRow {
   display_order: number | null;
   enabled: number | null;
   name?: string | null;
+  nickname?: string | null;
   avatar?: string | null;
   avatar_media_asset_id?: string | null;
   model?: string | null;
@@ -115,6 +116,10 @@ function parseInvokedUserMessageIds(json: string | null): number[] {
 }
 
 export class GroupChatRepository implements IGroupChatRepository {
+  async isSpeechTaskRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, taskId: string): Promise<boolean> {
+    return await transaction.getFirstAsync(`SELECT t.id FROM group_speech_tasks t JOIN group_speech_plans p ON p.id = t.plan_id
+      WHERE t.id = ? AND t.status = 'running' AND p.status = 'running'`, [taskId]) !== null;
+  }
   async rebaseRestoredMediaInTransaction(transaction: DatabaseTransactionExecutor, rebase: (uri: string | null) => string | null): Promise<void> {
     const rows = await transaction.getAllAsync<{ id: string; avatar: string }>('SELECT id, avatar FROM group_chats WHERE avatar_media_asset_id IS NULL AND avatar IS NOT NULL');
     for (const row of rows) {
@@ -177,6 +182,7 @@ export class GroupChatRepository implements IGroupChatRepository {
         `SELECT
            m.*,
            a.name,
+           a.nickname,
            a.avatar,
            a.avatar_media_asset_id,
            a.model
@@ -1329,6 +1335,7 @@ export class GroupChatRepository implements IGroupChatRepository {
       displayOrder: row.display_order || 0,
       enabled: row.enabled !== 0,
       name: row.name || undefined,
+      nickname: row.nickname,
       avatar: row.avatar || null,
       avatarMediaAssetId: row.avatar_media_asset_id || null,
       model: row.model || null,

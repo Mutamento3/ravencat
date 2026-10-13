@@ -22,6 +22,7 @@ import type {
   AIAvatarMediaAssetMigrationCandidate,
   CommitAIAvatarMediaAssetReferenceInput,
   IAIAssistantRepository,
+  AssistantNicknameContext,
 } from '../domain/AssistantRepository';
 import {
   createHostAIAppointmentCooldown,
@@ -34,6 +35,19 @@ import {
  * AI助手的 SQLite 实现
  */
 export class AIAssistantRepository implements IAIAssistantRepository {
+  /** 一次性复制四项设置，同事务完成；不修改角色资料，也不建立继承关系。 */
+  async applyContextLimits(assistantIds: readonly string[], settings: import('../domain/AssistantRepository').AssistantContextLimits): Promise<void> {
+    const database = databaseCoordinator.openTaskExecutor({ name: 'assistants.applyContextLimits', feature: 'assistants', priority: 'interactive' });
+    await database.withExclusiveTransactionAsync(async (transaction) => {
+      const now = new Date().toISOString();
+      for (const id of assistantIds) {
+        const result = await transaction.runAsync(`UPDATE ai_assistants SET private_context_primary_limit = ?, private_context_secondary_limit = ?,
+          group_context_primary_limit = ?, group_context_secondary_limit = ?, updated_at = ? WHERE id = ?`,
+        [settings.privateContextPrimaryLimit, settings.privateContextSecondaryLimit, settings.groupContextPrimaryLimit, settings.groupContextSecondaryLimit, now, id]);
+        if (result.changes !== 1) throw new Error('所选AI已删除，请刷新列表后重新应用');
+      }
+    });
+  }
   async rebaseRestoredMediaInTransaction(transaction: DatabaseTransactionExecutor, rebase: (uri: string | null) => string | null): Promise<void> {
     const rows = await transaction.getAllAsync<{ id: string; avatar: string }>('SELECT id, avatar FROM ai_assistants WHERE avatar_media_asset_id IS NULL AND avatar IS NOT NULL');
     for (const row of rows) {
@@ -58,6 +72,7 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       id: row.id as string,
       agentId: row.agent_id as string,
       name: row.name as string,
+      nickname: row.nickname as string | null,
       avatar: row.avatar as string | null,
       avatarMediaAssetId: row.avatar_media_asset_id as string | null,
       model: row.model as string,
@@ -106,6 +121,7 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       id: row.id as string,
       agentId: row.agent_id as string,
       name: row.name as string,
+      nickname: row.nickname as string | null,
       avatar: row.avatar as string | null,
       avatarMediaAssetId: row.avatar_media_asset_id as string | null,
       model: row.model as string,
@@ -195,7 +211,7 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       priority: 'surface',
     });
     const rows = await database.getAllAsync<Record<string, unknown>>(
-      `SELECT a.id, a.agent_id, a.name, a.avatar, a.avatar_media_asset_id, a.model,
+      `SELECT a.id, a.agent_id, a.name, a.nickname, a.avatar, a.avatar_media_asset_id, a.model,
               a.is_host_ai,
               (SELECT id FROM sessions WHERE ai_assistant_id = a.id LIMIT 1)
                 AS canonical_conversation_id,
@@ -292,7 +308,7 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       priority: 'surface',
     });
     const row = await database.getFirstAsync<Record<string, unknown>>(
-      `SELECT a.id, a.agent_id, a.name, a.avatar, a.avatar_media_asset_id, a.model,
+      `SELECT a.id, a.agent_id, a.name, a.nickname, a.avatar, a.avatar_media_asset_id, a.model,
               a.is_host_ai,
               (SELECT id FROM sessions WHERE ai_assistant_id = a.id LIMIT 1)
                 AS canonical_conversation_id,
@@ -318,11 +334,12 @@ export class AIAssistantRepository implements IAIAssistantRepository {
     await database.withExclusiveTransactionAsync(async (transaction) => {
       await transaction.runAsync(
         `INSERT INTO ai_assistants
-         (id, agent_id, name, avatar, avatar_media_asset_id, model, api_key, api_base_url, system_prompt, temperature, top_p, max_tokens, private_context_primary_limit, private_context_secondary_limit, group_context_primary_limit, group_context_secondary_limit, enable_tools, disable_thinking, enable_short_text_protocol, allow_multiple_bubbles, show_token_usage, supports_vision, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,      [
+         (id, agent_id, name, nickname, avatar, avatar_media_asset_id, model, api_key, api_base_url, system_prompt, temperature, top_p, max_tokens, private_context_primary_limit, private_context_secondary_limit, group_context_primary_limit, group_context_secondary_limit, enable_tools, disable_thinking, enable_short_text_protocol, allow_multiple_bubbles, show_token_usage, supports_vision, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,      [
           ai.id,
           ai.agentId,
           ai.name,
+          ai.nickname,
           ai.avatarMediaAssetId ? null : ai.avatar || null,
           ai.avatarMediaAssetId || null,
           ai.model,
@@ -455,17 +472,57 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       }
     }
 
-    fields.push('updated_at = ?');
-    values.push(now);
-    values.push(assistantId);
-
     const database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'assistants.updateSettings', feature: 'assistants', priority: 'runtime' });
-    await database.runAsync(
-      `UPDATE ai_assistants SET ${fields.join(', ')} WHERE id = ?`,
-      values
-    );
+    return database.withExclusiveTransactionAsync(async (transaction) => {
+      if (settings.nickname !== undefined) {
+        const previous = await transaction.getFirstAsync<{ nickname: string | null }>(
+          'SELECT nickname FROM ai_assistants WHERE id = ?', [assistantId],
+        );
+        if (!previous) return false;
+        if (previous.nickname !== settings.nickname) {
+          // 当前值与修改事件一起提交；旧请求的确认只能消费它实际收到的事件 ID。
+          fields.push('nickname = ?');
+          values.push(settings.nickname);
+          await transaction.runAsync(
+            `INSERT INTO assistant_nickname_changes
+              (assistant_id, previous_nickname, nickname, created_at) VALUES (?, ?, ?, ?)`,
+            [assistantId, previous.nickname, settings.nickname, now],
+          );
+        }
+      }
+      fields.push('updated_at = ?');
+      values.push(now, assistantId);
+      const result = await transaction.runAsync(
+        `UPDATE ai_assistants SET ${fields.join(', ')} WHERE id = ?`, values,
+      );
+      return result.changes > 0;
+    });
+  }
 
-    return true;
+  async getNicknameContext(assistantId: string): Promise<AssistantNicknameContext | null> {
+    const database = databaseCoordinator.openTaskExecutor({ name: 'assistants.nicknameContext', feature: 'assistants', priority: 'runtime' });
+    return database.withExclusiveTransactionAsync(async (transaction) => {
+      const assistant = await transaction.getFirstAsync<{ nickname: string | null }>(
+        'SELECT nickname FROM ai_assistants WHERE id = ?', [assistantId],
+      );
+      if (!assistant) return null;
+      const rows = await transaction.getAllAsync<{
+        id: number; previous_nickname: string | null; nickname: string | null; acknowledged: number;
+      }>('SELECT id, previous_nickname, nickname, acknowledged FROM assistant_nickname_changes WHERE assistant_id = ? ORDER BY id', [assistantId]);
+      return {
+        nickname: assistant.nickname,
+        changes: rows.map((row) => ({ id: row.id, previousNickname: row.previous_nickname,
+          nickname: row.nickname, acknowledged: row.acknowledged === 1 })),
+      };
+    });
+  }
+
+  async acknowledgeNicknameChanges(assistantId: string, throughChangeId: number): Promise<void> {
+    const database = databaseCoordinator.openTaskExecutor({ name: 'assistants.acknowledgeNickname', feature: 'assistants', priority: 'runtime' });
+    await database.runAsync(
+      'UPDATE assistant_nickname_changes SET acknowledged = 1 WHERE assistant_id = ? AND id <= ? AND acknowledged = 0',
+      [assistantId, throughChangeId],
+    );
   }
 
   /**

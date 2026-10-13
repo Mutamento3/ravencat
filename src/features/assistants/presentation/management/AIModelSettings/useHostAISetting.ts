@@ -1,4 +1,5 @@
 /** 管理模型设置页面中的主理 AI 查询、任命与撤销状态。 */
+import { getAssistantDisplayName } from '../../../AssistantNickname';
 
 import { showAppDialog, type AppDialogButton, type AppDialogTone } from '@shared/ui';
 import { useCallback, useEffect, useState } from 'react';
@@ -107,7 +108,7 @@ export default function useHostAISetting({
       if (latestHostAI && latestHostAI.id !== aiAssistant.id) {
         showAlert(
           '无法任命',
-          `当前已有主理 AI「${latestHostAI.name}」，请先撤销其身份后再任命新的主理 AI。`, undefined, 'warning'
+          `当前已有主理 AI「${getAssistantDisplayName(latestHostAI)}」，请先撤销其身份后再任命新的主理 AI。`, undefined, 'warning'
         );
         return;
       }
@@ -126,7 +127,7 @@ export default function useHostAISetting({
 
       showAlert(
         '任命主理 AI',
-        `确定要将「${aiAssistant.name}」设置为主理 AI 吗？\n\n主理 AI 是 RavenCat 中权限最高的 AI，可以管理其他 AI。在你另行授予相关系统权限后，主理 AI 还可以使用设备控制能力；本次任命不会自动授予 Android 系统权限。\n\n请谨慎选择主理 AI。`,
+        `确定要将「${getAssistantDisplayName(aiAssistant)}」设置为主理 AI 吗？\n\n主理 AI 是 RavenCat 中权限最高的 AI，可以管理其他 AI。在你另行授予相关系统权限后，主理 AI 还可以使用设备控制能力；本次任命不会自动授予 Android 系统权限。\n\n请谨慎选择主理 AI。`,
         [
           { text: '取消', style: 'cancel' },
           {
@@ -137,7 +138,7 @@ export default function useHostAISetting({
                 await appointHostAIAssistant(aiAssistant.id);
                 setIsHostAI(true);
                 onUpdated?.({ id: aiAssistant.id, isHostAI: true });
-                showAlert('成功', `「${aiAssistant.name}」已被设置为主理 AI`, undefined, 'success');
+                showAlert('成功', `「${getAssistantDisplayName(aiAssistant)}」已被设置为主理 AI`, undefined, 'success');
                 await checkHostStatus();
               } catch (error) {
                 console.error('Failed to set host AI:', error);
@@ -155,7 +156,7 @@ export default function useHostAISetting({
 
     showAlert(
       '撤销主理 AI',
-      `确定要取消「${aiAssistant.name}」的主理 AI 身份吗？\n\n该 AI 将失去监管其他 AI 的权限。`,
+      `确定要取消「${getAssistantDisplayName(aiAssistant)}」的主理 AI 身份吗？\n\n该 AI 将失去监管其他 AI 的权限。`,
       [
         { text: '取消', style: 'cancel' },
         {
@@ -167,7 +168,7 @@ export default function useHostAISetting({
               await revokeHostAIAssistant(aiAssistant.id);
               setIsHostAI(false);
               onUpdated?.({ id: aiAssistant.id, isHostAI: false });
-              showAlert('成功', `「${aiAssistant.name}」的主理 AI 身份已取消`, undefined, 'success');
+              showAlert('成功', `「${getAssistantDisplayName(aiAssistant)}」的主理 AI 身份已取消`, undefined, 'success');
               await checkHostStatus();
             } catch (error) {
               console.error('Failed to revoke host AI:', error);

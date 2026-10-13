@@ -5,8 +5,6 @@ import type { ViewStyle } from 'react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
-  Keyboard,
-  KeyboardAvoidingView,
   View,
   Text,
   TouchableOpacity,
@@ -18,6 +16,7 @@ import {
 import { useTheme, useThemedStyles, ThemedSurface } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import KeyboardAvoidingContainer from './KeyboardAvoidingContainer';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -27,7 +26,7 @@ export interface ModalSheetProps {
   title?: string;
   children: ReactNode;
   style?: ViewStyle;
-  /** 表单弹窗的避让必须发生在 Modal 窗口内；调用方已有避让时无需开启。 */
+  /** 表单弹窗在自己的 Modal 窗口内避让，内容无需再包避让容器。 */
   avoidKeyboard?: boolean;
 }
 
@@ -80,23 +79,11 @@ export default function ModalSheet({
   avoidKeyboard = false,
 }: ModalSheetProps) {
   const [internalVisible, setInternalVisible] = useState(visible);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
-
-  useEffect(() => {
-    if (!avoidKeyboard || !internalVisible) return;
-    setKeyboardVisible(Keyboard.isVisible());
-    const showSubscription = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
-    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
-    return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, [avoidKeyboard, internalVisible]);
 
   useEffect(() => {
     if (visible) {
@@ -151,11 +138,9 @@ export default function ModalSheet({
       onRequestClose={onClose}
     >
       <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
-        {/* Android 隐藏事件的 screenY 不一定等于 Modal 高度；隐藏后禁用避让，避免残留留白。 */}
-        <KeyboardAvoidingView
+        <KeyboardAvoidingContainer
           style={styles.keyboardContainer}
-          behavior="padding"
-          enabled={avoidKeyboard && keyboardVisible}
+          enabled={avoidKeyboard}
         >
           <TouchableWithoutFeedback onPress={onClose}>
             <View style={StyleSheet.absoluteFill} />
@@ -189,7 +174,7 @@ export default function ModalSheet({
             ) : null}
             {children}
           </Animated.View>
-        </KeyboardAvoidingView>
+        </KeyboardAvoidingContainer>
       </Animated.View>
     </Modal>
   );

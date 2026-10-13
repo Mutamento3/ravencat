@@ -9,14 +9,17 @@ export function resolveTogetherListeningToolPanelHandler(
 
 /**
  * ChatToolPanel 的入口可见性只反映真实 capability callback：
- * handler 为 undefined 时「一起听」入口不存在，而不是 disabled/no-op。
+ * handler 为 undefined 时对应入口不存在，而不是 disabled/no-op。
  */
 export function resolveChatToolPanelTools<T>(params: {
   defaultTools: readonly T[];
+  videoCallTool: T;
+  videoCallHandler: (() => void) | undefined;
   togetherListeningTool: T;
   togetherListeningHandler: (() => void) | undefined;
 }): readonly T[] {
-  return params.togetherListeningHandler
-    ? [...params.defaultTools, params.togetherListeningTool]
-    : params.defaultTools;
+  const tools = [...params.defaultTools];
+  if (params.videoCallHandler) tools.push(params.videoCallTool);
+  if (params.togetherListeningHandler) tools.push(params.togetherListeningTool);
+  return tools;
 }

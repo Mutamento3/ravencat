@@ -1,21 +1,23 @@
 /** 创建群聊页面，负责选择成员并配置、测试管理员模型后创建群组。 */
 
 import React, { useState, useCallback, useRef } from 'react';
-import { View, Text, ScrollView, KeyboardAvoidingView, TouchableOpacity, Keyboard } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import NavigationHeader from '@shared/ui/NavigationHeader';
-import { Button, InputField, AIAvatar, GroupAvatar, ModelPickerModal, showAppDialog } from '@shared/ui';
+import { KeyboardAvoidingContainer, Button, InputField, AIAvatar, GroupAvatar, ModelPickerModal, showAppDialog } from '@shared/ui';
 import { createCommonStyles } from '@shared/ui/commonStyles';
 import { useTheme, useThemedStyles } from '@shared/theme';
 import { createStyles } from './CreateGroup.styles';
-import type { AIProfile } from '@features/assistants';
 import type { GroupChatDetails } from '../../group/domain/GroupChat';
 import { createGroupChat } from '../../group/application';
-import {
+import { getAssistantDisplayName,
   fetchModelsWithConfig,
   runConnectionTestByConfig,
+  GeneralModelPrefill,
+  type ModelCallConfig,
+  type AIProfile,
 } from '@features/assistants';
 import {
   PERSISTENT_IMAGE_CATEGORY,
@@ -37,6 +39,7 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
   const [adminUrl, setAdminUrl] = useState('');
   const [adminApiKey, setAdminApiKey] = useState('');
   const [adminModel, setAdminModel] = useState('');
+  const [adminParams, setAdminParams] = useState<Pick<ModelCallConfig, 'temperature' | 'topP' | 'maxTokens'>>();
   const [availableModels, setAvailableModels] = useState<{ id: string; name: string }[]>([]);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -44,6 +47,15 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
   const [testResult, setTestResult] = useState<'success' | 'error' | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSaving, setIsSaving] = useState(false);
+  const fillAdminConfig = (config: ModelCallConfig) => {
+    setAdminUrl(config.apiBaseUrl);
+    setAdminApiKey(config.apiKey);
+    setAdminModel(config.model);
+    setAdminParams({ temperature: config.temperature, topP: config.topP, maxTokens: config.maxTokens });
+    setAvailableModels([]);
+    setShowModelPicker(false);
+    setTestResult(null);
+  };
   const avatarDraftIdRef = useRef(
     `new_group_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   );
@@ -155,7 +167,7 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
         apiBaseUrl,
         apiKey,
         selectedModel,
-        requestOptions: { skipParams: true },
+        requestOptions: adminParams ?? { skipParams: true },
       });
 
       if (result.success) {
@@ -173,7 +185,7 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
     } finally {
       setIsTesting(false);
     }
-  }, [adminApiKey, adminModel, adminUrl]);
+  }, [adminApiKey, adminModel, adminUrl, adminParams]);
 
   const handlePickAvatar = useCallback(async () => {
     try {
@@ -223,6 +235,7 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
           apiBaseUrl: adminUrl,
           apiKey: adminApiKey,
           model: adminModel,
+          ...adminParams,
         },
       }), (details) => details.group.avatar);
 
@@ -233,15 +246,14 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
     } finally {
       setIsSaving(false);
     }
-  }, [adminApiKey, adminModel, adminUrl, commitAvatar, groupName, isSaving, onCreated, selectedIds, testResult]);
+  }, [adminApiKey, adminModel, adminUrl, adminParams, commitAvatar, groupName, isSaving, onCreated, selectedIds, testResult]);
 
   const avatarBusy = isPickingAvatar || isCommittingAvatar;
 
   return (
     <SafeAreaView style={commonStyles.screenContainer} edges={['top', 'left', 'right']}>
-      <KeyboardAvoidingView
+      <KeyboardAvoidingContainer
         style={commonStyles.screenContainer}
-        behavior="padding"
         keyboardVerticalOffset={0}
       >
         <NavigationHeader
@@ -295,6 +307,7 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
           {/* 群管理员 */}
           <View style={styles.section}>
             <Text style={commonStyles.sectionTitle}>群管理员</Text>
+            <GeneralModelPrefill onFill={fillAdminConfig} disabled={isTesting || isLoadingModels || isSaving} />
             <InputField
               label="API 地址"
               placeholder="https://api.example.com/v1"
@@ -363,12 +376,12 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
                   onPress={() => toggleAI(ai.id)}
                 >
                   <AIAvatar
-                    name={ai.name}
+                    name={getAssistantDisplayName(ai)}
                     avatarUrl={ai.avatar}
                     size="small"
                   />
                   <Text style={styles.aiName} numberOfLines={1}>
-                    {ai.name}
+                    {getAssistantDisplayName(ai)}
                   </Text>
                   <View
                     style={[
@@ -385,7 +398,7 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
             )}
           </View>
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingContainer>
       <ModelPickerModal
         visible={showModelPicker}
         models={availableModels}

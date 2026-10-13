@@ -20,6 +20,8 @@ export interface AIProfile {
   /** 不可变 actor key，用于跨场景归因；创建 Assistant 后不得修改。 */
   readonly agentId: string;
   name: string;
+  /** 用户私有备注；公开身份与其他 AI 的名称目录仍使用 name。 */
+  nickname: string | null;
   avatar: string | null;
   /** canonical 头像身份；avatar 是当前展示 URI，未迁移时直接来自 legacy 列。 */
   avatarMediaAssetId: string | null;
@@ -110,6 +112,7 @@ export function createAIProfile(
     id: normalizedId,
     agentId: normalizedAgentId,
     name: data.name || '',
+    nickname: data.nickname ?? null,
     avatar: data.avatar || null,
     avatarMediaAssetId: data.avatarMediaAssetId || null,
     model: data.model || '',

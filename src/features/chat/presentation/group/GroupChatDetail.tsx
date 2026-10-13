@@ -1,7 +1,7 @@
 /** 群聊详情页，协调群消息时间线、输入、召唤成员与群聊操作。 */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, ToastAndroid, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, ScrollView, ToastAndroid, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -27,6 +27,9 @@ import {
   terminateGroupSpeechPlan,
 } from '../../group/application';
 import GroupSpeechQueueOverlay from './GroupSpeechQueueOverlay';
+import { getHostAIAssistant } from '@features/assistants';
+import { acceptChatTogetherListeningInvitation, declineChatTogetherListeningInvitation, leaveChatTogetherListening,
+  type ChatTogetherListeningResult } from '../../conversation/application/ChatTogetherListeningGateway';
 import { setChatEventBus } from '../../messages/events/ChatEvents';
 import { useMessageHistoryState } from '../messages/components/useMessageHistoryState';
 import { useChatTimelineSync } from '../messages/components/useChatTimelineSync';
@@ -129,6 +132,11 @@ export default function GroupChatDetail({
   onGoBack,
 }: GroupChatDetailProps) {
   const theme = useTheme();
+  const listeningAction = async (action: typeof acceptChatTogetherListeningInvitation, activityId: string): Promise<ChatTogetherListeningResult> => {
+    const host = await getHostAIAssistant();
+    if (!host) return { status: 'unavailable', message: '当前没有主理AI，一起听操作未执行。' };
+    return action({ activityId, chatSessionId: group.id, aiConfig: { id: host.id, isHostAI: host.isHostAI } });
+  };
   const styles = useMemo(() => createChatDetailStyles(theme), [theme]);
   const localStyles = useMemo(() => StyleSheet.create({
     summonBar: {
@@ -161,9 +169,12 @@ export default function GroupChatDetail({
     },
     mentionPanel: {
       maxHeight: 218,
+      flexGrow: 0,
       backgroundColor: theme.colors.background.app,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: theme.colors.border.light,
+    },
+    mentionPanelContent: {
       paddingVertical: 6,
     },
     mentionItem: {
@@ -239,6 +250,7 @@ export default function GroupChatDetail({
     assistants: aiAssistants.map((assistant) => ({
       id: assistant.id,
       name: assistant.name,
+      nickname: assistant.nickname,
       avatar: assistant.avatar || null,
       isBlocked: assistant.isBlocked === true,
     })),
@@ -255,9 +267,8 @@ export default function GroupChatDetail({
 
   const handleSelectionDeleted = useCallback((ids: readonly number[]) => {
     const deleted = new Set(ids);
-    setMessages((previous) => previous.filter((message) => !deleted.has(message.id)));
     setReplyTo((previous) => previous && deleted.has(previous.id) ? null : previous);
-  }, [setMessages]);
+  }, []);
   const selection = useChatMessageSelection({
     sessionId, isActive, messages,
     onDeleted: handleSelectionDeleted,
@@ -360,6 +371,9 @@ export default function GroupChatDetail({
       aiAssistants.map((assistant) => [assistant.id, assistant])
     );
   }, [aiAssistants]);
+  const publicMentionMembers = useMemo(() => aiAssistants.map((assistant) => ({
+    aiAssistantId: assistant.id, name: assistant.name,
+  })), [aiAssistants]);
 
   const memberAssistants = useMemo<ChatDetailAIAssistantLike[]>(() => {
     const members = groupDetails?.members || [];
@@ -373,6 +387,7 @@ export default function GroupChatDetail({
           id: member.aiAssistantId,
           agentId: member.agentId,
           name: member.name || profile?.name || 'AI',
+          nickname: profile?.nickname ?? member.nickname,
           avatar: member.avatar ?? profile?.avatar ?? null,
           model: member.model || profile?.model || 'AI',
           apiKey: '',
@@ -383,7 +398,9 @@ export default function GroupChatDetail({
   }, [aiAssistantLike, assistantById, groupDetails]);
 
   const mentionCandidates = useMemo(
-    () => participantDirectory?.assistants || [],
+    () => participantDirectory?.assistants.map((participant) => ({
+      ...participant, displayName: participant.nickname ?? participant.displayName,
+    })) || [],
     [participantDirectory],
   );
 
@@ -394,15 +411,13 @@ export default function GroupChatDetail({
     }
 
     const query = activeMentionQuery.query.trim().toLowerCase();
-    return mentionCandidates
-      .filter((candidate) => {
-        if (!query) {
-          return true;
-        }
+    return mentionCandidates.filter((candidate) => {
+      if (!query) {
+        return true;
+      }
 
-        return candidate.displayName.toLowerCase().includes(query);
-      })
-      .slice(0, 6);
+      return candidate.displayName.toLowerCase().includes(query);
+    });
   }, [activeMentionQuery, mentionCandidates]);
 
   const shouldShowMentionPanel = Boolean(
@@ -559,8 +574,8 @@ export default function GroupChatDetail({
       delete next[edited.id];
       return next;
     });
-    setReplyTo((previous) => previous?.id === edited.id ? createChatReplyTarget(edited) : previous);
-  }, [setMessages]);
+    setReplyTo((previous) => previous?.id === edited.id ? createChatReplyTarget(edited, publicMentionMembers) : previous);
+  }, [publicMentionMembers, setMessages]);
 
   const handleDeleteMessage = useCallback(() => {
     if (!selectedMessage) return;
@@ -576,7 +591,7 @@ export default function GroupChatDetail({
           onPress: async () => {
             try {
               const deletedIds = await deleteChatMessage(selectedMessage.id);
-              setMessages((prev) => prev.filter((m) => !deletedIds.includes(m.id)));
+              handleSelectionDeleted(deletedIds);
             } catch (error) {
               showAppDialog({ title: '删除失败', message: error instanceof Error ? error.message : '删除消息失败', tone: 'error' });
             }
@@ -584,12 +599,12 @@ export default function GroupChatDetail({
         },
       ],
     });
-  }, [selectedMessage, setMessages]);
+  }, [selectedMessage, handleSelectionDeleted]);
 
   const handleQuoteMessage = useCallback(() => {
     if (!selectedMessage) return;
-    setReplyTo(createChatReplyTarget(selectedMessage));
-  }, [selectedMessage]);
+    setReplyTo(createChatReplyTarget(selectedMessage, publicMentionMembers));
+  }, [publicMentionMembers, selectedMessage]);
 
   const handleTranslateMessage = useCallback(async () => {
     if (!selectedMessage || isTranslatingMessage) return;
@@ -706,7 +721,11 @@ export default function GroupChatDetail({
       </View>
 
       {shouldShowMentionPanel ? (
-        <View style={localStyles.mentionPanel}>
+        <ScrollView
+          style={localStyles.mentionPanel}
+          contentContainerStyle={localStyles.mentionPanelContent}
+          keyboardShouldPersistTaps="handled"
+        >
           {filteredMentionCandidates.map((candidate) => (
             <TouchableOpacity
               key={candidate.assistantId}
@@ -727,7 +746,7 @@ export default function GroupChatDetail({
               </View>
             </TouchableOpacity>
           ))}
-        </View>
+        </ScrollView>
       ) : null}
 
       <ChatInputArea
@@ -782,6 +801,9 @@ export default function GroupChatDetail({
             userName={currentUser.name}
             pauseAutoScroll={share.visible}
             showAssistantName
+            onTogetherListeningAccept={(id) => listeningAction(acceptChatTogetherListeningInvitation, id)}
+            onTogetherListeningDecline={(id) => listeningAction(declineChatTogetherListeningInvitation, id)}
+            onTogetherListeningLeave={(id) => listeningAction(leaveChatTogetherListening, id)}
             onMessageLongPress={handleMessageLongPress}
             translations={messageTranslations}
             onHideTranslation={handleHideTranslation}

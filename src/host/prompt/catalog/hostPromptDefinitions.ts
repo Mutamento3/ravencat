@@ -102,10 +102,19 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
     contentDescription: '按 aiConfig.agentId 查询；无身份或无未读时 omitted。', sourcePath: FACTORY_SOURCE,
   }),
   define({
+    id: 'context.assistant_nickname', name: '用户给你的昵称备注', owner: 'assistants',
+    description: '当前角色的私有昵称、称呼历史与本轮修改提醒。', category: 'context',
+    supportedScenarios: [...PACK_SCENARIOS, 'call.post_user_hangup', 'together_listening.post_user_decline'],
+    defaultSlot: 'dynamic_context', placement: 'system', protection: 'locked',
+    protectionReason: '用户备注只读，不允许覆盖、禁用或向其他角色披露。',
+    contentKind: 'provider', providerId: 'assistants.nickname',
+    contentDescription: '仅按可信当前 assistantId 读取；修改提醒在单聊成功回复后确认，失败保留。', sourcePath: FACTORY_SOURCE,
+  }),
+  define({
     id: 'context.group_chat', name: '群聊身份与成员上下文', owner: 'host',
-    description: '标记当前 AI、其他 AI 和用户发言身份，并关闭群聊工具。', category: 'context',
+    description: '标记群成员身份，说明工具沿用本轮授权与实际 schema。', category: 'context',
     supportedScenarios: ['chat.group_member_reply'], defaultSlot: 'scenario', placement: 'system', protection: 'locked',
-    protectionReason: '防止 AI 混淆群成员身份或错误开放工具。', contentKind: 'provider', providerId: 'chat.group_context',
+    protectionReason: '防止混淆群成员身份或将群聊说明误当成工具授权。', contentKind: 'provider', providerId: 'chat.group_context',
     contentDescription: '由 runtimeContext.groupChat 动态生成。', sourcePath: FACTORY_SOURCE,
   }),
   define({
@@ -140,7 +149,7 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
   define({
     id: 'context.together_listening_runtime', name: '用户运行时状态与当前共同活动', owner: 'host',
     description: '提供本轮唯一的网易云播放事实，以及只对对应主理 AI 生效的共同聆听上下文。',
-    category: 'context', supportedScenarios: ['chat.private_reply', 'raven_cat.ai_schedule_trigger'],
+    category: 'context', supportedScenarios: ['chat.private_reply', 'chat.group_member_reply', 'raven_cat.ai_schedule_trigger'],
     defaultSlot: 'dynamic_context', placement: 'system', protection: 'locked',
     protectionReason: '当前运行时事实必须保持单轮一致，且不能被 token trimming 删除。',
     contentKind: 'provider', providerId: 'runtime.together_listening',
@@ -169,7 +178,7 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
   }),
   define({
     id: 'context.conversation_summary', name: '聊天摘要', owner: 'chat',
-    description: '用户维护的历史记录，AI 只能追加；与尚未总结原文从同一事实快照读取。', category: 'context', supportedScenarios: ['chat.private_reply', 'call.live_reply', 'call.outgoing_decision'],
+    description: '来源会话的摘要与主客背景，按当前AI身份和成员关系读取。', category: 'context', supportedScenarios: ['chat.private_reply', 'chat.group_member_reply', 'call.live_reply', 'call.outgoing_decision'],
     defaultSlot: 'dynamic_context', placement: 'system', protection: 'locked', protectionReason: '处理游标与正文由 Chat 原子交接。',
     contentKind: 'provider', providerId: 'chat.summary', contentDescription: '开启时注入二级摘要与尚未归纳一级摘要；关闭时不注入，原记录不因清消息删除。', sourcePath: 'src/host/prompt/PromptHistoryBuilder.ts',
   }),

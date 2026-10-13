@@ -112,6 +112,7 @@ const { buildAssistantTurnItems } = load('src/features/chat/reply/application/As
   './ChatReplyUtils': { buildLogicalMessageId: () => 'logical-message', formatMessageTime: () => '12:00' },
 });
 const metadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts', {
+  './SharedChatRecord': load('src/features/chat/messages/domain/SharedChatRecord.ts'),
   './ChatSticker': { isStickerMessageMetadata: () => true },
 });
 const react = { memo: (component) => component, createElement: (type, props, ...children) => ({ type, props, children }) };

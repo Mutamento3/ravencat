@@ -109,6 +109,7 @@ export class PromptPackCompiler {
     );
     return {
       scenario: params.scenario,
+      assistantNicknameNoticeRevision: budgetResult.blocks.find((block) => block.key === 'assistant_nickname')?.assistantNicknameNoticeRevision,
       blocks: budgetResult.blocks,
       systemPrompt: [stableSystemPrompt, summaryPrompt].filter(Boolean).join('\n\n'),
       toolInstructionsSlot,

@@ -5,18 +5,17 @@ import {
   View,
   Text,
   ScrollView,
-  KeyboardAvoidingView,
-} from 'react-native';
+  } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { GroupChatAdminConfig, UpdateGroupChatAdminConfigInput } from '../../group/domain/GroupChat';
 import NavigationHeader from '@shared/ui/NavigationHeader';
-import { ModelPickerModal, Button, InputField, SliderField } from '@shared/ui';
+import { KeyboardAvoidingContainer, ModelPickerModal, Button, InputField, SliderField } from '@shared/ui';
 import { createCommonStyles } from '@shared/ui/commonStyles';
 import { useTheme } from '@shared/theme';
 import { AutoSaveErrors } from '@shared/ui/AutoSaveErrors';
 
-import { ModelSection } from '@features/assistants';
+import { ModelSection, CopyToGeneralModel } from '@features/assistants';
 import NumberInputPresetsSection from './NumberInputPresetsSection';
 import useGroupAdminSettings from './useGroupAdminSettings';
 
@@ -60,15 +59,15 @@ export default function GroupAdminSettings({
     handleFetchModels,
     handleSelectModel,
     handleTestConnection,
+    readModelConfig,
     errors, saveError, flush, back, restoreDraft, feedback, connectionError,
   } = useGroupAdminSettings({ adminConfig, onUpdate, onBack });
   const blur = () => { void flush(); };
 
   return (
     <SafeAreaView style={commonStyles.screenContainer} edges={['top', 'left', 'right']}>
-      <KeyboardAvoidingView
+      <KeyboardAvoidingContainer
         style={commonStyles.screenContainer}
-        behavior="padding"
         keyboardVerticalOffset={0}
       >
         <NavigationHeader title="管理员设置" onGoBack={back}
@@ -165,6 +164,8 @@ export default function GroupAdminSettings({
             presets={['2000', '4000', '8000', '无限制']}
           /></View>
 
+          <View style={commonStyles.section}><CopyToGeneralModel readConfig={readModelConfig} /></View>
+
           {/* 管理员上下文消息数量 */}
           <View onLayout={feedback.fieldLayout(['contextMessageCount'])}><NumberInputPresetsSection
             onBlur={blur}
@@ -192,7 +193,7 @@ export default function GroupAdminSettings({
             />
           </View>
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingContainer>
 
       {/* 模型选择弹窗 */}
       <ModelPickerModal

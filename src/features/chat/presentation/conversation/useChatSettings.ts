@@ -201,6 +201,9 @@ export default function useChatSettings({
   return {
     name: infoEditor.draft.name,
     setName: (name: string) => infoEditor.change({ name }),
+    nickname: infoEditor.draft.nickname,
+    setNickname: (nickname: string) => infoEditor.change({ nickname }),
+    nicknameError: infoEditor.errors.nickname,
     systemPrompt: infoEditor.draft.systemPrompt,
     setSystemPrompt: (systemPrompt: string) => infoEditor.change({ systemPrompt }),
     nameError: infoEditor.errors.name,

@@ -1,10 +1,10 @@
 /** 辅助模型编辑：已有资产自动保存，新资产在完整校验后显式创建。 */
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, ScrollView, KeyboardAvoidingView, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
-import { Button, InputField, ModelPickerModal, ToggleField, SliderField, showAppDialog } from '@shared/ui';
+import { KeyboardAvoidingContainer, Button, InputField, ModelPickerModal, ToggleField, SliderField, showAppDialog } from '@shared/ui';
 import { createCommonStyles } from '@shared/ui/commonStyles';
 import type { AuxiliaryModelConfig, UpdateAuxiliaryModelConfigInput } from '../../domain/AuxiliaryModel';
 import type { ModelInfo } from '../../application/modelTypes';
@@ -20,7 +20,7 @@ import { readDraftNumber } from '@shared/ui/draftValidation';
 import { getAuxiliaryModelDraft, parseAuxiliaryModelDraft, type AuxiliaryModelDraft } from './auxiliaryModelDraft';
 
 interface AuxiliaryModelEditScreenProps {
-  capabilityKind: 'embedding' | 'ocr';
+  capabilityKind: 'general' | 'embedding' | 'ocr';
   capabilityLabel: string;
   modelId?: string | null;
   initialData?: AuxiliaryModelConfig | null;
@@ -138,9 +138,8 @@ export default function AuxiliaryModelEditScreen({ capabilityKind, capabilityLab
 
   return (
     <SafeAreaView style={commonStyles.screenContainer} edges={['top', 'left', 'right']}>
-      <KeyboardAvoidingView
+      <KeyboardAvoidingContainer
         style={commonStyles.screenContainer}
-        behavior="padding"
         keyboardVerticalOffset={0}
       >
         <NavigationHeader
@@ -168,7 +167,7 @@ export default function AuxiliaryModelEditScreen({ capabilityKind, capabilityLab
               value={name}
               onChangeText={setName}
               {...fieldProps('name')}
-              placeholder="如：图片理解模型"
+              placeholder={capabilityKind === 'general' ? '如：通用文本模型' : '如：图片理解模型'}
               inputStyle={modelSettingsStyles.borderedInput}
             />
           </View>
@@ -356,7 +355,7 @@ export default function AuxiliaryModelEditScreen({ capabilityKind, capabilityLab
             />
           </View>
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingContainer>
 
       {/* 模型选择弹窗 */}
       {canFetchModels ? (

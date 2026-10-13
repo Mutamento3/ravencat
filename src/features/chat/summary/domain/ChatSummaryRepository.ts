@@ -24,14 +24,17 @@ export interface ChatSummarySettings {
   generationEnabled: boolean; injectEnabled: boolean;
   secondaryEnabled: boolean; secondaryTokenThreshold: number; fixedMessageId: number | null;
   requestTimeoutSeconds: number; maxOutputTokens: number | null;
+  /** null 明确选择当前聊天模型／群管理员；非空值持续引用通用资产。 */
+  modelConfigId: string | null; groupTriggerCount: number;
 }
 export type ChatSummarySettingsPatch = Partial<Omit<ChatSummarySettings, 'fixedMessageId'>>;
 export const DEFAULT_CHAT_SUMMARY_SETTINGS: ChatSummarySettings = {
   generationEnabled: true, injectEnabled: true, secondaryEnabled: true, secondaryTokenThreshold: 8000, fixedMessageId: null,
   requestTimeoutSeconds: 300, maxOutputTokens: null,
+  modelConfigId: null, groupTriggerCount: 40,
 };
 export type ChatSummaryLevel = 'primary' | 'secondary';
-export interface ChatSummaryRequestSettings { requestTimeoutSeconds: number; maxOutputTokens: number | null }
+export interface ChatSummaryRequestSettings { requestTimeoutSeconds: number; maxOutputTokens: number | null; modelConfigId: string | null }
 export interface ChatSummaryCallDiagnostics {
   httpStatus?: number | null;
   model: string; requestedMaxTokens: number | null; timeoutSeconds: number; durationMs: number;
@@ -51,17 +54,20 @@ export class ChatSummaryGenerationError extends Error {
 }
 export interface ChatSummaryTaskClaim { conversationId: string; claimId: string; generation: number; taskId: string }
 export interface SecondaryChatSummaryClaim {
+  requestSettings: ChatSummaryRequestSettings;
   taskId: string;
   conversationId: string; claimId: string; generation: number;
   segments: ChatSummarySegment[]; timeZone: string;
 }
 export interface ChatSummarySearchInput {
+  conversationId?: string;
   from?: string; to?: string; keywords?: string[]; offset?: number;
 }
 export interface ChatSummarySearchPage {
   entries: ChatSummarySegment[]; nextOffset: number | null;
 }
 export interface ChatSummaryClaim {
+  requestSettings: ChatSummaryRequestSettings;
   taskId: string;
   conversationId: string; claimId: string; generation: number; revision: number;
   previous: ChatSummarySegment[]; timeZone: string;
@@ -78,12 +84,22 @@ export interface ChatSummaryModelInput {
   part: { index: number; total: number };
   earlierAdditionsReadOnly: string[];
 }
+export interface ChatBackgroundContextOptions {
+  privateLimit: number; groupLimit: number;
+  upperBound?: { messageId: number; createdAt: string };
+}
+export interface ChatBackgroundContext {
+  conversationId: string; kind: 'direct' | 'group'; name: string;
+  timeline: ConversationContextItem[]; contextSegments: ChatSummarySegment[];
+}
 export interface ChatSummaryRepository {
+  invalidateModelReferencesInTransaction(transaction: import('@platform/persistence').DatabaseTransactionExecutor, modelConfigId: string): Promise<void>;
+  readBackgroundContexts(assistantId: string, currentConversationId: string, options: ChatBackgroundContextOptions): Promise<ChatBackgroundContext[]>;
   readContext(conversationId: string, protectedMessageIds: readonly number[]): Promise<ChatSummarySnapshot>;
   prepareConversations(now: string): Promise<{ conversationIds: string[]; pausedConversationIds: string[] }>;
   getNextWakeAt(): Promise<string | null>;
   claim(conversationId: string, batchSize: number, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<ChatSummaryClaim | null>;
-  renewClaim(claim: ChatSummaryClaim, now: string, expiresAt: string): Promise<boolean>;
+  renewClaim(claim: ChatSummaryClaim | SecondaryChatSummaryClaim, now: string, expiresAt: string): Promise<boolean>;
   appendClaim(claim: ChatSummaryClaim, additions: readonly ChatSummaryAddition[], now: string): Promise<boolean>;
   releaseClaim(claim: ChatSummaryClaim): Promise<void>;
   readSettings(conversationId: string): Promise<ChatSummarySettings>;

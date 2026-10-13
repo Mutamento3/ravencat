@@ -43,7 +43,7 @@ export type TogetherListeningTransitionResult =
 
 async function createInvitation(
   initiator: TogetherListeningInitiator,
-  input: { hostAiId: string; chatSessionId: string; timelineRunId?: string },
+  input: { hostAiId: string; chatSessionId: string; timelineRunId?: string; groupSpeechTaskId?: string },
   options: { projectActivity: boolean },
 ): Promise<CreateTogetherListeningInvitationResult> {
   const runtime = getTogetherListeningRuntimeDependencies();
@@ -72,6 +72,7 @@ async function createInvitation(
   // 首张卡的 run 排序身份只在插入时生效；后续 lifecycle 投影都是同一行的 patch。
   const projectionStatus = await projectActivityToChat(result.activity, {
     timelineRunId: input.timelineRunId,
+    groupSpeechTaskId: input.groupSpeechTaskId,
   });
   if (projectionStatus === 'projected') {
     return {
@@ -120,6 +121,7 @@ export function createAITogetherListeningInvitation(input: {
   chatSessionId: string;
   /** 发起邀请的 Chat Agent run 标识；只用于首张卡的时间线排序身份。 */
   timelineRunId?: string;
+  groupSpeechTaskId?: string;
 }): Promise<CreateTogetherListeningInvitationResult> {
   return createInvitation('ai', input, { projectActivity: true });
 }

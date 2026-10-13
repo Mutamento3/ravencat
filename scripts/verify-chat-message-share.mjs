@@ -35,11 +35,12 @@ const coordinator = {
   },
   openTaskExecutor: () => ({ ...executor, withExclusiveTransactionAsync: (work) => coordinator.transaction({}, work) }),
 };
-const assistants = [{ id: 'ai-a', agentId: 'agent-a', name: '同名 AI' }, { id: 'ai-b', agentId: 'agent-b', name: '同名 AI' }];
+const assistants = [{ id: 'ai-a', agentId: 'agent-a', name: '同名 AI', nickname: '备注甲' }, { id: 'ai-b', agentId: 'agent-b', name: '同名 AI', nickname: '备注乙' }];
 let runtime, groupRuntime, snapshot;
 let failHost = false, failNotice = false;
 const dispatched = [], scheduled = [], notices = [], imageInputs = [];
 const boundaries = new Map([
+  ['@features/assistants', { getAssistantDisplayName: (assistant) => assistant.nickname ?? assistant.name }],
   ['expo-crypto', { randomUUID }], ['@platform/persistence', { databaseCoordinator: coordinator }],
   ['@features/stickers', { recordUserStickerUse: async () => {} }],
   ['@shared/diagnostics/TurnTimelineLog', { logTurnTimeline() {} }],
@@ -240,7 +241,7 @@ assert.match(splitTurn.turnInputMessages[0].content, /agent_id=agent-b，自己/
 assert.equal(splitTurn.turnInputMessages[1].role, 'user');
 assert.equal(splitTurn.turnInputMessages[1].content, '请比较这些意见');
 const admin = load('src/features/chat/group/application/GroupAdminReplyParser.ts').buildGroupAdminInput({ groupName: '目标群', memberAliases: [], candidateAliases: [], userMessages: [forwarded], recentMessages: [] });
-assert.match(admin, /A 的发言/); assert.match(admin, /来源群/);
+assert.match(admin, /A 的发言/); assert.ok(!admin.includes(groupRecord.sourceName), '模型不读取界面来源标题');
 const summary = JSON.parse(load('src/features/chat/summary/application/ChatSummary.ts').buildChatSummaryModelInput({ timeZone: 'Asia/Shanghai', part: { index: 1, total: 1 }, calls: [], previous: [], earlierAdditionsReadOnly: [], messages: timeline }, 'agent-b'));
 assert.equal(summary.currentAgentId, 'agent-b'); assert.match(summary.newMessagesOnly[0].content, /agent-a/);
 assert.equal(metadata.getMessageSharedRecord({ metadataJson: JSON.stringify({ kind: 'shared_record', sharedRecord: {} }) }), null);
@@ -304,7 +305,7 @@ assert.equal(metadata.getMessageSharedRecord({ metadataJson: JSON.stringify({ ki
   const input = adminRequests[0].modelMessages[0];
   assert.equal(input.role, 'user');
   assert.match(input.content, /最终回复/); assert.match(input.content, /我自己的话/);
-  assert.match(input.content, /原单聊/); assert.match(input.content, /member_1/);
+  assert.ok(!input.content.includes(directRecord.sourceName), '管理员输入不读取分享卡片的界面标题'); assert.match(input.content, /member_1/);
   assert.match(input.content, /最近可见上下文：\n无$/, '没有本群旧消息也有完整本轮分享输入');
   assert.equal(memberTurns.length, 1);
   assert.deepEqual(metadata.getMessageSharedRecord(memberTurns[0].currentUserMessages[0]), directRecord);
@@ -392,9 +393,17 @@ boundaries.set('../MessageBubble/AttachmentCard', { default: 'Attachment', __esM
 boundaries.set('../MessageBubble/StickerMessageCard', { default: 'Sticker', __esModule: true });
 const keyboardListeners = new Map();
 boundaries.set('react-native', { ActivityIndicator: 'Loading', ScrollView: 'Scroll',
-  Keyboard: { addListener: (event, callback) => { keyboardListeners.set(event, callback); return { remove: () => keyboardListeners.delete(event) }; } },
+  Keyboard: { isVisible: () => true, addListener: (event, callback) => {
+    if (!keyboardListeners.has(event)) keyboardListeners.set(event, new Set());
+    keyboardListeners.get(event).add(callback);
+    return { remove: () => { const listeners = keyboardListeners.get(event); listeners.delete(callback); if (!listeners.size) keyboardListeners.delete(event); } };
+  } },
   StyleSheet: { create: (styles) => styles, hairlineWidth: 1 }, KeyboardAvoidingView: 'KeyboardAvoid', Text: 'Text', TextInput: 'Input', TouchableOpacity: 'Button', View: 'View',
   Modal: ({ visible, children, ...rest }) => visible ? React.createElement('Modal', rest, children) : null,
+});
+boundaries.set('@shared/ui', {
+  AppTextInput: load('src/shared/ui/AppTextInput.tsx').default,
+  KeyboardAvoidingContainer: load('src/shared/ui/KeyboardAvoidingContainer.tsx').default,
 });
 const Sheet = load('src/features/chat/presentation/messages/components/ChatShareSheet.tsx').default;
 let confirmed = 0;
@@ -403,9 +412,13 @@ const previewState = { visible: true, record: full, target: destinations[0], tar
 const commentNative = { focused: true, blur() { this.focused = false; } };
 await renderer.act(async () => { rendered = renderer.create(React.createElement(Sheet, { share: previewState, onPreviewFile() {} }), { createNodeMock: (element) => element.type === 'Input' ? commentNative : null }); });
 assert.equal(rendered.root.findAllByType('Text').filter((item) => /^第 \d+ 条$/.test(item.props.children)).length, 20);
-await renderer.act(async () => keyboardListeners.get('keyboardDidHide')());
+await renderer.act(async () => { for (const listener of keyboardListeners.get('keyboardDidHide')) listener(); });
 assert.equal(commentNative.focused, false, '输入法主动收起后解除附言框焦点');
 assert.equal(rendered.root.findByType('Input').props.value, '附言', '收起键盘不丢弃附言');
+assert.equal(rendered.root.findByType('KeyboardAvoid').props.enabled, false, '收起键盘后清除窗口避让');
+await renderer.act(async () => { for (const listener of keyboardListeners.get('keyboardDidShow')) listener(); });
+assert.equal(rendered.root.findByType('KeyboardAvoid').props.enabled, true, '再次输入时恢复避让');
+assert.equal(rendered.root.findByType('Input').props.value, '附言', '切换键盘不重建输入草稿');
 const confirm = rendered.root.findAllByType('Button').find((button) => button.findAllByType('Text').some((item) => item.props.children === '确认分享'));
 await renderer.act(async () => confirm.props.onPress()); assert.equal(confirmed, 1);
 await renderer.act(async () => rendered.update(React.createElement(Sheet, { share: { ...previewState, sending: true }, onPreviewFile() {} })));
@@ -421,5 +434,53 @@ theme = load('src/shared/theme/themes/defaultLight.ts').defaultLightTheme;
 await renderer.act(async () => rendered.update(React.createElement(RecordCard, { messageId: 123, record: groupRecord, comment: '', onPreviewFile() {} })));
 assert.equal(rendered.root.findByType('Button').props.style.backgroundColor, theme.colors.surface.default);
 await renderer.act(async () => rendered.unmount());
+// 昵称是界面资料；跨 AI 分享、引用及摘要只能消费生成时的公开正文。
+const publicMembers = assistants.map((assistant) => ({ aiAssistantId: assistant.id, name: assistant.name }));
+const privateMention = `@${assistants[0].nickname}`;
+const privateMentionId = insert('source-group', `${privateMention} 看看这个。`, { metadata: { groupChat: { mentions: [{
+  actorType: 'user', target: { targetType: 'assistant', assistantId: 'ai-a', displayNameAtSend: assistants[0].nickname },
+}] } } });
+const originalMention = await messages.getMessageById(privateMentionId);
+const replyTarget = metadata.createChatReplyTarget(originalMention, publicMembers);
+assert.equal(replyTarget.quote.text, `${privateMention} 看看这个。`, '引用界面保留昵称');
+assert.equal(replyTarget.quote.modelText, '@同名 AI 看看这个。');
+const quotedId = insert('source-group', '我引用的是这一条', { metadata: { replyQuote: replyTarget.quote } });
+db.prepare('UPDATE messages SET reply_to_id=?, reply_to_text=? WHERE id=?').run(privateMentionId, replyTarget.text, quotedId);
+const quotedMessage = await messages.getMessageById(quotedId);
+assert.ok(!metadata.buildReplyQuoteModelText(quotedMessage).includes(assistants[0].nickname));
+const nicknameGroupRecord = await share.createChatShareSnapshot({ sessionId: 'source-group', name: '来源群' }, [privateMentionId, quotedId]);
+assert.ok(nicknameGroupRecord.entries.every((entry) => entry.text.includes(assistants[0].nickname)));
+assert.ok(nicknameGroupRecord.entries.every((entry) => !entry.modelText.includes(assistants[0].nickname)));
+assert.match(nicknameGroupRecord.entries[1].modelText, /引用消息/);
+
+const privateTitleId = insert('source-direct', '一条普通正文');
+const privateTitleRecord = await share.createChatShareSnapshot({ sessionId: 'source-direct', name: assistants[0].nickname, assistantId: 'ai-a' }, [privateTitleId]);
+assert.equal(privateTitleRecord.sourceName, assistants[0].nickname, '分享界面保留昵称标题');
+assert.ok(!sharedDomain.buildSharedChatRecordText(privateTitleRecord, '', 'agent-b').includes(assistants[0].nickname));
+const resharedId = insert('source-direct', '再次转发', { metadata: { kind: 'shared_record', sharedRecord: nicknameGroupRecord } });
+const resharedRecord = await share.createChatShareSnapshot({ sessionId: 'source-direct', name: assistants[1].nickname }, [resharedId]);
+assert.ok(resharedRecord.entries.some((entry) => entry.text.includes(assistants[0].nickname)), '再次分享保持界面快照');
+const summaryProjection = load('src/features/chat/summary/domain/ChatContext.ts');
+for (const record of [privateTitleRecord, nicknameGroupRecord, resharedRecord]) {
+  const recordMessage = { ...quotedMessage, id: 5000, text: '', replyToText: null,
+    metadataJson: JSON.stringify({ kind: 'shared_record', sharedRecord: record }) };
+  const input = await inputBuilder.buildChatUserMessageModelInput(recordMessage, 'ai-b', 'agent-b');
+  const summary = summaryProjection.projectChatContextMessage(recordMessage, [time, 5000, 0, 5000]);
+  for (const assistant of assistants) {
+    assert.ok(!JSON.stringify(input.modelInput).includes(assistant.nickname), '当前输入不泄露备注');
+    assert.ok(!summary.content.includes(assistant.nickname), '共享记录的摘要输入不泄露备注');
+  }
+}
+const quoteSummary = summaryProjection.projectChatContextMessage(quotedMessage, [time, quotedId, 0, quotedId]);
+assert.ok(!quoteSummary.content.includes(assistants[0].nickname), '引用进入摘要时继续使用公开正文');
+const oldQuote = { ...quotedMessage, metadataJson: JSON.stringify({ replyQuote: { ...replyTarget.quote, modelText: undefined } }) };
+assert.ok(!metadata.buildReplyQuoteModelText(oldQuote).includes(assistants[0].nickname), '旧引用没有公开投影时不再传播备注');
+assert.equal(metadata.getMessageReplyQuote(oldQuote).text, replyTarget.quote.text, '旧引用的界面原文仍保留');
+assert.ok(!metadata.buildReplyQuoteModelText({ replyToText: privateMention, metadataJson: null }).includes(assistants[0].nickname));
+const oldShared = { ...nicknameGroupRecord, entries: nicknameGroupRecord.entries.map(({ modelText, ...entry }) => entry) };
+assert.ok(!sharedDomain.buildSharedChatRecordText(oldShared, '', 'agent-b').includes(assistants[0].nickname));
+assert.ok(oldShared.entries.some((entry) => entry.text.includes(assistants[0].nickname)), '旧分享卡片的界面正文不被清除');
+assert.equal(metadata.createChatReplyTarget({ ...originalMention, text: '用户自己写下的普通称呼', metadataJson: null }, publicMembers).quote.modelText,
+  '用户自己写下的普通称呼', '不按昵称字典改写用户普通正文');
 db.close();
 console.log('verify-chat-message-share: 四种方向、空群无附言召唤及取消、整轮快照、身份、当前输入／历史／摘要、媒体引用与页面状态验证通过。');

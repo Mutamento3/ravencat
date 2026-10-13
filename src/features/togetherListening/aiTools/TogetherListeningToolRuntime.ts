@@ -11,10 +11,11 @@ import {
   getCurrentTogetherListeningActivity,
   endTogetherListeningActivity,
 } from '../application/TogetherListeningLifecycle';
-import { getTogetherListeningRuntimeDependencies } from '../application/TogetherListeningRuntime';
+import { getTogetherListeningRuntimeDependencies, type TogetherListeningCurrentLyric } from '../application/TogetherListeningRuntime';
 import {
   isExplicitTogetherListeningMediaLoss,
   resolveTogetherListeningNetEaseAvailability,
+  readTogetherListeningCurrentLyric,
   type TogetherListeningNetEaseAvailability,
 } from '../application/TogetherListeningRuntimeAwareness';
 
@@ -44,6 +45,7 @@ export interface TogetherListeningToolResultData {
   projectionStatus?: 'projected' | 'failed' | 'deferred' | 'skipped';
   latestHostAiId?: string | null;
   mediaReason?: string;
+  currentLyric?: TogetherListeningCurrentLyric | null;
 }
 
 export function typedResult(
@@ -87,6 +89,10 @@ export async function readCurrentActivity(): Promise<TogetherListeningActivity |
 export async function observeLatestNetEase(): Promise<TogetherListeningNetEaseAvailability> {
   const runtime = getTogetherListeningRuntimeDependencies();
   return resolveTogetherListeningNetEaseAvailability(await runtime.observeNetEasePlayback());
+}
+
+export function readLatestCurrentLyric(availability: TogetherListeningNetEaseAvailability) {
+  return readTogetherListeningCurrentLyric(availability, getTogetherListeningRuntimeDependencies().nowEpochMs());
 }
 
 export function mapMediaUnavailable(

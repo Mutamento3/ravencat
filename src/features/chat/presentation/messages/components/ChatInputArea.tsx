@@ -1,6 +1,6 @@
 /** 提供聊天文本输入、附件操作、回复状态与主题快捷面板。 */
 
-import { showAppDialog } from '@shared/ui';
+import { AppTextInput, showAppDialog } from '@shared/ui';
 import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { View, Text, TextInput, TouchableOpacity, type LayoutChangeEvent, Keyboard } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -409,7 +409,7 @@ export default function ChatInputArea({
           <TouchableOpacity style={styles.voiceButton} onPress={enterVoiceMode}>
             <Ionicons name="mic-outline" size={26} color={theme.colors.icon.primary} />
           </TouchableOpacity>
-          <TextInput
+          <AppTextInput
             ref={inputRef}
             style={styles.input}
             value={value}
@@ -417,7 +417,7 @@ export default function ChatInputArea({
             placeholder={disabled ? disabledPlaceholder : ''}
             placeholderTextColor={theme.colors.text.tertiary}
             maxLength={500}
-            multiline
+            autoGrow
             textAlignVertical="top"
             scrollEnabled
             editable={!disabled}
@@ -482,7 +482,7 @@ export default function ChatInputArea({
           onImagePress={handleImagePress}
           onCameraPress={handleCameraPress}
           onFilePress={handleFilePress}
-          onVideoCallPress={handleVideoCallPress}
+          onVideoCallPress={onVideoCallPress ? handleVideoCallPress : undefined}
           onTogetherListeningPress={resolveTogetherListeningToolPanelHandler(
             onTogetherListeningPress,
             handleTogetherListeningPress,

@@ -138,6 +138,8 @@ globalThis.__externalCommandTrace = trace;
 globalThis.__externalCommandObserverNotifications = observerNotifications;
 
 const source = read('src/features/chat/messages/application/AppendExternalAssistantMessages.ts')
+  .replace("from '@platform/persistence'", `from '${transpileToModuleUrl(`export const databaseCoordinator = { transaction: (_, work) => work({}) };`)}'`)
+  .replace("from '../../group/application/ChatGroupRuntime'", `from '${transpileToModuleUrl(`export function getChatGroupRuntimeDependencies() { return { groups: globalThis.__externalCommandGroups }; }`)}'`)
   .replace("from '../../reply/delivery/AssistantMessageArrival'", `from '${arrivalModuleUrl}'`)
   .replace(
     /from ['"]\.\/ChatMessageRuntime['"]/,
@@ -153,6 +155,7 @@ const source = read('src/features/chat/messages/application/AppendExternalAssist
   );
 
 const { appendExternalAssistantMessages } = await import(transpileToModuleUrl(source));
+globalThis.__externalCommandGroups = { getById: async () => null };
 const result = await appendExternalAssistantMessages({
   sessionId: 'session-external',
   segments: ['第一段', '第二段'],
@@ -243,5 +246,28 @@ assert.deepEqual(
   ['commit', 'ui', 'observer'],
   '免交付事实的观察者通知必须发生在单次 commit 完成之后',
 );
+
+trace.length = 0;
+deliveries.length = 0;
+globalThis.__externalCommandGroups = {
+  getById: async (id) => ({ group: { id, name: '群目标' }, members: [{ aiAssistantId: 'ai-external', name: '公开名字' }] }),
+  updatePreviewInTransaction: async (_, id, messageId, preview) => trace.push({ kind: 'group-preview', id, messageId, preview }),
+};
+globalThis.__externalCommandRepository = {
+  commitMessages: async () => { throw new Error('群消息不能走单聊提交'); },
+  async commitMessagesInTransaction(_, input) {
+    assert.equal(input.previewText, null);
+    assert.equal(input.messages[0].sessionId, 'group-external');
+    assert.equal(JSON.parse(input.messages[0].metadataJson).actorName, '公开名字');
+    trace.push({ kind: 'group-commit' });
+    return input.messages.map((message, index) => ({ ...message, id: 61 + index }));
+  },
+};
+const groupResult = await appendExternalAssistantMessages({ sessionId: 'group-external', segments: ['后续消息'],
+  aiId: 'ai-external', aiName: '公开名字', agentId: 'agent-external', triggerSource: 'together_listening' });
+assert.equal(groupResult.messages[0].sessionId, 'group-external');
+assert.equal(trace[1].kind, 'group-preview');
+assert.equal(trace[1].id, 'group-external');
+assert.equal(deliveries[0].sessionId, 'group-external');
 
 console.log('Chat external assistant command 行为测试通过。');

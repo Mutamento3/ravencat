@@ -1,7 +1,8 @@
-/** 提供聊天消息更新、重载与输入状态事件总线契约及发布工具。 */
+/** 提供聊天消息更新、删除、重载与输入状态事件总线契约及发布工具。 */
 export type ChatEventName =
   | 'messagesUpdated'
   | 'messagesPatched'
+  | 'messagesDeleted'
   | 'messagesReloadRequested'
   | 'typingStatusChanged'
   | 'regenerationChanged'
@@ -13,6 +14,7 @@ export interface ChatEventBusPayload {
   typingCorrelationId?: string;
   activeTypingCount?: number;
   updatedMessageIds?: number[];
+  deletedMessageIds?: readonly number[];
   regenerationError?: string;
 }
 
@@ -94,6 +96,15 @@ export function emitChatMessagesReloadRequested(sessionId: string): void {
       (error) => {
         console.error('[ChatEvents] Failed to emit messagesReloadRequested:', error);
       }
+    );
+  }
+}
+
+/** 删除事实来自已提交事务；消费者只移除这些身份，不重置已加载的历史窗口。 */
+export function emitChatMessagesDeleted(sessionId: string, deletedMessageIds: readonly number[]): void {
+  for (const eventBus of chatEventBuses) {
+    Promise.resolve(eventBus.emit('messagesDeleted', { sessionId, deletedMessageIds })).catch(
+      (error) => console.error('[ChatEvents] 发布消息删除失败', error),
     );
   }
 }

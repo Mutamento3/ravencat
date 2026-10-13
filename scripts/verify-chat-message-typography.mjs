@@ -81,6 +81,8 @@ const bubbleContent = loadTypeScriptModule(
         return { default: noopComponent };
       case './styles':
         return { createMessageBubbleStyles: () => ({}) };
+      case './selectableMarkdownRenderer':
+        return { createSelectableMarkdownRenderer: () => () => null };
       default:
         throw new Error(`未预期的运行时依赖: ${specifier}`);
     }

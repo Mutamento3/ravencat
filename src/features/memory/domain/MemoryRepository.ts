@@ -41,6 +41,8 @@ export interface MemoryRepository {
   getEmbeddingModelId(): Promise<string | null>;
   setEmbeddingModelId(modelConfigId: string | null): Promise<void>;
   listEntries(poolId: string): Promise<MemoryEntry[]>;
+  /** 聚合全部空间的正文数量；没有条目的空间不出现在结果中。 */
+  listEntryCounts(): Promise<ReadonlyMap<string, number>>;
   getEntry(poolId: string, memoryId: string): Promise<MemoryEntry | null>;
   createEntry(input: CreateMemoryRecord): Promise<MemoryEntry>;
   updateEntry(poolId: string, memoryId: string, content: string, normalizedContent: string, now: string, summary?: string | null): Promise<MemoryEntry>;

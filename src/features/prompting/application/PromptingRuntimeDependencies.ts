@@ -46,6 +46,7 @@ export interface PromptPreviewGateway {
 export interface PromptAssistantSummary {
   id: string;
   name: string;
+  nickname?: string | null;
   model: string;
   avatar: string | null;
   persona: string;

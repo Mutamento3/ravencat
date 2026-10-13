@@ -3,12 +3,11 @@
 import React, { useCallback, useEffect } from 'react';
 import {
   ScrollView,
-  KeyboardAvoidingView,
   Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import NavigationHeader from '@shared/ui/NavigationHeader';
-import { ModelPickerModal, Button } from '@shared/ui';
+import { KeyboardAvoidingContainer, ModelPickerModal, Button } from '@shared/ui';
 import useAddAIForm from './useAddAIForm';
 import StepIndicator from './StepIndicator';
 import {
@@ -25,6 +24,7 @@ import {
 import { createStyles } from './styles';
 import { createCommonStyles } from '@shared/ui/commonStyles';
 import { useTheme, useThemedStyles } from '@shared/theme';
+import GeneralModelPrefill from '../auxiliaryModels/GeneralModelPrefill';
 
 const STEPS = ['基本信息', '选择模型', '测试连接'];
 
@@ -69,6 +69,7 @@ export default function AddAIScreen({ onBack, onAdded }: AddAIScreenProps) {
     handleSelectModel,
     handleTestConnection,
     handleSave,
+    handleFillModelConfig,
   } = useAddAIForm({ onAdded, onBack });
 
   useEffect(() => {
@@ -114,9 +115,8 @@ export default function AddAIScreen({ onBack, onAdded }: AddAIScreenProps) {
 
   return (
     <SafeAreaView style={commonStyles.screenContainer} edges={['top', 'left', 'right']}>
-      <KeyboardAvoidingView
+      <KeyboardAvoidingContainer
         style={commonStyles.screenContainer}
-        behavior="padding"
         keyboardVerticalOffset={0}
       >
         <NavigationHeader
@@ -138,6 +138,8 @@ export default function AddAIScreen({ onBack, onAdded }: AddAIScreenProps) {
 
           {/* AI名称 */}
           <NameInput value={name} onChangeText={setName} />
+
+          <GeneralModelPrefill onFill={handleFillModelConfig} disabled={isTesting || isLoadingModels} />
 
           {/* API 地址 */}
           <ApiUrlInput
@@ -183,7 +185,7 @@ export default function AddAIScreen({ onBack, onAdded }: AddAIScreenProps) {
           {/* 提示信息 */}
           <TipSection />
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingContainer>
 
       {/* 模型选择弹窗 */}
       <ModelPickerModal

@@ -18,6 +18,7 @@
  * App 前后台直接读 AppState。KimiPhoneHost 只保留已读标记、未读角标与列表刷新等 UI 关注。
  */
 import { AppState } from 'react-native';
+import { getAIAssistantById, getAssistantDisplayName } from '@features/assistants';
 import {
   conversationKeyOfDirect,
   conversationKeyOfGroup,
@@ -69,6 +70,11 @@ function buildNotificationEventId(payload: AIMessageReceivedPayload): string {
   return `message:${payload.committedMessageId}`;
 }
 
+async function resolveNotificationAssistantName(payload: AIMessageReceivedPayload): Promise<string> {
+  const assistant = await getAIAssistantById(payload.aiId);
+  return assistant ? getAssistantDisplayName(assistant) : payload.aiName;
+}
+
 async function deliverAIMessage(
   payload: AIMessageReceivedPayload
 ): Promise<AIMessageDeliveryReceipt> {
@@ -95,13 +101,14 @@ async function deliverAIMessage(
 
   // 聚合维度：群聊按 group:<groupId> + 群名，单聊按 ai:<aiId> + AI 名；发送者名用于群 InboxStyle 行。
   const isGroupConversation = payload.conversationKind === 'group' && Boolean(payload.groupId);
+  const aiDisplayName = await resolveNotificationAssistantName(payload);
   const conversationTitle = isGroupConversation
-    ? payload.groupName || payload.aiName
-    : payload.aiName;
+    ? payload.groupName || aiDisplayName
+    : aiDisplayName;
 
   const posted = await sendAIMessageNotification({
     aiId: payload.aiId,
-    aiName: payload.aiName,
+    aiName: aiDisplayName,
     message: payload.message,
     aiAvatar: payload.aiAvatar || null,
     sessionId: payload.sessionId,

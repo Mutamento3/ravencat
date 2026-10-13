@@ -1,5 +1,5 @@
 /** Host 组合 Chat 真值与悬浮展示；每次替换最近消息窗口，不累计历史或轮询数据库。 */
-import { aiAssistantRepository, subscribeAIAssistantUpdated } from '@features/assistants';
+import { getAssistantDisplayName, aiAssistantRepository, subscribeAIAssistantUpdated } from '@features/assistants';
 import {
   getCanonicalChatConversation,
   listRecentChatPreviewMessages,
@@ -46,7 +46,7 @@ export function syncFloatingConversation(): Promise<void> {
       if (readRevision !== revision) continue;
       await updateConversationPreview({ sessionId: session?.id ?? null, messages });
       await updateTargetPreview(session && ai ? {
-        title: `To ${ai.name}`,
+        title: `To ${getAssistantDisplayName(ai)}`,
         subtitle: session.name?.trim() || 'Active session',
         status: 'ready',
       } : {
@@ -70,7 +70,7 @@ export function configureFloatingConversationProjection(): void {
   if (configured) return;
   configured = true;
   setChatEventBus({ emit: (eventName) => {
-    if (eventName === 'messagesUpdated' || eventName === 'messagesPatched' || eventName === 'messagesReloadRequested') {
+    if (eventName === 'messagesUpdated' || eventName === 'messagesPatched' || eventName === 'messagesDeleted' || eventName === 'messagesReloadRequested') {
       databaseReady = true;
       requestSync();
     }

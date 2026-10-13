@@ -468,6 +468,7 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     react: React,
     'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable' },
     '@expo/vector-icons': { Ionicons: 'Icon' },
+    '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname || assistant.name },
     '@shopify/flash-list': { FlashList },
     '@features/chat/messages/domain': { ...metadata, buildSessionPreviewTextFromMessage: (msg) => msg.text },
     '@shared/utils/timeFormat': { formatMessageTime: () => '12:00' },
@@ -561,6 +562,11 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   update({ messages }); commit(2100);
   assert.equal(scrolls, 2, '用户滚离底部时，新消息不得拉回');
   assert.equal(renderer.root.findAllByProps({ accessibilityLabel: '查看新消息' }).length > 0, true);
+  const keptIds = messages.filter((message) => message.id !== 602).map((message) => message.id);
+  messages = messages.filter((message) => message.id !== 602);
+  update({ messages }); commit(1900);
+  assert.equal(scrolls, 2, '阅读历史时删除消息不能跳到底部');
+  assert.deepEqual(list().props.data.map((item) => item.msg.id), keptIds, '删除只移除目标，保留其余历史');
   act(() => list().props.onScrollEndDrag({ nativeEvent: { ...away.nativeEvent, contentOffset: { y: 1500 }, contentSize: { height: 2100 } } }));
   update({ pauseAutoScroll: true, messages: [...messages, message({ id: 605 })] });
   commit(2200);

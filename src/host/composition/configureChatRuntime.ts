@@ -25,6 +25,7 @@ import {
   requireAuxiliaryModel,
   resolveAuxiliaryModel,
   subscribeAuxiliaryModelsChanged,
+  acknowledgeAssistantNicknameNotice,
 } from '@features/assistants';
 import {
   buildToolsDescription,
@@ -170,6 +171,7 @@ export function configureChatRuntime(): void {
       isTimelineHidden: isToolTimelineHidden,
     },
     prompt: {
+      acknowledgeNicknameNotice: acknowledgeAssistantNicknameNotice,
       assembleChat: assembleResolvedChatPromptPack,
       assembleLedger: assembleResolvedLedgerPromptPack,
       assembleStandalone: assembleResolvedStandalonePromptPack,

@@ -34,7 +34,7 @@ export class AuxiliaryModelRepository implements IAuxiliaryModelRepository {
   async listModelConfigs(params: { capabilityKind?: CapabilityKind } = {}): Promise<AuxiliaryModelConfig[]> {
     const db = databaseCoordinator.openTaskExecutor({ name: 'assistants.listModelConfigs', feature: 'assistants', priority: 'runtime' });
     // 历史退休资产不作为当前可运行能力进入模型中心。
-    const whereParts: string[] = ["capability_kind IN ('embedding', 'ocr', 'stt', 'tts', 'translation')"];
+    const whereParts: string[] = ["capability_kind IN ('general', 'embedding', 'ocr', 'stt', 'tts', 'translation')"];
     const values: string[] = [];
 
     if (params.capabilityKind) {
@@ -167,6 +167,10 @@ export class AuxiliaryModelRepository implements IAuxiliaryModelRepository {
       if (!row) throw new Error(`辅助模型配置不存在：${id}`);
       const updated = this.mapModelConfigRow(row);
       const initialized = await initializeAuxiliaryModelInTransaction(transaction, updated);
+      if (input.capabilityKind !== undefined || input.baseUrl !== undefined || input.apiKey !== undefined || input.model !== undefined
+        || input.temperature !== undefined || input.topP !== undefined || input.maxTokens !== undefined || input.enabled !== undefined) {
+        await getAuxiliaryModelInitialization().invalidateModelReferencesInTransaction(transaction, id);
+      }
       return { updated, initialized };
     });
     if (initialized) getAuxiliaryModelInitialization().modelSelectionsInitialized(updated);
@@ -175,8 +179,11 @@ export class AuxiliaryModelRepository implements IAuxiliaryModelRepository {
 
   async deleteModelConfig(id: string): Promise<boolean> {
     const db = databaseCoordinator.openTaskExecutor({ name: 'assistants.deleteModelConfig', feature: 'assistants', priority: 'runtime' });
-    await db.runAsync(`DELETE FROM auxiliary_model_configs WHERE id = ?`, [id]);
-    return true;
+    return db.withExclusiveTransactionAsync(async (transaction) => {
+      const result = await transaction.runAsync(`DELETE FROM auxiliary_model_configs WHERE id = ?`, [id]);
+      if (result.changes > 0) await getAuxiliaryModelInitialization().invalidateModelReferencesInTransaction(transaction, id);
+      return result.changes > 0;
+    });
   }
 
   private mapModelConfigRow(row: AuxiliaryModelConfigRow): AuxiliaryModelConfig {

@@ -10,6 +10,7 @@ export interface ConversationContextItem {
   speaker: 'user' | 'assistant' | 'application';
   timestamp: string;
   content: string;
+  actor?: ChatContextItem['actor'];
   sharedRecord?: SharedChatRecord;
   sharedComment?: string;
   logicalIdentity: string | null;
@@ -51,6 +52,7 @@ export function buildConversationTimeline(raw: readonly ChatContextItem[], calls
     while (callIndex < entries.length && entries[callIndex].orderAt <= item.cursor[0]) timeline.push(entries[callIndex++].item);
     timeline.push({ source: 'chat', kind: item.kind, speaker: item.kind === 'app_event' ? 'application' : item.role,
       timestamp: item.timestamp, content: item.content, messageId: item.messageId,
+      ...(item.actor ? { actor: item.actor } : {}),
       ...(item.sharedRecord ? { sharedRecord: item.sharedRecord, sharedComment: item.sharedComment } : {}),
       logicalIdentity: item.kind === 'dialogue'
         ? item.logicalMessageId === null ? 'chat:message:' + item.messageId : 'chat:logical:' + item.logicalMessageId : null });

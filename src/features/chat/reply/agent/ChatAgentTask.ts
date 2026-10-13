@@ -15,12 +15,13 @@ export interface CreateChatAgentTaskParams {
   allowedToolNames: string[];
   modelTransport: ModelTransportMode;
   createdAt: string;
+  type?: 'chat_reply' | 'group_chat_reply';
 }
 
 export function createChatAgentTask(params: CreateChatAgentTaskParams): AgentTask {
   return {
     id: `chat_task_${params.runId}`,
-    type: 'chat_reply',
+    type: params.type ?? 'chat_reply',
     source: 'chat',
     goal: params.goal,
     assistantId: params.assistantId,

@@ -2,7 +2,8 @@
 
 import type { StyleProp, TextStyle, ViewStyle } from 'react-native';
 import React from 'react';
-import { View, Text, TextInput, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
+import AppTextInput from './AppTextInput';
 import { useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 
@@ -83,14 +84,15 @@ export default function InputField({
   return (
     <View style={[styles.container, style]}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
-      <TextInput
-        style={[styles.input, multiline && styles.textArea, inputStyle, error && { borderWidth: 1, borderColor: theme.colors.feedback.error }]}
+      <AppTextInput
+        style={[styles.input, multiline && !autoGrow && styles.textArea, inputStyle, error && { borderWidth: 1, borderColor: theme.colors.feedback.error }]}
         value={value}
         onChangeText={onChangeText}
         onBlur={onBlur}
         placeholder={placeholder}
         placeholderTextColor={theme.colors.text.tertiary}
-        multiline={multiline || autoGrow}
+        multiline={multiline}
+        autoGrow={autoGrow}
         maxLength={maxLength}
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize}

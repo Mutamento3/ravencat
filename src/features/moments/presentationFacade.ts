@@ -1,5 +1,5 @@
 /** 朋友圈界面使用的查询与写入门面。 */
-import { listAIAssistants } from '@features/assistants';
+import { getAssistantDisplayName, listAIAssistants } from '@features/assistants';
 import {
   getCurrentUserProfile,
   type UserProfile,
@@ -87,7 +87,7 @@ export async function listMomentRecords(
 ): Promise<MomentRecord[]> {
   const [moments, directory] = await Promise.all([
     momentRepository.listMomentTimelineForUser(options),
-    loadMomentActorDirectory(profile),
+    loadMomentActorDirectory(profile, 'user'),
   ]);
 
   const records: MomentRecord[] = [];
@@ -238,7 +238,7 @@ export async function listMomentAudienceCandidates(): Promise<MomentAudienceCand
     seen.add(agentId);
     candidates.push({
       agentId,
-      displayName: assistant.name,
+      displayName: getAssistantDisplayName(assistant),
       avatar: assistant.avatar ?? null,
     });
   }

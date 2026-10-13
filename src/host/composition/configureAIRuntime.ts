@@ -1,5 +1,5 @@
 /** 在应用组合入口连接助手、聊天与语音模型解析能力。 */
-import {
+import { getAssistantDisplayName,
   aiAssistantRepository,
   configureAssistantRuntime,
   getAuxiliaryModelSelection,
@@ -129,7 +129,7 @@ export function configureAIRuntime(): void {
         async (assistantId) => {
           const assistant = await aiAssistantRepository.getById(assistantId);
           if (!assistant) throw new Error(`通话角色 ${assistantId} 不存在`);
-          return { name: assistant.name, avatar: assistant.avatar };
+          return { name: getAssistantDisplayName(assistant), avatar: assistant.avatar };
         },
       ),
     },

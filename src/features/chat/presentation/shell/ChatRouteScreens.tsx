@@ -686,10 +686,30 @@ export function GroupMenuRouteScreen({ groupId }: { groupId: string }) {
       chatBackgroundKey={`group:${groupId}`}
       onBack={router.routeBack}
       onAdminSettings={() => router.openGroupSubScreen(groupId, 'adminSettings')}
+      onSummary={() => router.openGroupSubScreen(groupId, 'summary')}
       onDeleteGroup={handleDeleteGroup}
       onUpdateProfile={handleUpdateProfile}
     />
   );
+}
+
+/** 群摘要页面沿用两级正文、编辑与诊断，只将会话身份交给同一摘要 owner。 */
+export function GroupSummaryRouteScreen({ groupId, view, segmentId, taskId, onBack, onCreateSummary, onEditSummary, onEditSecondary, onTask, onSettings }: {
+  groupId: string; view?: 'edit' | 'secondary' | 'settings'; segmentId?: string; taskId?: string; onBack(): void;
+  onCreateSummary(): void; onEditSummary(id: string): void; onEditSecondary(): void; onTask(id: string): void; onSettings(): void;
+}) {
+  const router = usePreparedGroup(groupId);
+  const ready = !router.preparing && router.currentGroup?.id === groupId;
+  const { details, loadError } = useGroupRouteDetails(groupId, ready);
+  if (loadError) return <GroupRouteUnavailable description={loadError} onBack={router.returnToConversations} />;
+  if (!ready || !details) return <RouteLoading />;
+  if (view === 'settings') return <ChatSummarySettingsScreen conversationId={groupId} group onBack={onBack} />;
+  if (taskId) return <ChatSummaryTaskScreen conversationId={groupId} taskId={taskId} onBack={onBack} onSettings={onSettings}
+    onEditSummary={onEditSummary} onEditSecondary={onEditSecondary} />;
+  if (view === 'secondary') return <ChatSecondarySummaryScreen conversationId={groupId} onBack={onBack} onEditSource={onEditSummary} />;
+  if (view === 'edit') return <ChatSummaryEditorScreen conversationId={groupId} segmentId={segmentId} onBack={onBack} onEditSource={onEditSummary} />;
+  return <ChatSummaryScreen conversationId={groupId} onBack={onBack} onCreateSummary={onCreateSummary} onEditSummary={onEditSummary}
+    onEditSecondary={onEditSecondary} onTask={onTask} onSettings={onSettings} />;
 }
 
 export function GroupAdminSettingsRouteScreen({ groupId }: { groupId: string }) {

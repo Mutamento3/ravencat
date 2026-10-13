@@ -2,8 +2,15 @@
 import { randomUUID } from 'expo-crypto';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { emitChatSummaryChanged, getChatSummaryRuntime } from './ChatSummaryRuntime';
-import { ChatSummaryGenerationError, type ChatSummaryTaskClaim, type ChatSummaryAddition, type ChatSummaryModelInput, type ChatSummarySettingsPatch, type ChatSummarySearchInput, type ChatSummarySegment } from '../domain/ChatSummaryRepository';
+import { ChatSummaryGenerationError, type ChatSummaryTaskClaim, type ChatSummaryAddition, type ChatSummaryModelInput, type ChatSummarySettingsPatch, type ChatSummarySearchInput, type ChatSummarySegment , ChatBackgroundContextOptions } from '../domain/ChatSummaryRepository';
 import { splitSummaryMessages } from '../domain/ChatSummaryTimeline';
+import { buildSharedChatRecordText } from '../../messages/domain/SharedChatRecord';
+import type { DatabaseTransactionExecutor } from '@platform/persistence';
+
+/** Host在资产变更事务中调用；正文、进度和配置引用保持不变。 */
+export function invalidateChatSummaryModelReferencesInTransaction(transaction: DatabaseTransactionExecutor, modelConfigId: string): Promise<void> {
+  return getChatSummaryRuntime().repository.invalidateModelReferencesInTransaction(transaction, modelConfigId);
+}
 
 function requireSummaryContent(value: string): string {
   const content = value.trim();
@@ -12,6 +19,9 @@ function requireSummaryContent(value: string): string {
 }
 export async function getChatSummaryContext(conversationId: string, protectedMessageIds: readonly number[] = []) {
   return getChatSummaryRuntime().repository.readContext(conversationId, protectedMessageIds);
+}
+export function getChatBackgroundContexts(assistantId: string, currentConversationId: string, options: ChatBackgroundContextOptions) {
+  return getChatSummaryRuntime().repository.readBackgroundContexts(assistantId, currentConversationId, options);
 }
 export async function createChatSummary(conversationId: string, content: string) {
   await getChatSummaryRuntime().repository.create(conversationId, randomUUID(), requireSummaryContent(content), new Date().toISOString(), Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -73,21 +83,6 @@ export async function searchChatSummaries(assistantId: string, input: ChatSummar
   if (from !== undefined && to !== undefined && from > to) throw new ChatSummaryInputError('查询开始时间不能晚于结束时间');
   return getChatSummaryRuntime().repository.search(assistantId, { ...input, from, to });
 }
-/** 模型输出是外部边界，不能把整个摘要列表或编辑指令作为追加结果。 */
-function parseSummaryJson(text: string): unknown {
-  try { return JSON.parse(text.trim()); }
-  catch { throw new ChatSummaryGenerationError({ kind: 'invalid_output', message: '模型返回的摘要不是有效 JSON，未提交。', retryable: true }); }
-}
-export function parseChatSummaryAddition(text: string): string {
-  const value = parseSummaryJson(text);
-  if (typeof value !== 'object' || value === null || Array.isArray(value)
-    || Object.keys(value).length !== 1 || !('content' in value) || typeof value.content !== 'string') {
-    throw new ChatSummaryGenerationError({ kind: 'invalid_output', message: '摘要模型必须只返回新增正文 content', retryable: true });
-  }
-  const content = value.content.trim();
-  if (!content) throw new ChatSummaryGenerationError({ kind: 'empty_output', message: '摘要正文不能为空', retryable: true });
-  return content;
-}
 export async function processChatSummary(conversationId: string, signal: AbortSignal): Promise<boolean> {
   const runtime = getChatSummaryRuntime();
   const batchSize = await runtime.getBatchSize(conversationId);
@@ -104,12 +99,15 @@ async function processPrimaryChatSummary(conversationId: string, batchSize: numb
   const runtime = getChatSummaryRuntime();
   throwIfAbortSignalAborted(signal);
   const now = new Date();
-  const settings = await runtime.repository.readSettings(conversationId);
-  const leaseMs = settings.requestTimeoutSeconds * 1000 + 60_000;
-  const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
+  const initialSettings = await runtime.repository.readSettings(conversationId);
+  const initialLeaseMs = initialSettings.requestTimeoutSeconds * 1000 + 60_000;
+  const expiresAt = new Date(now.getTime() + initialLeaseMs).toISOString();
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const claim = await runtime.repository.claim(conversationId, batchSize, randomUUID(), now.toISOString(), expiresAt, timeZone);
   if (!claim) return false;
+  // 请求选择与generation必须来自领取事务的同一快照，不能沿用领取前的旧设置。
+  const settings = claim.requestSettings;
+  const leaseMs = settings.requestTimeoutSeconds * 1000 + 60_000;
   emitChatSummaryChanged(conversationId, 'task');
   try {
     const batches = splitSummaryMessages(claim.messages);
@@ -123,9 +121,8 @@ async function processPrimaryChatSummary(conversationId: string, batchSize: numb
       const input: ChatSummaryModelInput = { conversationId, timeZone, previous: claim.previous, messages,
         calls: claim.calls.filter((call) => callIds.has(call.info.callId)), part: { index: index + 1, total: batches.length },
         earlierAdditionsReadOnly: additions.map((addition) => addition.content) };
-      const text = await runtime.generateAddition(input, signal,
+      const content = await runtime.generateAddition(input, signal,
         (diagnostics) => runtime.repository.recordInvocation(claim, diagnostics, new Date().toISOString()), settings);
-      const content = parseChatSummaryAddition(text);
       additions.push({ id: randomUUID(), content, messages });
     }
     throwIfAbortSignalAborted(signal);
@@ -145,13 +142,11 @@ async function processSecondaryChatSummary(conversationId: string, signal: Abort
   if (!claim) return false;
   emitChatSummaryChanged(conversationId, 'task');
   try {
-    const text = await runtime.generateSecondary(claim, signal,
-      (diagnostics) => runtime.repository.recordInvocation(claim, diagnostics, new Date().toISOString()), settings);
-    const value = parseSummaryJson(text);
-    if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).length !== 1
-      || !('content' in value) || typeof value.content !== 'string') throw new ChatSummaryGenerationError({ kind: 'invalid_output', message: '二级摘要模型必须只返回正文 content', retryable: true });
-    const content = value.content.trim();
-    if (!content) throw new ChatSummaryGenerationError({ kind: 'empty_output', message: '二级摘要正文不能为空', retryable: true });
+    const request = claim.requestSettings;
+    const started = new Date();
+    if (!await runtime.repository.renewClaim(claim, started.toISOString(), new Date(started.getTime() + request.requestTimeoutSeconds * 1000 + 60_000).toISOString())) return false;
+    const content = await runtime.generateSecondary(claim, signal,
+      (diagnostics) => runtime.repository.recordInvocation(claim, diagnostics, new Date().toISOString()), request);
     throwIfAbortSignalAborted(signal);
     const committed = await runtime.repository.appendSecondary(claim, randomUUID(), content, new Date().toISOString());
     if (committed) emitChatSummaryChanged(conversationId);
@@ -173,7 +168,9 @@ export function buildChatSummaryModelInput(input: ChatSummaryModelInput, current
     content: segment.content, discussionStart: segment.sourceStartAt, discussionEnd: segment.sourceEndAt, timeZone: segment.timeZone,
   })), newMessagesOnly: input.messages.map((message) => ({
     timestamp: message.timestamp, localDateTime: new Date(message.timestamp).toLocaleString('sv-SE', { timeZone: input.timeZone }),
-    source: message.source, callId: message.callId, speaker: message.speaker, content: message.content,
+    source: message.source, callId: message.callId, speaker: message.speaker,
+    content: message.sharedRecord ? buildSharedChatRecordText(message.sharedRecord, message.sharedComment!, currentAgentId) : message.content,
+    ...(message.actor ? { actor: message.actor } : {}),
     continuation: message.continuation,
   })) });
 }

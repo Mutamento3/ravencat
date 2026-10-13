@@ -1,5 +1,5 @@
 /** Host 装配身份空间与 Memory 自有向量选择，不向 Memory 泄露其他 Feature 的仓储。 */
-import { aiAssistantRepository, getAuxiliaryModelSelection, requireAuxiliaryModel, resolveAuxiliaryModel, subscribeAuxiliaryModelsChanged } from '@features/assistants';
+import { getAssistantDisplayName, aiAssistantRepository, getAuxiliaryModelSelection, requireAuxiliaryModel, resolveAuxiliaryModel, subscribeAuxiliaryModelsChanged } from '@features/assistants';
 import { createAIClient } from '@platform/ai';
 import { configureMemoryRuntimeDependencies, memoryEntryRepository, memoryRepository, MemoryEmbeddingError } from '@features/memory/composition';
 import { configureMemoryEmbeddingQueue, refreshMemoryEmbeddingModel } from '../runtime/MemoryEmbeddingQueueCoordinator';
@@ -12,7 +12,7 @@ export function configureMemoryRuntime(): void {
     const assistant = await aiAssistantRepository.getById(assistantId);
     if (!assistant) throw new Error('无法为不存在的 AI 解析记忆空间');
     const pool = await memoryRepository.getOrCreatePairPool({ aiAssistantId: assistant.id });
-    return { poolId: pool.id, assistantId: assistant.id, assistantName: assistant.name,
+    return { poolId: pool.id, assistantId: assistant.id, assistantName: getAssistantDisplayName(assistant),
       assistantAvatar: assistant.avatar, isHost: assistant.isHostAI };
   };
   configureMemoryRuntimeDependencies({

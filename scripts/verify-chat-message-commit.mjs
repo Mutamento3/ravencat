@@ -23,6 +23,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import React from 'react';
+import { act, create } from 'react-test-renderer';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -76,7 +79,20 @@ const messageTimelineModuleUrl = transpileToModuleUrl(
     .replace(/from\s*['"]\.\/ChatMessageRuntime['"]/, `from '${timelineRuntimeStubUrl}'`)
     .replace(/from\s*['"]\.\.\/events\/ChatEvents['"]/, `from '${timelineEventsStubUrl}'`),
 );
-const { mergeTimelineMessages, subscribeConversationTimeline } = await import(messageTimelineModuleUrl);
+const { mergeTimelineMessages, subscribeConversationTimeline, messageTimeline, openConversationTimeline, loadOlderTimelineMessages } = await import(messageTimelineModuleUrl);
+const require = createRequire(import.meta.url);
+function loadHookModule(relativePath, dependencies) {
+  const module = { exports: {} };
+  const output = ts.transpileModule(read(relativePath), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  new Function('require', 'module', 'exports', output)((id) => {
+    if (id === 'react') return require(id);
+    if (Object.hasOwn(dependencies, id)) return dependencies[id];
+    throw new Error(`未提供依赖 ${id}`);
+  }, module, module.exports);
+  return module.exports;
+}
 assert.equal(TIME_SEPARATOR_GAP_MS, 10 * 60 * 1000, '时间分隔阈值为 10 分钟');
 assert.equal(
   shouldShowTimeSeparatorBefore(null, '2026-08-03T10:00:00.000Z'),
@@ -243,6 +259,81 @@ assert.equal(orderingFactPatch.messages[0].turnItemIndex, 1);
   await globalThis.__TEST_TIMELINE_EVENT_BUS__.emit('messagesUpdated', { sessionId: 's1' });
   assert.deepEqual(appended.map((message) => message.id), [61]);
   unsubscribe();
+}
+
+// 已加载多页时，单条及联删只移除提交身份；继续上翻不得跳过中间消息。
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+for (const sessionId of ['direct-delete', 'group-delete']) {
+  const rows = Array.from({ length: 100 }, (_, index) => ({ ...baseTimelineMessage, sessionId, id: index + 1 }));
+  const pageCursors = [];
+  let openCount = 0;
+  let resolveNewer;
+  const repository = {
+    getMessages: async (_sessionId, { cursor, limit }) => {
+      const eligible = rows.filter((row) => cursor === null || row.id < cursor);
+      const messages = eligible.slice(-limit);
+      return { messages, hasMore: eligible.length > limit, nextCursor: messages[0]?.id ?? null };
+    },
+    getNewerMessages: () => new Promise((resolve) => { resolveNewer = resolve; }),
+  };
+  const timeline = {
+    ...messageTimeline,
+    open: async (params) => {
+      openCount++;
+      return openConversationTimeline(params, { repository });
+    },
+    loadOlder: async (params) => {
+      pageCursors.push(params.cursor);
+      return loadOlderTimelineMessages(params, { repository });
+    },
+    subscribe: (params) => subscribeConversationTimeline(params, { repository }),
+  };
+  const base = 'src/features/chat/presentation/messages/components/';
+  const pagination = loadHookModule(`${base}chatHistoryPagination.ts`, {});
+  const window = loadHookModule(`${base}chatBottomAnchorExperiment.ts`, {});
+  const cache = loadHookModule(`${base}sessionTimelineCache.ts`, { './chatBottomAnchorExperiment': window });
+  const { useMessageHistoryState } = loadHookModule(`${base}useMessageHistoryState.ts`, {
+    '../../../messages/application/MessageTimeline': { messageTimeline: timeline },
+    './sessionTimelineCache': cache,
+    './chatBottomAnchorExperiment': window,
+    './chatHistoryPagination': pagination,
+  });
+  const { useChatTimelineSync } = loadHookModule(`${base}useChatTimelineSync.ts`, {
+    '../../../messages/application/MessageTimeline': { messageTimeline: timeline },
+    '../../../messages/events/ChatEvents': { setChatEventBus: () => () => {} },
+  });
+  let history;
+  function Screen() {
+    history = useMessageHistoryState(sessionId);
+    const [isTyping, setIsTyping] = React.useState(false);
+    useChatTimelineSync({ sessionId, ...history, isTyping, setIsTyping });
+    return null;
+  }
+  let renderer;
+  await act(async () => { renderer = create(React.createElement(Screen)); });
+  await act(async () => { await history.loadMore(); });
+  const before = history.messages.map((message) => message.id);
+  const cursor = Math.min(...before);
+  const removed = [cursor, cursor + 1, 100];
+  const eventBus = globalThis.__TEST_TIMELINE_EVENT_BUS__;
+  // 让新消息查询持有删除前的快照，再提交删除。
+  let syncing;
+  await act(async () => { syncing = eventBus.emit('messagesUpdated', { sessionId }); });
+  for (const id of removed) rows.splice(rows.findIndex((row) => row.id === id), 1);
+  await act(async () => { await eventBus.emit('messagesDeleted', { sessionId, deletedMessageIds: removed }); });
+  assert.deepEqual(history.messages.map((message) => message.id), before.filter((id) => !removed.includes(id)), '删除必须保留已加载历史');
+  assert.equal(history.lastMessageIdRef.current, 99, '删除尾消息后同步水位必须更新');
+  await act(async () => {
+    resolveNewer([{ ...baseTimelineMessage, sessionId, id: 100 }]);
+    await syncing;
+  });
+  assert.equal(history.messages.some((message) => removed.includes(message.id)), false, '旧查询结果不得复活已删除消息');
+  await act(async () => { await history.loadMore(); });
+  assert.equal(pageCursors.at(-1), cursor, '删除最早可见消息也必须保留原分页边界');
+  while (history.hasMore) await act(async () => { await history.loadMore(); });
+  assert.deepEqual(history.messages.map((message) => message.id), rows.map((message) => message.id), '继续上滑应完整加载所有未删除消息');
+  assert.equal(openCount, 1, '删除不能触发首屏重载');
+  await act(async () => { renderer.unmount(); });
 }
 
 // ============================================================================

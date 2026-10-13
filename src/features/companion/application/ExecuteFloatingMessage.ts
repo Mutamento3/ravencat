@@ -1,4 +1,5 @@
 /** 执行悬浮层截图草稿与显式发送，不拥有 Android Headless 宿主。 */
+import { getAssistantDisplayName } from '@features/assistants';
 
 import type { ChatAttachment } from '@features/chat';
 import {
@@ -107,7 +108,7 @@ export async function executeFloatingMessage(
     sessionId = targetResult.session.id;
 
     await updateTargetPreview({
-      title: `To ${targetResult.ai.name || 'Host AI'}`,
+      title: `To ${getAssistantDisplayName(targetResult.ai)}`,
       subtitle: targetResult.session.name?.trim() || 'Active session',
       status: 'ready',
     });

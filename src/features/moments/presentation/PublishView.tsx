@@ -1,9 +1,9 @@
 // 时刻发布界面：正文、图片、可选地点与可见范围。
 // 发布时刻页面 - 简洁风格
 
-import { showAppDialog } from '@shared/ui';
+import { KeyboardAvoidingContainer, showAppDialog } from '@shared/ui';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, BackHandler, Image, Keyboard, KeyboardAvoidingView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, BackHandler, Image, Keyboard, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { ChevronRight, ImagePlus, MapPin, X } from 'lucide-react-native';
@@ -282,8 +282,7 @@ export default function PublishMomentScreen({ onPublish, onCancel }: PublishMome
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-        <KeyboardAvoidingView
-          behavior="padding"
+        <KeyboardAvoidingContainer
           style={styles.keyboardView}
         >
           <View style={styles.header}>
@@ -378,7 +377,7 @@ export default function PublishMomentScreen({ onPublish, onCancel }: PublishMome
               <ChevronRight size={16} color={theme.colors.icon.secondary} />
             </TouchableOpacity>
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardAvoidingContainer>
       </TouchableWithoutFeedback>
 
       <MomentAudienceSelectorModal

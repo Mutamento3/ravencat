@@ -104,7 +104,7 @@ export const createCallStyles = (theme: PresentationTheme) =>
     textInputModalInput: {
       flex: 1,
       minHeight: 40,
-      maxHeight: 40,
+      maxHeight: 120,
       paddingHorizontal: 0,
       paddingVertical: 0,
       color: theme.colors.text.primary,

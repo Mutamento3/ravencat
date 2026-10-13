@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getChatSummaryContext } from '../application/ChatSummary';
 import { subscribeChatSummaryChanged } from '../application/ChatSummaryRuntime';
 import type { ChatSummarySnapshot } from '../domain/ChatSummaryRepository';
+import { subscribeAuxiliaryModelsChanged } from '@features/assistants';
 
 export function useChatSummarySnapshot(conversationId: string) {
   const [snapshot, setSnapshot] = useState<ChatSummarySnapshot | null>(null);
@@ -21,7 +22,8 @@ export function useChatSummarySnapshot(conversationId: string) {
     };
     void refresh();
     const unsubscribe = subscribeChatSummaryChanged((id) => { if (id === conversationId) void refresh(); });
-    return () => { active = false; unsubscribe(); };
+    const models = subscribeAuxiliaryModelsChanged(() => { void refresh(); });
+    return () => { active = false; unsubscribe(); models(); };
   }, [conversationId, load]);
   return { snapshot, error };
 }

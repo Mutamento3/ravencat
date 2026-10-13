@@ -62,6 +62,7 @@ export interface GroupChatMember {
   displayOrder: number;
   enabled: boolean;
   name?: string;
+  nickname?: string | null;
   avatar?: string | null;
   avatarMediaAssetId?: string | null;
   model?: string | null;

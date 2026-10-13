@@ -178,6 +178,10 @@ exports.createRuntimeSlot = (name) => {
 write('node_modules/@platform/ai/index.js', `
 exports.createAIClient = (config) => globalThis.__listen5.createClient(config);
 `);
+write('node_modules/@features/assistants/index.js', `
+exports.aiAssistantRepository = { getById: async (id) => globalThis.__listen5.aiConfigs[id] ?? null };
+exports.getAssistantDisplayName = (assistant) => assistant.nickname ?? assistant.name;
+`);
 write('node_modules/@features/chat/composition.js', `
 exports.commitTogetherListeningUserInvitation = (...args) => globalThis.__listen5.chat.commit(...args);
 exports.upsertTogetherListeningTimelineEntry = (...args) => globalThis.__listen5.chat.upsert(...args);

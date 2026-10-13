@@ -1,11 +1,13 @@
 /**
- * 网易云播放能力的最小运行时依赖。
+ * 网易云播放与当前句歌词查询的最小运行时依赖。
  *
  * Phone Tools 只描述自己消费的结构契约；generic MediaSession 的真实实现由 Host 从
  * Device Control application public API 注入，避免两个 Feature 形成静态依赖环。
+ * 当前句歌词复用公开歌词 backend，由 Host 装配，不在 application 导入具体 adapter。
  */
 
 import { createRuntimeSlot } from '@shared/runtime/RuntimeSlot';
+import type { NetEasePublicDataBackend } from './NetEasePublicDataBackend';
 
 export type NetEasePlaybackCommand = 'pause' | 'resume' | 'next' | 'previous';
 
@@ -26,6 +28,8 @@ export type NetEaseMediaSessionPlaybackState =
 
 export interface NetEaseMediaSessionSnapshot {
   packageName: string;
+  /** 系统媒体输出观察；远程 session 不推断本机设备。 */
+  audioOutput: { playbackType: 'local' | 'remote'; deviceNames: string[] } | null;
   playback: {
     state: NetEaseMediaSessionPlaybackState;
     positionMs: number | null;
@@ -87,6 +91,7 @@ export type NetEaseMediaSessionCommandResult =
     };
 
 export interface NetEasePlaybackRuntimeDependencies {
+  getSongLyrics: NetEasePublicDataBackend['getSongLyrics'];
   getMediaSessionSnapshot(
     packageName: string,
   ): Promise<NetEaseMediaSessionSnapshotResult>;

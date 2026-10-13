@@ -4,6 +4,7 @@ import type { GroupChatMember } from '../domain/GroupChat';
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import { getMessageAttachments, getMessageSharedRecord } from '../../messages/domain/chatMessageMetadata';
 import { buildSharedChatRecordText } from '../../messages/domain/SharedChatRecord';
+import { buildGroupMentionModelText } from './GroupMentionModelText';
 
 const MAX_ADMIN_ADDED_SPEAKERS = 4;
 
@@ -58,15 +59,16 @@ export function buildGroupAdminInput(params: {
   const formatMembers = (entries: GroupAdminMemberAlias[]) => entries
     .map(({ alias, member }) => `- ${alias}: ${member.name || 'AI'}`)
     .join('\n') || '无';
+  const publicMembers = memberAliases.map(({ member }) => ({ aiAssistantId: member.aiAssistantId, name: member.name || 'AI' }));
   const userBatchText = userMessages
-    .map((message) => `用户: ${formatUserMessageForAdmin(message)}`)
+    .map((message) => `用户: ${buildGroupMentionModelText(formatUserMessageForAdmin(message), message, publicMembers)}`)
     .join('\n') || '无';
   const currentUserMessageIds = new Set(userMessages.map((message) => message.id));
   const recentText = recentMessages
     .filter((message) => !currentUserMessageIds.has(message.id))
     .map((message) => {
       if (message.isMe) {
-        return `用户: ${formatUserMessageForAdmin(message)}`;
+        return `用户: ${buildGroupMentionModelText(formatUserMessageForAdmin(message), message, publicMembers)}`;
       }
       const entry = memberAliases.find(({ member }) => member.agentId === message.agentId);
       return `${entry?.member.name || 'AI'}: ${message.text}`;

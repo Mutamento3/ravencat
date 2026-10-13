@@ -1,6 +1,7 @@
 // sticker_annotation 已被 Sticker System V2 移除：表情包识别模型改为由
 // Sticker 业务配置直接引用既有 ocr 模型，不再作为辅助模型 capability 存在。
 export const CAPABILITY_KINDS = [
+  'general',
   'embedding',
   'ocr',
   'stt',

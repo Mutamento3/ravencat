@@ -50,6 +50,14 @@ export function useChatTimelineSync({
           return merged.changed ? merged.messages : previous;
         });
       },
+      onRemove: (messageIds) => {
+        const deleted = new Set(messageIds);
+        setMessages((previous) => {
+          const messages = previous.filter((message) => !deleted.has(message.id));
+          lastMessageIdRef.current = messageTimeline.getLastMessageId(messages);
+          return messages.length === previous.length ? previous : messages;
+        });
+      },
       onError: (error) => {
         console.error('[useChatTimelineSync] Failed to sync messages:', error);
       },

@@ -170,6 +170,8 @@ export type MediaSessionPlaybackState =
 
 export interface MediaSessionSnapshot {
   packageName: string;
+  /** 本地 session 读取系统选中媒体路由的名称；远程 session 不推断输出设备。 */
+  audioOutput: { playbackType: 'local' | 'remote'; deviceNames: string[] } | null;
   playback: {
     state: MediaSessionPlaybackState;
     positionMs: number | null;

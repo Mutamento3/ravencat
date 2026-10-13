@@ -4,6 +4,7 @@ import { showAppDialog } from '@shared/ui';
 import { useState, useCallback, useMemo } from 'react';
 
 import { createAIAssistant } from '../../AIAssistantManagement';
+import type { ModelCallConfig } from '../../domain/ModelCallConfig';
 import {
   buildNewAI,
   validateAddAIForm,
@@ -28,6 +29,8 @@ interface UseAddAIFormStateResult {
   setSystemPrompt: (prompt: string) => void;
   currentStep: number;
   handleSave: () => Promise<void>;
+  modelParams: Pick<ModelCallConfig, 'temperature' | 'topP' | 'maxTokens'> | undefined;
+  fillModelConfig: (config: ModelCallConfig) => void;
 }
 
 export default function useAddAIFormState({ onAdded, onBack }: UseAddAIFormStateOptions): UseAddAIFormStateResult {
@@ -36,6 +39,13 @@ export default function useAddAIFormState({ onAdded, onBack }: UseAddAIFormState
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [modelParams, setModelParams] = useState<Pick<ModelCallConfig, 'temperature' | 'topP' | 'maxTokens'>>();
+  const fillModelConfig = (config: ModelCallConfig) => {
+    setApiBaseUrl(config.apiBaseUrl);
+    setApiKey(config.apiKey);
+    setSelectedModel(config.model);
+    setModelParams({ temperature: config.temperature, topP: config.topP, maxTokens: config.maxTokens });
+  };
 
   const currentStep = useMemo(() => getCurrentAddAIStep({
     apiBaseUrl,
@@ -62,6 +72,7 @@ export default function useAddAIFormState({ onAdded, onBack }: UseAddAIFormState
         apiKey,
         apiBaseUrl,
         systemPrompt,
+        modelParams,
       });
 
       await createAIAssistant(newAI);
@@ -77,11 +88,13 @@ export default function useAddAIFormState({ onAdded, onBack }: UseAddAIFormState
     apiKey,
     selectedModel,
     systemPrompt,
+    modelParams,
     onAdded,
     onBack,
   ]);
 
   return {
+    modelParams, fillModelConfig,
     name,
     setName,
     apiKey,

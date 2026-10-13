@@ -28,7 +28,7 @@ interface ToolResult {
  */
 export const definition = {
   name: 'blockAIAssistant',
-  description: '【主理AI专属】将指定AI助手暂时拉黑',
+  description: '将指定AI助手暂时拉黑',
   parameters: {
     type: 'object',
     properties: {

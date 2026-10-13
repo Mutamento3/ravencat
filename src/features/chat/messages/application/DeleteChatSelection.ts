@@ -5,7 +5,7 @@ import { getChatMessageRuntimeDependencies } from './ChatMessageRuntime';
 import { getChatGroupRuntimeDependencies } from '../../group/application/ChatGroupRuntime';
 import { canSelectChatMessage, getChatSelectionKey, MAX_CHAT_SELECTION_UNITS } from '../domain/ChatMessageSelection';
 import { buildSessionPreviewTextFromMessage } from '../domain/chatMessageMetadata';
-import { emitChatMessagesReloadRequested } from '../events/ChatEvents';
+import { emitChatMessagesDeleted } from '../events/ChatEvents';
 
 export async function deleteChatSelection(sessionId: string, anchorMessageIds: readonly number[]): Promise<readonly number[]> {
   if (anchorMessageIds.length === 0 || anchorMessageIds.length > MAX_CHAT_SELECTION_UNITS) {
@@ -37,7 +37,7 @@ export async function deleteChatSelection(sessionId: string, anchorMessageIds: r
   });
   if (result.deletedMessageIds.length > 0) {
     await dependencies.regeneration?.onInvalidated(sessionId);
-    emitChatMessagesReloadRequested(sessionId);
+    emitChatMessagesDeleted(sessionId, result.deletedMessageIds);
     await releaseMediaAssetCandidates(result.mediaAssetCandidates);
   }
   return result.deletedMessageIds;

@@ -43,6 +43,7 @@ export type PromptBlockKey =
   | 'agent_registry_summary'
   | 'moment_audience_candidates'
   | 'moments_social_inbox'
+  | 'assistant_nickname'
   | 'group_chat_context'
   | 'tools_description'
   | 'ledger_context_summary'
@@ -58,6 +59,8 @@ export type PromptBlockKey =
   | 'current_input';
 
 export interface PromptPackBlock {
+  /** 本轮实际注入的备注修改快照；只供成功回复后的确认，不进入模型文本。 */
+  assistantNicknameNoticeRevision?: number;
   key: PromptBlockKey;
   /** 迁移期工厂草稿可以省略，最终 Pack 由编译器保证存在。 */
   instanceId?: string;
@@ -129,6 +132,10 @@ export interface PromptPackAIConfig {
   disabledPromptDefinitionIds?: string[];
   isHostAI?: boolean;
   isBlocked?: boolean;
+  privateContextPrimaryLimit?: number;
+  privateContextSecondaryLimit?: number;
+  groupContextPrimaryLimit?: number;
+  groupContextSecondaryLimit?: number;
 }
 
 export interface PromptPackGroupChatMemberContext {
@@ -147,6 +154,7 @@ export interface PromptPackGroupChatContext {
   recentWindowLimit: number;
   currentTurnUserMessageIds?: number[];
   inputUpperBoundMessageId?: number;
+  planId?: string | null;
 }
 
 export interface PromptPackRuntimeContext {
@@ -196,6 +204,7 @@ export interface AssembleStandalonePromptPackParams {
 }
 
 export interface PromptPack {
+  assistantNicknameNoticeRevision?: number;
   scenario: PromptPackScenario;
   blocks: PromptPackBlock[];
   /** 前置系统内容：固定规则与用途说明在前，聊天摘要在后；本轮上下文位于 modelMessages 的历史之后。 */

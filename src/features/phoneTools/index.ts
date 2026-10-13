@@ -113,3 +113,5 @@ export type {
   NetEasePlaybackSnapshotResult,
 } from './application/NetEasePlayback';
 export type { NetEasePlaybackCommand } from './application/NetEasePlaybackRuntimeDependencies';
+export { getNetEaseCurrentLyric } from './application/NetEaseCurrentLyric';
+export type { NetEaseCurrentLyric, NetEaseLyricPlayback } from './application/NetEaseCurrentLyric';

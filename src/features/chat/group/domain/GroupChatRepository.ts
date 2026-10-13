@@ -44,6 +44,7 @@ export interface CommitGroupAvatarMediaAssetReferenceInput {
 }
 
 export interface IGroupChatRepository {
+  isSpeechTaskRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, taskId: string): Promise<boolean>;
   getAll(): Promise<GroupChat[]>;
   getById(groupId: string): Promise<GroupChatDetails | null>;
   getMembers(groupId: string): Promise<GroupChatMember[]>;

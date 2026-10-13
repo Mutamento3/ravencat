@@ -53,7 +53,7 @@ export default function ChatStatisticsScreen({ assistantCreatedAt, conversationI
   useFocusEffect(useCallback(() => {
     void load();
     const unsubscribe = setChatEventBus({ emit: (event, payload) => {
-      if (payload.sessionId === conversationId && (event === 'messagesUpdated' || event === 'messagesPatched' || event === 'messagesReloadRequested')) void load();
+      if (payload.sessionId === conversationId && (event === 'messagesUpdated' || event === 'messagesPatched' || event === 'messagesDeleted' || event === 'messagesReloadRequested')) void load();
     } });
     // 失焦／退出后撤销旧查询的展示资格，后发查询也不能被旧快照覆盖。
     return () => { revision.current++; unsubscribe(); };

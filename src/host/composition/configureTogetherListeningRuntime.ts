@@ -11,11 +11,12 @@ import {
 } from '@features/togetherListening';
 import {
   getNetEasePlaybackSnapshot,
+  getNetEaseCurrentLyric,
   NetEasePlaybackError,
 } from '@features/phoneTools';
 import { configureChatTogetherListeningGateway } from '@features/chat/composition';
 import { appendExternalAssistantMessage } from '@features/chat';
-import {
+import { getAssistantDisplayName,
   aiAssistantRepository,
   subscribeAIAssistantUpdated,
 } from '@features/assistants';
@@ -93,11 +94,12 @@ export function configureTogetherListeningRuntime(): void {
     generateId: () => `together-listening-${createRandomUUID()}`,
     nowEpochMs: Date.now,
     observeNetEasePlayback,
+    readCurrentNetEaseLyric: getNetEaseCurrentLyric,
     getCurrentHostAIId: async () => (await aiAssistantRepository.getHostAI())?.id ?? null,
     resolveSystemPresentationAIIdentity: async (aiId) => {
       const assistant = await aiAssistantRepository.getById(aiId);
       return assistant
-        ? { name: assistant.name, avatar: assistant.avatar || null }
+        ? { name: getAssistantDisplayName(assistant), avatar: assistant.avatar || null }
         : null;
     },
   });
@@ -140,6 +142,11 @@ async function observeNetEasePlayback(): Promise<TogetherListeningNetEaseObserva
       title: snapshot.metadata.title,
       artist: snapshot.metadata.artist,
       album: snapshot.metadata.album,
+      positionMs: snapshot.playback.positionMs,
+      speed: snapshot.playback.speed,
+      updatedAtEpochMs: snapshot.playback.updatedAtEpochMs,
+      durationMs: snapshot.metadata.durationMs,
+      audioOutput: snapshot.audioOutput,
     };
   } catch (error) {
     if (!(error instanceof NetEasePlaybackError)) {

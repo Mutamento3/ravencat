@@ -81,7 +81,8 @@ const chatStickerModule = await loadTypeScriptModule(
 );
 const chatMessageMetadata = loadTypeScriptModuleWithMocks(
   'src/features/chat/messages/domain/chatMessageMetadata.ts',
-  { './ChatSticker': chatStickerModule },
+  { './ChatSticker': chatStickerModule,
+    './SharedChatRecord': loadTypeScriptModuleWithMocks('src/features/chat/messages/domain/SharedChatRecord.ts', {}) },
 );
 // 真实 legacy 迁移驱动扫描、定位、catalog 与 owner CAS 的并发路径。
 const chatAttachmentMigration = loadTypeScriptModuleWithMocks(

@@ -25,6 +25,8 @@ export type MediaSessionPlaybackState =
 
 export interface MediaSessionSnapshot {
   packageName: string;
+  /** 系统媒体输出快照，不承诺指定 App 的逐音轨实际路由。 */
+  audioOutput: { playbackType: 'local' | 'remote'; deviceNames: string[] } | null;
   playback: {
     state: MediaSessionPlaybackState;
     positionMs: number | null;

@@ -85,6 +85,7 @@ export interface ChatReplyRuntimeDependencies {
     isTimelineHidden: (toolName: string) => boolean;
   };
   prompt: {
+    acknowledgeNicknameNotice: (assistantId: string, throughChangeId: number) => Promise<void>;
     assembleChat: (params: AssemblePromptPackParams) => Promise<PromptPack>;
     assembleLedger: (params: AssemblePromptPackParams) => Promise<PromptPack>;
     assembleStandalone: (params: AssembleStandalonePromptPackParams) => Promise<PromptPack>;

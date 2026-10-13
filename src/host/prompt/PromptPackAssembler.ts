@@ -73,15 +73,19 @@ export class PromptPackAssembler {
       },
     };
     const blocks = await this.createBlocks(scenario, resolvedParams, userIdentity);
+    blocks.push(await renderHostPromptProviderBlock('context.assistant_nickname', { scenario, params: resolvedParams }));
     if (resolvedParams.additionalBlocks?.length) {
       blocks.push(...resolvedParams.additionalBlocks);
     }
-    const summaryContext = this.isPrivateConversationScenario(scenario) && !resolvedParams.runtimeContext?.groupChat
-      ? await promptHistoryBuilder.loadPrivateSummaryContext(resolvedParams) : null;
+    const summaryContext = resolvedParams.runtimeContext?.groupChat
+      ? await promptHistoryBuilder.loadGroupSummaryContext(resolvedParams)
+      : this.isPrivateConversationScenario(scenario) ? await promptHistoryBuilder.loadPrivateSummaryContext(resolvedParams) : null;
     const recentMessages = summaryContext ? summaryContext.messages
       : await promptHistoryBuilder.loadRecentMessages(scenario, resolvedParams);
-    if (summaryContext?.summaryContent) blocks.push({
-      key: 'conversation_summary', title: '聊天摘要', content: summaryContext.summaryContent, required: false,
+    const background = summaryContext ? await promptHistoryBuilder.loadBackgroundContext(resolvedParams) : '';
+    const summaryContent = [summaryContext?.summaryContent, background].filter(Boolean).join('\n\n');
+    if (summaryContent) blocks.push({
+      key: 'conversation_summary', title: '聊天摘要与来源背景', content: summaryContent, required: false,
       status: 'ready', source: 'ChatSummaryRepository.readContext', truncatable: false, scenario, placement: 'system',
     });
     blocks.push(promptPackBlockFactory.createRecentChatWindowBlock(recentMessages));
@@ -213,8 +217,9 @@ export class PromptPackAssembler {
   ): NonNullable<AssemblePromptPackParams['preset']> {
     const runtimeItems: NonNullable<AssemblePromptPackParams['preset']>['items'] = [
       { definitionId: 'context.protocol_space', slot: 'user_rules' as const, sortOrder: 60, enabled: true, required: false, protection: 'locked' as const },
+      { definitionId: 'context.assistant_nickname', slot: 'dynamic_context' as const, sortOrder: 190, enabled: true, required: false, protection: 'locked' as const },
     ];
-    if (this.isPrivateConversationScenario(scenario)) {
+    if (this.isPrivateConversationScenario(scenario) || scenario === 'chat.group_member_reply') {
       runtimeItems.push(
         { definitionId: 'context.conversation_summary', slot: 'dynamic_context' as const, sortOrder: 160, enabled: true, required: false, protection: 'locked' as const },
         { definitionId: 'context.passive_memory', slot: 'dynamic_context' as const, sortOrder: 180, enabled: true, required: false, protection: 'locked' as const },

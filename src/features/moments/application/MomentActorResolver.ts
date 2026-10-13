@@ -6,7 +6,7 @@
  * 都不要自己按名字猜身份。
  */
 
-import { listAIAssistants } from '@features/assistants';
+import { listAIAssistants, getAssistantDisplayName } from '@features/assistants';
 import {
   getCurrentUserProfile,
   SELF_USER_PROFILE_ID,
@@ -42,7 +42,8 @@ export interface MomentActorDirectory {
  * @param currentProfile 调用方已经读到的用户资料；省略时自行读取，避免重复读取。
  */
 export async function loadMomentActorDirectory(
-  currentProfile?: UserProfile | null
+  currentProfile?: UserProfile | null,
+  nameAudience: 'ai' | 'user' = 'ai',
 ): Promise<MomentActorDirectory> {
   const [profile, assistants] = await Promise.all([
     currentProfile ?? getCurrentUserProfile(),
@@ -54,7 +55,7 @@ export async function loadMomentActorDirectory(
     const agentId = typeof assistant.agentId === 'string' ? assistant.agentId.trim() : '';
     if (agentId) {
       assistantByAgentId.set(agentId, {
-        name: assistant.name,
+        name: nameAudience === 'user' ? getAssistantDisplayName(assistant) : assistant.name,
         avatar: assistant.avatar ?? null,
       });
     }
@@ -64,7 +65,7 @@ export async function loadMomentActorDirectory(
     actors: [
       { actorType: 'user', actorId: SELF_USER_PROFILE_ID, displayName: profile.name, avatar: profile.avatar ?? null, exists: true },
       ...assistants.map((assistant): ResolvedMomentActor => ({
-        actorType: 'ai', actorId: assistant.agentId, displayName: assistant.name,
+        actorType: 'ai', actorId: assistant.agentId, displayName: nameAudience === 'user' ? getAssistantDisplayName(assistant) : assistant.name,
         avatar: assistant.avatar ?? null, exists: true,
       })),
     ],

@@ -44,6 +44,7 @@ export type {
   RunChatVisibleAgentParams,
 } from './reply/application/RunChatVisibleAgent';
 export { buildChatUserMessageModelInput } from './reply/application/BuildChatBatchAIInput';
+export { buildGroupMentionModelText } from './group/application/GroupMentionModelText';
 export {
   requestProactiveChatReply,
 } from './reply/application/RequestProactiveChatReply';
@@ -293,13 +294,14 @@ export {
   ChatStatisticsRouteScreen,
   ChatSummaryEditorRouteScreen,
   ChatSummarySettingsRouteScreen,
+  GroupSummaryRouteScreen,
   CreateGroupRouteScreen,
   GroupAdminSettingsRouteScreen,
   GroupConversationRouteScreen,
   GroupFilePreviewRouteScreen,
   GroupMenuRouteScreen,
 } from './presentation/shell/ChatRouteScreens';
-export { getChatSummaryContext, createChatSummary, editChatSummary, deleteChatSummary, clearChatSummary,
+export { getChatSummaryContext, getChatBackgroundContexts, createChatSummary, editChatSummary, deleteChatSummary, clearChatSummary,
   updateChatSummarySettings, searchChatSummaries, getChatSummarySettings, setFixedChatContextStart, retryChatSummaryTask,
 } from './summary/application/ChatSummary';
 export { subscribeChatSummaryChanged } from './summary/application/ChatSummaryRuntime';
@@ -307,6 +309,7 @@ export type { ChatSummarySegment, ChatSummarySnapshot, ChatSummarySettings, Chat
 export type { ChatSummaryTask, ChatSummaryCallDiagnostics } from './summary/domain/ChatSummaryRepository';
 export { SearchChatSummariesTool } from './summary/aiTools/SearchChatSummariesTool';
 export { isChatReplyRunCurrentInTransaction } from './reply/application/ChatRunMutationFence';
+export { isGroupSpeechTaskRunCurrentInTransaction } from './group/application/GroupSpeechTermination';
 
 export { getChatImageModelSettings, selectChatImageModel, subscribeChatImageModelsChanged } from './reply/application/ChatImageModels';
 export { default as ChatFavoritesScreen } from './presentation/favorites/ChatFavoritesScreen';

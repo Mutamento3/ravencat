@@ -1,17 +1,29 @@
-/** 星云和远星保持静态；固定图元预算，不随屏幕像素面积增长。 */
-import React, { memo, useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
-import Svg, { Defs, Ellipse, Path, RadialGradient, Stop } from 'react-native-svg';
-import { useTheme } from '@shared/theme';
+/** 星云纹理缓慢漂移，远星保持独立；固定图元预算，不随屏幕像素面积增长。 */
+import React, { memo, useEffect, useMemo } from 'react';
+import { StyleSheet, View, type ViewStyle } from 'react-native';
+import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
+import Svg, { Defs, Ellipse, FeColorMatrix, Filter, Image, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { getThemeById, useTheme } from '@shared/theme';
 import { DISTANT_STARS, GALAXY_DUST } from './galaxyStarField';
 
 function dot(x: number, y: number, radius: number) {
   return `M${x - radius},${y}a${radius},${radius} 0 1,0 ${radius * 2},0a${radius},${radius} 0 1,0 ${-radius * 2},0`;
 }
 
-function GalaxyBackground({ width, height }: { width: number; height: number }) {
+function GalaxyBackground({ width, height, paused }: { width: number; height: number; paused: boolean }) {
   const theme = useTheme();
   const starlight = theme.mode === 'dark' ? theme.colors.text.primary : theme.colors.text.inverse;
+  const spaceColor = getThemeById('default-dark').colors.background.app;
+  const drift = useSharedValue(0);
+  // Screen 传入统一生命周期；只移动已着色纹理，不逐帧重算滤镜或模糊。
+  useEffect(() => {
+    if (!paused) drift.value = withRepeat(withTiming(drift.value + 1, { duration: 90000, easing: Easing.linear }), -1);
+    return () => cancelAnimation(drift);
+  }, [paused, drift]);
+  const nebulaMotion = useAnimatedStyle<ViewStyle>(() => ({
+    opacity: 0.25 + Math.sin(drift.value * Math.PI * 2) * 0.02,
+    transform: [{ translateX: Math.sin(drift.value * Math.PI * 2) * 12 }, { translateY: Math.cos(drift.value * Math.PI * 2) * 16 }, { scale: 1.12 }] as const,
+  }));
   const paths = useMemo(() => {
     const distant: string[] = [];
     const bright: string[] = [];
@@ -27,17 +39,37 @@ function GalaxyBackground({ width, height }: { width: number; height: number }) 
   }, [width, height]);
 
   return <View style={StyleSheet.absoluteFill} pointerEvents="none">
+    {/* 保留真实尘埃的明暗结构，冷色材质去掉原照片的红褐色。 */}
+    <Animated.View style={[StyleSheet.absoluteFill, nebulaMotion]}>
+      <Svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+        <Defs>
+          <Filter id="cool-nebula" x="0%" y="0%" width="100%" height="100%">
+            <FeColorMatrix type="matrix" values={[
+              0.22, 0.36, 0.26, 0, 0,
+              0.14, 0.22, 0.2, 0, 0,
+              0.32, 0.52, 0.5, 0, 0,
+              0, 0, 0, 1, 0,
+            ]} />
+          </Filter>
+        </Defs>
+        <Image href={require('./assets/orion-nebula.jpg')} width={width} height={height} preserveAspectRatio="xMidYMid slice" filter="url(#cool-nebula)" />
+      </Svg>
+    </Animated.View>
     <Svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
       <Defs>
-        {[0, 1, 2].map(i => {
-          return <RadialGradient key={i} id={`nebula-${i}`} cx="50%" cy="50%" rx="50%" ry="50%">
-            <Stop offset="0" stopColor={theme.colors.brand.primary} stopOpacity={0.18} />
-            <Stop offset="0.45" stopColor={theme.colors.brand.primary} stopOpacity={0.07} />
-            <Stop offset="1" stopColor={theme.colors.brand.primary} stopOpacity={0} />
-          </RadialGradient>;
-        })}
+        <RadialGradient id="nebula-tint" cx="50%" cy="50%" rx="50%" ry="50%">
+          <Stop offset="0" stopColor={theme.colors.brand.primary} stopOpacity={0.09} />
+          <Stop offset="0.45" stopColor={theme.colors.brand.primary} stopOpacity={0.04} />
+          <Stop offset="1" stopColor={theme.colors.brand.primary} stopOpacity={0} />
+        </RadialGradient>
+        <RadialGradient id="nebula-vignette" cx="50%" cy="48%" rx="70%" ry="65%">
+          <Stop offset="0" stopColor={spaceColor} stopOpacity={0} />
+          <Stop offset="0.55" stopColor={spaceColor} stopOpacity={0.12} />
+          <Stop offset="1" stopColor={spaceColor} stopOpacity={0.8} />
+        </RadialGradient>
       </Defs>
-      {[0, 1, 2].map(i => <Ellipse key={i} cx={width * (0.08 + i * 0.44)} cy={height * (0.28 + i * 0.18)} rx={width * 0.65} ry={height * 0.22} fill={`url(#nebula-${i})`} />)}
+      {[0, 1, 2].map(i => <Ellipse key={i} cx={width * (0.08 + i * 0.44)} cy={height * (0.28 + i * 0.18)} rx={width * 0.65} ry={height * 0.22} fill="url(#nebula-tint)" />)}
+      <Rect width={width} height={height} fill="url(#nebula-vignette)" />
       <Path d={paths.dust} fill={starlight} opacity={0.16} />
       <Path d={paths.distant} fill={starlight} opacity={0.35} />
       <Path d={paths.bright} fill={starlight} opacity={0.65} />

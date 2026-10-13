@@ -4,7 +4,9 @@ export const CHAT_SUMMARY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS chat_summary_request_settings (
   conversation_id TEXT PRIMARY KEY REFERENCES chat_conversations(id) ON DELETE CASCADE,
   timeout_seconds INTEGER NOT NULL DEFAULT 300,
-  max_output_tokens INTEGER
+  max_output_tokens INTEGER,
+  model_config_id TEXT,
+  group_trigger_count INTEGER NOT NULL DEFAULT 40
 );
 CREATE TABLE IF NOT EXISTS chat_summary_tasks (
   id TEXT PRIMARY KEY,
@@ -78,6 +80,14 @@ CREATE TABLE IF NOT EXISTS chat_summary_call_boundary (
   cleared_at TEXT NOT NULL
 );
 `;
+/** 配置引用不建资产外键，删除资产后仍保留选择及不可用状态。 */
+export async function migrateChatSummaryModels(db: DatabaseWriteExecutor): Promise<void> {
+  await db.execAsync(`CREATE TABLE IF NOT EXISTS chat_summary_request_settings (
+    conversation_id TEXT PRIMARY KEY REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    timeout_seconds INTEGER NOT NULL DEFAULT 300, max_output_tokens INTEGER);
+    ALTER TABLE chat_summary_request_settings ADD COLUMN model_config_id TEXT;
+    ALTER TABLE chat_summary_request_settings ADD COLUMN group_trigger_count INTEGER NOT NULL DEFAULT 40;`);
+}
 /** 归纳标记是处理进度，不是外键：用户删除二级正文后，不能自动补回或重新注入其原摘要。 */
 export async function migrateSecondaryChatSummary(db: DatabaseWriteExecutor): Promise<void> {
   await db.execAsync("ALTER TABLE chat_summary_segments ADD COLUMN level TEXT NOT NULL DEFAULT 'primary' CHECK(level IN ('primary', 'secondary')); ALTER TABLE chat_summary_segments ADD COLUMN compaction_id TEXT; ALTER TABLE chat_summary_segments ADD COLUMN context_sequence INTEGER;");

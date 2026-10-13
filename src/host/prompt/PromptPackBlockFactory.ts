@@ -1,7 +1,7 @@
 import { DEFAULT_SELF_NAME } from '@shared';
 import type { IUserProfileRepository, UserProfile } from '@features/profile';
 import { recallPassiveMemory } from '@features/memory';
-import { agentRegistryService } from '@features/assistants';
+import { agentRegistryService, getAssistantNicknamePromptContext } from '@features/assistants';
 import {
   formatSocialInboxSummary,
   loadMomentActorDirectory,
@@ -122,6 +122,16 @@ function buildMcpServicesDescription(
 }
 
 export class PromptPackBlockFactory {
+  async createAssistantNicknameBlock(assistantId: string, userDisplayName: string, includeChangeNotice: boolean): Promise<PromptPackBlock> {
+    const context = await getAssistantNicknamePromptContext(assistantId, userDisplayName, includeChangeNotice);
+    return {
+      key: 'assistant_nickname', title: '用户给你的昵称备注', content: context.content,
+      required: false, status: context.content ? 'ready' : 'omitted',
+      source: 'assistants.getAssistantNicknamePromptContext', truncatable: false,
+      scenario: 'shared', placement: 'system', assistantNicknameNoticeRevision: context.noticeRevision,
+    };
+  }
+
   createFoundationBlock(aiConfig: PromptPackAIConfig, userDisplayName?: string): PromptPackBlock {
     return {
       key: 'foundation_default_core',
@@ -361,8 +371,10 @@ export class PromptPackBlockFactory {
       `- 你在本群中的显示名是“${displayName(groupChat.currentAIName)}”。`,
       '- 群聊历史中，API role 为 assistant 只表示你自己先前的输出；API role 为 user 表示外部上下文，既可能是用户输入，也可能是其他 AI 成员的发言。',
       '- 外部发言正文前的显示名用于说明说话者。',
-      '- 不得把其他 AI 的话说成自己说过的话。群聊中工具关闭，不得假装查询外部数据。',
-      `- 近期历史固定为最后 ${groupChat.recentWindowLimit} 条可见消息。`,
+      '- 不得把其他 AI 的话说成自己说过的话。',
+      '- 群聊沿用本轮已授权工具，工具能力与参数以实际提供的工具目录和 function schema 为准；未提供的工具不能调用，不得假装已查询或执行。',
+      '- 群聊中不得发起视频通话。',
+      `- 关闭自动摘要且无固定起点时，近期主窗口为 ${groupChat.recentWindowLimit} 条逻辑对话；自动摘要成功交接前保留未处理原文。`,
       '', '【群成员】', ...memberLines,
     ].join('\n');
 

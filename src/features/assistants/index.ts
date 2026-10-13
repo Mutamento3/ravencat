@@ -1,7 +1,11 @@
 /** AI 助手与辅助模型功能公共出口。 */
 export type { AIProfile, AIConfig } from './domain/AIProfile';
+export { getAssistantDisplayName, getAssistantNicknamePromptContext, acknowledgeAssistantNicknameNotice } from './AssistantNickname';
 export type * from './domain/AssistantToolPermission';
 export * from './domain/AuxiliaryModel';
+export type { ModelCallConfig } from './domain/ModelCallConfig';
+export { default as CopyToGeneralModel } from './presentation/auxiliaryModels/CopyToGeneralModel';
+export { default as GeneralModelPrefill } from './presentation/auxiliaryModels/GeneralModelPrefill';
 export { createChangeOwnAvatarTool } from './aiTools/ChangeOwnAvatarTool';
 export type {
   AIAssistantSettingsUpdate,
@@ -37,6 +41,7 @@ export {
   clearHostAIAppointmentCooldownForDevelopment,
   updateAIModelSettings,
   updateAIAssistantSettings,
+  applyAssistantContextLimits,
   updateAIAssistantAvatarFromDraft,
   subscribeAIAssistantUpdated,
 } from './AIAssistantManagement';
@@ -59,6 +64,8 @@ export {
 } from './application/AIModelService';
 export type * from './application/modelTypes';
 export { default as AddAIScreen } from './presentation/management';
+export { default as ContextLimitsApply } from './presentation/management/ContextLimitsApply';
+export type { AssistantContextLimits } from './domain/AssistantRepository';
 export { default as AIModelSettings } from './presentation/management/AIModelSettings';
 export { default as ConversationList } from './presentation/management/ConversationList';
 export type { ConversationListPinTarget } from './presentation/management/ConversationList';

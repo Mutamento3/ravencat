@@ -1,8 +1,9 @@
 /** 单条与多选共用目标选择、完整预览与确认发送，不改变来源页的输入草稿。 */
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
+import { AppTextInput, KeyboardAvoidingContainer } from '@shared/ui';
 import type { useChatMessageShare } from './useChatMessageShare';
 import { SharedChatRecordEntries } from './SharedChatRecordView';
 import type { PreviewFileHandler } from '../MessageBubble/MessageBubbleContent';
@@ -19,8 +20,7 @@ export default function ChatShareSheet({ share, onPreviewFile }: { share: Return
     return () => subscription.remove();
   }, [share.visible]);
   return <Modal visible={share.visible} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={share.close}>
-    {/* 透明系统栏下原生窗口可能不缩放；用留白避让，避免 height 模式反复改变自身测量高度。 */}
-    <KeyboardAvoidingView behavior="padding" style={styles.page}>
+    <KeyboardAvoidingContainer enabled={share.visible} style={styles.page}>
     <View style={[styles.page, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 8) }]}>
       <View style={styles.header}>
         <TouchableOpacity disabled={share.sending} onPress={share.target ? () => share.choose(null) : share.close} style={styles.button}><Text style={styles.link}>{share.target ? '返回' : '取消'}</Text></TouchableOpacity>
@@ -40,11 +40,11 @@ export default function ChatShareSheet({ share, onPreviewFile }: { share: Return
           <SharedChatRecordEntries record={share.record} onPreviewFile={onPreviewFile} />
         </ScrollView>
         <Text style={styles.hint}>语音消息将以转写文本分享，不包含可播放音频。</Text>
-        <TextInput ref={commentInput} editable={!share.sending} accessibilityLabel="分享附言" placeholder="附言（可选，作为单独消息发送）" placeholderTextColor={theme.colors.text.secondary} multiline value={share.comment} onChangeText={share.setComment} style={styles.input} />
+        <AppTextInput ref={commentInput} editable={!share.sending} accessibilityLabel="分享附言" placeholder="附言（可选，作为单独消息发送）" placeholderTextColor={theme.colors.text.secondary} autoGrow value={share.comment} onChangeText={share.setComment} style={styles.input} />
         <TouchableOpacity accessibilityRole="button" disabled={share.sending} accessibilityState={{ disabled: share.sending }} onPress={() => { void share.send(); }} style={[styles.send, share.sending && styles.disabled]}><Text style={styles.sendText}>{share.sending ? '分享中…' : '确认分享'}</Text></TouchableOpacity>
       </> : null}
     </View>
-    </KeyboardAvoidingView>
+    </KeyboardAvoidingContainer>
   </Modal>;
 }
 

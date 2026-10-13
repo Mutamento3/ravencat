@@ -109,8 +109,10 @@ interface BuiltInToolRegistrationBase extends LegacyAgentToolMetadata {
    * 再暴露旁路发送工具会产生同一意图的两条消息。
    */
   outOfBandOnly: boolean;
-  /** 只有普通单聊与已接入 Chat 持久存档的自主执行可以消费媒体 intent。 */
+  /** 媒体 intent 必须由已接入 Chat 持久提交的场景消费；群聊沿用群任务 fence。 */
   directChatOnly: boolean;
+  groupChatAllowed: boolean;
+  groupChatForbidden: boolean;
   memoryParticipation: BuiltInToolMemoryParticipation;
   /** App Tool Package membership 只属于 Host Built-in exposure，不进入通用 AgentTool contract。 */
   phoneToolPackageId: string | null;
@@ -189,6 +191,8 @@ function builtInTool(
     | 'callOnly'
     | 'outOfBandOnly'
     | 'directChatOnly'
+    | 'groupChatAllowed'
+    | 'groupChatForbidden'
     | 'memoryParticipation'
     | 'phoneToolPackageId'
     | 'dynamicRunExposure'
@@ -204,6 +208,8 @@ function builtInTool(
     callOnly: options.callOnly ?? false,
     outOfBandOnly: options.outOfBandOnly ?? false,
     directChatOnly: options.directChatOnly ?? false,
+    groupChatAllowed: options.groupChatAllowed ?? false,
+    groupChatForbidden: options.groupChatForbidden ?? false,
     memoryParticipation: options.memoryParticipation ?? 'none',
     phoneToolPackageId: options.phoneToolPackageId ?? null,
     dynamicRunExposure: options.dynamicRunExposure ?? false,
@@ -221,6 +227,8 @@ function agentNativeBuiltInTool(
     | 'callOnly'
     | 'outOfBandOnly'
     | 'directChatOnly'
+    | 'groupChatAllowed'
+    | 'groupChatForbidden'
     | 'memoryParticipation'
     | 'phoneToolPackageId'
     | 'dynamicRunExposure'
@@ -236,6 +244,8 @@ function agentNativeBuiltInTool(
     callOnly: options.callOnly ?? false,
     outOfBandOnly: options.outOfBandOnly ?? false,
     directChatOnly: options.directChatOnly ?? false,
+    groupChatAllowed: options.groupChatAllowed ?? false,
+    groupChatForbidden: options.groupChatForbidden ?? false,
     memoryParticipation: options.memoryParticipation ?? 'none',
     phoneToolPackageId: options.phoneToolPackageId ?? null,
     dynamicRunExposure: options.dynamicRunExposure ?? false,
@@ -257,11 +267,11 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   agentNativeBuiltInTool(WebSearchTool, 'webTools', SAFE_READ),
   agentNativeBuiltInTool(WebFetchTool, 'webTools', SAFE_READ),
   agentNativeBuiltInTool(DownloadFileTool, 'webTools', REVERSIBLE_ACTION),
-  agentNativeBuiltInTool(DownloadImageTool, 'media', REVERSIBLE_ACTION, { directChatOnly: true }),
-  agentNativeBuiltInTool(ViewImageTool, 'media', PRIVATE_READ, { directChatOnly: true }),
-  agentNativeBuiltInTool(createChangeOwnAvatarTool(assertImageToolRunCurrent), 'media', REVERSIBLE_ACTION, { directChatOnly: true }),
-  agentNativeBuiltInTool(AddOwnStickerTool, 'stickers', REVERSIBLE_ACTION, { directChatOnly: true }),
-  agentNativeBuiltInTool(MaintainOwnStickerTool, 'stickers', REVERSIBLE_ACTION, { directChatOnly: true }),
+  agentNativeBuiltInTool(DownloadImageTool, 'media', REVERSIBLE_ACTION, { directChatOnly: true, groupChatAllowed: true }),
+  agentNativeBuiltInTool(ViewImageTool, 'media', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true }),
+  agentNativeBuiltInTool(createChangeOwnAvatarTool(assertImageToolRunCurrent), 'media', REVERSIBLE_ACTION, { directChatOnly: true, groupChatAllowed: true }),
+  agentNativeBuiltInTool(AddOwnStickerTool, 'stickers', REVERSIBLE_ACTION, { directChatOnly: true, groupChatAllowed: true }),
+  agentNativeBuiltInTool(MaintainOwnStickerTool, 'stickers', REVERSIBLE_ACTION, { directChatOnly: true, groupChatAllowed: true }),
   builtInTool(GetProtocolsTool, 'protocol', SAFE_READ),
   builtInTool(SearchProtocolsTool, 'protocol', SAFE_READ),
   builtInTool(AddProtocolTool, 'protocol', REVERSIBLE_WRITE),
@@ -282,11 +292,11 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   builtInTool(AddLedgerRecordTool, 'wallet', REVERSIBLE_ACTION),
   builtInTool(UpdateLedgerRecordTool, 'wallet', REVERSIBLE_ACTION),
   builtInTool(DeleteLedgerRecordTool, 'wallet', REVERSIBLE_ACTION),
-  builtInTool(RequestVideoCallTool, 'calls', EXTERNAL_SIDE_EFFECT),
+  builtInTool(RequestVideoCallTool, 'calls', EXTERNAL_SIDE_EFFECT, { groupChatForbidden: true }),
   builtInTool(LookAtUserTool, 'calls', SENSITIVE_ACTION, { callOnly: true }),
   agentNativeBuiltInTool(RememberMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   agentNativeBuiltInTool(RecallMemoryTool, 'memory', PRIVATE_READ, { memoryParticipation: 'read_write' }),
-  agentNativeBuiltInTool(SearchChatSummariesTool, 'chat', PRIVATE_READ, { directChatOnly: true }),
+  agentNativeBuiltInTool(SearchChatSummariesTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true }),
   agentNativeBuiltInTool(UpdateMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   agentNativeBuiltInTool(ForgetMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   builtInTool(BlockAIAssistantTool, 'assistants', SENSITIVE_ACTION, { hostOnly: true }),
@@ -319,31 +329,31 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
     SendVoiceMessageTool,
     'chat',
     EXTERNAL_SIDE_EFFECT,
-    { directChatOnly: true },
+    { directChatOnly: true, groupChatAllowed: true },
   ),
   agentNativeBuiltInTool(
     SearchStickersTool,
     'stickers',
     SAFE_READ,
-    { directChatOnly: true },
+    { directChatOnly: true, groupChatAllowed: true },
   ),
   agentNativeBuiltInTool(
     ListStickerGroupsTool,
     'stickers',
     SAFE_READ,
-    { directChatOnly: true },
+    { directChatOnly: true, groupChatAllowed: true },
   ),
   agentNativeBuiltInTool(
     ListStickersInGroupTool,
     'stickers',
     SAFE_READ,
-    { directChatOnly: true },
+    { directChatOnly: true, groupChatAllowed: true },
   ),
   agentNativeBuiltInTool(
     SelectStickerTool,
     'stickers',
     EXTERNAL_SIDE_EFFECT,
-    { directChatOnly: true },
+    { directChatOnly: true, groupChatAllowed: true },
   ),
   builtInTool(
     InviteListeningTogetherTool,
@@ -497,6 +507,8 @@ interface BuiltInToolPolicyEntry {
   callOnly: boolean;
   outOfBandOnly: boolean;
   directChatOnly?: boolean;
+  groupChatAllowed?: boolean;
+  groupChatForbidden?: boolean;
   memoryParticipation: BuiltInToolMemoryParticipation;
   dynamicRunExposure?: boolean;
 }
@@ -513,6 +525,7 @@ export function getPolicyAllowedToolEntriesForAI<T extends BuiltInToolPolicyEntr
   return registrations.filter((registration) => {
     if (aiConfig.enableTools !== true) return false;
     if (!allowedToolNames.has(registration.tool.name)) return false;
+    if (registration.groupChatForbidden && aiConfig.triggerSource === 'group_chat') return false;
     if (registration.dynamicRunExposure) return false;
     if (
       registration.memoryParticipation === 'read_write'
@@ -528,7 +541,7 @@ export function getPolicyAllowedToolEntriesForAI<T extends BuiltInToolPolicyEntr
     ) {
       return false;
     }
-    if (registration.directChatOnly && (aiConfig.triggerSource ?? 'chat') !== 'chat'
+    if (registration.directChatOnly && !(registration.groupChatAllowed && aiConfig.triggerSource === 'group_chat') && (aiConfig.triggerSource ?? 'chat') !== 'chat'
       && !aiConfig.capabilities?.includes('raven_cat.autonomous')) {
       return false;
     }
@@ -615,11 +628,11 @@ export function buildToolsDescription(aiConfig: AIToolsConfig = {}): string {
       '日程提供行动机会，醒来以后仍可以决定不联系用户。不要自行套用固定 cadence。',
     ] : []),
     ...(hasStickerReply ? [
-      'search_stickers 与 select_sticker 是普通单聊里的日常表达能力：不要求用户先明确提出“发表情包”；表情包是很自然的日常互动，想发送的时候可以主动先搜索再选择发送。',
+      'search_stickers 与 select_sticker 是单聊与群聊里的日常表达能力：不要求用户先明确提出“发表情包”；表情包是很自然的日常互动，想发送的时候可以主动先搜索再选择发送。',
       '表情包可以单独作为回复，也可以配合必要的简短文字；无需用文字重复它已经表达清楚的意思。',
     ] : []),
     ...(hasVoiceReply ? [
-      'send_voice_message 是普通单聊里的日常回复媒介：不要求用户先明确提出“发语音”；当语气、情绪、安慰、亲密感或口语表达比纯文字更重要时，可以主动发送语音。',
+      'send_voice_message 是单聊与群聊里的日常回复媒介：不要求用户先明确提出“发语音”；当语气、情绪、安慰、亲密感或口语表达比纯文字更重要时，可以主动发送语音。',
       '发送语音必须实际调用 send_voice_message；若当前 function schema 尚未提供它，先用 open_tool_package 展开 chat 包，再调用。思考中计划调用或在正文里写转写标签，都不等于已发送语音；工具失败时如实说明尚未发送。',
       '信息密集、需要精确查阅或很长的内容优先使用文字；发送成功后不要再用文字重复同一正文，也无需重复自己发送成功。',
     ] : []),

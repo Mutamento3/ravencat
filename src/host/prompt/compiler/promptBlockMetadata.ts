@@ -23,6 +23,7 @@ const BLOCK_METADATA: Partial<Record<PromptPackBlock['key'], PromptBlockMetadata
   agent_registry_summary: { definitionId: 'context.agent_registry', slot: 'user_rules', protection: 'overridable' },
   moment_audience_candidates: { definitionId: 'context.moment_audience_candidates', slot: 'capabilities', protection: 'locked' },
   moments_social_inbox: { definitionId: 'context.moments_social_inbox', slot: 'dynamic_context', protection: 'locked' },
+  assistant_nickname: { definitionId: 'context.assistant_nickname', slot: 'dynamic_context', protection: 'locked' },
   group_chat_context: { definitionId: 'context.group_chat', slot: 'scenario', protection: 'locked' },
   tools_description: { definitionId: 'context.tools_description', slot: 'capabilities', protection: 'locked' },
   ledger_context_summary: { definitionId: 'scenario.ledger_reply', slot: 'scenario', protection: 'locked' },

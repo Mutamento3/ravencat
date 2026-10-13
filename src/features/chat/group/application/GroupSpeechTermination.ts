@@ -9,9 +9,15 @@
  */
 
 import { getChatGroupRuntimeDependencies } from './ChatGroupRuntime';
+import type { DatabaseTransactionExecutor } from '@platform/persistence';
 import { abortGroupSpeechPlanExecution, listActiveGroupSpeechGroupIds } from './GroupSpeechExecutionAbort';
 import { cancelGroupAutoInvocation } from './GroupAutoInvocationScheduler';
 import { emitChatGroupSpeechPlanChanged } from '../../messages/events/ChatEvents';
+
+/** 群工具的持久提交资格来自当前发言任务，与网络取消分工。 */
+export function isGroupSpeechTaskRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, taskId: string): Promise<boolean> {
+  return getChatGroupRuntimeDependencies().groups.isSpeechTaskRunCurrentInTransaction(transaction, taskId);
+}
 
 /** 冷启动只结算失去执行者的旧计划；同进程仍活着的调用保留原 owner。 */
 export async function interruptAbandonedGroupSpeechPlans(): Promise<void> {

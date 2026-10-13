@@ -23,7 +23,7 @@ interface ToolResult {
 
 export const definition = {
   name: 'unblockAIAssistant',
-  description: '【主理AI专属】解除指定 AI 助手的拉黑状态',
+  description: '解除指定 AI 助手的拉黑状态',
   parameters: {
     type: 'object',
     properties: {

@@ -16,7 +16,7 @@ import useChatSettings from './useChatSettings';
 import { createStyles } from './chatSettingsStyles';
 import { getChatInteractionProfile, useTheme, useThemedStyles } from '@shared/theme';
 import { createCommonStyles } from '@shared/ui/commonStyles';
-import type { AIProfile } from '@features/assistants';
+import { ContextLimitsApply, type AIProfile } from '@features/assistants';
 import ChatWallpaperSettings from '../messages/components/ChatWallpaperSettings';
 import ContextWindowSection from './ContextWindowSection';
 import FixedChatContextSection from './FixedChatContextSection';
@@ -49,6 +49,9 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
     // 表单字段
     name,
     setName,
+    nickname,
+    setNickname,
+    nicknameError,
     systemPrompt,
     setSystemPrompt,
     contextLimits,
@@ -83,7 +86,7 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
         {/* AI 信息卡片 */}
         <View style={styles.aiCard}>
           <AIInfoCard
-            name={name}
+            name={nickname.trim() || name}
             model={aiAssistant.model}
             avatarUrl={avatarUrl}
             size="large"
@@ -108,6 +111,15 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
             maxLength={20}
           />
           <InputField
+            label="AI昵称"
+            value={nickname}
+            onChangeText={setNickname}
+            onBlur={() => void flush()}
+            error={nicknameError}
+            placeholder="给这个AI设置专属昵称"
+            hint="最多20个字符"
+          />
+          <InputField
             label="AI 人设"
             value={systemPrompt}
             onChangeText={setSystemPrompt}
@@ -126,6 +138,11 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
           errors={settingsErrors}
           fixed={fixed}
         />
+        <ContextLimitsApply readSettings={async () => {
+          if (!await flush()) return null;
+          return { privateContextPrimaryLimit: Number(contextLimits.privatePrimary), privateContextSecondaryLimit: Number(contextLimits.privateSecondary),
+            groupContextPrimaryLimit: Number(contextLimits.groupPrimary), groupContextSecondaryLimit: Number(contextLimits.groupSecondary) };
+        }} />
         <FixedChatContextSection conversationId={conversationId} onFixedChange={setFixed}
           onChoose={() => { void leave(onChooseFixedStart); }} />
 

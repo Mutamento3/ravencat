@@ -26,6 +26,7 @@ interface GroupOptionsProps {
   chatBackgroundKey: string;
   onBack?: () => void;
   onAdminSettings?: () => void;
+  onSummary(): void;
   onDeleteGroup?: () => void | Promise<void>;
   onUpdateProfile?: (input: UpdateGroupChatProfileInput, draft?: PersistentAvatarDraft | null) => Promise<GroupChat>;
 }
@@ -147,6 +148,7 @@ export default function GroupOptions({
   chatBackgroundKey,
   onBack,
   onAdminSettings,
+  onSummary,
   onDeleteGroup,
   onUpdateProfile,
 }: GroupOptionsProps) {
@@ -338,12 +340,12 @@ export default function GroupOptions({
             {members.map((member) => (
               <View key={member.aiAssistantId} style={styles.memberItem}>
                 <AIAvatar
-                  name={member.name || member.model || 'AI'}
+                  name={member.nickname ?? member.name ?? member.model ?? 'AI'}
                   avatarUrl={member.avatar}
                   size="medium"
                 />
                 <Text style={styles.memberName} numberOfLines={1}>
-                  {member.name || member.model || 'AI'}
+                  {member.nickname ?? member.name ?? member.model ?? 'AI'}
                 </Text>
               </View>
             ))}
@@ -356,6 +358,11 @@ export default function GroupOptions({
           onPress={onAdminSettings}
         >
           <Text style={styles.menuItemTitle}>管理员设置</Text>
+          <ChevronRight size={18} color={theme.colors.text.tertiary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={onSummary}>
+          <Text style={styles.menuItemTitle}>聊天摘要</Text>
           <ChevronRight size={18} color={theme.colors.text.tertiary} />
         </TouchableOpacity>
 

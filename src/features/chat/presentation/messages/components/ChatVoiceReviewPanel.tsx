@@ -4,11 +4,11 @@ import React from 'react';
 import {
   ActivityIndicator,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { AppTextInput } from '@shared/ui';
 
 import type { PresentationTheme } from '@shared/theme';
 import type { createInputAreaStyles } from './chatInputStyles';
@@ -57,13 +57,13 @@ export function ChatVoiceReviewPanel({
         <Text style={styles.voiceReviewDuration}>{formatDuration(draft.durationMs)}</Text>
       </View>
 
-      <TextInput
+      <AppTextInput
         style={styles.voiceReviewInput}
         value={draft.transcript}
         onChangeText={onChangeTranscript}
         placeholder="没有识别到内容，可以手动输入"
         placeholderTextColor={theme.colors.text.tertiary}
-        multiline
+        autoGrow
         textAlignVertical="top"
         scrollEnabled
         editable={!isCommitting}

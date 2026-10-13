@@ -18,7 +18,7 @@ export interface StartChatCallParams {
 }
 
 export type StartChatCallResult =
-  | { status: 'endedActive'; call: ChatCallSession; visibleMessages: ChatMessage[] }
+  | { status: 'ended'; call: ChatCallSession; visibleMessages: ChatMessage[] }
   | { status: 'accepted'; call: ChatCallSession; visibleMessages: ChatMessage[] }
   | { status: 'rejected'; call: ChatCallSession; visibleMessages: ChatMessage[] }
   | { status: 'failed'; call: ChatCallSession | null; errorMessage: string; visibleMessages: ChatMessage[] };

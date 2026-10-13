@@ -1450,6 +1450,8 @@ assert.match(failedTool.text, /调用失败/);
 }
 
 // 工具直接结束的真实 Runtime → canonical projector 链路，不制造空 final step。
+for (const scope of ['direct','group']) {
+const outputSessionId=scope==='group'?'group-session':'session-1';
 for (const [toolName, data, expectedText] of [
   ['select_sticker', {
     discriminator: 'ravencat.sticker.send.v1',
@@ -1468,9 +1470,9 @@ for (const [toolName, data, expectedText] of [
   const commits = [];
   const runId = `finish-${toolName}`;
   const projector = new canonicalProjectorModule.ChatAgentRunProjector({
-    sessionId: 'session-1', repository: {}, callbacks: {},
+    sessionId: outputSessionId, repository: {}, callbacks: {},
     aiConfig: { id: 'assistant-1', agentId: 'agent-1', name: 'Kimi' },
-    runtimeContext: { replyRunId: runId }, policy: { bubbleDeliveryMode: 'multi-bubble' },
+    runtimeContext: { replyRunId: runId, ...(scope==='group'?{groupChat:{groupId:outputSessionId,planId:'group-plan',taskId:runId}}:{}) }, policy: { bubbleDeliveryMode: 'multi-bubble' },
     projection: { kind: 'canonical', commit: { commitAgentTimeline: async (params) => {
       commits.push(params);
       return { outcome: 'committed', messages: params.items.map(({ message }, index) => ({ ...message, id: index + 1 })) };
@@ -1499,7 +1501,7 @@ for (const [toolName, data, expectedText] of [
   const result = await runtime.run({
     runId,
     task: chatTaskModule.createChatAgentTask({
-      runId, goal: '发送一条回复', assistantId: 'assistant-1', sessionId: 'session-1',
+      runId, type:scope==='group'?'group_chat_reply':'chat_reply',goal: '发送一条回复', assistantId: 'assistant-1', sessionId: outputSessionId,
       allowedToolNames: [toolName], modelTransport: 'complete', createdAt: new Date(0).toISOString(),
     }),
     initialHistory: [], eventSink: (event) => projector.handleEvent(event),
@@ -1510,11 +1512,13 @@ for (const [toolName, data, expectedText] of [
   assert.equal(commits[0].items.length, 1, '单独发送不产生多余文本或工具状态气泡');
   assert.equal(commits[0].items[0].message.senderType, 'assistant');
   assert.equal(commits[0].items[0].message.text, expectedText);
+  assert.equal(commits[0].items[0].message.sessionId,outputSessionId,'输出属于执行会话');
   if (toolName === 'send_voice_message') {
     assert.equal(typeof commits[0].items[0].materializeInTransaction, 'function', '语音仍由 T3 物化媒体');
   } else {
     assert.equal(JSON.parse(commits[0].items[0].message.metadataJson).sticker.stickerId, 'sticker-1');
   }
+}
 }
 
 // 自主执行即使不发消息，也保留结论；失败/取消保留此前已发生的模型与工具记录。

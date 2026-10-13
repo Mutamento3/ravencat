@@ -1,3 +1,4 @@
+import { getAssistantDisplayName } from '../../AssistantNickname';
 import React, { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, type ListRenderItemInfo, type GestureResponderEvent, Dimensions, Modal, TouchableWithoutFeedback, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -351,7 +352,7 @@ export default function ConversationList({
 
   const renderItem = useCallback(({ item }: ListRenderItemInfo<ConversationListItem>) => {
     const isGroupChat = item.kind === 'group';
-    const name = isGroupChat ? item.group.name : item.ai.name;
+    const name = isGroupChat ? item.group.name : getAssistantDisplayName(item.ai);
     const avatar = isGroupChat ? item.group.avatar : item.ai.avatar;
     const lastMessage = isGroupChat ? item.group.lastMessage : item.ai.lastMessage;
     const lastTime = isGroupChat ? item.group.lastTime : item.ai.lastTime;

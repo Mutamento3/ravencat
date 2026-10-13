@@ -14,6 +14,7 @@ import {
   readCurrentHostAuthority,
   typedResult,
   unavailable,
+  readLatestCurrentLyric,
 } from './TogetherListeningToolRuntime';
 
 interface RespondArgs { decision: 'accept' | 'decline' }
@@ -75,6 +76,7 @@ export async function execute(args: RespondArgs, context: ToolContext) {
     activityId: result.activity.id,
     phase: result.activity.phase,
     projectionStatus: result.projectionStatus,
+    ...(args.decision === 'accept' ? { currentLyric: await readLatestCurrentLyric(availability) } : {}),
   }, args.decision === 'accept'
     ? '已接受用户的 Together Listening 邀请。'
     : '已拒绝用户的 Together Listening 邀请。');

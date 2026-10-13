@@ -8,11 +8,11 @@ export function readDraftNumber(text: string, label: string, min: number, max: n
   return { value, error: null };
 }
 
-export function readDraftInteger(text: string, label: string, optional = false) {
+export function readDraftInteger(text: string, label: string, optional = false, minimum = 1) {
   if (optional && text.trim() === '') return { value: null, error: null };
   const value = Number(text);
-  if (!text.trim() || !Number.isSafeInteger(value) || value < 1) {
-    return { value: null, error: `${label}需要填写正整数；这次修改尚未保存。` };
+  if (!text.trim() || !Number.isSafeInteger(value) || value < minimum) {
+    return { value: null, error: `${label}需要填写${minimum === 0 ? '非负' : '正'}整数；这次修改尚未保存。` };
   }
   return { value, error: null };
 }

@@ -11,6 +11,8 @@ import {
 import { emitChatMessagesUpdated } from '../events/ChatEvents';
 import type { ChatMessage, CreateMessageInput } from '../domain/ChatMessage';
 import { beginAssistantMessageArrival, finishAssistantMessageArrival } from '../../reply/delivery/AssistantMessageArrival';
+import { databaseCoordinator } from '@platform/persistence';
+import { getChatGroupRuntimeDependencies } from '../../group/application/ChatGroupRuntime';
 
 export interface AppendExternalAssistantMessageParams {
   sessionId: string;
@@ -220,10 +222,26 @@ export async function appendExternalAssistantMessages(
   const deliveryKind = params.deliveryKind
     ?? resolveAIMessageDeliveryKind(params.triggerSource);
   const messages = buildCreateMessages(params, segments);
-  const insertedMessages = await repository.commitMessages({
-    messages,
-    previewText: params.previewText ?? segments[segments.length - 1]!,
-  });
+  const previewText = params.previewText ?? segments[segments.length - 1]!;
+  const groups = getChatGroupRuntimeDependencies().groups;
+  const group = await groups.getById(params.sessionId);
+  if (group) {
+    const actor = group.members.find((member) => member.aiAssistantId === params.aiId);
+    for (const message of messages) {
+      message.metadataJson = JSON.stringify({ ...JSON.parse(message.metadataJson!),
+        actorAIId: params.aiId, actorAgentId: params.agentId, actorName: actor?.name ?? params.aiName,
+        groupChat: { groupId: group.group.id, groupName: group.group.name } });
+    }
+  }
+  // 外部业务仍通过共同消息命令提交，群列表投影与正文由各自 owner 在同一事务交接。
+  const insertedMessages = group
+    ? await databaseCoordinator.transaction({ name: 'chat.external-group-assistant', feature: 'chat', priority: 'interactive' }, async (transaction) => {
+      const committed = await repository.commitMessagesInTransaction(transaction, { messages, previewText: null });
+      const last = committed[committed.length - 1];
+      await groups.updatePreviewInTransaction(transaction, params.sessionId, last.id, previewText, last.createdAt);
+      return committed;
+    })
+    : await repository.commitMessages({ messages, previewText });
 
   const tracksArrival = Boolean(params.aiId && params.aiName && params.delivery !== 'none');
   const messageIds = insertedMessages.map((message) => message.id);

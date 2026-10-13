@@ -19,7 +19,8 @@ function load(file, mocks = {}) {
 }
 const domain = load('src/features/stickers/domain/Sticker.ts');
 const chatSticker = load('src/features/chat/messages/domain/ChatSticker.ts');
-const chatMetadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts', { './ChatSticker': chatSticker });
+const chatMetadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts', { './ChatSticker': chatSticker,
+  './SharedChatRecord': load('src/features/chat/messages/domain/SharedChatRecord.ts') });
 const sharedRecord = load('src/features/chat/messages/domain/SharedChatRecord.ts');
 const embeddingDomain = load('src/features/stickers/domain/StickerEmbedding.ts');
 const abort = load('src/shared/runtime/abortSignal.ts');
@@ -45,9 +46,14 @@ const { ConversationTurnRepository } = load('src/features/chat/reply/infrastruct
   '../../messages/infrastructure/SQLiteMessageRepository': {}, '../domain/ConversationTurn': {}, '../../messages/domain': {},
 });
 const turns = new ConversationTurnRepository();
+const { GroupChatRepository } = load('src/features/chat/group/infrastructure/SQLiteGroupChatRepository.ts', {
+  '@platform/persistence': {}, '@features/media': {}, '@features/profile': {},
+});
+const groups = new GroupChatRepository();
 const { assertImageToolRunCurrent } = load('src/host/composition/agent/assertImageToolRunCurrent.ts', {
   '@shared/runtime/abortSignal': abort,
-  '@features/chat': { isChatReplyRunCurrentInTransaction: (tx, id) => turns.isRunCurrentInTransaction(tx, id) },
+  '@features/chat': { isChatReplyRunCurrentInTransaction: (tx, id) => turns.isRunCurrentInTransaction(tx, id),
+    isGroupSpeechTaskRunCurrentInTransaction: (tx, id) => groups.isSpeechTaskRunCurrentInTransaction(tx, id) },
 });
 
 function coordinated(db) {
@@ -191,6 +197,15 @@ const chatActor = context('ai-one', 'chat');
 assert.equal(await turns.isRunCurrentInTransaction(createSqliteExecutor(db), 'run-1'), true);
 await turns.supersedeActiveRunInTransaction(createSqliteExecutor(db), 'chat', now);
 await assert.rejects(commands.maintainAISticker({ sticker_id: 'one-sticker', action: 'delete' }, chatActor), /新消息打断/);
+db.exec(`INSERT INTO chat_conversations VALUES ('image-group','group');
+  INSERT INTO group_chats(id,name,created_at,updated_at) VALUES ('image-group','群','${now}','${now}');
+  INSERT INTO group_speech_plans(id,group_id,status,created_at,updated_at) VALUES ('image-plan','image-group','running','${now}','${now}');
+  INSERT INTO group_speech_tasks(id,plan_id,group_id,ai_assistant_id,agent_id,sequence_order,source,status,created_at,updated_at)
+    VALUES ('image-task','image-plan','image-group','ai-one','ai-one',1,'admin','running','${now}','${now}');`);
+const groupActor = { ...context('ai-one', 'chat'), runId: 'image-task', task: { assistantId: 'ai-one', source: 'chat', type: 'group_chat_reply' } };
+await assertImageToolRunCurrent(createSqliteExecutor(db), groupActor);
+db.prepare("UPDATE group_speech_plans SET status='terminated' WHERE id='image-plan'").run();
+await assert.rejects(commands.maintainAISticker({ sticker_id: 'one-sticker', action: 'delete' }, groupActor), /群发言任务已结束/);
 assert.notEqual(await repo.getStickerById('one-sticker', 'ai-one'), null);
 const claim = await aiRepo.claim('ai-one', 'one-sticker', 'embed', 'before-edit', 'process-1', now, noFence);
 await repo.updateStickerMetadata('one-sticker', { description: '等待网络期间修改了语义' }, now, 'ai-one');
@@ -257,6 +272,7 @@ assert.equal((await changingAvatar).code, 'AVATAR_CHANGE_CONFLICT');
 assert.equal((await assistants.getAvatarMediaAssetReference('ai-two')).avatar, 'file:///user-edit.png');
 resolveAvatarMedia = async () => ({ localUri: 'file:///cat.png' });
 await assert.rejects(avatarTool.execute({ media_asset_id: asset.id }, chatActor), /新消息打断/);
+await assert.rejects(avatarTool.execute({ media_asset_id: asset.id }, groupActor), /群发言任务已结束/);
 assert.equal((await assistants.getAvatarMediaAssetReference('ai-one')).avatarMediaAssetId, null);
 
 // 浏览和选择时带素材 ID 与缺向量提醒；不把本地路径或文件内容交给模型。
@@ -298,7 +314,8 @@ for (const [key, sql] of Object.entries(SCHEMAS)) {
   legacy.exec(sql);
 }
 // 119 的真实结构没有后来新增的设置列，不能把当前 schema 冒充旧库。
-legacy.exec('ALTER TABLE ai_assistants DROP COLUMN show_token_usage;');
+legacy.exec('ALTER TABLE ai_assistants DROP COLUMN show_token_usage; ALTER TABLE ai_assistants DROP COLUMN nickname;');
+legacy.exec('ALTER TABLE chat_summary_request_settings DROP COLUMN model_config_id; ALTER TABLE chat_summary_request_settings DROP COLUMN group_trigger_count;');
 const schema = loadSqliteModule('stickerSchema');
 const oldStickers = schema.STICKERS_SCHEMA.replace('media_asset_id TEXT NOT NULL CHECK', 'media_asset_id TEXT NOT NULL UNIQUE CHECK')
   .replace('    owner_assistant_id TEXT,\n', '').replace(',\n    FOREIGN KEY (owner_assistant_id) REFERENCES ai_assistants(id) ON DELETE CASCADE', '');

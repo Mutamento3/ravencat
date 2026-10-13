@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { ModalSheet } from '@shared/ui';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { AppTextInput, ModalSheet } from '@shared/ui';
 import { useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
 import type { McpServerAuthMode } from '../domain/McpServerConfig';
 import { parseMcpServerImport, type McpServerImportDraft } from '../application/ParseMcpServerImport';
@@ -57,7 +57,7 @@ export default function McpConnectionFields(props: Props) {
       <Text style={styles.buttonText}>从官方配置 JSON 导入</Text>
     </TouchableOpacity>
     <Text style={styles.label}>Server URL</Text>
-    <TextInput style={styles.input} value={props.url} onChangeText={props.onUrlChange}
+    <AppTextInput style={styles.input} value={props.url} onChangeText={props.onUrlChange}
       placeholder="请输入 MCP Server 地址" placeholderTextColor={theme.colors.text.tertiary}
       autoCapitalize="none" autoCorrect={false} keyboardType="url" editable={!props.disabled} />
     <Text style={styles.label}>认证方式</Text>
@@ -70,7 +70,7 @@ export default function McpConnectionFields(props: Props) {
     </View>
     {props.authMode === 'bearer_token' && <>
       <Text style={styles.label}>Token</Text>
-      <TextInput style={styles.input} value={props.bearerToken} onChangeText={props.onTokenChange}
+      <AppTextInput style={styles.input} value={props.bearerToken} onChangeText={props.onTokenChange}
         placeholder={props.hasSavedToken ? '已保存，留空保留；更换地址时需重新填写' : '粘贴 Token，无需 Bearer 前缀'}
         placeholderTextColor={theme.colors.text.tertiary} secureTextEntry autoCapitalize="none"
         autoCorrect={false} editable={!props.disabled} />
@@ -78,7 +78,7 @@ export default function McpConnectionFields(props: Props) {
     </>}
     <ModalSheet visible={open} onClose={close} title="粘贴官方 MCP 配置" avoidKeyboard>
       <ScrollView contentContainerStyle={styles.dialog} keyboardShouldPersistTaps="handled">
-        <TextInput style={[styles.input, styles.json]} value={json} onChangeText={(value) => { setJson(value); setDrafts([]); }}
+        <AppTextInput style={[styles.input, styles.json]} value={json} onChangeText={(value) => { setJson(value); setDrafts([]); }}
           multiline autoCapitalize="none" autoCorrect={false} placeholder={'{"mcpServers": { ... }}'}
           placeholderTextColor={theme.colors.text.tertiary} />
         {error && <Text style={styles.error}>{error}</Text>}

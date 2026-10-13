@@ -4,11 +4,13 @@ import { showAppDialog } from '@shared/ui';
 import { useState, useCallback } from 'react';
 
 import { runConnectionTestByConfig } from './sharedModelConfig';
+import type { ConnectionTestOptions } from '@platform/ai';
 
 interface UseAddAIConnectionTestOptions {
   apiBaseUrl: string;
   apiKey: string;
   selectedModel: string;
+  requestOptions?: ConnectionTestOptions;
 }
 
 interface UseAddAIConnectionTestResult {
@@ -22,6 +24,7 @@ export default function useAddAIConnectionTest({
   apiBaseUrl,
   apiKey,
   selectedModel,
+  requestOptions,
 }: UseAddAIConnectionTestOptions): UseAddAIConnectionTestResult {
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<'success' | 'error' | null>(null);
@@ -43,7 +46,7 @@ export default function useAddAIConnectionTest({
         apiBaseUrl,
         apiKey,
         selectedModel,
-        requestOptions: { skipParams: true },
+        requestOptions: requestOptions ?? { skipParams: true },
       });
 
       if (result.success) {
@@ -62,7 +65,7 @@ export default function useAddAIConnectionTest({
     } finally {
       setIsTesting(false);
     }
-  }, [apiBaseUrl, apiKey, selectedModel, resetConnectionTest]);
+  }, [apiBaseUrl, apiKey, selectedModel, requestOptions, resetConnectionTest]);
 
   return {
     isTesting,

@@ -16,6 +16,7 @@ export interface ChatDetailAIAssistantLike {
   id: string;
   agentId: string;
   name: string;
+  nickname?: string | null;
   avatar?: string | null;
   model: string;
   apiKey: string;

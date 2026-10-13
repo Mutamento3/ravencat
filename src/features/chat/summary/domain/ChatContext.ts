@@ -17,6 +17,10 @@ export interface ChatContextItem {
   pending?: true;
   sharedRecord?: SharedChatRecord;
   sharedComment?: string;
+  /** 群共享投影只携带公开身份；原消息供当前输入的附件投影使用。 */
+  actor?: { assistantId: string | null; agentId: string | null; name: string };
+  message?: ChatMessage;
+  groupPlanId?: string | null;
 }
 export function projectChatContextMessage(message: ChatMessage, cursor: ChatCanonicalCursor): ChatContextItem | null {
   const eventText = buildChatSystemEventModelText(message);

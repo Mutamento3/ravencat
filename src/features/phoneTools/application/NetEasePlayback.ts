@@ -86,11 +86,11 @@ export async function getNetEasePlaybackSnapshot(): Promise<NetEasePlaybackSnaps
 
   switch (result.status) {
     case 'session_snapshot_available': {
-      const { playback, metadata, actions } = result.snapshot;
+      const { playback, metadata, actions, audioOutput } = result.snapshot;
       return {
         status: 'playback_snapshot_available',
         targetPackage: NETEASE_MUSIC_PACKAGE,
-        snapshot: { playback, metadata, actions },
+        snapshot: { playback, metadata, actions, audioOutput },
       };
     }
     case 'permission_not_granted':

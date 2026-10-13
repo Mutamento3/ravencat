@@ -1,4 +1,5 @@
 /** 展示单聊详情功能菜单。 */
+import { getAssistantDisplayName } from '@features/assistants';
 
 import React from 'react';
 import { StyleSheet, ScrollView } from 'react-native';
@@ -108,7 +109,7 @@ export default function AIOptions({
 
     showAppDialog({
       title: '删除 AI 助手',
-      message: `删除「${aiAssistant.name}」会永久清空它的会话、消息、聊天摘要和专属记忆空间。若要保留数据，请先到设置中备份应用。确定继续吗？`,
+      message: `删除「${getAssistantDisplayName(aiAssistant)}」会永久清空它的会话、消息、聊天摘要和专属记忆空间。若要保留数据，请先到设置中备份应用。确定继续吗？`,
       buttons: [
         { text: '取消', style: 'cancel' },
         {

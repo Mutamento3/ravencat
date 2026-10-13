@@ -82,6 +82,7 @@ export const SCHEMAS: Record<string, string> = {
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
+      nickname TEXT,
       avatar TEXT,
       avatar_media_asset_id TEXT,
       model TEXT NOT NULL,
@@ -125,6 +126,20 @@ export const SCHEMAS: Record<string, string> = {
   `,
 
   hostAIRelationshipState: HOST_AI_RELATIONSHIP_STATE_SCHEMA,
+
+  assistantNicknameChanges: `
+    CREATE TABLE IF NOT EXISTS assistant_nickname_changes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      assistant_id TEXT NOT NULL,
+      previous_nickname TEXT,
+      nickname TEXT,
+      acknowledged INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (assistant_id) REFERENCES ai_assistants(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_assistant_nickname_changes_owner
+      ON assistant_nickname_changes(assistant_id, id);
+  `,
 
   auxiliaryModelConfigs: `
     CREATE TABLE IF NOT EXISTS auxiliary_model_configs (

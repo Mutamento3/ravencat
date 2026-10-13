@@ -51,6 +51,13 @@ export async function getAIAssistantById(aiId: string): Promise<AIProfile | null
 export async function listAIAssistantSummaries(): Promise<AIAssistantSummary[]> {
   return aiAssistantRepository.listSummaries();
 }
+export async function applyAssistantContextLimits(assistantIds: readonly string[], settings: import('./domain/AssistantRepository').AssistantContextLimits): Promise<void> {
+  await aiAssistantRepository.applyContextLimits(assistantIds, settings);
+  for (const id of assistantIds) {
+    const assistant = await aiAssistantRepository.getById(id);
+    if (assistant) emitAIAssistantUpdated(assistant);
+  }
+}
 
 export async function deleteAIAssistant(aiId: string): Promise<boolean> {
   return hostAuthorityCoordinator.runHostMutation(async () => {

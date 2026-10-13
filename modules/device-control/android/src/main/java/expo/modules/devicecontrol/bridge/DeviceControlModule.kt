@@ -125,7 +125,7 @@ class DeviceControlModule : Module() {
     val listenerComponent = notificationListenerComponent(context)
     val manager = context.getSystemService(MediaSessionManager::class.java)
     return {
-      manager.getActiveSessions(listenerComponent).map(::AndroidMediaSessionControllerSource)
+      manager.getActiveSessions(listenerComponent).map { AndroidMediaSessionControllerSource(it, context) }
     }
   }
 

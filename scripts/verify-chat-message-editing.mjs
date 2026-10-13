@@ -66,7 +66,7 @@ const executor = {
 };
 const persistence = { databaseCoordinator: { openTaskExecutor: () => executor } };
 const domain = 'src/features/chat/messages/domain/';
-const metadata = load(`${domain}chatMessageMetadata.ts`, { './ChatSticker': load(`${domain}ChatSticker.ts`) });
+const metadata = load(`${domain}chatMessageMetadata.ts`, { './ChatSticker': load(`${domain}ChatSticker.ts`), './SharedChatRecord': load(`${domain}SharedChatRecord.ts`) });
 const policy = load(`${domain}ChatMessageEditing.ts`, { './chatMessageMetadata': metadata });
 const { MessageRepository } = load('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts', {
   '@platform/persistence': persistence,

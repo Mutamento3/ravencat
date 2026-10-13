@@ -84,6 +84,7 @@ export async function runChatAgentReplyFlow({
     },
   });
   const task = createChatAgentTask({
+    type: runtimeContext.groupChat ? 'group_chat_reply' : 'chat_reply',
     runId,
     goal: modelTransport === 'stream'
       ? resolveChatGoal(requestMessages)
@@ -142,7 +143,7 @@ export async function runChatAgentReplyFlow({
       createLegacyContext: (executionContext) => createRuntimeToolContext(
         sessionId,
         aiConfig,
-        repository,
+        persistence.decorateCommitRepository?.(repository) ?? repository,
         callbacks,
         runtimeContext,
         executionContext.abortSignal,

@@ -1,6 +1,6 @@
 {
   "name": "kimiphone",
-  "version": "2.1.0-preview.1",
+  "version": "2.1.1",
   "license": "MIT",
   "main": "index.js",
   "scripts": {
@@ -13,6 +13,7 @@
     "verify:ui-slider": "node --no-warnings scripts/verify-ui-slider.mjs",
     "verify:ui-toggle": "node --no-warnings scripts/verify-ui-toggle.mjs",
     "verify:ui-dialog": "node --no-warnings scripts/verify-ui-dialog.mjs",
+    "verify:ui-input": "node --no-warnings scripts/verify-ui-input.mjs",
     "verify:chat-message-selection": "node --no-warnings scripts/verify-chat-message-selection.mjs",
     "verify:chat-message-share": "node --no-warnings scripts/verify-chat-message-share.mjs",
     "verify:chat-message-editing": "node --no-warnings scripts/verify-chat-message-editing.mjs",
@@ -101,6 +102,7 @@
     "verify:chat-conversation-entry": "node scripts/verify-chat-conversation-entry-and-preload.mjs",
     "verify:session-timeline-cache-lru": "node scripts/verify-session-timeline-cache-lru.mjs",
     "verify:assistant-identity": "node scripts/verify-assistant-identity.mjs",
+    "verify:assistant-nickname": "node --no-warnings scripts/verify-assistant-nickname.mjs",
     "verify:auxiliary-model-runtime": "node scripts/verify-auxiliary-model-runtime.mjs",
     "verify:model-settings-autosave": "node --no-warnings scripts/verify-model-settings-autosave.mjs",
     "verify:chat-conversation-preparation": "node scripts/verify-chat-conversation-preparation.mjs",

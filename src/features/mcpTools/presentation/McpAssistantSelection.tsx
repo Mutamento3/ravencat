@@ -1,4 +1,5 @@
 /** MCP 私有多选：配置页与列表共用，不绑定群聊的成员规则。 */
+import { getAssistantDisplayName } from '@features/assistants';
 import React, { useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Check, ChevronDown, ChevronUp, Square } from 'lucide-react-native';
@@ -38,7 +39,7 @@ export default function McpAssistantSelection({ assistants, selectedIds, disable
   const styles = useThemedStyles(createStyles);
   const [selectionExpanded, setSelectionExpanded] = useState(false);
   const expanded = !collapsible || selectionExpanded;
-  const selectedNames = assistants.filter((assistant) => selectedIds.includes(assistant.id)).map((assistant) => assistant.name);
+  const selectedNames = assistants.filter((assistant) => selectedIds.includes(assistant.id)).map((assistant) => getAssistantDisplayName(assistant));
   const summary = selectedNames.length === 0 ? '未选择' : selectedNames.join('、');
   const Chevron = expanded ? ChevronUp : ChevronDown;
   return (
@@ -59,11 +60,11 @@ export default function McpAssistantSelection({ assistants, selectedIds, disable
               const selected = selectedIds.includes(assistant.id);
               return (
                 <TouchableOpacity key={assistant.id} accessibilityRole="checkbox"
-                  accessibilityLabel={assistant.name} accessibilityState={{ checked: selected, disabled }}
+                  accessibilityLabel={getAssistantDisplayName(assistant)} accessibilityState={{ checked: selected, disabled }}
                   style={[styles.option, disabled && styles.disabled]}
                   disabled={disabled} onPress={() => onToggle(assistant.id, !selected)} activeOpacity={0.7}>
-                  <AIAvatar name={assistant.name} avatarUrl={assistant.avatar} size="small" />
-                  <Text style={styles.name} numberOfLines={1}>{assistant.name}</Text>
+                  <AIAvatar name={getAssistantDisplayName(assistant)} avatarUrl={assistant.avatar} size="small" />
+                  <Text style={styles.name} numberOfLines={1}>{getAssistantDisplayName(assistant)}</Text>
                   <View style={[styles.checkbox, selected && styles.selected]}>
                     {selected ? <Check size={14} color={theme.colors.brand.onPrimary} />
                       : <Square size={20} color={theme.colors.text.tertiary} />}

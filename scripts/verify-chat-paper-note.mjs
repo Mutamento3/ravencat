@@ -54,6 +54,7 @@ const quote = load(`${bubbleDir}ReplyQuote.tsx`, {
   './StickerMessageCard': stub('Sticker'), './VoiceMessageCard': stub('Voice'),
 });
 const contents = load(`${bubbleDir}MessageBubbleContent.tsx`, {
+  './selectableMarkdownRenderer': { createSelectableMarkdownRenderer: () => () => null },
   ...base, './styles': styles, './AttachmentCard': stub('Attachment'),
   '@shopify/flash-list': { useMappingHelper: () => ({ getMappingKey: (id) => id }) },
   'react-native-markdown-renderer': { __esModule: true, default: 'Markdown', MarkdownIt: () => ({}), hasParents: () => false },

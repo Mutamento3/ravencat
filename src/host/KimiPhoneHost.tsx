@@ -1394,6 +1394,7 @@ function HostLifecycle({
           const segments: Record<GroupChatSubScreen, string> = {
             menu: 'menu',
             adminSettings: 'admin-settings',
+            summary: 'summary',
           };
           router.push(`/chat/groups/${encodeURIComponent(groupId)}/${segments[screen]}` as Href);
         }}

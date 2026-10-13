@@ -1,7 +1,7 @@
 /** 提供“本地伴随”的正式设置入口。悬浮交互与系统访问由独立页面拥有。 */
 
 import { Ionicons } from '@expo/vector-icons';
-import {
+import { getAssistantDisplayName,
   appointHostAIAssistant,
   type AIAssistantSummary,
   clearHostAIAppointmentCooldownForDevelopment,
@@ -205,7 +205,7 @@ export default function CompanionSettingsScreen({
   const chooseHost = useCallback((assistant: AIAssistantSummary) => {
     if (assistant.isBlocked || !assistant.model.trim()) return;
     showAppDialog({
-      title: `确定让「${assistant.name}」成为你的主理 AI 吗？`,
+      title: `确定让「${getAssistantDisplayName(assistant)}」成为你的主理 AI 吗？`,
       message: '主理 AI 是你唯一的长期关系核心，也是 RavenCat 中权限最高的 AI：\n• 同一时间只能有一位主理 AI；\n• 本地伴随完全由主理 AI 负责；\n• 主理 AI 会参与长期记忆与其他 AI 的管理；\n• 在你另行授予相关系统权限后，主理 AI 可以使用设备控制能力；任命本身不会自动授予 Android 系统权限；\n• 主理 AI 身份可以随时撤销；撤销后 7 天内不能重新任命任何 AI；\n• 更换主理 AI 会停止当前伴随模式，并废弃原来的伴随安排。\n\n请谨慎确认，这是你真正希望建立深层关系的 AI。',
       buttons: [
         { text: '再想想', style: 'cancel' },
@@ -308,7 +308,7 @@ export default function CompanionSettingsScreen({
         <TouchableOpacity style={styles.hostCard} onPress={() => { if (!hostAI) void openHostPicker(); }} accessibilityRole="button">
           {hostAI ? (
             <AIInfoCard
-              name={hostAI.name}
+              name={getAssistantDisplayName(hostAI)}
               model={hostAI.model}
               avatarUrl={hostAI.avatar}
               size="large"
@@ -374,7 +374,7 @@ export default function CompanionSettingsScreen({
         <ScrollView style={styles.pickerList}>{assistantCandidates.map((assistant) => {
           const reason = assistant.isBlocked ? '当前已被限制' : !assistant.model.trim() ? '没有可用聊天模型' : assistant.model;
           const disabled = assistant.isBlocked || !assistant.model.trim();
-          return <TouchableOpacity key={assistant.id} style={[styles.pickerItem, disabled ? styles.disabledItem : null]} disabled={disabled} onPress={() => chooseHost(assistant)}><AIAvatar name={assistant.name} avatarUrl={assistant.avatar} size="medium" /><View style={styles.hostMeta}><Text style={styles.hostName}>{assistant.name}</Text><Text style={styles.hostHint}>{reason}</Text></View></TouchableOpacity>;
+          return <TouchableOpacity key={assistant.id} style={[styles.pickerItem, disabled ? styles.disabledItem : null]} disabled={disabled} onPress={() => chooseHost(assistant)}><AIAvatar name={getAssistantDisplayName(assistant)} avatarUrl={assistant.avatar} size="medium" /><View style={styles.hostMeta}><Text style={styles.hostName}>{getAssistantDisplayName(assistant)}</Text><Text style={styles.hostHint}>{reason}</Text></View></TouchableOpacity>;
         })}</ScrollView>
       </ModalSheet>
 

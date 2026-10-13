@@ -49,6 +49,7 @@ export type { ChatSummaryCallDiagnostics, ChatSummaryRequestSettings } from './s
 export { buildChatSummaryModelInput } from './summary/application/ChatSummary';
 
 export { processChatSummary, prepareChatSummaryConversations, getNextChatSummaryWakeAt } from './summary/application/ChatSummary';
+export { invalidateChatSummaryModelReferencesInTransaction } from './summary/application/ChatSummary';
 
 // Host runtime 依赖、执行入口与运行时类型。
 export type {

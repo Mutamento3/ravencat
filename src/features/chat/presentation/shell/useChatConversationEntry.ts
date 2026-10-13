@@ -5,6 +5,7 @@
  * 只要身份已知（preparedSession 或一次索引读）就立即进入 ChatDetail，
  * 消息由 ChatDetail 自己的首屏加载负责。预热只影响消息出现快慢。
  */
+import { getAssistantDisplayName } from '@features/assistants';
 
 import { showAppDialog } from '@shared/ui';
 import { useCallback, useRef } from 'react';
@@ -57,7 +58,7 @@ export function useChatConversationEntry({
       return 'superseded';
     }
     if (ai.isBlocked) {
-      showAppDialog({ title: '已被拉黑', message: `${ai.name} 当前已被主理 AI 拉黑，暂时无法进入对话`, tone: 'warning' });
+      showAppDialog({ title: '已被拉黑', message: `${getAssistantDisplayName(ai)} 当前已被主理 AI 拉黑，暂时无法进入对话`, tone: 'warning' });
       return 'completed';
     }
 

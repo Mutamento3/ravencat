@@ -25,6 +25,7 @@ function compile(relativePath) {
 for (const relativePath of [
   'src/features/calls/application/runtime/OutgoingCallDecisionParser.ts',
   'src/features/chat/group/application/GroupAdminReplyParser.ts',
+  'src/features/chat/group/application/GroupMentionModelText.ts',
   'src/features/chat/messages/domain/ChatSticker.ts',
   'src/features/chat/messages/domain/SharedChatRecord.ts',
   'src/features/chat/messages/domain/chatMessageMetadata.ts',

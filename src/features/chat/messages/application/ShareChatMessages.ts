@@ -1,4 +1,5 @@
 /** 分享只展开已选择的事实快照，发送仍交给单聊／群聊原有的用户消息 owner。 */
+import { getAssistantDisplayName } from '@features/assistants';
 import { databaseCoordinator } from '@platform/persistence';
 import { getChatDetailAvailableAssistants, getChatDetailCurrentUser } from '../../conversation/application/ChatPresentation';
 import { resolveCanonicalConversation } from '../../conversation/application/ResolveCanonicalConversation';
@@ -9,7 +10,7 @@ import { getChatMessageRuntimeDependencies } from './ChatMessageRuntime';
 import { sendUserMessage, type AIAssistantConfig } from './SendUserMessage';
 import { canSelectChatMessage, getChatSelectionKey, MAX_CHAT_SELECTION_UNITS } from '../domain/ChatMessageSelection';
 import { sortChatTimelineMessages } from '../domain/ChatTimelineOrdering';
-import { getMessageAttachments, getMessageSharedRecord, getMessageSticker, getMessageVoice, isToolStatusMessageMetadata, parseMessageMetadata } from '../domain/chatMessageMetadata';
+import { buildGroupMentionModelText, buildReplyQuoteModelText, getMessageAttachments, getMessageSharedRecord, getMessageSticker, getMessageVoice, isToolStatusMessageMetadata, parseMessageMetadata } from '../domain/chatMessageMetadata';
 import type { SharedChatRecord, SharedChatRecordEntry } from '../domain/SharedChatRecord';
 import type { ChatMessage } from '../domain/ChatMessage';
 
@@ -20,7 +21,7 @@ export async function listChatShareTargets(): Promise<ChatShareTarget[]> {
   const [assistants, groups] = await Promise.all([getChatDetailAvailableAssistants(), listGroupChats()]);
   return [
     ...assistants.filter((assistant) => !assistant.isBlocked).map((assistant): ChatShareTarget => ({
-      kind: 'direct', id: assistant.id, name: assistant.name, aiConfig: assistant,
+      kind: 'direct', id: assistant.id, name: getAssistantDisplayName(assistant), aiConfig: assistant,
     })),
     ...groups.map((group): ChatShareTarget => ({ kind: 'group', id: group.id, name: group.name })),
   ];
@@ -30,6 +31,7 @@ export async function createChatShareSnapshot(source: { sessionId: string; name:
   if (!anchorMessageIds.length || anchorMessageIds.length > MAX_CHAT_SELECTION_UNITS) throw new Error(`请选择 1 至 ${MAX_CHAT_SELECTION_UNITS} 条消息`);
   const [assistants, user] = await Promise.all([getChatDetailAvailableAssistants(), getChatDetailCurrentUser()]);
   const directory = new Map(assistants.map((assistant) => [assistant.agentId, assistant]));
+  const publicMembers = assistants.map((assistant) => ({ aiAssistantId: assistant.id, name: assistant.name }));
   const sourceAssistant = assistants.find((assistant) => assistant.id === source.assistantId);
   const repository = getChatMessageRuntimeDependencies().messages;
   const { messages, count } = await databaseCoordinator.transaction(
@@ -54,7 +56,8 @@ export async function createChatShareSnapshot(source: { sessionId: string; name:
     const shared = getMessageSharedRecord(message);
     if (shared) {
       // 再次分享保留原作者，避免把整份历史误标为转发者本人说的话。
-      if (message.text.trim()) entries.push({ author: { kind: 'user', name: metadata?.groupChat?.actorName ?? user.name, agentId: null }, createdAt: message.createdAt, kind: 'speech', text: message.text, attachments: [], sticker: null });
+      if (message.text.trim()) entries.push({ author: { kind: 'user', name: metadata?.groupChat?.actorName ?? user.name, agentId: null }, createdAt: message.createdAt, kind: 'speech', text: message.text,
+        modelText: buildGroupMentionModelText(message.text, message, publicMembers), attachments: [], sticker: null });
       entries.push(...shared.entries);
       continue;
     }
@@ -68,9 +71,13 @@ export async function createChatShareSnapshot(source: { sessionId: string; name:
     // 只转发可见工具状态，不泄露原始工具参数、返回值与私有思考。
     if (isTool && !toolStatus) continue;
     const text = isTool ? toolStatus!.displayText : `${message.replyToText ? `[引用：${message.replyToText}]\n` : ''}${getMessageVoice(message) ? '[语音转写]\n' : ''}${message.text}`;
+    const modelText = isTool ? toolStatus!.displayText : [
+      buildReplyQuoteModelText(message),
+      `${getMessageVoice(message) ? '[语音转写]\n' : ''}${buildGroupMentionModelText(message.text, message, publicMembers)}`,
+    ].filter(Boolean).join('\n');
     const attachments = getMessageAttachments(message).map((attachment) => ({ ...attachment, id: `share:${message.id}:${attachment.id}` }));
     const sticker = getMessageSticker(message);
-    if (text.trim() || attachments.length || sticker) entries.push({ author, createdAt: message.createdAt, kind: isTool ? 'tool_status' : 'speech', text, attachments, sticker });
+    if (text.trim() || attachments.length || sticker) entries.push({ author, createdAt: message.createdAt, kind: isTool ? 'tool_status' : 'speech', text, modelText, attachments, sticker });
   }
   if (!entries.length) throw new Error('所选消息没有可分享的正文');
   // 与来源对象脱离；预览与发送消费同一份快照。

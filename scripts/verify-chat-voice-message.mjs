@@ -386,7 +386,8 @@ const baseParams = {
 function loadChatMessageMetadataModule() {
   return loadTypeScriptModule(
     'src/features/chat/messages/domain/chatMessageMetadata.ts',
-    { './ChatSticker': { buildStickerMessagePreviewText: () => '[表情包]' } },
+    { './ChatSticker': { buildStickerMessagePreviewText: () => '[表情包]' },
+      './SharedChatRecord': loadTypeScriptModule('src/features/chat/messages/domain/SharedChatRecord.ts', {}) },
   );
 }
 

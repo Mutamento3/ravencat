@@ -216,7 +216,7 @@ const sources = [
 ];
 for (const source of sources) {
   const original = { id: 700, text: source.kind === 'image' || source.kind === 'sticker' ? '' : '引用时的正文', metadataJson: JSON.stringify(source) };
-  const target = metadata.createChatReplyTarget(original);
+  const target = metadata.createChatReplyTarget(original, []);
   assert.ok(target.text, '纯媒体引用草稿必须有可见摘要');
   original.text = '后来改写的正文';
   const send = { sessionId: 's1', text: '看看这个', replyToId: target.id, replyToText: target.text, replyQuote: target.quote,

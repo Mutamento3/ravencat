@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   SPEECH_PROVIDERS,
@@ -11,7 +11,7 @@ import {
   type SpeechKind,
   type SpeechProviderId,
 } from '@features/speech';
-import { Button, DropdownField, InputField, ToggleField, showAppDialog } from '@shared/ui';
+import { KeyboardAvoidingContainer, Button, DropdownField, InputField, ToggleField, showAppDialog } from '@shared/ui';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import { useTheme } from '@shared/theme';
 import { useAutoSaveDraft, useAutoSaveNavigation } from '@shared/ui/useAutoSaveDraft';
@@ -196,7 +196,7 @@ export default function SpeechModelEditScreen({
       style={{ flex: 1, backgroundColor: theme.colors.background.app }}
       edges={['top', 'left', 'right']}
     >
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+      <KeyboardAvoidingContainer style={{ flex: 1 }}>
         <NavigationHeader
           title={`${modelId ? '编辑' : '新建'}${kind === 'tts' ? '语音合成' : '实时语音识别'}`}
           onGoBack={back}
@@ -412,7 +412,7 @@ export default function SpeechModelEditScreen({
           ) : null}
           {modelId ? <Button title="删除配置" variant="danger" onPress={remove} /> : null}
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingContainer>
     </SafeAreaView>
   );
 }

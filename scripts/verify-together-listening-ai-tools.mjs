@@ -75,6 +75,7 @@ function harness({
   currentHostAIId = 'host-a',
   initial = [],
   projectionFails = false,
+  currentLyric = null,
 } = {}) {
   let rows = [...initial];
   let nextId = 1;
@@ -112,6 +113,7 @@ function harness({
     generateId: () => `activity-${nextId++}`,
     nowEpochMs: () => 100,
     observeNetEasePlayback: async () => currentObservation,
+    readCurrentNetEaseLyric: async () => currentLyric,
     getCurrentHostAIId: async () => hostAIId,
     resolveSystemPresentationAIIdentity: async () => ({ name: 'Host', avatar: null }),
   });
@@ -140,9 +142,19 @@ function activity(phase, endReason = null) {
     activityId: 'activity-1',
     phase: 'pending_user_response',
     projectionStatus: 'projected',
+    currentLyric: null,
   });
   assert.equal(state.rows().length, 1);
   assert.equal(state.projections().at(-1)?.phase, 'pending_user_response');
+}
+{
+  const currentLyric = { text: '当前歌曲正在播的这一句', startTimeMs: 20_000, positionMs: 21_000 };
+  harness({ currentLyric });
+  const invitation = await inviteTool.execute({}, context);
+  assert.deepEqual(invitation.data.currentLyric, currentLyric, 'AI 发起邀请时即获得当前一句');
+  harness({ currentLyric, initial: [activity('pending_ai_response')] });
+  const accepted = await respondTool.execute({ decision: 'accept' }, context);
+  assert.deepEqual(accepted.data.currentLyric, currentLyric, '接受邀请当轮的工具续轮立即获得当前一句');
 }
 {
   const state = harness({ projectionFails: true });

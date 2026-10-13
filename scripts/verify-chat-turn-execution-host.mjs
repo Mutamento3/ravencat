@@ -400,6 +400,10 @@ function createCoordinator(fakes) {
       'const AppState = globalThis.__fakeAppState;',
     )
     .replace(
+      /import\s*\{[^}]*\}\s*from\s*['"]@features\/assistants['"];/,
+      'const getAIAssistantById = async () => null; const getAssistantDisplayName = (assistant) => assistant.nickname ?? assistant.name;',
+    )
+    .replace(
       /import\s*\{[\s\S]*?\}\s*from\s*['"]@features\/chat['"];/,
       `const conversationKeyOfDirect = (aiId) => 'ai:' + aiId;
 const conversationKeyOfGroup = (groupId) => 'group:' + groupId;

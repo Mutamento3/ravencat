@@ -1,9 +1,9 @@
 /** 摘要编辑拥有独立路由草稿，保存后返回原摘要列表。 */
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
-import { NavigationHeader, useBusyBackHandler, showAppDialog } from '@shared/ui';
+import { KeyboardAvoidingContainer, NavigationHeader, useBusyBackHandler, showAppDialog } from '@shared/ui';
 import { createChatSummary, deleteChatSummary, editChatSummary, getChatSummaryContext } from '../application/ChatSummary';
 import { createChatSummaryStyles } from './chatSummaryStyles';
 import type { ChatSummaryTask } from '../domain/ChatSummaryRepository';
@@ -45,7 +45,7 @@ export default function ChatSummaryEditorScreen({ conversationId, segmentId, onB
     finally { setBusy(false); }
   };
   if (level === 'secondary' && !loading && !error) return <ChatSecondarySummaryScreen conversationId={conversationId} onBack={onBack} onEditSource={onEditSource} />;
-  return <SafeAreaView style={styles.screen}><KeyboardAvoidingView style={styles.screen} behavior="height">
+  return <SafeAreaView style={styles.screen}><KeyboardAvoidingContainer style={styles.screen}>
     <NavigationHeader title={editing ? '编辑摘要' : '新增摘要'} onGoBack={() => { if (!busy) onBack(); }} rightButton={<Pressable disabled={loading || !!error || busy || !content.trim()} onPress={() => { void run(() => editing ? editChatSummary(conversationId, segmentId!, content) : createChatSummary(conversationId, content)); }}><Text style={styles.action}>{busy ? '保存中' : '保存'}</Text></Pressable>} />
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
       {loading ? <ActivityIndicator color={theme.colors.brand.primary} /> : error ? <Text style={styles.danger}>{error}</Text> : <>
@@ -58,5 +58,5 @@ export default function ChatSummaryEditorScreen({ conversationId, segmentId, onB
           {!task && editing && <Text style={styles.meta}>这条摘要没有调用用量记录（手动记录或旧版本生成）。</Text>}
       </>}
     </ScrollView>
-  </KeyboardAvoidingView></SafeAreaView>;
+  </KeyboardAvoidingContainer></SafeAreaView>;
 }

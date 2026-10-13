@@ -22,6 +22,10 @@ const { AutoSaveDraftEditor } = load('src/shared/ui/AutoSaveDraftEditor.ts');
 const chatSettingsDraft = load('src/features/chat/presentation/conversation/chatSettingsDraft.ts', {
   '@shared/ui/draftValidation': load('src/shared/ui/draftValidation.ts'),
 });
+assert.deepEqual(chatSettingsDraft.parseChatSettingsDraft({privateSecondary:'0',groupSecondary:'1000'},['privateSecondary','groupSecondary']).patch,
+  {privateContextSecondaryLimit:0,groupContextSecondaryLimit:1000},'客条数允许0与高于主条数，不增加大小关系限制');
+assert.ok(chatSettingsDraft.parseChatSettingsDraft({privatePrimary:'0'},['privatePrimary']).errors.privatePrimary);
+assert.ok(chatSettingsDraft.parseChatSettingsDraft({groupSecondary:'-1'},['groupSecondary']).errors.groupSecondary);
 const tick = async () => { for (let count = 0; count < 30; count++) await Promise.resolve(); };
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 
@@ -172,6 +176,7 @@ try {
     'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
     '@shared/ui/NavigationHeader': { default: 'NavigationHeader' },
     '@shared/ui': { AIInfoCard: 'AIInfoCard', BackgroundPickerCard: 'BackgroundPickerCard', InputField: 'InputField', ToggleField: 'ToggleField' },
+    '@features/assistants': { ContextLimitsApply: 'ContextLimitsApply' },
     '@shared/ui/AutoSaveErrors': { AutoSaveErrors: 'AutoSaveErrors' },
     './useChatSettings': { default: () => tokenPage.render() },
     './chatSettingsStyles': { createStyles: () => ({}) },

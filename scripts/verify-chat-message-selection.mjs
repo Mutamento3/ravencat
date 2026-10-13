@@ -66,7 +66,7 @@ const executor = {
 };
 const persistence = { databaseCoordinator: { openTaskExecutor: () => executor } };
 const domain = 'src/features/chat/messages/domain/';
-const metadata = load(`${domain}chatMessageMetadata.ts`, { './ChatSticker': load(`${domain}ChatSticker.ts`) });
+const metadata = load(`${domain}chatMessageMetadata.ts`, { './ChatSticker': load(`${domain}ChatSticker.ts`), './SharedChatRecord': load(`${domain}SharedChatRecord.ts`) });
 const selectionPolicy = load(`${domain}ChatMessageSelection.ts`, { './chatMessageMetadata': metadata });
 const { MessageRepository } = load('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts', {
   '@platform/persistence': persistence,
@@ -79,7 +79,7 @@ const { GroupChatRepository } = load('src/features/chat/group/infrastructure/SQL
 });
 const messages = new MessageRepository();
 const groups = new GroupChatRepository();
-const reloads = [];
+const deletions = [];
 const released = [];
 const invalidated = [];
 const { deleteChatSelection } = load('src/features/chat/messages/application/DeleteChatSelection.ts', {
@@ -89,7 +89,7 @@ const { deleteChatSelection } = load('src/features/chat/messages/application/Del
   '../../group/application/ChatGroupRuntime': { getChatGroupRuntimeDependencies: () => ({ groups }) },
   '../domain/ChatMessageSelection': selectionPolicy,
   '../domain/chatMessageMetadata': metadata,
-  '../events/ChatEvents': { emitChatMessagesReloadRequested: (id) => reloads.push(id) },
+  '../events/ChatEvents': { emitChatMessagesDeleted: (sessionId, ids) => deletions.push({ sessionId, ids: [...ids] }) },
 });
 const time = '2026-10-09T08:00:00.000Z';
 function insert(session, text, { sender = 'user', run = null, logical = null, agent = null, metadata: meta = null } = {}) {
@@ -136,7 +136,7 @@ assert.deepEqual([...ids].sort((a, b) => a - b), [user, reasoning, preamble, too
 assert.equal((await messages.getMessageById(keep)).text, '保留用户消息');
 assert.equal((await messages.getMessageById(businessCard)).text, '一起听已发出邀请', '独立业务卡片不属于 canonical 回复删除范围');
 assert.deepEqual(released.at(-1), ['image-a']);
-assert.deepEqual(reloads, ['single']);
+assert.deepEqual(deletions, [{ sessionId: 'single', ids: [...ids] }], '提交后发布实际联删身份');
 assert.deepEqual(invalidated, ['single']);
 const releaseCount = released.length;
 assert.deepEqual(await deleteChatSelection('single', [answer]), [], '已删除轮次不会复活');
@@ -174,11 +174,11 @@ session('rollback');
 const rollbackUser = insert('rollback', '保留一');
 const rollbackAI = insert('rollback', '保留二', { sender: 'assistant', run: 'rollback-run' });
 db.exec("CREATE TRIGGER reject_preview BEFORE UPDATE ON sessions WHEN NEW.id = 'rollback' BEGIN SELECT RAISE(ABORT, 'preview rejected'); END");
-const beforeFailure = [reloads.length, released.length, invalidated.length];
+const beforeFailure = [deletions.length, released.length, invalidated.length];
 await assert.rejects(deleteChatSelection('rollback', [rollbackUser, rollbackAI]), /preview rejected/u);
 assert.ok(await messages.getMessageById(rollbackUser));
 assert.ok(await messages.getMessageById(rollbackAI));
-assert.deepEqual([reloads.length, released.length, invalidated.length], beforeFailure);
+assert.deepEqual([deletions.length, released.length, invalidated.length], beforeFailure);
 await assert.rejects(deleteChatSelection('single', [rollbackUser]), /所选消息已变化/u, '不能跨会话删除');
 db.exec('DROP TRIGGER reject_preview');
 

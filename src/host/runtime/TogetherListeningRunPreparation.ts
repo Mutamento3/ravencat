@@ -7,6 +7,7 @@
 import {
   captureTogetherListeningRuntimeSnapshot,
   reconcileTogetherListeningRuntime,
+  readTogetherListeningCurrentLyric,
   type TogetherListeningRuntimeSnapshot,
 } from '@features/togetherListening';
 import type {
@@ -38,6 +39,7 @@ export async function prepareTogetherListeningHostModelRun(
   if (
     !input.isHostAI
     || (input.scenario !== 'chat.private_reply'
+      && input.scenario !== 'chat.group_member_reply'
       && input.scenario !== 'raven_cat.ai_schedule_trigger')
   ) {
     return base;
@@ -47,10 +49,13 @@ export async function prepareTogetherListeningHostModelRun(
   if (snapshot.currentHostAiId !== input.currentAiId) {
     return base;
   }
+  const currentLyric = snapshot.activity?.hostAiId === input.currentAiId
+    ? await readTogetherListeningCurrentLyric(snapshot.netease, snapshot.capturedAtEpochMs)
+    : null;
   return {
     ...base,
     additionalPromptBlocks: [createTogetherListeningRuntimePromptBlock({
-      snapshot,
+      snapshot: { ...snapshot, currentLyric },
       currentAiId: input.currentAiId,
       scenario: input.scenario,
     })],

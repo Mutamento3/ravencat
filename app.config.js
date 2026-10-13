@@ -4,6 +4,10 @@ module.exports = ({ config }) => {
   // 根据构建环境决定应用名称和包名
   const isDevBuild = process.env.EAS_BUILD_PROFILE === 'development';
   const appName = isDevBuild ? 'KimiPhone' : 'RavenCat';
+  const developmentIcon = {
+    foregroundImage: "./assets/adaptive-icon.png",
+    backgroundColor: "#FFFFFF"
+  };
   // EAS 项目关联属于开发者账号，公开仓库不固定到维护者的项目。
   const easProjectId = process.env.EAS_PROJECT_ID;
   const easProjectOwner = process.env.EAS_PROJECT_OWNER;
@@ -24,9 +28,9 @@ module.exports = ({ config }) => {
       package: isDevBuild 
         ? "com.skylucky.kimiphone.dev"  // Dev Client 包名
         : "com.skylucky.kimiphone",       // Release 包名
-      adaptiveIcon: {
-        foregroundImage: isDevBuild ? "./assets/adaptive-icon.png" : "./assets/icon.png",
-        backgroundColor: isDevBuild ? "#FFFFFF" : "#000000"
+      adaptiveIcon: isDevBuild ? developmentIcon : {
+        foregroundImage: "./assets/icon.png",
+        backgroundColor: "#000000"
       },
       edgeToEdgeEnabled: true,
       permissions: [
@@ -42,6 +46,7 @@ module.exports = ({ config }) => {
     },
     plugins: [
       "./plugins/withAppVersion",
+      ["./plugins/withAndroidDevelopmentIcon", developmentIcon],
       "./plugins/withAndroidReleaseSigning",
       "./plugins/withFixedFontScale",
       "expo-router",

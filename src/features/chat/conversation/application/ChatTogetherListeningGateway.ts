@@ -37,7 +37,9 @@ export interface ChatTogetherListeningContext {
   aiConfig: AIAssistantConfig;
 }
 
-export interface ChatTogetherListeningActivityActionParams extends ChatTogetherListeningContext {
+export interface ChatTogetherListeningActivityActionParams {
+  chatSessionId: string;
+  aiConfig: Pick<AIAssistantConfig, 'id' | 'isHostAI'>;
   activityId: string;
 }
 

@@ -12,6 +12,7 @@ export interface ContextLimitsDraft {
 
 export interface ChatSettingsDraft extends ContextLimitsDraft {
   name: string;
+  nickname: string;
   systemPrompt: string;
   allowMultipleBubbles: boolean;
   showTokenUsage: boolean;
@@ -20,6 +21,7 @@ export interface ChatSettingsDraft extends ContextLimitsDraft {
 export function getChatSettingsDraft(ai: AIProfile): ChatSettingsDraft {
   return {
     name: ai.name,
+    nickname: ai.nickname ?? '',
     systemPrompt: ai.systemPrompt ?? '',
     allowMultipleBubbles: ai.allowMultipleBubbles,
     showTokenUsage: ai.showTokenUsage,
@@ -44,6 +46,12 @@ export function parseChatSettingsDraft(
       const name = draft.name.trim();
       if (!name) { result.errors.name = 'AI 名称不能为空；这次修改尚未保存。'; continue; }
       result.patch.name = name;
+    } else if (field === 'nickname') {
+      const nickname = draft.nickname.trim();
+      if (Array.from(nickname).length > 20 || /[\r\n]/.test(nickname)) {
+        result.errors.nickname = '昵称需为单行，最多20个字符；这次修改尚未保存。'; continue;
+      }
+      result.patch.nickname = nickname || null;
     } else if (field === 'systemPrompt') {
       result.patch.systemPrompt = draft.systemPrompt;
     } else if (field === 'allowMultipleBubbles') {
@@ -51,7 +59,8 @@ export function parseChatSettingsDraft(
     } else if (field === 'showTokenUsage') {
       result.patch.showTokenUsage = draft.showTokenUsage;
     } else {
-      const parsed = readDraftInteger(draft[field], '上下文条数');
+      const guest = field === 'privateSecondary' || field === 'groupSecondary';
+      const parsed = readDraftInteger(draft[field], guest ? '客条数（0关闭整类背景）' : '主条数', false, guest ? 0 : 1);
       if (parsed.error) { result.errors[field] = parsed.error; continue; }
       result.patch[contexts[field]] = parsed.value;
     }

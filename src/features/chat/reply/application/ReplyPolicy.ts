@@ -34,7 +34,6 @@ export function canUseToolsInRuntimeContext(
   return Boolean(
     aiConfig.enableTools &&
     (runtimeContext.allowedToolNames?.length || 0) > 0 &&
-    !runtimeContext.groupChat &&
     !checkRuntimeContextContainsImage(runtimeContext)
   );
 }

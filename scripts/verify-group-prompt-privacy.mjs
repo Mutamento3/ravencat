@@ -84,12 +84,23 @@ assert.ok(confidentialityBlock.content.includes('橙子'), '保密规则正文�
 assert.ok(!confidentialityBlock.content.includes('${userDisplayName}'), '用户显示名占位符必须被替换');
 
 const chatMetadata = loadTypeScriptModule('src/features/chat/messages/domain/chatMessageMetadata.ts', {
+  './SharedChatRecord': loadTypeScriptModule('src/features/chat/messages/domain/SharedChatRecord.ts', {}),
   './ChatSticker': loadTypeScriptModule('src/features/chat/messages/domain/ChatSticker.ts', {}),
 });
 const { PromptHistoryBuilder } = loadTypeScriptModule(
   'src/host/prompt/PromptHistoryBuilder.ts',
   {
     '@features/chat': {
+      getChatSummaryContext: async () => ({
+        settings: { generationEnabled: false, fixedMessageId: null }, contextSegments: [],
+        raw: globalThis.__GROUP_PROMPT_TIMELINE__.map((message) => {
+          const metadata = JSON.parse(message.metadataJson || '{}');
+          const member = groupChat.members.find((item) => item.agentId === message.agentId || item.aiAssistantId === metadata.actorAIId);
+          return { messageId: message.id, kind: message.senderType === 'system' ? 'app_event' : 'dialogue',
+            timestamp: message.createdAt, logicalMessageId: message.logicalMessageId ?? null, message,
+            actor: { name: metadata.actorName ?? member?.name ?? 'AI' }, groupPlanId: metadata.groupChat?.planId };
+        }),
+      }),
       getMessageSharedRecord: chatMetadata.getMessageSharedRecord,
       buildChatSystemEventModelText: chatMetadata.buildChatSystemEventModelText,
       buildReplyQuoteModelText: chatMetadata.buildReplyQuoteModelText,
@@ -112,6 +123,7 @@ const { PromptHistoryBuilder } = loadTypeScriptModule(
           : { displayText: message.text, modelInput: message.text };
       },
       buildSessionPreviewTextFromMessage: (message) => message.text,
+      buildGroupMentionModelText: (text) => text,
       getMessageAttachments: (message) => JSON.parse(message.metadataJson || '{}').attachments || [],
       isCallStatusMessageMetadata: (metadata) => metadata?.type === 'callStatus',
       isTogetherListeningMessageMetadata: (metadata) => metadata?.type === 'togetherListening',
@@ -429,6 +441,46 @@ assert.deepEqual(
   ['user', 'user', 'assistant', 'user'],
   '最终 fake provider 必须收到 PromptPack 的 perspective role',
 );
+
+// 用真实编译器与模型网关检查最终请求，防止群身份说明与已提供的函数参数相互冲突。
+const budget = loadTypeScriptModule('src/host/prompt/tokenBudget.ts', { '@shared/prompt': { estimateTextTokens: (text) => text.length } });
+const metadata = loadTypeScriptModule('src/host/prompt/compiler/promptBlockMetadata.ts', {});
+const { PromptPackCompiler } = loadTypeScriptModule('src/host/prompt/compiler/PromptPackCompiler.ts', {
+  '../tokenBudget': budget, './promptBlockMetadata': metadata,
+});
+const { getSystemPromptPreset } = loadTypeScriptModule('src/host/prompt/compiler/systemPromptPresets.ts', {});
+const prompt = new PromptPackCompiler().compile({
+  scenario: 'chat.group_member_reply', blocks: [factory.createFoundationBlock({ model: 'test' }, '橙子'), contextBlock, confidentialityBlock,
+    { key: 'current_input', title: '当前输入', content: '请查一下天气。', required: true, status: 'ready', placement: 'input' }],
+  recentMessages: perspectiveHistory, currentInput: { role: 'user', content: '请查一下天气。' },
+  preset: getSystemPromptPreset('chat.group_member_reply'),
+});
+const modelRequests = [];
+const response = { success: true, text: '回复', reasoningText: '', finishReason: 'stop', messageId: 'tool-policy-test',
+  promptTokens: 1, completionTokens: 1, totalTokens: 2, error: null, toolCalls: null, isToolCall: false };
+const toolGateway = new ChatAgentModelGateway({
+  client: {
+    chat: async (messages) => { modelRequests.push({ messages, tools: [] }); return response; },
+    chatWithTools: async (messages, tools) => { modelRequests.push({ messages, tools }); return response; },
+  },
+  initialMessages: [{ role: 'system', content: prompt.systemPrompt }, ...prompt.modelMessages],
+  diagnosticContext: { sessionId: groupChat.groupId, runId: 'tool-policy-test', correlationId: 'tool-policy-test' },
+});
+const search = { name: 'web_search', description: '搜索天气信息', inputSchema: {
+  type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false,
+} };
+for (const tools of [[], [search]]) {
+  await toolGateway.runTurn({ task: {}, history: [], tools, transport: 'complete', signal: new AbortController().signal });
+  const request = modelRequests.at(-1);
+  const instructions = request.messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n');
+  assert.doesNotMatch(instructions, /群聊中工具关闭|关闭群聊工具|群聊不支持工具调用/, '群身份上下文不能否定实际工具暴露');
+  assert.doesNotMatch(instructions, /不得输出 JSON、ID、alias/, '对外正文格式不能笼统禁止函数参数');
+  assert.match(instructions, /function schema/);
+  assert.match(instructions, /不得.*视频通话/);
+  assert.match(instructions, /不得.*泄露隐藏上下文/);
+  assert.equal(request.tools.length, tools.length, '提示词不得增加或移除实际工具授权');
+}
+assert.deepEqual(modelRequests.at(-1).tools[0].function.parameters, search.inputSchema);
 
 // 普通私聊仍保持真人 user / AI assistant 的既有语义。
 globalThis.__GROUP_PROMPT_TIMELINE__ = [

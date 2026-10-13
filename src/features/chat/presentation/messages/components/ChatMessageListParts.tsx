@@ -359,10 +359,9 @@ export const TouchableMessageBubble = memo(function TouchableMessageBubble({
     isAssistantOutputTail &&
     msg.status === 'sent';
   const inlineActionsStyle = isMoonKimiTheme(theme) ? { marginLeft: theme.spacing.lg, width: '90%' as const } : undefined;
-  const shouldBypassTouchWrapper = (
-    msg.senderType === 'reasoning' &&
-    interactionProfile.reasoningSurface === 'official-replica'
-  ) || Boolean(processCard && interactionProfile.toolStatusSurface === 'official-replica');
+  // 思维链文字自己拥有原生选择手势；外层 Touchable 不得抢占长按或嵌套滚动。
+  const shouldBypassTouchWrapper = msg.senderType === 'reasoning'
+    || Boolean(processCard && interactionProfile.toolStatusSurface === 'official-replica');
 
   const handlePressIn = useCallback((event: any) => {
     if (!shouldHandleLongPress) {
@@ -468,8 +467,6 @@ export const TouchableMessageBubble = memo(function TouchableMessageBubble({
     </View>
   );
 
-  // Official-replica process cards may contain their own ScrollView; wrapping them
-  // in TouchableWithoutFeedback can steal Android nested-scroll responders.
   if (shouldBypassTouchWrapper) {
     return content;
   }

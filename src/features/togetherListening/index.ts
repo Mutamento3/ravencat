@@ -55,6 +55,7 @@ export type {
 export {
   buildUserRuntimeStatusItems,
   captureTogetherListeningRuntimeSnapshot,
+  readTogetherListeningCurrentLyric,
   isExplicitTogetherListeningMediaLoss,
   reconcileTogetherListeningRuntime,
   reconcileTogetherListeningSystemPresentation,
@@ -72,3 +73,4 @@ export type {
   TogetherListeningInitiator,
   TogetherListeningPhase,
 } from './domain/TogetherListeningActivity';
+export type { TogetherListeningCurrentLyric } from './application/TogetherListeningRuntime';

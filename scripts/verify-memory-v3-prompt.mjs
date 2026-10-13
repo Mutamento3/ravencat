@@ -47,7 +47,7 @@ mocks.set('@features/moments', {});
 const metadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts');
 const { projectChatContextMessage } = load('src/features/chat/summary/domain/ChatContext.ts');
 const { buildConversationTimeline } = load('src/features/chat/summary/domain/ChatSummaryTimeline.ts');
-mocks.set('@features/chat', { ...metadata, getChatSummaryContext: async (_conversation, protectedIds) => ({
+mocks.set('@features/chat', { ...metadata, getChatBackgroundContexts: async () => [], getChatSummaryContext: async (_conversation, protectedIds = []) => ({
   segments, pendingCalls, raw: remaining.filter((item) => !protectedIds.includes(item.messageId)),
   settings: summarySettings, contextSegments: summarySettings.injectEnabled ? contextSegments ?? segments : [],
   timeline: buildConversationTimeline(remaining.filter((item) => !protectedIds.includes(item.messageId)), pendingCalls),
@@ -235,10 +235,12 @@ contextSegments = undefined;
 // 同一通话气泡的终态通过 patched 发布，前台摘要队列必须能由它唤起。
 const scheduledSummaries = [];
 let summaryBus;
+let auxiliaryChanged;
+mocks.set('@features/assistants', { subscribeAuxiliaryModelsChanged: listener => { auxiliaryChanged = listener; return () => {}; } });
 let summaryRuns = 0;
 let processSummaryHook = async () => false;
 let summaryChanged;
-mocks.set('@features/chat', { ...mocks.get('@features/chat'), subscribeChatSummaryChanged: listener => { summaryChanged=listener; return()=>{}; } });
+Object.assign(mocks.get('@features/chat'), { subscribeChatSummaryChanged: listener => { summaryChanged=listener; return()=>{}; } });
 mocks.set('react-native', { InteractionManager: { runAfterInteractions(callback) {
   scheduledSummaries.push(callback); return { cancel() {} };
 } } });
@@ -302,6 +304,7 @@ mocks.set('@features/prompting', {
     userPrompts: [{ id: 'static', name: '长期片段', content: '保持不变的长期静态提示词' }] }),
 });
 mocks.set('./compiler', load('src/host/prompt/compiler/PromptPackCompiler.ts'));
+mocks.set('@features/profile', { getCurrentUserProfile: async () => ({ name: '枫渡' }) });
 const resolved = load('src/host/prompt/ResolvedPromptPackAssembler.ts');
 const summaryPacks = [];
 const summaryParams = [];
@@ -310,7 +313,7 @@ mocks.set('@host/prompt', { assembleResolvedSummaryPromptPack: async (...args) =
   const pack = await resolved.assembleResolvedSummaryPromptPack(...args); summaryPacks.push(pack); return pack;
 } });
 mocks.set('@shared/aiTools', { ToolContext: load('src/shared/aiTools/ToolContext.ts').ToolContext });
-mocks.set('@features/profile', { userProfileRepository: { get: async () => ({ name: '枫渡' }) } });
+mocks.set('@features/profile', { getCurrentUserProfile: async () => ({ name: '枫渡' }), userProfileRepository: { get: async () => ({ name: '枫渡' }) } });
 mocks.set('@features/protocol', { protocolRepository: {} });
 mocks.set('./agent/createAgentToolRegistry', {
   resolveAllowedToolNames: async () => ['search_chat_summaries'], getRuntimeAllowedToolNamesForAI: () => ['search_chat_summaries'],
@@ -323,9 +326,12 @@ const assistants = {
   a: { id: 'a', name: '小鸦', systemPrompt: '你是小鸦，用温柔而直接的语气与枫渡相处。', apiBaseUrl: 'https://example.invalid', apiKey: 'test', model: 'chat', maxTokens: 2000 },
   b: { id: 'b', name: '小月', systemPrompt: '你是小月，口吻沉静，珍惜与枫渡的共同经历。', apiBaseUrl: 'https://example.invalid', apiKey: 'test', model: 'chat', maxTokens: 2000 },
 };
-mocks.set('@features/assistants', { aiAssistantRepository: { getById: async (id) => assistants[id] } });
+let selectedModel = { baseURL: 'https://aux.invalid', apiKey: 'aux-key', model: 'aux-summary', maxTokens: 7000, temperature: 0, topP: null };
+mocks.set('@features/assistants', { aiAssistantRepository: { getById: async (id) => assistants[id] },
+  resolveAuxiliaryModel: async () => selectedModel });
 const requests = [];
-let modelResponse={ success: true, usageReported:true, promptTokens:100,completionTokens:20,totalTokens:120,cachedTokens:30,finishReason:'stop', text: '{"content":"我们聊清了复习计划，我也替他松了口气。"}' };
+const plainSummary = '我们约好"明天"复习。\n我负责整理 {重点}。';
+let modelResponse={ success: true, usageReported:true, promptTokens:100,completionTokens:20,totalTokens:120,cachedTokens:30,finishReason:'stop', text: '  ' + plainSummary + '\n' };
 let modelReply;
 const requestConfigs=[],requestOptions=[];
 mocks.set('@platform/ai', { createAIClient: config => {requestConfigs.push(config);return ({ chat: async (messages,options) => {
@@ -337,6 +343,8 @@ mocks.set('@features/chat/composition', {
   configureChatSummaryRuntime(runtime) { summaryRuntime = runtime; }, SQLiteChatSummaryRepository: class {},
   ChatSummaryGenerationError:load('src/features/chat/summary/domain/ChatSummaryRepository.ts').ChatSummaryGenerationError,
   sessionRepository: { getSession: async (id) => ({ aiAssistantId: id }) },
+  groupChatRepository: { getById: async (id) => id === 'group' ? { group: { id, name: '测试群' }, adminConfig: {
+    model: 'admin-summary', apiKey: 'admin-key', apiBaseUrl: 'https://admin.invalid', maxTokens: 3000, systemPrompt: '不应进入摘要的管理员调度' } } : null },
   createChatSummaryPromptBlock: summaryPrompt.createChatSummaryPromptBlock,
   createSecondaryChatSummaryPromptBlock: summaryPrompt.createSecondaryChatSummaryPromptBlock,
   buildChatSummaryModelInput: summaryApplication.buildChatSummaryModelInput,
@@ -344,11 +352,12 @@ mocks.set('@features/chat/composition', {
 mocks.set('../runtime/ChatSummaryQueueCoordinator', { configureChatSummaryQueue() {} });
 load('src/host/composition/configureChatSummaryRuntime.ts').configureChatSummary();
 const diagnostics=[]; const report=async value=>{diagnostics.push(value);};
-const requestSettings={requestTimeoutSeconds:300,maxOutputTokens:null};
+const requestSettings={requestTimeoutSeconds:300,maxOutputTokens:null,modelConfigId:null};
 const summaryClaim = { conversationId: 'a', previous: [], timeZone: 'Asia/Shanghai', calls: [],
   part: { index: 1, total: 1 }, earlierAdditionsReadOnly: [],
   messages: [{ source: 'chat', speaker: 'user', timestamp: '2026-10-04T04:00:00.000Z', content: '我很担心复习进度，想一起定个计划。' }] };
-await summaryRuntime.generateAddition(summaryClaim, new AbortController().signal,report,requestSettings);
+assert.equal(await summaryRuntime.generateAddition(summaryClaim, new AbortController().signal,report,requestSettings), plainSummary,
+  '一级直接返回去除首尾空白的纯正文，保留引号与换行');
 assert.ok(requests[0][0].content.includes(assistants.a.systemPrompt), '普通聊天摘要必须带所属 AI 的人设');
 assert.ok(!requests[0][0].content.includes(assistants.b.systemPrompt));
 assert.ok(!requests[0][0].content.includes(summaryClaim.messages[0].content), '历史正文不能升为 system 指令');
@@ -363,8 +372,9 @@ await summaryRuntime.generateAddition(callClaim, new AbortController().signal,re
 assert.ok(requests[1][0].content.includes(assistants.b.systemPrompt), '包含通话的摘要也必须带所属 AI 的人设');
 assert.ok(!requests[1][0].content.includes(assistants.a.systemPrompt));
 assert.equal(JSON.parse(requests[1].at(-1).content).newMessagesOnly[0].source, 'call');
-await summaryRuntime.generateSecondary({ conversationId: 'a', timeZone: 'Asia/Shanghai',
-  segments: [{ content: '六批已经形成的摘要', sourceStartAt: null, sourceEndAt: null, timeZone: 'Asia/Shanghai' }] }, new AbortController().signal,report,requestSettings);
+assert.equal(await summaryRuntime.generateSecondary({ conversationId: 'a', timeZone: 'Asia/Shanghai',
+  segments: [{ content: '六批已经形成的摘要', sourceStartAt: null, sourceEndAt: null, timeZone: 'Asia/Shanghai' }] }, new AbortController().signal,report,requestSettings), plainSummary,
+  '二级与一级使用相同的纯正文输出契约');
 assert.equal(summaryPacks[2].stableSystemPrompt, summaryPacks[0].stableSystemPrompt, '两级请求复用相同稳定前缀');
 assert.equal(summaryPacks[2].dynamicSystemPrompt, '');
 assert.deepEqual(Object.keys(JSON.parse(requests[2].at(-1).content)), ['summaries']);
@@ -378,13 +388,19 @@ await summaryRuntime.generateAddition(summaryClaim, new AbortController().signal
 assert.ok(!requests[3][0].content.includes('你是小鸦'), '未设人设的 AI 不得借用其他角色的身份');
 assert.equal(diagnostics[0].totalTokens,120);assert.equal(diagnostics[0].finishReason,'stop');
 assert.equal(requestOptions[0].allowReasoningLengthRetry,false,'摘要任务自己拥有有限重试');
-modelResponse={...modelResponse,finishReason:'length',text:'{"content":"未完成'};
+modelResponse={...modelResponse,finishReason:'length',text:'尚未完成的正文'};
 await assert.rejects(summaryRuntime.generateAddition(summaryClaim,new AbortController().signal,report,{...requestSettings,maxOutputTokens:8}),
   error=>error.failure.kind==='output_limit' && error.failure.retryable===false);
 assert.equal(requestConfigs.at(-1).maxTokens,8);assert.equal(diagnostics.at(-1).finishReason,'length');
 modelResponse={...modelResponse,finishReason:'stop',text:'',reasoningText:'只有思考'};
 await assert.rejects(summaryRuntime.generateAddition(summaryClaim,new AbortController().signal,report,requestSettings),error=>error.failure.kind==='empty_output');
 assert.equal(diagnostics.at(-1).reasoningCharacters,4);
+modelResponse={...modelResponse,text:' \n\t ',reasoningText:''};
+await assert.rejects(summaryRuntime.generateSecondary({conversationId:'a',timeZone:'Asia/Shanghai',segments:[]},new AbortController().signal,report,requestSettings),
+  error=>error.failure.kind==='empty_output','二级的纯空白输出在模型边界拒绝');
+modelResponse={...modelResponse,text:'猫'.repeat(501)};
+assert.equal(await summaryRuntime.generateAddition(summaryClaim,new AbortController().signal,report,requestSettings),modelResponse.text,
+  '超过提示词字数的非空纯正文仍完整返回');
 modelResponse={success:false,text:'',error:'credential test invalid',httpStatus:401};
 await assert.rejects(summaryRuntime.generateAddition(summaryClaim,new AbortController().signal,report,requestSettings),error=>error.failure.kind==='request' && !error.failure.retryable);
 assert.ok(!diagnostics.at(-1).serverError.includes('test'),'服务端错误中的凭据不落库');
@@ -401,6 +417,75 @@ try {
   await assert.rejects(summaryRuntime.generateAddition(summaryClaim,new AbortController().signal,report,requestSettings),error=>error===localFailure,
     '本地持久化和装配故障不分类为模型请求失败');
 } finally { packAssembler.assembleResolvedSummaryPromptPack=previousAssemble; }
+// 通用总结持续引用实际配置，专用输入不继承聊天人设或工具目录；群管理员与辅助模型规则相同。
+modelReply=undefined;modelResponse={success:true,text:'总结正文'};
+assistants.a.systemPrompt='私聊专属稳定人设';
+const auxiliarySettings={...requestSettings,modelConfigId:'selected-asset'};
+await summaryRuntime.generateAddition(summaryClaim,new AbortController().signal,report,auxiliarySettings);
+assert.equal(requestConfigs.at(-1).model,'aux-summary');assert.equal(requestConfigs.at(-1).maxTokens,7000);
+assert.equal(diagnostics.at(-1).model,'aux-summary');
+assert.ok(!requests.at(-1)[0].content.includes('私聊专属稳定人设'));
+assert.ok(!JSON.stringify(requests.at(-1)).includes('固定工具包目录'));
+selectedModel={...selectedModel,model:'edited-asset',maxTokens:9000,temperature:null};
+await summaryRuntime.generateSecondary({conversationId:'a',timeZone:'Asia/Shanghai',segments:[]},new AbortController().signal,report,auxiliarySettings);
+assert.equal(requestConfigs.at(-1).model,'edited-asset');assert.equal(requestConfigs.at(-1).maxTokens,9000,'后续任务跟随资产修改');
+await summaryRuntime.generateAddition({...summaryClaim,conversationId:'group'},new AbortController().signal,report,requestSettings);
+const groupPrompt=requests.at(-1)[0].content;
+assert.equal(requestConfigs.at(-1).model,'admin-summary');assert.equal(requestConfigs.at(-1).maxTokens,3000);
+assert.ok(groupPrompt.includes('中立叙述'));assert.ok(!groupPrompt.includes('不应进入摘要的管理员调度'));
+await summaryRuntime.generateAddition({...summaryClaim,conversationId:'group'},new AbortController().signal,report,auxiliarySettings);
+assert.equal(requests.at(-1)[0].content,groupPrompt,'群管理员和通用资产使用相同总结规则');
+assert.equal(requestConfigs.at(-1).model,'edited-asset');
+selectedModel=null;
+const beforeUnavailable=requests.length;
+await assert.rejects(summaryRuntime.generateAddition(summaryClaim,new AbortController().signal,report,auxiliarySettings),error=>error.failure.retryable===false);
+assert.equal(requests.length,beforeUnavailable,'失效选择不切换聊天模型');
+
+// 群主窗口保留当前输入、准确身份、旧摘要和未处理保护，不读后续用户输入。
+const historyBuilder=load('src/host/prompt/PromptHistoryBuilder.ts').promptHistoryBuilder;
+const groupMessages=Array.from({length:5},(_,index)=>({id:100+index,sessionId:'group-context',text:'群原文'+index,
+  isMe:index%2===0,senderType:index%2===0?'user':'assistant',status:'sent',createdAt:'2026-10-04T04:00:00.000Z',
+  metadataJson:JSON.stringify({actorAIId:index===1?'b':'a',actorName:index===1?'小月':'小鸦',groupChat:{planId:index===3?'old':'current'}})}));
+const groupRaw=groupMessages.map(message=>({...projectChatContextMessage(message,[message.createdAt,message.id,0,message.id]),message,
+  actor:{assistantId:message.isMe?null:message.id===101?'b':'a',name:message.isMe?'用户':message.id===101?'小月':'小鸦'},
+  groupPlanId:JSON.parse(message.metadataJson).groupChat.planId}));
+const oldGetContext=mocks.get('@features/chat').getChatSummaryContext;
+let groupGeneration=false;
+mocks.get('@features/chat').getChatSummaryContext=async(id,protectedIds=[])=>id==='group-context'
+  ? {raw:groupRaw,settings:{generationEnabled:groupGeneration,fixedMessageId:null},contextSegments:[{content:'群已有摘要',sourceStartAt:null,sourceEndAt:null,timeZone:'Asia/Shanghai'}]}
+  : oldGetContext(id,protectedIds);
+mocks.get('@features/chat').buildChatUserMessageModelInput=async message=>({modelInput:message.text});
+const groupParams={sessionId:'group-context',currentInput:'本轮群发言请求',aiConfig:{id:'a',agentId:'actor-a',groupContextPrimaryLimit:1},
+  runtimeContext:{groupChat:{groupId:'group-context',recentWindowLimit:1,currentAIId:'a',currentTurnUserMessageIds:[102],inputUpperBoundMessageId:102,planId:'current',members:[{aiAssistantId:'a',name:'小鸦'},{aiAssistantId:'b',name:'小月'}]}}};
+let groupHistory=await historyBuilder.loadGroupSummaryContext(groupParams);
+assert.deepEqual(groupHistory.messages.map(item=>item.sourceMessageId),[101,102]);
+assert.equal(groupHistory.messages[0].role,'user','其他AI不能投影成自己');
+assert.ok(groupHistory.messages[0].content.includes('小月'));
+assert.ok(groupHistory.messages[1].content.includes('群原文2'));
+assert.equal(groupHistory.messages.filter(item=>item.sourceMessageId===102).length,1,'当前输入只提供一次');
+assert.ok(groupHistory.summaryContent.includes('群已有摘要'));
+groupGeneration=true;
+groupHistory=await historyBuilder.loadGroupSummaryContext(groupParams);
+assert.deepEqual(groupHistory.messages.map(item=>item.sourceMessageId),[100,101,102],'摘要成功前不按主窗口丢弃未处理原文');
+mocks.get('@features/chat').getChatSummaryContext=oldGetContext;
+const oldGetBackground=mocks.get('@features/chat').getChatBackgroundContexts;
+const backgroundRequests=[];
+mocks.get('@features/chat').getChatBackgroundContexts=async (assistantId,currentConversationId,options)=>{
+  backgroundRequests.push({assistantId,currentConversationId,options});
+  return [{conversationId:'source',kind:'group',name:'背景群',timeline:[],contextSegments:[{content:'背景摘要',sourceStartAt:null,sourceEndAt:null,timeZone:'Asia/Shanghai'}]}];
+};
+const backgroundParams={sessionId:'direct',aiConfig:{id:'a',groupContextSecondaryLimit:7,privateContextSecondaryLimit:0},
+  runtimeContext:{historyUpperBound:{messageId:102,createdAt:'2026-10-04T04:00:00.000Z'}}};
+assert.ok((await historyBuilder.loadBackgroundContext(backgroundParams)).includes('背景摘要'));
+assert.equal(backgroundRequests.at(-1).options.privateLimit,0);
+assert.equal(backgroundRequests.at(-1).options.groupLimit,7);
+await historyBuilder.loadBackgroundContext({...backgroundParams,sessionId:'group-context',aiConfig:{...backgroundParams.aiConfig,privateContextSecondaryLimit:50},
+  runtimeContext:{...backgroundParams.runtimeContext,groupChat:groupParams.runtimeContext.groupChat}});
+assert.equal(backgroundRequests.at(-1).options.privateLimit,50,'群读取当前AI自己的客·单聊数值');
+assert.equal(backgroundRequests.at(-1).options.groupLimit,7,'其他群按客·群聊数值读取');
+assert.deepEqual(backgroundRequests.at(-1).options.upperBound,backgroundParams.runtimeContext.historyUpperBound);
+mocks.get('@features/chat').getChatBackgroundContexts=oldGetBackground;
+
 // 验证真实 AIClient 边界保留 HTTP 状态，并区分服务端未报告用量与实际零用量。
 const { BaseAIClient }=load('src/platform/ai/BaseAIClient.ts');
 const previousFetch=globalThis.fetch;

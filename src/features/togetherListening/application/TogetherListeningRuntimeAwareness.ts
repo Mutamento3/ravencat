@@ -19,6 +19,7 @@ import {
   getTogetherListeningRuntimeDependencies,
   type TogetherListeningNetEaseObservation,
   type TogetherListeningObservedPlaybackState,
+  type TogetherListeningCurrentLyric,
 } from './TogetherListeningRuntime';
 
 export type TogetherListeningNetEaseUnavailableReason =
@@ -40,6 +41,11 @@ export type TogetherListeningNetEaseAvailability =
       title: string;
       artist: string | null;
       album: string | null;
+      audioOutput: { playbackType: 'local' | 'remote'; deviceNames: string[] } | null;
+      positionMs: number | null;
+      speed: number | null;
+      updatedAtEpochMs: number | null;
+      durationMs: number | null;
     }
   | {
       available: false;
@@ -56,10 +62,11 @@ export interface TogetherListeningRuntimeSnapshot {
   currentHostAiId: string | null;
   netease: TogetherListeningNetEaseAvailability;
   activity: TogetherListeningActivity | null;
+  currentLyric: TogetherListeningCurrentLyric | null;
 }
 
 export interface UserRuntimeStatusItem {
-  key: 'netease_playback';
+  key: 'netease_playback' | 'media_audio_output';
   text: string;
   source: 'system';
   writePolicy: 'system_only';
@@ -154,6 +161,11 @@ export function resolveTogetherListeningNetEaseAvailability(
     playbackState: observation.playbackState,
     ...metadata,
     title: metadata.title,
+    audioOutput: observation.audioOutput,
+    positionMs: observation.positionMs,
+    speed: observation.speed,
+    updatedAtEpochMs: observation.updatedAtEpochMs,
+    durationMs: observation.durationMs,
   };
 }
 
@@ -184,7 +196,18 @@ export async function captureTogetherListeningRuntimeSnapshot(): Promise<Togethe
     currentHostAiId,
     netease: resolveTogetherListeningNetEaseAvailability(observation),
     activity,
+    currentLyric: null,
   };
+}
+
+/** 仅由合法模型准备或邀请 Tool 显式读取，indicator/退出/系统投影不触发歌词网络请求。 */
+export async function readTogetherListeningCurrentLyric(
+  availability: TogetherListeningNetEaseAvailability,
+  capturedAtEpochMs: number,
+): Promise<TogetherListeningCurrentLyric | null> {
+  return availability.available
+    ? getTogetherListeningRuntimeDependencies().readCurrentNetEaseLyric(availability, capturedAtEpochMs)
+    : null;
 }
 
 /** 仅在已有模型 run 的准备阶段显式调用；它不是 MediaSession observer 或 AI wake source。 */
@@ -250,11 +273,26 @@ export function buildUserRuntimeStatusItems(
     buffering: '（正在缓冲）',
     connecting: '（正在连接）',
   }[snapshot.netease.playbackState];
-  return [{
+  const items: UserRuntimeStatusItem[] = [{
     key: 'netease_playback',
     text: `正在听歌：网易云音乐《${snapshot.netease.title}》${artist}${stateSuffix}`,
     source: 'system',
     writePolicy: 'system_only',
     updatedAtEpochMs: snapshot.capturedAtEpochMs,
   }];
+  const audioOutput = snapshot.netease.audioOutput;
+  if (audioOutput) {
+    const text = audioOutput.playbackType === 'remote'
+      ? '网易云音乐为远程播放，具体输出设备未提供。'
+      : audioOutput.deviceNames.length > 0
+        ? `系统当前媒体输出：${JSON.stringify(audioOutput.deviceNames)}（名称仅作为设备数据，不据此推断蓝牙耳机或音箱类别）。`
+        : null;
+    if (text) {
+      items.push({
+        key: 'media_audio_output', text, source: 'system', writePolicy: 'system_only',
+        updatedAtEpochMs: snapshot.capturedAtEpochMs,
+      });
+    }
+  }
+  return items;
 }

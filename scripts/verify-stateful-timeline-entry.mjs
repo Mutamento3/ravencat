@@ -67,12 +67,19 @@ Object.defineProperty(exports, 'databaseCoordinator', {
   get: () => globalThis.__statefulTimelineFakes.databaseCoordinator,
 });
 `);
+writeRuntimeModule('src/features/chat/group/application/ChatGroupRuntime.js', `
+exports.getChatGroupRuntimeDependencies = () => ({ groups: { getById: async () => null } });
+`);
+writeRuntimeModule('src/features/chat/reply/application/ChatReplyAbort.js', `
+exports.ChatReplyRunCancelledError = class extends Error {};
+`);
 
 for (const relativePath of [
   'src/features/chat/messages/domain/MessageTimeSeparator.ts',
   'src/features/chat/messages/domain/ChatMessage.ts',
   'src/features/chat/messages/domain/MessageRepository.ts',
   'src/features/chat/messages/domain/ChatSticker.ts',
+  'src/features/chat/messages/domain/SharedChatRecord.ts',
   'src/features/chat/messages/domain/chatMessageMetadata.ts',
   'src/features/chat/messages/events/ChatEvents.ts',
   'src/features/chat/messages/application/ChatMessageRuntime.ts',
@@ -572,8 +579,7 @@ try {
   // ========================================================================
   // V1 Closeout：Together Listening 生命周期卡的真实 stateful projection
   // ========================================================================
-  // pending → active → ended 必须始终是同一行 ChatMessage，lifecycle timestamp
-  // 随 metadata 一起更新，重新读取后仍然完整。
+  // 生命周期卡始终是同一行；结束事实在结束位置追加，独立于旧卡的上下文游标。
   const createdAt = Date.parse('2026-09-06T10:00:00.000Z');
   const activatedAt = createdAt + 60_000;
   const endedAt = activatedAt + 756_000;
@@ -612,11 +618,23 @@ try {
     source: 'togetherListening',
   });
 
+  const eventFailureUiCount = uiEvents.length;
+  database.sqlite.exec(`CREATE TRIGGER fail_together_end_event BEFORE INSERT ON messages
+    WHEN NEW.client_message_id = 'together-listening-ended:activity-2'
+    BEGIN SELECT RAISE(ABORT, 'injected end event failure'); END;`);
+  await assert.rejects(() => upsertTogetherListeningTimelineEntry(
+    timelineActivity('ended', endedAt, activatedAt, endedAt, 'user_left'),
+  ), /injected end event failure/);
+  database.sqlite.exec('DROP TRIGGER fail_together_end_event');
+  assert.equal(JSON.parse((await repository.getMessageById(tlActive.message.id)).metadataJson).phase, 'active',
+    '结束事件提交失败必须同时回滚旧卡 patch');
+  assert.equal(uiEvents.length, eventFailureUiCount, '失败事务不得刷新 UI');
+
   const tlEnded = await upsertTogetherListeningTimelineEntry(
     timelineActivity('ended', endedAt, activatedAt, endedAt, 'user_left'),
   );
   assert.equal(tlEnded.inserted, false);
-  assert.equal(tlEnded.message.id, tlPending.message.id, 'ended 必须 patch 原卡，不得插入第二条消息');
+  assert.equal(tlEnded.message.id, tlPending.message.id, 'ended 必须 patch 原卡，不能复制第二张卡');
   assert.equal(tlEnded.message.createdAt, tlPending.message.createdAt);
   assert.equal(tlEnded.message.turnRunId, null);
   assert.equal(
@@ -625,9 +643,25 @@ try {
         .prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id = 'session-tl2'")
         .get().count,
     ),
-    1,
-    '同 Activity 的完整生命周期只占一行',
+    2,
+    '同 Activity 只有一张卡和一条独立结束事件',
   );
+  const endEvent = await repository.getMessageByClientMessageId('session-tl2', 'together-listening-ended:activity-2');
+  assert.equal(endEvent.senderType, 'system');
+  assert.equal(endEvent.createdAt, new Date(endedAt).toISOString());
+  assert.equal(endEvent.turnRunId, null);
+  assert.deepEqual(uiEvents.slice(eventFailureUiCount), [
+    { eventName: 'messagesPatched', payload: { sessionId: 'session-tl2', updatedMessageIds: [tlPending.message.id] } },
+    { eventName: 'messagesUpdated', payload: { sessionId: 'session-tl2' } },
+  ], '提交后必须同时刷新原卡并通知新结束事件，不能仅加载新消息而保留旧卡状态');
+  assert.match(endEvent.text, /你已退出/);
+  assert.equal(JSON.parse(endEvent.metadataJson).endReason, 'user_left');
+  const afterOldCard = await repository.getMessages('session-tl2', { limit: 10, cursor: tlPending.message.id, order: 'ASC' });
+  assert.deepEqual(afterOldCard.messages.map(message => message.id), [endEvent.id],
+    '旧卡已被历史游标越过时，退出事件必须仍在后续历史内');
+  await upsertTogetherListeningTimelineEntry(timelineActivity('ended', endedAt, activatedAt, endedAt, 'user_left'));
+  assert.equal(Number(database.sqlite.prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id = 'session-tl2'").get().count), 2,
+    '重复结束投影必须幂等');
   assert.equal(
     readSessionPreview('session-tl2'),
     '[一起听已结束]',

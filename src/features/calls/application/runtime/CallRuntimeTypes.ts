@@ -25,7 +25,7 @@ export interface CallPreflightOptions {
 }
 
 export type StartOutgoingCallResult =
-  | { status: 'endedActive'; call: CallSession; visibleMessages: ChatMessage[] }
+  | { status: 'ended'; call: CallSession; visibleMessages: ChatMessage[] }
   | { status: 'accepted'; call: CallSession; firstEvent: CallEvent; visibleMessages: ChatMessage[] }
   | { status: 'rejected'; call: CallSession; rejectionReason: string; visibleMessages: ChatMessage[] }
   | { status: 'failed'; call: CallSession | null; errorMessage: string; visibleMessages: ChatMessage[] };

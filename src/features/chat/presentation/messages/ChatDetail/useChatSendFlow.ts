@@ -625,11 +625,6 @@ export function useChatSendFlow({
         });
       }
 
-      if (result.status === 'endedActive' && result.call.chatSessionId !== sessionId) {
-        setError('已挂断上一通正在进行的视频电话，请再次点击发起新的通话');
-        return;
-      }
-
       if (result.status === 'failed') {
         setError(result.errorMessage);
       }

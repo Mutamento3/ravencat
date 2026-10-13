@@ -28,6 +28,7 @@ export interface AIAssistantSummary {
   /** 对应 AIProfile.agentId 的不可变 actor key。 */
   readonly agentId: string;
   name: string;
+  nickname: string | null;
   avatar: string | null;
   avatarMediaAssetId: string | null;
   model: string;
@@ -39,7 +40,7 @@ export interface AIAssistantSummary {
 /** 对话设置拥有展示信息、人设、上下文与消息呈现策略，不接受身份键。 */
 export type AIAssistantSettingsUpdate = Partial<Pick<
   AIProfile,
-  'name' | 'avatar' | 'avatarMediaAssetId' | 'systemPrompt' | 'allowMultipleBubbles' | 'showTokenUsage'
+  'name' | 'nickname' | 'avatar' | 'avatarMediaAssetId' | 'systemPrompt' | 'allowMultipleBubbles' | 'showTokenUsage'
   | 'privateContextPrimaryLimit' | 'privateContextSecondaryLimit'
   | 'groupContextPrimaryLimit' | 'groupContextSecondaryLimit'
 >>;
@@ -63,6 +64,9 @@ export interface AIAssistantDeletionResult {
 }
 
 export interface IAIAssistantRepository {
+  applyContextLimits(assistantIds: readonly string[], settings: AssistantContextLimits): Promise<void>;
+  getNicknameContext(assistantId: string): Promise<AssistantNicknameContext | null>;
+  acknowledgeNicknameChanges(assistantId: string, throughChangeId: number): Promise<void>;
   getAll(): Promise<AIProfile[]>;
   listSummaries(): Promise<AIAssistantSummary[]>;
   getById(assistantId: string): Promise<AIProfile | null>;
@@ -90,4 +94,17 @@ export interface IAIAssistantRepository {
     input: CommitAIAvatarMediaAssetReferenceInput,
     guard: (transaction: DatabaseTransactionExecutor) => Promise<void>,
   ): Promise<boolean>;
+}
+export type AssistantContextLimits = Pick<AIProfile,
+  'privateContextPrimaryLimit' | 'privateContextSecondaryLimit' | 'groupContextPrimaryLimit' | 'groupContextSecondaryLimit'>;
+
+/** 备注历史仅供当前角色的上下文查询，不进入公共身份目录。 */
+export interface AssistantNicknameContext {
+  nickname: string | null;
+  changes: {
+    id: number;
+    previousNickname: string | null;
+    nickname: string | null;
+    acknowledged: boolean;
+  }[];
 }

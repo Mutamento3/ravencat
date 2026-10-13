@@ -6,12 +6,25 @@ data class MediaSessionSnapshot(
   val playback: MediaSessionPlaybackSnapshot,
   val metadata: MediaSessionMetadataSnapshot,
   val actions: MediaSessionActionsSnapshot,
+  val audioOutput: MediaSessionAudioOutputSnapshot? = null,
 ) {
   fun toMap(): Map<String, Any?> = mapOf(
     "packageName" to packageName,
     "playback" to playback.toMap(),
     "metadata" to metadata.toMap(),
     "actions" to actions.toMap(),
+    "audioOutput" to audioOutput?.toMap(),
+  )
+}
+
+/** 系统媒体路由不是指定 App 的逐音轨路由；远程 session 不冒用手机当前输出。 */
+data class MediaSessionAudioOutputSnapshot(
+  val playbackType: String,
+  val deviceNames: List<String>,
+) {
+  fun toMap(): Map<String, Any?> = mapOf(
+    "playbackType" to playbackType,
+    "deviceNames" to deviceNames,
   )
 }
 data class MediaSessionPlaybackSnapshot(

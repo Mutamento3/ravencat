@@ -85,6 +85,7 @@ const policyWithTrace = {
 
 const snapshot = {
   packageName: routeModule.NETEASE_MUSIC_PACKAGE,
+  audioOutput: { playbackType: 'local', deviceNames: ['有线耳机'] },
   playback: {
     state: 'playing',
     positionMs: 1234,
@@ -170,6 +171,7 @@ assert.deepEqual(await getNetEasePlaybackSnapshot(), {
     playback: snapshot.playback,
     metadata: snapshot.metadata,
     actions: snapshot.actions,
+    audioOutput: snapshot.audioOutput,
   },
 });
 assert.deepEqual(admissionCalls, [{
@@ -364,4 +366,61 @@ assert.equal(
   '网易云 package 字面量必须只有 NetEaseExactSongRoute 一份真值',
 );
 
-console.log('PHONE-8D3A 网易云播放产品能力验证通过。');
+// 当前歌词查询复用已完成边界归一化的歌词 backend，只返回本轮位置对应的一句。
+const { getNetEaseCurrentLyric } = loadTypeScriptModule('src/features/phoneTools/application/NetEaseCurrentLyric.ts', {
+  './NetEasePlaybackRuntimeDependencies': runtimeModule,
+});
+let lyricRequests = 0;
+let lyricResult = { ok: true, data: { status: 'available', truncated: false,
+  text: '[00:01.00][00:21.00]第一句\n[00:10.000]第二句\n[00:20.00]\n[00:30.0]第三句' } };
+runtimeModule.configureNetEasePlaybackRuntimeDependencies({
+  async getSongLyrics() { lyricRequests += 1; return lyricResult; },
+});
+const lyricPlayback = {
+  mediaId: '100', playbackState: 'playing', positionMs: 3500, speed: 2,
+  updatedAtEpochMs: 1000, durationMs: 60_000,
+};
+assert.deepEqual(await getNetEaseCurrentLyric(lyricPlayback, 5000), {
+  text: '第二句', startTimeMs: 10_000, positionMs: 11_500,
+}, '播放中按更新时间与速度定位，而不是直接使用旧 position');
+assert.deepEqual(await getNetEaseCurrentLyric({ ...lyricPlayback, playbackState: 'paused' }, 100_000), {
+  text: '第一句', startTimeMs: 1000, positionMs: 3500,
+}, '暂停时不随墙上时间推进');
+assert.equal(await getNetEaseCurrentLyric({ ...lyricPlayback, playbackState: 'paused', positionMs: 500 }, 5000), null,
+  '首句之前不能提前传歌词');
+assert.equal(await getNetEaseCurrentLyric({ ...lyricPlayback, playbackState: 'paused', positionMs: 20_500 }, 5000), null,
+  '空白时间戳表示间奏，不能继续沿用上一句');
+assert.equal((await getNetEaseCurrentLyric({ ...lyricPlayback, playbackState: 'paused', positionMs: 21_100 }, 5000)).text, '第一句',
+  '重复时间戳必须定位到副歌重唱');
+assert.equal(lyricRequests, 1, '同曲换位置只重算当前句，不重复请求整首');
+for (const patch of [{ mediaId: null }, { mediaId: 'track-100' }, { positionMs: -1 }, { updatedAtEpochMs: null }, { speed: null }, { positionMs: 60_000 }]) {
+  assert.equal(await getNetEaseCurrentLyric({ ...lyricPlayback, ...patch }, 5000), null);
+}
+assert.equal(lyricRequests, 1, '不可定位的外部身份或进度不触发歌词请求');
+lyricResult = { ok: true, data: { status: 'available', truncated: false, text: '[00:00.00]下一首的句子' } };
+assert.equal((await getNetEaseCurrentLyric({ ...lyricPlayback, mediaId: '101' }, 5000)).text, '下一首的句子');
+assert.equal(lyricRequests, 2, '切歌必须换歌词数据，不能复用上一首');
+lyricResult = { ok: false, error: { code: 'network_failure', message: '网络失败', apiCode: null } };
+assert.equal(await getNetEaseCurrentLyric({ ...lyricPlayback, mediaId: '102' }, 5000), null);
+assert.equal(lyricRequests, 3, '网络失败不在当前调用内自动 retry');
+lyricResult = { ok: true, data: { status: 'available', truncated: false, text: '[00:00.00]网络恢复后的句子' } };
+assert.equal((await getNetEaseCurrentLyric({ ...lyricPlayback, mediaId: '102' }, 5000)).text, '网络恢复后的句子');
+for (const [id, data] of [
+  ['103', { status: 'available', text: '只有全文，没有时间戳', truncated: false }],
+  ['104', { status: 'no_lyrics' }],
+  ['105', { status: 'available', text: '[00:00.00]完整句\n[00:10.00]截断的句', truncated: true }],
+]) {
+  lyricResult = { ok: true, data };
+  assert.equal(await getNetEaseCurrentLyric({ ...lyricPlayback, mediaId: id, positionMs: 11_000, playbackState: 'paused' }, 5000), null);
+}
+lyricResult = { ok: true, data: { status: 'available', text: '[offset:500]\n[00:01.2]有偏移的句子', truncated: false } };
+assert.deepEqual(await getNetEaseCurrentLyric({ ...lyricPlayback, mediaId: '106', positionMs: 750, playbackState: 'paused' }, 5000), {
+  text: '有偏移的句子', startTimeMs: 700, positionMs: 750,
+});
+const requestsBeforeConcurrent = lyricRequests;
+lyricResult = { ok: true, data: { status: 'available', text: '[00:00.00]同曲并发的当前句', truncated: false } };
+const concurrentLines = await Promise.all([1000, 2000, 3000].map(positionMs =>
+  getNetEaseCurrentLyric({ ...lyricPlayback, mediaId: '107', playbackState: 'paused', positionMs }, 5000)));
+assert.equal(lyricRequests, requestsBeforeConcurrent + 1, '同曲并发只发出一个歌词请求');
+assert.deepEqual(concurrentLines.map(line => line.positionMs), [1000, 2000, 3000], '共享歌词数据不能共享另一轮的当前位置');
+console.log('PHONE-8D3A 网易云播放产品能力与当前一句歌词定位验证通过。');

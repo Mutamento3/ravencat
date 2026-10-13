@@ -1,17 +1,23 @@
 /** Chat 对 Together Listening 暴露的窄投影命令。 */
 
 import type { AIReplyConfig } from '../../reply/application/ChatReplyTypes';
+import { databaseCoordinator } from '@platform/persistence';
 import type { ChatMessage, CreateMessageInput } from '../domain/ChatMessage';
 import {
   buildTogetherListeningMessageMetadata,
   getTogetherListeningPreviewText,
   type TogetherListeningMessageEndReason,
   type TogetherListeningMessagePhase,
+  type TogetherListeningEndedMessageMetadata,
 } from '../domain/chatMessageMetadata';
+import { emitChatMessagesPatched, emitChatMessagesUpdated } from '../events/ChatEvents';
+import { getChatMessageRuntimeDependencies } from './ChatMessageRuntime';
 import { commitAndDispatchCanonicalUserMessage } from './CommitAndDispatchCanonicalUserMessage';
 import { upsertStatefulTimelineEntry } from './UpsertStatefulTimelineEntry';
+import { getChatGroupRuntimeDependencies } from '../../group/application/ChatGroupRuntime';
+import { ChatReplyRunCancelledError } from '../../reply/application/ChatReplyAbort';
 
-export interface TogetherListeningTimelineActivity {
+interface TogetherListeningTimelineActivityBase {
   id: string;
   chatSessionId: string;
   hostAiId: string;
@@ -19,12 +25,17 @@ export interface TogetherListeningTimelineActivity {
   phase: TogetherListeningMessagePhase;
   createdAtEpochMs: number;
   updatedAtEpochMs: number;
-  endReason: TogetherListeningMessageEndReason | null;
   /** canonical Activity 进入 active 的时间；pending 与 declined 为 null。 */
   activatedAtEpochMs: number | null;
   /** canonical Activity 进入终态的时间；非终态为 null。 */
   endedAtEpochMs: number | null;
 }
+
+/** AI 主动退出时，Host 负责提供已经解析的显示名字；Chat 不重新查询助手身份。 */
+export type TogetherListeningTimelineActivity = TogetherListeningTimelineActivityBase & (
+  | { endReason: 'ai_left'; hostAiName: string }
+  | { endReason: Exclude<TogetherListeningMessageEndReason, 'ai_left'> | null }
+);
 
 export interface UpsertTogetherListeningTimelineEntryResult {
   message: ChatMessage;
@@ -38,6 +49,7 @@ export interface UpsertTogetherListeningTimelineEntryResult {
  */
 export interface TogetherListeningTimelineProjectionHint {
   timelineRunId?: string;
+  groupSpeechTaskId?: string;
 }
 
 function formatMessageTime(date: Date): string {
@@ -90,6 +102,66 @@ export async function upsertTogetherListeningTimelineEntry(
   hint?: TogetherListeningTimelineProjectionHint,
 ): Promise<UpsertTogetherListeningTimelineEntryResult> {
   const message = buildMessage(activity, hint);
+  const repository = getChatMessageRuntimeDependencies().messages;
+  const groups = getChatGroupRuntimeDependencies().groups;
+  const group = await groups.getById(activity.chatSessionId);
+  if (group) {
+    const actor = group.members.find((member) => member.aiAssistantId === activity.hostAiId);
+    message.agentId = actor?.agentId ?? null;
+    message.metadataJson = JSON.stringify({ ...JSON.parse(message.metadataJson!), actorAIId: activity.hostAiId,
+      actorAgentId: actor?.agentId ?? null, actorName: actor?.name ?? 'AI', groupChat: { groupId: group.group.id, groupName: group.group.name } });
+  }
+  if (group && activity.phase !== 'ended') {
+    const result = await databaseCoordinator.transaction({ name: 'chat.project-group-listening-invitation', feature: 'chat', priority: 'interactive' }, async (transaction) => {
+      if (hint?.groupSpeechTaskId && !await groups.isSpeechTaskRunCurrentInTransaction(transaction, hint.groupSpeechTaskId)) throw new ChatReplyRunCancelledError('superseded');
+      const result = await repository.upsertStatefulTimelineEntryInTransaction(transaction, { message, previewText: getTogetherListeningPreviewText(activity.phase) });
+      await groups.updatePreviewInTransaction(transaction, activity.chatSessionId, result.message.id, getTogetherListeningPreviewText(activity.phase), result.message.createdAt);
+      return result;
+    });
+    emitChatMessagesUpdated(activity.chatSessionId);
+    return result;
+  }
+  if (activity.phase === 'ended') {
+    const endedDate = new Date(activity.updatedAtEpochMs);
+    const text = activity.endReason === 'user_left'
+      ? '你已退出一起听，本次一起听已结束。'
+      : activity.endReason === 'ai_left'
+        ? `${activity.hostAiName}已退出一起听，本次一起听已结束。`
+        : '本次一起听活动已结束。';
+    const metadata: TogetherListeningEndedMessageMetadata = {
+      type: 'togetherListeningEnded', source: 'togetherListening', phase: 'ended',
+      activityId: activity.id, initiator: activity.initiator, endReason: activity.endReason,
+      activatedAtEpochMs: activity.activatedAtEpochMs, endedAtEpochMs: activity.endedAtEpochMs,
+    };
+    const endedMessage: CreateMessageInput = {
+      ...message, text, senderType: 'system', isMe: false,
+      clientMessageId: `together-listening-ended:${activity.id}`,
+      createdAt: endedDate.toISOString(), updatedAt: endedDate.toISOString(), time: formatMessageTime(endedDate),
+      metadataJson: JSON.stringify(metadata), turnRunId: null, turnItemIndex: null,
+    };
+    const database = databaseCoordinator.openTaskExecutor({
+      name: 'chat.projectTogetherListeningEnd', feature: 'chat', priority: 'interactive',
+    });
+    // 旧卡更新与新结束事件必须一起提交；稳定事件键保证重复投影不追加第二条退出记录。
+    const [card, event] = await database.withExclusiveTransactionAsync(async (transaction) => {
+      const card = await repository.upsertStatefulTimelineEntryInTransaction(transaction, {
+        message, previewText: getTogetherListeningPreviewText(activity.phase),
+      });
+      const event = await repository.upsertStatefulTimelineEntryInTransaction(transaction, {
+        message: endedMessage, previewText: null,
+      });
+      if (group) await groups.updatePreviewInTransaction(transaction, activity.chatSessionId, event.message.id, getTogetherListeningPreviewText(activity.phase), event.message.createdAt);
+      return [card, event];
+    });
+    const patchedMessageIds = [card, event].filter((entry) => !entry.inserted).map((entry) => entry.message.id);
+    if (patchedMessageIds.length > 0) {
+      emitChatMessagesPatched({ sessionId: activity.chatSessionId, updatedMessageIds: patchedMessageIds });
+    }
+    if (card.inserted || event.inserted) {
+      emitChatMessagesUpdated(activity.chatSessionId);
+    }
+    return card;
+  }
   return upsertStatefulTimelineEntry({
     message,
     previewText: getTogetherListeningPreviewText(activity.phase),

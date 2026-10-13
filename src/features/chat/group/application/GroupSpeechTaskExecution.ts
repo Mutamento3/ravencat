@@ -25,7 +25,6 @@ import {
   getGroupParticipantDirectory,
 } from './GroupParticipantDirectory';
 
-const GROUP_CHAT_AI_CONTEXT_LIMIT = 30;
 const GROUP_MEMBER_TURN_REQUEST = [
   '[本轮发言请求 / CURRENT GROUP TURN]',
   '请依据上方按时间顺序排列的群聊记录，自然回应标记为“本轮用户输入”的消息，并考虑本轮其他成员已经给出的回复。',
@@ -182,6 +181,7 @@ async function executeGroupSpeechTask(
   const abortController = new AbortController();
   const unregisterAbort = registerGroupSpeechAbort(context.planId, abortController);
   try {
+    if (!await runtime.groups.isSpeechTaskCommitEligible(context.planId, task.id)) return;
     await processAIReply(
       groupId,
       GROUP_MEMBER_TURN_REQUEST,
@@ -199,16 +199,19 @@ async function executeGroupSpeechTask(
       },
       {
         abortSignal: abortController.signal,
+        replyRunId: task.id,
         triggerSource: 'group_chat',
         triggerReason: toTriggerReason(task),
         relatedEntityType: 'group_speech_plan',
         relatedEntityId: context.planId,
         batchedUserMessageIds: context.currentUserMessages.map((message) => message.id),
+        historyUpperBound: { messageId: context.inputUpperBoundMessageId,
+          createdAt: context.currentUserMessages[context.currentUserMessages.length - 1].createdAt },
         batchedUserMessageCount: context.currentUserMessages.length,
         capabilities: context.currentUserMessages.some((message) => (
           getMessageAttachments(message).some((attachment) => attachment.type === 'image')
         )) ? ['vision.current_turn'] : undefined,
-        recentWindowLimit: GROUP_CHAT_AI_CONTEXT_LIMIT,
+        recentWindowLimit: ai.groupContextPrimaryLimit,
         groupChat: {
           groupId,
           groupName: context.details.group.name,
@@ -216,7 +219,7 @@ async function executeGroupSpeechTask(
           currentAgentId: ai.agentId,
           currentAIName: currentParticipant.displayName,
           members: context.groupChatPromptMembers,
-          recentWindowLimit: GROUP_CHAT_AI_CONTEXT_LIMIT,
+          recentWindowLimit: ai.groupContextPrimaryLimit,
           planId: context.planId,
           taskId: task.id,
           taskSource: task.source,
@@ -226,8 +229,7 @@ async function executeGroupSpeechTask(
         },
         userDisplayName: context.participantDirectory.currentUser.displayName,
       },
-      // 群聊保留 legacy 逐泡落库；提交 fence、mention 解析与动态任务追加
-      // 都在该接缝内完成。
+      // 共享 timeline 的逐条提交、媒体物化、mention 与动态任务都由群 owner 裁决。
       createGroupSegmentedReplyPersistence({
         directory: context.participantDirectory,
         task,

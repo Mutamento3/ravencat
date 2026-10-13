@@ -57,6 +57,7 @@ for (const relativePath of [
   'src/features/togetherListening/application/TogetherListeningSystemPresentation.ts',
   'src/features/togetherListening/application/TogetherListeningLifecycle.ts',
   'src/features/togetherListening/application/TogetherListeningRuntimeAwareness.ts',
+  'src/features/togetherListening/application/LeaveTogetherListeningByUser.ts',
 ]) compile(relativePath);
 
 const runtime = load('src/features/togetherListening/application/TogetherListeningRuntime.ts');
@@ -68,6 +69,7 @@ const baseObservation = {
   title: '夜曲',
   artist: '周杰伦',
   album: '十一月的萧邦',
+  audioOutput: null,
 };
 for (const state of ['playing', 'paused', 'buffering', 'connecting']) {
   const availability = awareness.resolveTogetherListeningNetEaseAvailability({
@@ -128,6 +130,24 @@ assert.deepEqual(statusItems, [{
   writePolicy: 'system_only',
   updatedAtEpochMs: 10,
 }]);
+// 同一歌曲的系统输出变化必须出现在下一轮快照中，不改变 Activity。
+for (const deviceName of ['手机扬声器', '有线耳机', '用户的蓝牙设备']) {
+  const items = awareness.buildUserRuntimeStatusItems({
+    capturedAtEpochMs: 10,
+    netease: { ...available, audioOutput: { playbackType: 'local', deviceNames: [deviceName] } },
+    activity: activity(),
+  });
+  assert.equal(items.length, 2);
+  assert.equal(items[1].key, 'media_audio_output');
+  assert.ok(items[1].text.includes(deviceName));
+}
+const remoteOutputItems = awareness.buildUserRuntimeStatusItems({
+  capturedAtEpochMs: 10,
+  netease: { ...available, audioOutput: { playbackType: 'remote', deviceNames: [] } },
+  activity: activity(),
+});
+assert.match(remoteOutputItems[1].text, /远程播放/);
+assert.doesNotMatch(remoteOutputItems[1].text, /手机扬声器/);
 for (const status of ['no_active_session', 'permission_not_granted', 'observation_failed']) {
   const netease = awareness.resolveTogetherListeningNetEaseAvailability({ status });
   assert.deepEqual(awareness.buildUserRuntimeStatusItems({
@@ -143,7 +163,10 @@ let observationReads = 0;
 let transitions = 0;
 let currentHostAIId = 'host-a';
 const repository = {
-  async getCurrent() { return currentActivity; },
+  async getCurrent() {
+    return currentActivity && ['pending_user_response', 'pending_ai_response', 'active'].includes(currentActivity.phase)
+      ? currentActivity : null;
+  },
   async getById() { return currentActivity; },
   async createIfNoCurrent() { throw new Error('not used'); },
   async transitionActivityIfPhase(id, expectedPhases, patch) {
@@ -251,10 +274,13 @@ write('node_modules/@features/togetherListening/index.js', `
 exports.captureTogetherListeningRuntimeSnapshot = (...args) => globalThis.__listenCapture(...args);
 exports.reconcileTogetherListeningRuntime = (...args) => globalThis.__listenReconcile(...args);
 exports.buildUserRuntimeStatusItems = (...args) => globalThis.__listenBuildStatus(...args);
+exports.readTogetherListeningCurrentLyric = (...args) => globalThis.__listenReadLyric(...args);
 `);
 compile('src/host/prompt/TogetherListeningPromptBlock.ts');
 const promptBlock = load('src/host/prompt/TogetherListeningPromptBlock.ts');
 globalThis.__listenBuildStatus = awareness.buildUserRuntimeStatusItems;
+let lyricReads = 0;
+globalThis.__listenReadLyric = async () => { lyricReads += 1; return { text: '这一句是当前歌词', startTimeMs: 10_000, positionMs: 12_000 }; };
 
 compile('src/host/runtime/TogetherListeningRunPreparation.ts');
 const runPreparation = load('src/host/runtime/TogetherListeningRunPreparation.ts');
@@ -270,8 +296,10 @@ function snapshot(song, phase = 'active', hostAiId = 'host-a') {
       title: song,
       artist: `歌手-${song}`,
       album: null,
+      audioOutput: null,
     },
     activity: activity(phase, hostAiId),
+    currentLyric: null,
   };
 }
 const activeBlock = promptBlock.createTogetherListeningRuntimePromptBlock({
@@ -281,11 +309,50 @@ assert.match(activeBlock.content, /【当前用户状态】[\s\S]*Song A/);
 assert.match(activeBlock.content, /【当前共同活动】[\s\S]*Song A/);
 assert.equal(activeBlock.required, true);
 assert.equal(activeBlock.truncatable, false);
+const currentLineBlock = promptBlock.createTogetherListeningRuntimePromptBlock({
+  snapshot: { ...snapshot('Song A'), currentLyric: { text: '只传当前这一句', startTimeMs: 60_000, positionMs: 63_000 } },
+  currentAiId: 'host-a', scenario: 'chat.private_reply',
+});
+assert.match(currentLineBlock.content, /1:03[\s\S]*只传当前这一句/);
+const staleLyricAfterExit = promptBlock.createTogetherListeningRuntimePromptBlock({
+  snapshot: { ...snapshot('Song A'), activity: null, currentLyric: { text: '退出后不能继续注入', startTimeMs: 0, positionMs: 0 } },
+  currentAiId: 'host-a', scenario: 'chat.private_reply',
+});
+assert.doesNotMatch(staleLyricAfterExit.content, /当前歌词|退出后不能继续注入/);
+const idleBlock = promptBlock.createTogetherListeningRuntimePromptBlock({
+  snapshot: { ...snapshot('Song A'), activity: null }, currentAiId: 'host-a', scenario: 'chat.private_reply',
+});
+assert.match(idleBlock.content, /正在听歌/);
+assert.match(idleBlock.content, /当前没有正在进行的一起听活动/);
+assert.doesNotMatch(idleBlock.content, /你与用户正在一起听/);
+// 用户退出 canonical Activity 后，即使网易云继续播放，下一轮也必须明确共同活动已不存在。
+currentActivity = activity();
+currentHostAIId = 'host-a';
+observation = { ...baseObservation, playbackState: 'playing',
+  audioOutput: { playbackType: 'local', deviceNames: ['有线耳机'] } };
+const userLeave = load('src/features/togetherListening/application/LeaveTogetherListeningByUser.ts');
+const left = await userLeave.leaveTogetherListeningByUser({ activityId: currentActivity.id, source: 'in_app_indicator' });
+assert.equal(left.status, 'left');
+assert.equal(left.activity.endReason, 'user_left');
+const afterLeaveBlock = promptBlock.createTogetherListeningRuntimePromptBlock({
+  snapshot: await awareness.captureTogetherListeningRuntimeSnapshot(), currentAiId: 'host-a', scenario: 'chat.private_reply',
+});
+assert.match(afterLeaveBlock.content, /正在听歌/);
+assert.match(afterLeaveBlock.content, /有线耳机/);
+assert.match(afterLeaveBlock.content, /当前没有正在进行的一起听活动/);
+assert.doesNotMatch(afterLeaveBlock.content, /你与用户正在一起听/);
+const unavailableActiveBlock = promptBlock.createTogetherListeningRuntimePromptBlock({
+  snapshot: { ...snapshot('Song A'), netease: { available: false, reason: 'observation_failed', artist: null } },
+  currentAiId: 'host-a', scenario: 'chat.private_reply',
+});
+assert.match(unavailableActiveBlock.content, /你与用户正在一起听/);
+assert.match(unavailableActiveBlock.content, /暂时不可用/);
 for (const phase of ['pending_user_response', 'pending_ai_response']) {
   const block = promptBlock.createTogetherListeningRuntimePromptBlock({
     snapshot: snapshot('Song A', phase), currentAiId: 'host-a', scenario: 'chat.private_reply',
   });
   assert.doesNotMatch(block.content, /你与用户正在一起听/);
+  assert.match(block.content, /尚未开始一起听/);
 }
 const mismatchBlock = promptBlock.createTogetherListeningRuntimePromptBlock({
   snapshot: snapshot('Song A', 'active', 'host-b'),
@@ -330,7 +397,8 @@ exports.promptPackBlockFactory = {
   createRecentMomentsBlock: async () => block('recent_moments_summary', 'context.recent_moments', 'moments', { protection: 'overridable' }),
 };
 `);
-write('src/host/prompt/PromptHistoryBuilder.js', `exports.promptHistoryBuilder = { loadPrivateSummaryContext: async () => ({ messages: [], summaryContent: "" }), loadRecentMessages: async () => [] };`);
+write('src/host/prompt/PromptHistoryBuilder.js', `exports.promptHistoryBuilder = { loadPrivateSummaryContext: async () => ({ messages: [], summaryContent: "" }), loadGroupSummaryContext: async () => ({ messages: [], summaryContent: "" }), loadBackgroundContext: async () => "", loadRecentMessages: async () => [] };`);
+write('node_modules/@features/profile/index.js', `exports.getCurrentUserProfile = async () => ({ name: 'User' });`);
 write('src/host/prompt/providers/index.js', `
 const block = (key, definitionId, content, slot, protection = 'locked') => ({
   key, definitionId, slot, protection, title: definitionId, content,
@@ -343,6 +411,7 @@ exports.renderHostPromptProviderBlock = async (id) => ({
   'context.group_chat': block('group_chat_context', id, 'group', 'scenario'),
   'context.moments_social_inbox': block('moments_social_inbox', id, '', 'dynamic_context'),
   'context.passive_memory': block('passive_memory', id, '', 'dynamic_context'),
+  'context.assistant_nickname': block('assistant_nickname', id, '', 'dynamic_context'),
 }[id]);
 `);
 for (const relativePath of [
@@ -382,6 +451,8 @@ assert.equal(runReads, 1, '同一个普通 Chat run 只能 capture 一次');
 assert.deepEqual(preparedChat.dynamicAllowedToolNames, allTogetherTools);
 assert.match(chatPack.dynamicSystemPrompt, /【当前用户状态】[\s\S]*Song A/);
 assert.match(chatPack.dynamicSystemPrompt, /【当前共同活动】[\s\S]*Song A/);
+assert.match(chatPack.dynamicSystemPrompt, /这一句是当前歌词/);
+assert.equal(lyricReads, 1, '一轮模型准备只定位一次歌词');
 assert.doesNotMatch(chatPack.dynamicSystemPrompt, /Song B/);
 
 runReads = 0;
@@ -407,15 +478,17 @@ const nonHostPreparation = await runPreparation.prepareTogetherListeningHostMode
 });
 assert.deepEqual(nonHostPreparation.dynamicAllowedToolNames, []);
 assert.deepEqual(nonHostPreparation.additionalPromptBlocks, []);
+assert.equal(lyricReads, 2, '非主理不能触发额外歌词读取');
 assert.equal(runReads, 0, '非 Host AI 不得读取或获得 Together Listening runtime');
 
 const groupPreparation = await runPreparation.prepareTogetherListeningHostModelRun({
   scenario: 'chat.group_member_reply', currentAiId: 'host-a', isHostAI: true,
   persistentAllowedToolNames: allTogetherTools,
 });
-assert.deepEqual(groupPreparation.dynamicAllowedToolNames, []);
-assert.deepEqual(groupPreparation.additionalPromptBlocks, []);
-assert.equal(runReads, 0, '群聊中的 Host AI 也不得读取或获得 Together Listening runtime');
+assert.deepEqual(groupPreparation.dynamicAllowedToolNames, allTogetherTools);
+assert.equal(groupPreparation.additionalPromptBlocks.length, 1);
+assert.equal(runReads, 1, '群聊中的主理沿用同一轮冻结快照与权限');
+runReads = 0;
 for (const scenario of [
   'call.live_reply',
   'call.outgoing_decision',
@@ -431,6 +504,7 @@ for (const scenario of [
 assert.equal(runReads, 0, '非目标场景不得触发 Together Listening observation');
 
 for (const phase of [null, 'pending_ai_response', 'pending_user_response', 'active']) {
+  const beforeLyricReads = lyricReads;
   globalThis.__listenCapture = async () => ({
     ...snapshot('Matrix', phase ?? 'active'),
     activity: phase === null ? null : activity(phase, 'host-a'),
@@ -444,6 +518,8 @@ for (const phase of [null, 'pending_ai_response', 'pending_user_response', 'acti
     allTogetherTools,
     `${phase ?? 'idle'} 时 Host AI 都应看到三只 Together Listening Tool`,
   );
+  assert.equal(lyricReads - beforeLyricReads, phase === null ? 0 : 1);
+  if (phase !== null) assert.match(prepared.additionalPromptBlocks[0].content, /这一句是当前歌词/);
 }
 
 for (const reason of ['no_active_session', 'permission_not_granted']) {
@@ -489,5 +565,6 @@ delete globalThis.__listenCapture;
 delete globalThis.__listenReconcile;
 delete globalThis.__listenBuildStatus;
 delete globalThis.__listenGetPreset;
+delete globalThis.__listenReadLyric;
 fs.rmSync(tempRoot, { recursive: true, force: true });
 console.log('LISTEN-2 runtime awareness、reconciliation、Prompt 注入与单轮一致性检查通过。');

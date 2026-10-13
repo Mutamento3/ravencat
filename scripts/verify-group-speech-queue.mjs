@@ -234,42 +234,7 @@ function loadGroupRuntimeStub() {
 }
 
 async function buildGroupTurnCommitUrl(groupRuntimeUrl) {
-  // 与真实 legacy 逐泡落库一致：经 repository.commitMessage 写 messages 表。
-  // 群聊接缝已用 fence 事务装饰该入口，fence 拒绝时错误必须向上抛（表现为
-  // ChatReplyRunCancelledError 拒绝），只有落库成功才记录 commits。
-  // segmentIndex/segmentTotal 模拟真实分段事实：mention 的 scheduling consequence
-  // 随其所在气泡的提交事务裁决，非最终气泡也必须能物化。
-  const legacyUrl = transpileToModuleUrl(`
-    export function createLegacySegmentedReplyPersistence() {
-      return {
-        persistsIntermediates: true,
-        persistCompletedAssistantReply: async (params) => {
-          await params.repository.commitMessage({
-            message: {
-              sessionId: params.runtimeContext?.groupChat?.groupId ?? 'g1',
-              text: params.response.text,
-              metadataJson: JSON.stringify({
-                groupChat: {
-                  mentions: params.runtimeContext?.groupChat?.mentions ?? [],
-                },
-              }),
-              senderType: 'assistant',
-              segmentIndex: params.response.segmentIndex ?? 0,
-              segmentTotal: params.response.segmentTotal ?? 1,
-            },
-            previewText: params.response.text,
-          });
-          globalThis.__GROUP_QUEUE_STATE__.commits.push({
-            text: params.response.text,
-            mentions: params.runtimeContext?.groupChat?.mentions ?? null,
-          });
-          globalThis.__GROUP_QUEUE_STATE__.observePreview?.(params.response.text);
-        },
-        persistAssistantPrelude: async () => {},
-      };
-    }
-  `);
-  // 提交接缝的事务内 fence 与气泡 INSERT 共用协调器。
+  // 队列测试消费真实群 timeline 提交端口；消息插入与 mention 后果共享 fence。
   const persistenceUrl = transpileToModuleUrl(`
     export const databaseCoordinator = {
       transaction(...args) {
@@ -306,14 +271,14 @@ async function buildGroupTurnCommitUrl(groupRuntimeUrl) {
     .replace(/from ['"]\.\/ChatGroupRuntime['"]/g, `from '${groupRuntimeUrl}'`);
   const appendUrl = transpileToModuleUrl(appendSource);
   const source = read('src/features/chat/group/application/GroupAssistantTurnCommit.ts')
+    .replace(/from ['"]\.\.\/\.\.\/messages\/domain\/chatMessageMetadata['"]/g,
+      `from '${transpileToModuleUrl(`export function buildSessionPreviewTextFromMessage(message) { return message.text; }`)}'`)
+    .replace(/from ['"]\.\.\/\.\.\/reply\/application\/CommittedAssistantSegmentDelivery['"]/g,
+      `from '${transpileToModuleUrl(`export async function deliverCommittedAssistantSegment() {}`)}'`)
     .replace(/from ['"]@platform\/persistence['"]/g, `from '${persistenceUrl}'`)
     .replace(
       /from ['"]\.\.\/\.\.\/messages\/application\/ChatMessageRuntime['"]/g,
       `from '${commitMessageRuntimeUrl}'`,
-    )
-    .replace(
-      /from ['"]\.\.\/\.\.\/reply\/application\/AssistantTurnCommit['"]/g,
-      `from '${legacyUrl}'`,
     )
     .replace(
       /from ['"]\.\.\/\.\.\/reply\/application\/ChatReplyAbort['"]/g,
@@ -358,12 +323,14 @@ async function loadGroupTaskExecution(groupRuntimeUrl, turnCommitUrl) {
           callbacks?.onReplyFailed?.({ status: 'failed', error: script.failMessage });
           return;
         }
-        await persistence.persistCompletedAssistantReply({
-          response: { text: script.text },
-          repository: _repo,
-          runtimeContext,
+        const result = await persistence.commitAgentTimeline({
+          items: [{ message: { sessionId: _sessionId, text: script.text, senderType: 'assistant',
+            metadataJson: JSON.stringify({ groupChat: {} }) } }], repository: _repo,
+          runtimeContext, callbacks, aiConfig,
         });
-        callbacks?.onFinalReply?.({ text: script.text, lastSegmentMessageId: 1 });
+        const message = result.messages[0];
+        state.commits.push({ text: script.text, mentions: JSON.parse(message.metadataJson).groupChat.mentions });
+        state.observePreview?.(script.text);
       } catch (error) {
         // 与真实 processAIReply 一致：取消错误安静收尾，不写错误消息。
         if (error && error.name === 'ChatReplyRunCancelledError') {
@@ -583,6 +550,7 @@ function buildGroupTestBed(db, GroupChatRepository) {
     CREATE TABLE IF NOT EXISTS ai_assistants (
       id TEXT PRIMARY KEY,
       name TEXT,
+      nickname TEXT,
       avatar TEXT,
       avatar_media_asset_id TEXT,
       model TEXT

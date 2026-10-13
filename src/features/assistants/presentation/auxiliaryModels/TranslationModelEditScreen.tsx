@@ -1,10 +1,10 @@
 /** 翻译资产编辑复用辅助模型命令与自动保存，业务选择不随编辑改变。 */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { TRANSLATION_PROVIDERS, testTranslationModelConnection, type TranslationProvider } from '@features/integrations';
 import { fetchModelList, type ModelInfo } from '@platform/ai';
-import { Button, DropdownField, InputField, ModelPickerModal, NavigationHeader, ToggleField, showAppDialog } from '@shared/ui';
+import { KeyboardAvoidingContainer, Button, DropdownField, InputField, ModelPickerModal, NavigationHeader, ToggleField, showAppDialog } from '@shared/ui';
 import { useTheme } from '@shared/theme';
 import { useAutoSaveDraft, useAutoSaveNavigation } from '@shared/ui/useAutoSaveDraft';
 import { useAutoSaveFeedback } from '@shared/ui/useAutoSaveFeedback';
@@ -100,7 +100,7 @@ export default function TranslationModelEditScreen({ modelId, initialData, savin
   const rightButton = modelId ? feedback.blocked ? <Button title="恢复" variant="text" onPress={reset} /> : undefined
     : <Button title={saving ? '创建中…' : '创建'} variant="text" disabled={saving} onPress={() => { void create(); }} />;
   return <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background.app }} edges={['top', 'left', 'right']}>
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+    <KeyboardAvoidingContainer style={{ flex: 1 }}>
       <NavigationHeader title={`${modelId ? '编辑' : '新建'}翻译模型`} onGoBack={back} rightButton={rightButton} />
       <AutoSaveErrors error={editor.saveError || creationError} blocked={!!modelId && feedback.blocked}
         retry={modelId ? blur : () => { void create(); }} restore={modelId ? reset : undefined} />
@@ -130,7 +130,7 @@ export default function TranslationModelEditScreen({ modelId, initialData, savin
           onPress={() => { void test(); }} />
         {modelId && <Button title="删除配置" variant="danger" onPress={remove} />}
       </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardAvoidingContainer>
     <ModelPickerModal visible={showModelPicker} models={models} selectedModel={draft.model}
       onSelect={(value) => { set('model', value, true); setShowModelPicker(false); }} onClose={() => setShowModelPicker(false)}
       emptyText="服务商未返回模型，请直接填写模型 ID" />

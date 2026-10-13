@@ -28,11 +28,12 @@ const stickerModuleUrl = transpileToModuleUrl(`
     return Boolean(metadata?.kind === 'sticker' && metadata.sticker);
   }
 `);
+const sharedRecordModuleUrl = transpileToModuleUrl(read('src/features/chat/messages/domain/SharedChatRecord.ts'));
 const metadataModuleUrl = transpileToModuleUrl(
   read('src/features/chat/messages/domain/chatMessageMetadata.ts').replace(
     /from ['"]\.\/ChatSticker['"]/g,
     `from '${stickerModuleUrl}'`,
-  ),
+  ).replace(/from ['"]\.\/SharedChatRecord['"]/g, `from '${sharedRecordModuleUrl}'`),
 );
 const directoryModuleUrl = transpileToModuleUrl(
   read('src/features/chat/group/domain/GroupParticipantDirectory.ts'),

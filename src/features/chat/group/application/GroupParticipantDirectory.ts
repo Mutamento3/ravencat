@@ -29,6 +29,7 @@ export async function getGroupParticipantDirectory(
       targetType: 'assistant',
       assistantId: profile.id,
       displayName: profile.name,
+      nickname: profile.nickname,
       avatar: profile.avatar,
       avatarMediaAssetId: profile.avatarMediaAssetId,
     }));

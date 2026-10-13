@@ -4,7 +4,7 @@ import { useAutoSaveDraft, useAutoSaveNavigation } from '@shared/ui/useAutoSaveD
 import { useAutoSaveFeedback } from '@shared/ui/useAutoSaveFeedback';
 import { readDraftNumber } from '@shared/ui/draftValidation';
 import type { GroupChatAdminConfig, UpdateGroupChatAdminConfigInput } from '../../group/domain/GroupChat';
-import { fetchModelsWithConfig, runConnectionTestByConfig, type ModelInfo } from '@features/assistants';
+import { fetchModelsWithConfig, runConnectionTestByConfig, type ModelInfo, type ModelCallConfig } from '@features/assistants';
 import { getGroupAdminSettingsDraft, parseGroupAdminSettingsDraft, type GroupAdminSettingsDraft } from './groupAdminSettingsDraft';
 
 export default function useGroupAdminSettings({ adminConfig, onUpdate, onBack }: {
@@ -68,7 +68,14 @@ export default function useGroupAdminSettings({ adminConfig, onUpdate, onBack }:
 
   const temperatureInput = readDraftNumber(draft.tempInput, 'Temperature', 0, 2, true);
   const topPInput = readDraftNumber(draft.topPInput, 'Top P', 0, 1, true);
+  const readModelConfig = (): ModelCallConfig | null => {
+    const config = validateAll();
+    if (!config) { feedback.revealErrors(getSnapshot().errors); return null; }
+    return { apiBaseUrl: config.apiBaseUrl ?? '', apiKey: config.apiKey ?? '', model: config.model!,
+      temperature: config.temperature!, topP: config.topP!, maxTokens: config.maxTokens! };
+  };
   return {
+    readModelConfig,
     ...draft, errors, saveError: editor.saveError, flush, back, restoreDraft, feedback, connectionError,
     temperature: temperatureInput.error ? adminConfig?.temperature ?? null : temperatureInput.value,
     topP: topPInput.error ? adminConfig?.topP ?? null : topPInput.value,

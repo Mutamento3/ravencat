@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { ArrowUp, CirclePlus, LoaderCircle, WifiHigh, type LucideIcon } from 'lucide-react-native';
+import { AppTextInput } from '@shared/ui';
 
 import type { PresentationTheme } from '@shared/theme';
 import type { createInputAreaStyles } from './chatInputStyles';
@@ -106,7 +107,7 @@ export function MoonKimiComposer({
               style={{ transform: [{ rotate: '90deg' }, { translateY: -1 }] }}
             />
           </TouchableOpacity>
-          <TextInput
+          <AppTextInput
             ref={inputRef}
             style={styles.moonKimiInput}
             value={value}
@@ -114,7 +115,7 @@ export function MoonKimiComposer({
             placeholder={disabled ? disabledPlaceholder : '尽管问，带图也行'}
             placeholderTextColor={theme.colors.text.tertiary}
             maxLength={500}
-            multiline
+            autoGrow
             textAlignVertical="center"
             scrollEnabled
             editable={!disabled}

@@ -39,13 +39,14 @@ interface ChatToolPanelProps {
   onTogetherListeningPress?: () => void;
 }
 
-// 默认工具列表，可扩展
+// 附件入口始终可用，通话入口由调用方提供的能力决定。
 const DEFAULT_TOOLS: ToolItemDef[] = [
   { id: 'image', Icon: Image, label: '上传图片' },
   { id: 'camera', Icon: Camera, label: '拍照' },
   { id: 'file', Icon: FileText, label: '上传文件' },
-  { id: 'videoCall', Icon: Video, label: '视频电话' },
 ];
+
+const VIDEO_CALL_TOOL: ToolItemDef = { id: 'videoCall', Icon: Video, label: '视频电话' };
 
 const TOGETHER_LISTENING_TOOL: ToolItemDef = {
   id: 'togetherListening',
@@ -102,6 +103,8 @@ export default function ChatToolPanel({
   const styles = useThemedStyles(createStyles);
   const tools = resolveChatToolPanelTools({
     defaultTools: DEFAULT_TOOLS,
+    videoCallTool: VIDEO_CALL_TOOL,
+    videoCallHandler: onVideoCallPress,
     togetherListeningTool: TOGETHER_LISTENING_TOOL,
     togetherListeningHandler: onTogetherListeningPress,
   });

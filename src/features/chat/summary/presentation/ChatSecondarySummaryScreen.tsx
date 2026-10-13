@@ -1,10 +1,10 @@
 /** 二级正文合成一个草稿；来源按时间排列，编辑来源不改写二级正文。 */
 import React, { useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { ChevronDown, ChevronRight } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
-import { NavigationHeader, showAppDialog, useBusyBackHandler } from '@shared/ui';
+import { KeyboardAvoidingContainer, NavigationHeader, showAppDialog, useBusyBackHandler } from '@shared/ui';
 import { deleteCombinedSecondarySummary, editCombinedSecondarySummary } from '../application/ChatSummary';
 import type { ChatSummarySnapshot } from '../domain/ChatSummaryRepository';
 import ChatSummaryDiagnostics from './ChatSummaryDiagnostics';
@@ -33,7 +33,7 @@ function SecondarySummaryEditor({ conversationId, onBack, onEditSource, snapshot
   const deleteAll = () => showAppDialog({ title: '删除二级摘要正文？', message: '删除全部二级正文，保留已归纳的一级记录和调用信息；不会恢复原摘要的自动注入。', buttons: [
     { text: '取消', style: 'cancel' }, { text: '删除', style: 'destructive', onPress: () => { void run(() => deleteCombinedSecondarySummary(conversationId, originals)); } },
   ] });
-  return <SafeAreaView style={styles.screen}><KeyboardAvoidingView style={styles.screen} behavior="height">
+  return <SafeAreaView style={styles.screen}><KeyboardAvoidingContainer style={styles.screen}>
     <NavigationHeader title="二级摘要" onGoBack={() => { if (!busy) onBack(); }} rightButton={<Pressable style={styles.textButton}
       accessibilityLabel="保存二级摘要" disabled={busy || !originals.length || !content.trim()}
       onPress={() => { void run(() => editCombinedSecondarySummary(conversationId, originals, content)); }}><Text style={styles.action}>{busy ? '保存中' : '保存'}</Text></Pressable>} />
@@ -60,7 +60,7 @@ function SecondarySummaryEditor({ conversationId, onBack, onEditSource, snapshot
         </>}
         {originals.length > 0 && <Pressable style={styles.textButton} disabled={busy} onPress={deleteAll}><Text style={styles.danger}>删除二级摘要正文</Text></Pressable>}
     </ScrollView>
-  </KeyboardAvoidingView></SafeAreaView>;
+  </KeyboardAvoidingContainer></SafeAreaView>;
 }
 export default function ChatSecondarySummaryScreen(props: Props) {
   const theme = useTheme(), styles = useThemedStyles(createChatSummaryStyles);

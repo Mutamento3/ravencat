@@ -65,8 +65,7 @@ export async function assemblePromptPackForRuntimeContext(
     toolContext,
     repository: repo,
     runtimeContext,
-    // 窗口条数：群聊由调用方经 runtimeContext.recentWindowLimit 显式传入（维持现有
-    // GROUP_CHAT_AI_CONTEXT_LIMIT）；单聊主场读取 AI 配置的单聊·主，缺失走共享兜底常量。
+    // 主窗口由来源场景决定；自动摘要交接之前，历史owner仍保留未处理原文。
     recentWindowLimit: runtimeContext.recentWindowLimit
       || aiConfig.privateContextPrimaryLimit
       || DEFAULT_PRIVATE_CONTEXT_PRIMARY_LIMIT,

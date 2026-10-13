@@ -82,6 +82,7 @@ export interface SubscribeConversationTimelineParams {
   getAfterId: () => number | null;
   onReplace?: (messages: ChatMessage[]) => void | Promise<void>;
   onAppend?: (messages: ChatMessage[]) => void | Promise<void>;
+  onRemove?: (messageIds: readonly number[]) => void | Promise<void>;
   onError?: (error: string) => void;
   pollIntervalMs?: number | null;
   shouldPoll?: () => boolean;
@@ -342,6 +343,7 @@ export function subscribeConversationTimeline(
     getAfterId,
     onReplace,
     onAppend,
+    onRemove,
     onError,
     pollIntervalMs = null,
     shouldPoll,
@@ -353,6 +355,8 @@ export function subscribeConversationTimeline(
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   const pendingPatchedMessageIds = new Set<number>();
   let hasPendingReload = false;
+  // 删除可能发生在增量查询等待期间；旧查询结果不能重新插入已提交删除的身份。
+  const deletedMessageIds = new Set<number>();
 
   const consumePendingPatchState = (): TimelinePatchSyncState => {
     if (pendingPatchedMessageIds.size === 0) {
@@ -396,10 +400,11 @@ export function subscribeConversationTimeline(
           return;
         }
 
+        const messages = result.messages.filter((message) => !deletedMessageIds.has(message.id));
         if (result.mode === 'replace') {
-          await onReplace?.(result.messages);
+          await onReplace?.(messages);
         } else if (result.mode === 'append' && result.messages.length > 0) {
-          await onAppend?.(result.messages);
+          await onAppend?.(messages);
         }
       } while (!isDisposed && hasPendingSync);
     } catch (error) {
@@ -413,6 +418,13 @@ export function subscribeConversationTimeline(
   const unregisterEventBus = setChatEventBus({
     emit: async (eventName, payload) => {
       if (payload?.sessionId !== sessionId) {
+        return;
+      }
+
+      if (eventName === 'messagesDeleted') {
+        const ids = payload.deletedMessageIds!;
+        for (const id of ids) deletedMessageIds.add(id);
+        await onRemove?.(ids);
         return;
       }
 

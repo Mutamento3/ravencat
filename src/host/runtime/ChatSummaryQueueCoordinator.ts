@@ -2,6 +2,7 @@
 import { InteractionManager } from 'react-native';
 import { prepareChatSummaryConversations, processChatSummary, getNextChatSummaryWakeAt, setChatEventBus } from '@features/chat/composition';
 import { subscribeChatSummaryChanged } from '@features/chat';
+import { subscribeAuxiliaryModelsChanged } from '@features/assistants';
 let configured = false;
 let active = false;
 let scheduled: ReturnType<typeof InteractionManager.runAfterInteractions> | null = null;
@@ -13,9 +14,10 @@ export function configureChatSummaryQueue(): void {
   if (configured) return;
   configured = true;
   subscribeChatSummaryChanged((_id, kind) => { if (kind === 'summary') requestChatSummaryRun(); });
+  subscribeAuxiliaryModelsChanged(requestChatSummaryRun);
   // 通话结束更新既有记录气泡，走 patched 而不是新增消息事件。
   setChatEventBus({ emit(eventName) {
-    if (eventName === 'messagesUpdated' || eventName === 'messagesPatched') requestChatSummaryRun();
+    if (eventName === 'messagesUpdated' || eventName === 'messagesPatched' || eventName === 'groupSpeechPlanChanged') requestChatSummaryRun();
   } });
 }
 export function requestChatSummaryRun(): void {

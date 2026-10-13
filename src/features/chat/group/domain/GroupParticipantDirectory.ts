@@ -12,6 +12,8 @@ export interface GroupAssistantParticipant {
   targetType: 'assistant';
   assistantId: string;
   displayName: string;
+  /** 仅用户 UI 使用；模型与 AI mention 解析继续使用公开 displayName。 */
+  nickname?: string | null;
   avatar: string | null;
   avatarMediaAssetId: string | null;
 }

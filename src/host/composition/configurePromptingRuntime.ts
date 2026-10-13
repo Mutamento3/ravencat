@@ -5,7 +5,7 @@ import {
   sqlitePromptingRepository,
   sqlitePromptDefaultsRepository,
 } from '@features/prompting/composition';
-import {
+import { getAssistantDisplayName,
   aiAssistantRepository,
   assistantToolPermissionRepository,
 } from '@features/assistants';
@@ -38,12 +38,13 @@ export function configurePromptingRuntime(): void {
     assistantPrompts: sqlitePromptingRepository,
     assistants: {
       async listOptions() {
-        return (await aiAssistantRepository.listSummaries()).map(({ id, name, isHostAI }) => ({ id, name, isHostAI }));
+        return (await aiAssistantRepository.listSummaries()).map((assistant) => ({ id: assistant.id, name: getAssistantDisplayName(assistant), isHostAI: assistant.isHostAI }));
       },
       async list() {
         return (await aiAssistantRepository.getAll()).map((assistant) => ({
           id: assistant.id,
           name: assistant.name,
+          nickname: assistant.nickname,
           model: assistant.model,
           avatar: assistant.avatar || null,
           persona: assistant.systemPrompt || '',
@@ -97,7 +98,7 @@ export function configurePromptingRuntime(): void {
         if (targetType === 'assistant') {
           return (await aiAssistantRepository.getAll()).map((assistant) => ({
             id: assistant.id,
-            name: assistant.name,
+            name: getAssistantDisplayName(assistant),
           }));
         }
         return (await groupChatRepository.getAll()).map((group) => ({

@@ -9,6 +9,8 @@
 
 ## 1. 产品语义
 
+当前主理可在单聊与群成员回复中使用已授权的一起听工具，仍复用同一轮冻结快照与 Activity owner。群邀请卡使用目标群身份与公开参与者名称，首张投影受群任务持久资格约束；终止后的失败首投影不会复活卡片。群页的接受、拒绝、退出沿用 Chat 网关，后续消息与群列表预览由共同消息命令在同一事务交接。一起听仍表达用户与主理的活动，不把其他群成员自动加入，不新增后台唤醒。
+
 Together Listening 表达用户与当前主理 AI 已经通过显式邀请和接受，共同进入一次一起听 Activity。
 
 ```text
@@ -30,6 +32,7 @@ V1 复用 Device Control 已验证的网易云 exact-package MediaSession 能力
 
 - `mediaId / title / artist / album / durationMs`；
 - playback state、position、speed 与更新时间；
+- 本地播放时系统当前选中媒体路由的设备名称；远程播放只标记远程，不冒用本机输出；
 - advertised actions；
 - `pause / resume / next / previous` transport control。
 
@@ -118,11 +121,22 @@ User Runtime Status 与 Together Listening Context 是两个独立 block：
 【当前共同活动】
 - 你与用户正在一起听网易云音乐。
 - 当前正在一起听歌曲：《歌曲名》— 歌手
+
+【当前歌词】
+- 本轮播放位置 1:03 对应的一句歌词："当前播到的歌词"
 ```
 
-普通播放只生成用户状态；只有 `active` Activity 才生成当前共同活动。Chat 与 autonomous / proactive prompt 都消费这些事实。
+普通播放只生成用户播放状态，不能据此推断共同活动。当前共同活动块始终明确表达当前主理 AI 的 `active`、等待邀请回应或没有正在进行的活动，覆盖历史对话和旧工具结果中的活动描述。`active` 时即使歌曲观察暂时不可用，也仍表达共同活动存在。Chat 与 autonomous / proactive prompt 都消费这些事实。
+
+媒体输出与歌曲共享本轮快照：本地 session 读取 Android `MediaRouter2` 的系统选中路由名称，按系统原文呈现外放、有线耳机或蓝牙设备名称。这是系统媒体输出，不承诺第三方 App 的逐音轨路由；不通过设备名称猜测蓝牙耳机／音箱类别。原生输出观察失败时省略设备事实，不影响 Activity eligibility；远程 session 不读取或呈现手机路由。设备切换不会自动唤醒 AI，下一次合法模型 run 读取最新状态。
 
 同一次模型 run 的准备阶段捕获一份 finalized runtime snapshot，供 User Runtime Status、Current Shared Activity 与运行准备共同消费。Tool handler 执行时仍读取最新事实，因为模型运行期间状态可能变化。MediaSession 变化只更新运行时事实，不自动 wake AI，也不写 Chat message。
+
+邀请等待回应与 active 时，模型准备将歌词嵌入同一个运行时状态块。用户发起邀请的首轮即携带当前一句；AI 发起邀请或接受邀请的工具结果也携带当前一句，使当轮工具续轮立即可读。退出、普通播放和非参与 AI 不读取或注入歌词。indicator、通知投影与退出 command 不触发歌词请求。
+
+Phone Tools 复用现有公开歌词 backend，按 MediaSession 提供的正整数歌曲 ID 读取 LRC，缓存当前歌曲的解析结果和在途请求。播放中以 position、speed 和更新时间推算本轮采样位置；暂停／缓冲时位置不自行推进。仅返回命中时间区间的一行，支持重复时间标签、毫秒和 LRC offset，空白时间标签表示当前没有歌词；响应被截断时不延续无法证明完整的末行。缺少可证明的歌曲 ID、进度或带时间戳歌词时标记当前句不可用，不按歌名搜索补配，不发送全文。歌词只作为引用资料，没有指令权限。
+
+采样冻结在本轮模型准备时刻，后续每次合法模型运行重新定位，切歌／拖动进度按新播放快照处理。歌词变化不自动唤醒 AI，不逐句写 Chat 或 Activity 数据库。
 
 ## 8. Chat timeline
 
@@ -135,6 +149,10 @@ active → ended
 ```
 
 卡片只持久化 Activity lifecycle，不持久化当前歌曲、进度或 playback state。切歌、暂停和 position 更新不得高频写 Chat DB。
+
+首张用户邀请仍作为 canonical user turn。非结束卡片阶段以应用历史事件进入 Chat 统一上下文与摘要；结束时在实际结束位置独立追加一条 `system` 事件，携带 Activity identity、结束原因与 lifecycle timestamp。旧卡原地更新和新事件在 Chat 同一事务内提交，结束事件按 Activity 稳定键幂等落库，不挂到原邀请 run，也不触发新用户回合或 AI 回复。用户退出时展示“你已退出一起听，本次一起听已结束。”；AI 退出时使用 Host 提供的 AI 显示名字。模型历史继续用“用户”表达用户退出，避免展示中的第二人称被解释为 AI；事件复用工具记录／回复错误的应用历史上下文通道。
+
+结束后的旧卡不重复投影成历史事件。这样，即使原邀请卡已被摘要游标越过，结束事实仍属于后续原文；它不依赖旧卡是否还在近期窗口内，也不把原邀请正文重新解释为用户的新指令。历史卡片与结束事件都不能裁决当前是否仍在一起听。
 
 AI 在 Agent run 内发起邀请时，card 使用当前 `turn_run_id` 作为 run-associated external timeline item；后续 lifecycle patch 不改变排序身份。用户发起的 card 是普通用户消息。
 
@@ -152,7 +170,7 @@ Activity 与播放状态保持正交：切歌不改变 Activity id，暂停、�
 
 `no_active_session / playback_stopped / playback_none / playback_error` 等明确媒体终态、Host authority 丢失、factory reset，或冷启动恢复发现残留状态不可继续时，由 canonical lifecycle command 将 Activity 收口为 `ended`。
 
-进入终态后，Chat card patch 为终态，Prompt 不再注入 Current Shared Activity，App indicator、standard notification 与 Floating projection 清除。
+进入终态后，Chat card patch 为终态，Prompt 明确注入当前没有正在进行的一起听活动，App indicator、standard notification 与 Floating projection 清除。
 
 ## 10. Presentation
 

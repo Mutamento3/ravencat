@@ -13,6 +13,7 @@ export type ChatSubScreen =
 
 export type GroupChatSubScreen =
   | 'menu'
+  | 'summary'
   | 'adminSettings';
 
 /**

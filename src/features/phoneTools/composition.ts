@@ -1,4 +1,5 @@
 /** 仅供 Host 组装 Phone Tools 的设备事实、Protected Apps 真值与网易云设备能力依赖。 */
+export { nativeNetEasePublicDataBackend } from './infrastructure/NativeNetEasePublicDataBackend';
 
 export {
   configureProtectedAppsRuntimeDependencies,

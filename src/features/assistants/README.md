@@ -1,7 +1,11 @@
 # Assistants 与辅助模型资产
 
+总结模型使用通用资产的持续引用，与角色／群管理员创建时的独立副本不同。资产调用参数、启停或删除与 Chat 引用任务资格撤销共享事务；保留引用、摘要正文和进度，不自动切换。一次性应用上下文设置通过 `applyAssistantContextLimits` 只复制四项数值，之后各角色独立修改，不增加继承关系。
+
 辅助模型中心创建、编辑、启停、删除和测试模型配置。每种能力首个配置可用后，Host 在同一事务中组合各 owner 的初始选择；后续新增不覆盖。AI 翻译与腾讯云的连接配置由 Assistants 作为资产管理，翻译参数契约、业务选择和调用归 Integrations。
-配置列表路由为 `/auxiliary-models/capabilities/[kind]`，包含 embedding、OCR、STT、TTS、translation 五类资产；历史退休的 translate 占位类型不进入列表。
+配置列表路由为 `/auxiliary-models/capabilities/[kind]`，包含 general、embedding、OCR、STT、TTS、translation 六类资产；历史退休的 translate 占位类型不进入列表。
+
+通用辅助模型复用资产的名称、连接、参数、启停、连接测试与自动保存表单，不参与首次资产初始化，不提供全局默认。单聊模型设置与群管理员设置可从当前合法草稿创建独立命名的副本；创建角色或群聊时可选择可用通用模型填入初始配置。复制字段为 API 地址、Key、模型、Temperature、Top P 与 Max Tokens，不复制角色名称、人设、上下文、工具权限或角色行为开关。复制只传递值，不保存来源 ID；双方后续编辑、停用或删除互不影响。创建表单显示填入的初始参数，连接测试使用这些参数，角色和管理员仍走原有创建命令。总结模型引用与调用见上方持续引用契约。行为验证为 `node --no-warnings scripts/verify-general-model-copies.mjs`。
 
 角色模型设置与已有辅助模型编辑自动保存：文字停止输入 1 秒或失焦提交，开关与选择立即提交。
 角色模型、视觉辅助模型和群聊管理员的 Temperature / Top P 使用公共 `SliderField`；连续拖动本地预览，松手提交最终值，保留手动输入和字段错误提示。
@@ -12,6 +16,10 @@
 校验与写入错误在页面内展示；返回先提交，未保存错误可修正或恢复已保存值。新建辅助模型仍需明确点击「创建」。
 输入、提交及页面生命周期契约见 [模型设置自动保存](../../../docs/architecture/model-settings-autosave.md)，行为验证为 `verify:model-settings-autosave`。
 单聊对话设置维护名称、人设、头像、上下文可见条数与多气泡回复，沿用助手已有字段并独立自动保存；模型页只编辑调用配置，重置不影响对话上下文。助手头像命令只更新头像；通用草稿确认复用 shared/ui，契约见 [对话设置自动保存](../../../docs/architecture/conversation-settings-autosave.md)。
+
+用户昵称位于对话设置的 AI 名称下方，仅用户可修改；空值恢复显示公开名称。`name` 仍是 AI 公开名称，`nickname` 是用户私有备注，用户界面通过 `getAssistantDisplayName` 解析。昵称与修改事件由 Assistants 在同一事务中保存，历史不修改聊天正文。Host 仅按可信当前角色 ID 注入自身昵称与完整称呼历史，放在历史之后、当前输入之前的动态 system 消息中。单聊额外注入尚未确认的修改提醒，成功提交最终回复后确认本轮事件上界；失败、取消及无最终回复不消费提醒，旧确认不覆盖后续编辑。群聊、通话与自主任务读取自身事实，不消费单聊提醒。其他 AI 的目录、群成员模型上下文与朋友圈工具继续使用公开名称；用户结构化 @ 在模型投影时按稳定成员 ID 转回公开名称。
+
+`node --no-warnings scripts/verify-assistant-nickname.mjs` 验证昵称的保存、清空、历史顺序、修改提醒、失败保留、旧确认隔离、并发与回滚，以及群聊和朋友圈的名称隐私。
 
 角色模型设置可弹窗选择角色 TTS，选择持久化于 `assistant_voice_settings`，用于该角色的语音消息和通话。新增角色在创建事务中初始化当前可用的首次 OCR 与 TTS 配置，之后独立更换或取消；任务解析不继承默认。
 

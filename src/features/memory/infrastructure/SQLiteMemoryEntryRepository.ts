@@ -104,6 +104,12 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
     return rows.map(mapEntry);
   }
 
+  async listEntryCounts(): Promise<ReadonlyMap<string, number>> {
+    const rows = await executor('listEntryCounts').getAllAsync<{ pool_id: string; count: number }>(
+      'SELECT pool_id, COUNT(*) AS count FROM memory_items GROUP BY pool_id');
+    return new Map(rows.map(row => [row.pool_id, row.count]));
+  }
+
   async getEntry(poolId: string, memoryId: string) {
     const row = await executor('getEntry').getFirstAsync<EntryRow>(`${ENTRY_QUERY} WHERE m.pool_id = ? AND m.id = ?`, [poolId, memoryId]);
     return row ? mapEntry(row) : null;

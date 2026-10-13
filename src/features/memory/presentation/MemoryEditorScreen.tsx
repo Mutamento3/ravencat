@@ -1,10 +1,10 @@
 /** 记忆正文编辑独立于列表路由，草稿不会随向量状态刷新而被覆盖。 */
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import type { MemoryEntry } from '../domain/Memory';
 import { addMemoryTrigger, editMemory, forgetMemory, rememberMemory, retryMemoryEmbedding } from '../application/MemoryCommands';
 import { useTheme, useThemedStyles } from '@shared/theme';
-import { NavigationHeader, useBusyBackHandler, showAppDialog } from '@shared/ui';
+import { KeyboardAvoidingContainer, NavigationHeader, useBusyBackHandler, showAppDialog } from '@shared/ui';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { createMemoryScreenStyles } from './memoryScreenStyles';
 import useMemoryManagementSnapshot from './useMemoryManagementSnapshot';
@@ -45,7 +45,7 @@ export default function MemoryEditorScreen({ assistantId, memoryId, onBack }: {
       { text: '取消', style: 'cancel' }, { text: '删除', style: 'destructive', onPress: () => { void run(() => forgetMemory(assistantId, memoryId!), true); } },
     ] });
   };
-  return <SafeAreaView style={styles.screen}><KeyboardAvoidingView style={styles.screen} behavior="height">
+  return <SafeAreaView style={styles.screen}><KeyboardAvoidingContainer style={styles.screen}>
     <NavigationHeader title={editing ? '编辑记忆' : '新建记忆'} onGoBack={() => { if (!busy) onBack(); }} />
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
       {error && <Text style={styles.danger}>{error}</Text>}
@@ -78,5 +78,5 @@ export default function MemoryEditorScreen({ assistantId, memoryId, onBack }: {
 
       </>}
     </ScrollView>
-  </KeyboardAvoidingView></SafeAreaView>;
+  </KeyboardAvoidingContainer></SafeAreaView>;
 }

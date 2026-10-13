@@ -34,6 +34,10 @@ complete / stream 使用同一组装路径；附图只属于本次模型观察�
 
 ## 3. 工具契约与权限
 
+群成员回复使用同一 Registry、Executor、RunLoop 与 ChatAgent timeline。群任务将自身 ID 作为 run ID，群 owner 在每条正文／媒体物化事务内检查任务与 plan 的持久资格，取消后保留已提交事实、丢弃未提交意图。工具错误消息也使用装饰后的群提交 Repository，不能绕过 fence。模型调用与语音／图片准备均在事务外；Runtime 不拥有群进度或消息提交。
+
+群场景逐项启用已授权语音、表情、图片及既有业务工具，保留主理与 owner 限制；`request_video_call` 明确禁止。Together Listening 主理工具沿用既有运行快照、Activity、授权与目标会话投影，无群专属隐私授权或后台唤醒机制。
+
 Built-in 与 MCP 最终都通过同一 Registry、Executor 和 RunLoop。工具定义提供 name、description、inputSchema 与 execute，Runtime 不理解其后是 SQLite、Android、Memory、Moments 或远端网络。
 
 Host 冻结工具暴露面，Runtime 校验当前 allowlist 与 schema，Feature execute 裁决真正的业务前置条件。未知、未授权和非法参数都不执行。

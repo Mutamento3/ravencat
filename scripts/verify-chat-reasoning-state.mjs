@@ -1,4 +1,4 @@
-/** 思维链按消息隔离展开状态、流式更新与回收后的尺寸回归。 */
+/** 验证思维链展开、原生文字选择、流式更新与回收后的状态隔离。 */
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -37,8 +37,13 @@ const themeApi = {
   isMoonKimiTheme: (value) => value.id === 'moon-kimi',
   isPaperNoteTheme: (value) => value.id === 'paper-note',
   GlassSurface: 'GlassSurface',
+  useThemedStyles: (factory) => factory(theme),
 };
-const native = { View: 'View', Text: 'Text', TouchableOpacity: 'TouchableOpacity', StyleSheet: { create: (value) => value, hairlineWidth: 1 } };
+const native = {
+  View: 'View', Text: 'Text', TouchableOpacity: 'TouchableOpacity',
+  StyleSheet: { create: (value) => value, hairlineWidth: 1 },
+};
+const processCard = { __esModule: true, default: (props) => React.createElement('ProcessCard', props, props.expanded ? props.children : null) };
 const styles = { createMessageBubbleStyles: () => ({}) };
 const contents = {
   BubbleAttachmentList: 'Attachments', BubbleTextContent: 'Body', TranslationBlock: 'Translation',
@@ -52,7 +57,7 @@ const Bubble = load('src/features/chat/presentation/messages/MessageBubble/index
   './styles': styles, './Avatar': { Avatar: 'Avatar' }, './ReplyQuote': { ReplyQuote: 'Quote' },
   './TokenInfo': { TokenInfo: 'TokenInfo' }, './ReasoningHeader': { ReasoningHeader: 'ReasoningHeader' },
   '../components/SharedChatRecordView': defaultStub('SharedChatRecord'),
-  './OfficialReplicaProcessCard': defaultStub('ProcessCard'), './PaperNoteMessageFrame': defaultStub('PaperFrame'),
+  './OfficialReplicaProcessCard': processCard, './PaperNoteMessageFrame': defaultStub('PaperFrame'),
   './StickerMessageCard': defaultStub('Sticker'), './VoiceMessageCard': defaultStub('Voice'),
   './layoutProbe': { isLayoutProbeEnabled: () => false }, './MessageBubbleContent': contents,
 }).default;
@@ -67,6 +72,7 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   const previousLayouts = layouts;
   act(() => header(renderer).props.onToggle());
   assert.equal(expanded(renderer), true);
+  assert.equal(renderer.root.findByType('Body').props.selectable, true, '各主题的思维链正文应启用原生选择');
   assert.ok(layouts > previousLayouts, '展开改变列表项高度时应通知列表重新布局');
   if (id === 'moon-kimi') {
     act(() => {
@@ -122,7 +128,7 @@ const ActionGroup = load('src/features/chat/presentation/messages/MessageBubble/
   },
   '@features/chat/messages/application/AgentTransientTimeline': { getAgentTimelineRenderKey: (message) => String(message.id) },
   '@shared/theme': { ...themeApi, getChatInteractionProfile: (value) => ({ reasoningSurface: value.id === 'moon-kimi' ? 'official-replica' : 'default', toolStatusSurface: value.id === 'moon-kimi' ? 'official-replica' : 'default' }) },
-  './styles': styles, './OfficialReplicaProcessCard': defaultStub('ProcessCard'), './MessageBubbleContent': contents,
+  './styles': styles, './OfficialReplicaProcessCard': processCard, './MessageBubbleContent': contents,
 }).default;
 for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   theme = { ...theme, id };
@@ -137,6 +143,84 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   const reasoning = { id: 4, senderType: 'reasoning', text: '真实思考内容', metadataJson: '{}' };
   act(() => renderer.update(React.createElement(ActionGroup, { group: { ...group, children: [reasoning, ...children] } })));
   assert.deepEqual(renderer.root.findAllByType('Body').map((node) => node.props.text), ['真实思考内容'], '修复纯工具步骤后，真实思维链仍须完整显示');
+  const secondReasoning = { ...reasoning, id: 5, text: '**第二段**\n思考内容' };
+  const activity = { id: 6, senderType: 'system', text: '等待 AI 响应…', metadataJson: JSON.stringify({ type: 'agentActivity', phase: 'started' }) };
+  act(() => renderer.update(React.createElement(ActionGroup, { group: { ...group, children: [activity, reasoning, ...children, secondReasoning] } })));
+  assert.deepEqual(renderer.root.findAllByType('Body').map((node) => node.props.selectable), [false, true, true], '行动步骤仅思考正文启用原生选择');
   act(() => renderer.unmount());
+}
+
+// Markdown 使用真实解析与渲染，只有 React Native 原生节点由占位组件承接。
+const markdownRoot = path.join(root, 'node_modules/react-native-markdown-renderer/lib/commonjs');
+const markdownCache = new Map();
+function loadMarkdown(file = path.join(markdownRoot, 'index.js')) {
+  if (markdownCache.has(file)) return markdownCache.get(file).exports;
+  const module = { exports: {} };
+  markdownCache.set(file, module);
+  new Function('module', 'exports', 'require', fs.readFileSync(file, 'utf8'))(module, module.exports, (name) => {
+    if (name === 'react-native') return { ...native, Platform: { select: (options) => options.android }, Image: 'Image', TouchableWithoutFeedback: 'TouchableWithoutFeedback' };
+    if (name.startsWith('.')) return loadMarkdown(path.resolve(path.dirname(file), `${name}.js`));
+    return fromRepo(name);
+  });
+  return module.exports;
+}
+const markdownLibrary = loadMarkdown();
+const selectableMarkdown = load('src/features/chat/presentation/messages/MessageBubble/selectableMarkdownRenderer.tsx', {
+  react: React, 'react-native': native, 'react-native-markdown-renderer': markdownLibrary,
+});
+const { BubbleTextContent } = load('src/features/chat/presentation/messages/MessageBubble/MessageBubbleContent.tsx', {
+  react: React, 'react-native': native, '@shared/theme': themeApi,
+  'react-native-markdown-renderer': markdownLibrary,
+  './selectableMarkdownRenderer': selectableMarkdown,
+  '@shopify/flash-list': { useMappingHelper: () => ({ getMappingKey: (key) => key }) },
+  './AttachmentCard': defaultStub('Attachment'), './styles': styles,
+});
+const textProps = { hasTextContent: true, plainTextStyle: {}, markdownStyles: { text: { fontSize: 12 }, strong: { fontWeight: '700' }, heading1: { fontSize: 18 } }, selectable: true };
+let textRenderer;
+act(() => { textRenderer = create(React.createElement(BubbleTextContent, { ...textProps, text: '第一段\n\n第二段', paragraphSpacing: 24, shouldUseMarkdown: false })); });
+assert.ok(textRenderer.root.findAllByType('Text').some((node) => node.props.selectable && node.props.children === '第一段\n\n第二段'), '多段纯文本必须位于同一原生选区');
+act(() => textRenderer.update(React.createElement(BubbleTextContent, { ...textProps, text: '完整纯文本', shouldUseMarkdown: false })));
+assert.equal(textRenderer.root.findByType('Text').props.selectable, true);
+act(() => textRenderer.update(React.createElement(BubbleTextContent, { ...textProps, text: '完整纯文本', selectable: false, shouldUseMarkdown: false })));
+assert.equal(textRenderer.root.findByType('Text').props.selectable, false, '普通正文不改变现有长按行为');
+const markdownText = '# 标题\n\n含 **加粗** 与 [链接](https://example.com) 的段落\n\n- 第一项\n- 第二项\n  - 子项\n\n3. 第三项\n4. 第四项\n\n> 引用内容\n\n```ts\nconst value = 1;\n```\n\n    缩进代码\n\n| 表头甲 | 表头乙 |\n| --- | --- |\n| 内容甲 | 内容乙 |';
+act(() => textRenderer.update(React.createElement(BubbleTextContent, { ...textProps, text: markdownText, shouldUseMarkdown: true })));
+const selectableTexts = textRenderer.root.findAllByType('Text').filter((node) => node.props.selectable);
+function renderedText(node) {
+  return typeof node === 'string' ? node : node.children.map(renderedText).join('');
+}
+const expectedContent = ['标题', '加粗', '链接', '• 第一项\n• 第二项', '  • 子项', '3. 第三项\n4. 第四项', '引用内容', 'const value = 1;', '缩进代码', '表头甲 | 表头乙\n内容甲 | 内容乙'];
+assert.ok(selectableTexts.some((node) => expectedContent.every((content) => renderedText(node).includes(content))), '标题、多个列点、段落、代码和表格内容必须处于同一原生选区，不能仅逐块可选');
+assert.ok(selectableTexts.every((node) => node.findAllByType('View').length === 0), '原生文字选区内部不能被块级布局容器切断');
+assert.ok(textRenderer.root.findAllByType('Text').some((node) => node.props.style?.fontSize === 18), '连续选择仍保留标题字号');
+assert.ok(textRenderer.root.findAllByType('Text').some((node) => node.props.style?.fontWeight === '700'), '连续选择仍保留加粗格式');
+assert.ok(textRenderer.root.findAllByType('Text').some((node) => node.props.onPress), '原生选择不移除链接点击行为');
+act(() => textRenderer.update(React.createElement(BubbleTextContent, { ...textProps, text: markdownText, selectable: false, shouldUseMarkdown: true })));
+assert.equal(textRenderer.root.findAllByType('Text').filter((node) => node.props.selectable).length, 0, '普通 Markdown 不启用思维链的选择策略');
+act(() => textRenderer.unmount());
+
+const { TouchableMessageBubble } = load('src/features/chat/presentation/messages/components/ChatMessageListParts.tsx', {
+  react: React, 'react-native': { ...native, TouchableWithoutFeedback: 'TouchableWithoutFeedback' },
+  'lucide-react-native': { Check: 'Check', Circle: 'Circle' },
+  '../MessageBubble': defaultStub('MessageBubble'), '../MessageBubble/ActionGroupProcessCard': defaultStub('ActionGroup'),
+  '../MessageBubble/layoutProbe': { isLayoutProbeEnabled: () => false },
+  './TogetherListeningActivityCard': defaultStub('TogetherListeningCard'), './ChatMessageInlineActions': defaultStub('InlineActions'),
+  '../../../messages/domain/chatMessageMetadata': { getMessageSharedRecord: () => null, parseMessageMetadata: () => null },
+  './chatMessageRenderUtils': {}, './chatActionGrouping': {}, './chatStyles': { createMessageListPartsStyles: () => ({}) },
+  './togetherListeningCardViewModel': {},
+  '@shared/theme': { ...themeApi, getChatInteractionProfile: (value) => ({
+    enableMessageLongPressMenu: true, reasoningSurface: value.id === 'moon-kimi' ? 'official-replica' : 'default',
+  }) },
+});
+for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
+  theme = { ...theme, id };
+  const props = { msg: { id: 1, senderType: 'reasoning', text: '思考内容', isMe: false, status: 'sent' }, resolvedAIIdentity: {}, onMessageLongPress: () => {} };
+  let touchRenderer;
+  act(() => { touchRenderer = create(React.createElement(TouchableMessageBubble, props)); });
+  assert.equal(touchRenderer.root.findAll((node) => typeof node.props.onLongPress === 'function').length, 0, '所有主题的思维链外层均不能抢占原生长按');
+  act(() => touchRenderer.unmount());
+  act(() => { touchRenderer = create(React.createElement(TouchableMessageBubble, { ...props, msg: { ...props.msg, senderType: 'assistant' } })); });
+  assert.equal(touchRenderer.root.findAllByType('TouchableWithoutFeedback').length, 1, '普通消息继续支持已有操作菜单');
+  act(() => touchRenderer.unmount());
 }
 console.log('Chat reasoning state verification passed.');

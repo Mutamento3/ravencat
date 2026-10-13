@@ -288,6 +288,9 @@ try {
     assert.deepEqual(updates, [{ apiKey: 'new', updatedAt: 'committed' }]);
     let stateIndex = 0; let confirmation;
     const { default: renderHostSettings } = load(`${directory}management/AIModelSettings/useHostAISetting.ts`, {
+      '../../../AssistantNickname': load('src/features/assistants/AssistantNickname.ts', {
+        './infrastructure/SQLiteAssistantRepository': { aiAssistantRepository: {} },
+      }),
       react: { useCallback: (callback) => callback, useEffect() {},
         useState: (value) => [stateIndex++ === 1 ? false : value, () => {}] },
       '@shared/ui': { showAppDialog() {} },
@@ -306,18 +309,22 @@ try {
   {
     const theme = { spacing: { lg: 16, md: 8, sm: 4, xs: 2 }, radius: { md: 8 },
       colors: { surface: { input: '#fff' }, feedback: { error: '#e00' }, text: { primary: '#111', secondary: '#555', tertiary: '#888' } } };
-    const react = { default: { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }) } };
+    const react = { default: { createElement: (type, props, ...children) => typeof type === 'function'
+      ? type({ ...props, children }) : { type, props: props ?? {}, children } },
+      forwardRef: (render) => (props) => render(props, null) };
     const themeModule = { useTheme: () => theme, useThemedStyles: (factory) => factory(theme) };
+    const native = { View: 'View', Text: 'Text', TextInput: 'TextInput', StyleSheet: { create: (styles) => styles } };
     const { default: InputField } = load('src/shared/ui/InputField.tsx', {
       react, '@shared/theme': themeModule,
-      'react-native': { View: 'View', Text: 'Text', TextInput: 'TextInput', StyleSheet: { create: (styles) => styles } },
+      'react-native': native,
+      './AppTextInput': load('src/shared/ui/AppTextInput.tsx', { react, '@shared/theme': themeModule, 'react-native': native }),
     });
     let blurred = false;
     const field = InputField({ value: '3', onChangeText() {}, onBlur: () => { blurred = true; }, error: '输入无效，尚未保存' });
     const input = field.children.find((child) => child?.type === 'TextInput');
     const message = field.children.find((child) => child?.type === 'Text');
     assert.equal(input.props.value, '3');
-    assert.ok(input.props.style.some((style) => style?.borderColor === '#e00'));
+    assert.ok(input.props.style.flat(Infinity).some((style) => style?.borderColor === '#e00'));
     assert.deepEqual(message.children, ['输入无效，尚未保存']);
     assert.equal(message.props.accessibilityRole, 'alert');
     input.props.onBlur(); assert.equal(blurred, true);

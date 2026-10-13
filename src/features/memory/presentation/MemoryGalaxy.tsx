@@ -1,20 +1,33 @@
 /** 星空只拥有视觉坐标与交互；空间事实和导航由上层提供。 */
 import React, { memo, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, State } from 'react-native-gesture-handler';
 import Animated, {
   cancelAnimation, Easing, useAnimatedStyle, useReducedMotion, useSharedValue,
   withRepeat, withSequence, withSpring, withTiming, type SharedValue,
 } from 'react-native-reanimated';
-import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
 import { useTheme, useThemedStyles } from '@shared/theme';
-import type { MemorySpaceDescriptor } from '../domain/Memory';
+import type { MemoryManagementSnapshot } from '../application/MemoryQueries';
 import { createMemoryGalaxyStyles } from './memoryGalaxyStyles';
 import { NEAR_STAR_LAYERS, type GalaxyStar } from './galaxyStarField';
+import MemoryPlanet, { type PlanetTexture } from './MemoryPlanet';
 
 const SPACES_PER_PAGE = 6;
 const MIN_SCALE = 0.8;
 const MAX_SCALE = 1.8;
+type GalaxySpace = MemoryManagementSnapshot['spaces'][number];
+const ORBIT_LANES = [{ x: 0.76, y: 0.62 }, { x: 0.9, y: 0.82 }, { x: 1, y: 1 }];
+const PRIMARY_TEXTURE: PlanetTexture = {
+  source: require('./assets/neptune.png'), frame: { x: 18, y: 18, width: 92, height: 92 }, rotation: 0,
+};
+// 取景按 NASA 原图的圆盘位置校准；不缩放生成第二套图片，也不根据像素猜测留白。
+const SATELLITE_TEXTURES: PlanetTexture[] = [
+  { source: require('./assets/mars.jpg'), frame: { x: 16, y: 16, width: 96, height: 96 }, rotation: 0 },
+  { source: require('./assets/jupiter.jpg'), frame: { x: -15, y: 21, width: 154, height: 87 }, rotation: 0 },
+  { source: require('./assets/mercury.jpg'), frame: { x: 20, y: 20, width: 88, height: 88 }, rotation: 0 },
+  { source: require('./assets/europa.jpg'), frame: { x: 20, y: 19, width: 88, height: 65 }, rotation: 0 },
+  { source: require('./assets/ganymede.jpg'), frame: { x: 7, y: 19.5, width: 118, height: 88.5 }, rotation: 180 },
+];
 
 function BackgroundStar({ star, width, height, touchX, touchY, pulse, color }: {
   star: GalaxyStar; width: number; height: number; color: string;
@@ -53,69 +66,73 @@ function StarLayer({ stars, layer, width, height, phase, touchX, touchY, pulse, 
   </Animated.View>;
 }
 
-function SpaceStar({ space, index, count, width, height, rotation, phase, onSelect, disabled }: {
-  space: MemorySpaceDescriptor; index: number; count: number; width: number; height: number;
-  rotation: SharedValue<number>; phase: SharedValue<number>; onSelect(assistantId: string): void; disabled: boolean;
+function SpacePlanet({ space, texture, primary, index, count, width, height, orbitX, orbitY, rotation, phase, starOrbit, onSelect, disabled }: {
+  space: GalaxySpace; index: number; count: number; width: number; height: number;
+  primary: boolean; orbitX: number; orbitY: number;
+  texture: PlanetTexture;
+  rotation: SharedValue<number>; phase: SharedValue<number>; starOrbit: SharedValue<number>;
+  onSelect(assistantId: string): void; disabled: boolean;
 }) {
-  const theme = useTheme();
   const styles = useThemedStyles(createMemoryGalaxyStyles);
-  const starlight = theme.mode === 'dark' ? theme.colors.text.primary : theme.colors.text.inverse;
+  const diameter = primary ? (count === 0 ? 116 : 96) : 32 + Math.min(12, Math.log2(1 + space.memoryCount) * 2.1);
+  const canvasSize = diameter * 1.6;
+  const buttonWidth = primary ? 184 : 104;
+  const lane = ORBIT_LANES[index % ORBIT_LANES.length];
   const position = useAnimatedStyle<ViewStyle>(() => {
+    if (primary) return { zIndex: 1 };
     const angle = index / count * Math.PI * 2 - Math.PI / 2 + rotation.value * Math.PI / 180;
-    // 轨道直接定义在视口内，文字保持正向，不创建巨型世界或反向旋转层。
-    const x = count === 1 ? 0 : Math.cos(angle) * Math.max(0, width / 2 - 70);
-    const y = count === 1 ? 0 : Math.sin(angle) * Math.max(0, height / 2 - 90);
-    return { transform: [{ translateX: x }, { translateY: y }] as const };
+    const depth = (Math.sin(angle) + 1) / 2;
+    return {
+      zIndex: depth > 0.5 ? 2 : 0,
+      opacity: 0.64 + depth * 0.36,
+      transform: [{ translateX: Math.cos(angle) * orbitX * lane.x }, { translateY: Math.sin(angle) * orbitY * lane.y }, { scale: 0.86 + depth * 0.14 }] as const,
+    };
   });
-  const glow = useAnimatedStyle(() => ({ opacity: 0.7 + Math.sin(phase.value * Math.PI * 2 + index) * 0.2 }));
-  const orbit = useAnimatedStyle<ViewStyle>(() => ({ transform: [{ rotate: `${phase.value * 360}deg` }] as const }));
-
-  return <Animated.View style={[styles.spaceStar, { left: width / 2 - 56, top: height / 2 - 44 }, position]}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`打开${space.assistantName}的记忆空间`} disabled={disabled} onPress={() => onSelect(space.assistantId)} style={({ pressed }) => [styles.spaceButton, pressed && styles.pressedStar]}>
-      <View style={styles.starBody}>
-        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, glow]}>
-          <Svg width={88} height={88} viewBox="0 0 88 88">
-            <Defs>
-              <RadialGradient id={`glow-${space.poolId}`} gradientUnits="userSpaceOnUse" cx={44} cy={44} rx={44} ry={44}>
-                <Stop offset="0" stopColor={theme.colors.brand.primary} stopOpacity={0.5} />
-                <Stop offset="1" stopColor={theme.colors.brand.primary} stopOpacity={0} />
-              </RadialGradient>
-              <RadialGradient id={`core-${space.poolId}`} gradientUnits="userSpaceOnUse" cx={37} cy={37} rx={34} ry={34}>
-                <Stop offset="0" stopColor={starlight} />
-                <Stop offset="1" stopColor={theme.colors.brand.primary} />
-              </RadialGradient>
-            </Defs>
-            <Circle cx={44} cy={44} r={44} fill={`url(#glow-${space.poolId})`} />
-            <Circle cx={44} cy={44} r={35} fill="none" stroke={starlight} strokeOpacity={0.16} />
-            <Circle cx={44} cy={44} r={41} fill="none" stroke={starlight} strokeOpacity={0.08} />
-            <Circle cx={44} cy={44} r={22} fill={`url(#core-${space.poolId})`} />
-          </Svg>
-        </Animated.View>
-        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, orbit]}>
-          <Svg width={88} height={88}><Circle cx={44} cy={9} r={1.5} fill={starlight} /><Circle cx={79} cy={44} r={2} fill={starlight} /></Svg>
-        </Animated.View>
-        <Text style={styles.starShort}>{space.assistantName.slice(0, 1)}</Text>
+  return <Animated.View style={[styles.spacePlanet, { width: buttonWidth, left: width / 2 - buttonWidth / 2, top: height / 2 - canvasSize / 2 }, position]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`打开${space.assistantName}的记忆空间，${space.memoryCount}条记忆`} disabled={disabled} onPress={() => onSelect(space.assistantId)} style={({ pressed }) => [styles.spaceButton, pressed && styles.pressedPlanet]}>
+      <View style={[styles.planetBody, { width: canvasSize, height: canvasSize }]}>
+        <MemoryPlanet memoryCount={space.memoryCount} phase={phase} starOrbit={starOrbit} texture={texture} primary={primary} diameter={diameter} />
       </View>
-      <Text style={styles.starName} numberOfLines={1}>{space.assistantName}</Text>
-      {space.isHost && <Text style={styles.starCount}>主理空间</Text>}
+      <Text style={[styles.planetName, primary && styles.primaryPlanetName]} numberOfLines={1}>{space.assistantName}</Text>
+      {space.isHost && <Text style={styles.planetMeta}>主理空间</Text>}
     </Pressable>
   </Animated.View>;
 }
 
 function MemoryGalaxy({ spaces, paused, disabled, onSelect }: {
-  spaces: MemorySpaceDescriptor[]; paused: boolean; disabled: boolean; onSelect(assistantId: string): void;
+  spaces: GalaxySpace[]; paused: boolean; disabled: boolean; onSelect(assistantId: string): void;
 }) {
   const theme = useTheme();
   const styles = useThemedStyles(createMemoryGalaxyStyles);
   const starlight = theme.mode === 'dark' ? theme.colors.text.primary : theme.colors.text.inverse;
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [page, setPage] = useState(0);
-  const pageCount = Math.ceil(spaces.length / SPACES_PER_PAGE);
+  // 主理空间固定在中心；没有主理身份时，首个空间作为本页的视觉中心。
+  const primarySpace = spaces.find(space => space.isHost) ?? spaces[0];
+  const satellites = useMemo(() => spaces.filter(space => space.assistantId !== primarySpace.assistantId), [spaces, primarySpace.assistantId]);
+  const pageCount = Math.max(1, Math.ceil(satellites.length / (SPACES_PER_PAGE - 1)));
   const currentPage = Math.min(page, pageCount - 1);
-  const visibleSpaces = useMemo(() => spaces.slice(currentPage * SPACES_PER_PAGE, (currentPage + 1) * SPACES_PER_PAGE), [spaces, currentPage]);
+  const visibleSpaces = useMemo(() => satellites.slice(currentPage * (SPACES_PER_PAGE - 1), (currentPage + 1) * (SPACES_PER_PAGE - 1)), [satellites, currentPage]);
+  const textures = useMemo(() => {
+    const assigned = new Map<string, PlanetTexture>();
+    const used = new Set<number>();
+    // 每页最多五个外围空间，五种素材保证页内无重复；固定身份顺序让事实刷新不洗牌。
+    for (const space of [...visibleSpaces].sort((a, b) => a.assistantId.localeCompare(b.assistantId))) {
+      let hash = 0;
+      for (const character of space.assistantId) hash = Math.imul(hash, 31) + character.charCodeAt(0);
+      let index = (hash >>> 0) % SATELLITE_TEXTURES.length;
+      while (used.has(index)) index = (index + 1) % SATELLITE_TEXTURES.length;
+      used.add(index);
+      assigned.set(space.assistantId, SATELLITE_TEXTURES[index]);
+    }
+    return assigned;
+  }, [visibleSpaces]);
+  const orbitX = Math.max(0, viewport.width / 2 - 60);
+  const orbitY = Math.max(0, viewport.height / 2 - 72);
   const reducedMotion = useReducedMotion();
   const phase = useSharedValue(0);
   const rotation = useSharedValue(0);
+  const starOrbit = useSharedValue(0);
   const pulse = useSharedValue(0);
   const touchX = useSharedValue(-1000);
   const touchY = useSharedValue(-1000);
@@ -142,14 +159,16 @@ function MemoryGalaxy({ spaces, paused, disabled, onSelect }: {
     if (active) {
       phase.value = withRepeat(withTiming(phase.value + 1, { duration: 12000, easing: Easing.linear }), -1);
       rotation.value = withRepeat(withTiming(rotation.value + 360, { duration: 180000, easing: Easing.linear }), -1);
+      starOrbit.value = withRepeat(withTiming(starOrbit.value + 360, { duration: 45000, easing: Easing.linear }), -1);
     }
     return () => {
       cancelAnimation(phase);
       cancelAnimation(rotation);
+      cancelAnimation(starOrbit);
       cancelAnimation(pulse);
       pulse.value = 0;
     };
-  }, [active, phase, rotation, pulse]);
+  }, [active, phase, rotation, starOrbit, pulse]);
 
   const pan = Gesture.Pan().enabled(!paused && !disabled).maxPointers(1).minDistance(8)
     .onStart(() => { panStartX.value = offsetX.value; panStartY.value = offsetY.value; })
@@ -158,6 +177,10 @@ function MemoryGalaxy({ spaces, paused, disabled, onSelect }: {
       offsetY.value = Math.max(-viewport.height * 0.6, Math.min(viewport.height * 0.6, panStartY.value + e.translationY));
     });
   const pinch = Gesture.Pinch().enabled(!paused && !disabled)
+    .onTouchesUp((event, manager) => {
+      // Android 会在第一根手指抬起后继续更新单指焦点；先结束双指缩放，保留最后的双指位置。
+      if (event.state === State.ACTIVE && event.numberOfTouches < 2) manager.end();
+    })
     .onStart(e => {
       pinchStartScale.value = scale.value;
       pinchStartX.value = offsetX.value;
@@ -186,7 +209,8 @@ function MemoryGalaxy({ spaces, paused, disabled, onSelect }: {
           {NEAR_STAR_LAYERS.map((stars, i) => <StarLayer key={i} stars={stars} layer={i} width={viewport.width} height={viewport.height} color={starlight} phase={phase} touchX={touchX} touchY={touchY} pulse={pulse} />)}
         </View>
         <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFill, worldTransform]}>
-          {visibleSpaces.map((space, i) => <SpaceStar key={space.poolId} space={space} index={i} count={visibleSpaces.length} width={viewport.width} height={viewport.height} rotation={rotation} phase={phase} onSelect={onSelect} disabled={disabled || paused} />)}
+          <SpacePlanet space={primarySpace} texture={PRIMARY_TEXTURE} primary index={0} count={visibleSpaces.length} width={viewport.width} height={viewport.height} orbitX={orbitX} orbitY={orbitY} rotation={rotation} phase={phase} starOrbit={starOrbit} onSelect={onSelect} disabled={disabled || paused} />
+          {visibleSpaces.map((space, i) => <SpacePlanet key={space.poolId} space={space} texture={textures.get(space.assistantId)!} primary={false} index={i} count={visibleSpaces.length} width={viewport.width} height={viewport.height} orbitX={orbitX} orbitY={orbitY} rotation={rotation} phase={phase} starOrbit={starOrbit} onSelect={onSelect} disabled={disabled || paused} />)}
         </Animated.View>
       </View>
     </GestureDetector>
