@@ -66,6 +66,7 @@ export {
 } from './ConversationTurnExecutionHost';
 export { createRandomUUID } from './randomUUID';
 export { copyTextToClipboard } from './Clipboard';
+export { TextSelectionScrollView, releaseTextSelectionFocus } from './TextSelection';
 export {
   voiceRecordingPort,
   clearVoiceRecordingDataForFactoryReset,

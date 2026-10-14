@@ -1,7 +1,8 @@
 /** 渲染聊天消息气泡，组合头像、正文、附件、翻译、思维链与工具状态。 */
 
-import React, { memo, useCallback, useMemo } from 'react';
+import React, { memo, useCallback, useMemo, useRef } from 'react';
 import { useRecyclingState } from '@shopify/flash-list';
+import { releaseTextSelectionFocus } from '@platform/device';
 import {
   View,
   Text,
@@ -211,6 +212,9 @@ function MessageBubble({
 
   // FlashList 会复用气泡实例；展开状态和滚动尺寸归消息所有，不能随实例传给下一条。
   const [isExpanded, setIsExpanded] = useRecyclingState(false, [messageId]);
+  const currentMessageId = useRef(messageId);
+  currentMessageId.current = messageId;
+  const toggleRequest = useRef(0);
   const [reasoningBodyHeight, setReasoningBodyHeight] = useRecyclingState(0, [messageId]);
   const [reasoningContentHeight, setReasoningContentHeight] = useRecyclingState(0, [messageId]);
   const fallbackIsReasoning = senderType === 'reasoning';
@@ -316,9 +320,15 @@ function MessageBubble({
     };
   }, [isMe, messageId, presentationRunKey, theme.id, useWideMarkdownLayout, senderType]);
 
-  const handleToggleExpanded = useCallback(() => {
-    setIsExpanded((previous) => !previous);
-  }, [setIsExpanded]);
+  const handleToggleExpanded = useCallback(async () => {
+    const request = ++toggleRequest.current;
+    if (isExpanded) {
+      await releaseTextSelectionFocus();
+      if (currentMessageId.current !== messageId || request !== toggleRequest.current) return;
+    }
+    // 连点收起和迟到的原生响应都不能把后来请求的展开状态反转。
+    setIsExpanded(!isExpanded);
+  }, [isExpanded, messageId, setIsExpanded]);
 
   const handleReasoningBodyLayout = useCallback((event: LayoutChangeEvent) => {
     setReasoningBodyHeight(event.nativeEvent.layout.height);

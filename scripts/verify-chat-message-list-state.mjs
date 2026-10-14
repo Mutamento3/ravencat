@@ -449,11 +449,51 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
 {
   let scrolls = 0;
   let offset = 600;
+  let scrollContainerMounts = 0;
+  let scrollContainerUnmounts = 0;
+  const ScrollView = React.forwardRef(function ScrollView(props, ref) {
+    React.useEffect(() => {
+      scrollContainerMounts++;
+      return () => { scrollContainerUnmounts++; };
+    }, []);
+    return React.createElement('NativeScroller', { ...props, ref });
+  });
+  const native = {
+    View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView,
+    requireNativeComponent: () => 'NativeTextSelectionScrollView',
+    Animated: {
+      createAnimatedComponent: (Component) => React.forwardRef(function AnimatedComponent(props, ref) {
+        return React.createElement(Component, { ...props, ref });
+      }),
+    },
+  };
+  const selection = loadModule('src/platform/device/TextSelection.tsx', (name) => {
+    if (name === 'react') return React;
+    if (name === 'react-native') return native;
+    if (name === 'expo-modules-core') return { requireNativeModule: () => ({ releaseFocus: async () => {} }) };
+    throw new Error(`未预期的文字选择适配依赖：${name}`);
+  });
+  // 使用 FlashList 真正的滚动组件装配，覆盖动画包装层造成容器重建的回归。
+  const { useSecondaryProps } = loadModule(
+    'node_modules/@shopify/flash-list/src/recyclerview/hooks/useSecondaryProps.tsx',
+    (name) => {
+      if (name === 'react') return React;
+      if (name === 'react-native') return native;
+      if (name === '../utils/componentUtils') {
+        return loadModule('node_modules/@shopify/flash-list/src/recyclerview/utils/componentUtils.ts', () => React);
+      }
+      if (name === '../components/CompatView') return { CompatView: 'View' };
+      if (name === '../components/CompatScroller') return { CompatAnimatedScroller: ScrollView };
+      if (name === '../utils/getInvertedTransformStyle') return {};
+      throw new Error(`未预期的 FlashList 滚动装配依赖：${name}`);
+    },
+  );
   const FlashList = React.forwardRef(function FlashList(props, ref) {
+    const { CompatScrollView } = useSecondaryProps(props);
     React.useImperativeHandle(ref, () => ({
       scrollToEnd: () => { scrolls++; offset = 1000; },
     }), []);
-    return React.createElement('FlashList', props);
+    return React.createElement('FlashList', props, React.createElement(CompatScrollView, props));
   });
   const toolStatus = loadModule(
     'src/features/chat/presentation/messages/components/chatToolStatusPresentation.ts',
@@ -465,6 +505,7 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   );
   const theme = loadModule('src/shared/theme/themes/moonKimi.ts').moonKimiTheme;
   const boundaries = {
+    '@platform/device': selection,
     react: React,
     'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable' },
     '@expo/vector-icons': { Ionicons: 'Icon' },
@@ -524,6 +565,8 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   const usageMessage = message({ id: 602, tokensUsed: 120, promptTokens: 100, completionTokens: 20,
     metadataJson: '{"cachedTokens":80}' });
   update({ messages: [messages[0], usageMessage], aiAssistant: { id: 'ai', showTokenUsage: true } });
+  assert.equal(scrollContainerMounts, 1, '消息或设置更新不能重建滚动容器');
+  assert.equal(scrollContainerUnmounts, 0, '消息或设置更新保留正在使用的原生滚动视图');
   assert.equal(list().props.data.at(-1).displayTokensUsed, 120, '开启选择后实际列表提供用量提示');
   update({ aiAssistant: { id: 'ai', showTokenUsage: false } });
   assert.equal(list().props.data.at(-1).displayTokensUsed, 0, '关闭选择后实际列表隐藏所有用量提示');
@@ -608,6 +651,12 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   });
   flushFrames();
   assert.equal(scrolls, 4, '视口跟随执行前仍应尊重用户新产生的上翻意图');
+  assert.equal(scrollContainerMounts, 1, '流式增长、历史分页、滚动提示与键盘变化共用同一个滚动容器');
+  assert.equal(scrollContainerUnmounts, 0, '列表更新不能卸载滚动视图和已测量的消息');
+  update({ sessionId: 's2' });
+  assert.equal(scrollContainerMounts, 2, '切换会话才重新建立列表滚动容器');
+  assert.equal(scrollContainerUnmounts, 1, '切换会话释放旧列表');
   act(() => renderer.unmount());
+  assert.equal(scrollContainerUnmounts, 2, '离开页面释放剩余滚动容器');
 }
 console.log('Chat message list state verification passed.');

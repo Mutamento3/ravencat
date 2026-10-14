@@ -60,6 +60,7 @@ const contents = load(`${bubbleDir}MessageBubbleContent.tsx`, {
   'react-native-markdown-renderer': { __esModule: true, default: 'Markdown', MarkdownIt: () => ({}), hasParents: () => false },
 });
 const Bubble = load(`${bubbleDir}index.tsx`, {
+  '@platform/device': { releaseTextSelectionFocus: async () => {} },
   ...base, './styles': styles, './PaperNoteMessageFrame': frame, './ReplyQuote': quote,
   './MessageBubbleContent': contents, './Avatar': { Avatar: 'Avatar' },
   './TokenInfo': { TokenInfo: () => null }, './ReasoningHeader': { ReasoningHeader: 'Reasoning' },

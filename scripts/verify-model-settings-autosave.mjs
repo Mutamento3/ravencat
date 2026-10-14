@@ -286,8 +286,9 @@ try {
     renderForm({ aiAssistant: { ...profile, id: 'ai' }, onUpdated: (patch) => updates.push(patch) });
     await save({ apiKey: 'new' });
     assert.deepEqual(updates, [{ apiKey: 'new', updatedAt: 'committed' }]);
-    let stateIndex = 0; let confirmation;
+    let stateIndex = 0; let confirmation; let appointmentCalls = 0; let appointmentNotice;
     const { default: renderHostSettings } = load(`${directory}management/AIModelSettings/useHostAISetting.ts`, {
+      '../../HostAIAppointmentDialog': load(`${directory}HostAIAppointmentDialog.ts`),
       '../../../AssistantNickname': load('src/features/assistants/AssistantNickname.ts', {
         './infrastructure/SQLiteAssistantRepository': { aiAssistantRepository: {} },
       }),
@@ -297,12 +298,24 @@ try {
       '../../../AIAssistantManagement': {
         getHostAIAssistant: async () => null,
         getHostAICooldownStatus: async () => ({ appointment: { isInCooldown: false, remainingDays: 0 } }),
-        appointHostAIAssistant: async () => {},
+        appointHostAIAssistant: async () => { appointmentCalls++; },
       },
     });
-    const host = renderHostSettings({ aiAssistant: { ...profile, id: 'ai', name: '角色' }, onUpdated: (patch) => updates.push(patch),
-      onShowAlert: (_title, _message, buttons) => { if (buttons) confirmation = buttons.find((button) => button.text === '确定').onPress; } });
-    await host.handleHostAIToggle(true); await confirmation();
+    const host = renderHostSettings({ aiAssistant: { ...profile, id: 'ai', name: '角色', nickname: '昵称' }, onUpdated: (patch) => updates.push(patch),
+      onShowAlert: (title, message, buttons) => {
+        if (buttons) {
+          appointmentNotice = { title, message };
+          confirmation = buttons.find((button) => button.style !== 'cancel').onPress;
+        }
+      } });
+    await host.handleHostAIToggle(true);
+    assert.equal(appointmentCalls, 0, '任命必须等待用户确认');
+    assert.ok(appointmentNotice.title.includes('「昵称」'), '任命提醒沿用用户的昵称备注');
+    assert.ok(appointmentNotice.message.includes('7 天'), '任命前必须告知撤销后的七天冷静期');
+    assert.ok(appointmentNotice.message.includes('不会自动授予 Android 系统权限'), '任命提醒必须区分主理关系与系统授权');
+    assert.ok(appointmentNotice.message.includes('保留历史记录'), '任命提醒必须区分未来日程废弃与历史保留');
+    await confirmation();
+    assert.equal(appointmentCalls, 1);
     assert.deepEqual(updates[1], { id: 'ai', isHostAI: true });
   }
   // 错误在输入框下方展示，边框变红且用户原输入保留；正常状态没有常驻反馈。
@@ -502,14 +515,26 @@ try {
   let summaryRuntime;
   const summaryComposition = load('src/host/composition/configureChatSummaryRuntime.ts', {
     '@features/assistants': { aiAssistantRepository: { getById: async () => summaryAssistant } },
+    '@features/profile': { userProfileRepository: {} },
+    '@features/protocol': { protocolRepository: {} },
+    '@features/chat': { getChatSummarySettings: async () => ({ modelConfigId: null }) },
+    '@shared/aiTools': { ToolContext: class {} },
     '@features/calls/composition': { callRepository: {} },
     '@features/chat/composition': {
       configureChatSummaryRuntime: (runtime) => { summaryRuntime = runtime; },
       SQLiteChatSummaryRepository: class {},
       sessionRepository: { getSession: async () => ({ aiAssistantId: summaryAssistant.id }) },
+      groupChatRepository: { getById: async () => null },
       createChatSummaryPromptBlock: () => ({}), buildChatSummaryModelInput: () => '摘要输入',
     },
-    '@host/prompt': { assembleResolvedStandalonePromptPack: async () => ({ systemPrompt: '摘要规则', currentInput: { content: '摘要输入' } }) },
+    '@host/prompt': { assembleResolvedSummaryPromptPack: async () => ({ systemPrompt: '摘要规则', modelMessages: [{ role: 'user', content: '摘要输入' }] }) },
+    './agent/createAgentToolRegistry': {
+      resolveAllowedToolNames: async () => [], getRuntimeAllowedToolNamesForAI: () => [],
+      createAgentToolRegistry: () => ({}), getToolPackageRuntimeBindings: () => ({}),
+      readDirectToolNamesForHostRun: async () => [], buildToolsDescription: () => '',
+    },
+    './agent/ToolPackageExposure': { registerToolPackagesForHostRun: () => ({ instructions: () => ({ catalog: '' }) }) },
+    './agent/registerMcpToolsForHostRun': { resolveMcpExposure: async () => ({ allowedToolNames: [] }) },
     '@platform/ai': factory,
     '../runtime/ChatSummaryQueueCoordinator': { configureChatSummaryQueue() {} },
     '../prompt/PromptPackBlockFactory': { promptPackBlockFactory: { createPersonaBlock: () => ({}) } },
@@ -517,7 +542,8 @@ try {
   summaryComposition.configureChatSummary();
   for (const disableThinking of [true, false]) {
     summaryAssistant = { ...summaryAssistant, model: 'kimi-k2.6', temperature: null, topP: null, disableThinking };
-    assert.equal(await summaryRuntime.generateAddition({ conversationId: 'summary-session' }, new AbortController().signal), '完成');
+    assert.equal(await summaryRuntime.generateAddition({ conversationId: 'summary-session' }, new AbortController().signal,
+      async () => {}, { requestTimeoutSeconds: 300, maxOutputTokens: null, modelConfigId: null }), '完成');
     assert.equal(requests.at(-1).model, 'kimi-k2.6');
     assert.equal(Object.hasOwn(requests.at(-1), 'temperature'), false);
     assert.equal(Object.hasOwn(requests.at(-1), 'top_p'), false);

@@ -67,6 +67,7 @@ export { default as AddAIScreen } from './presentation/management';
 export { default as ContextLimitsApply } from './presentation/management/ContextLimitsApply';
 export type { AssistantContextLimits } from './domain/AssistantRepository';
 export { default as AIModelSettings } from './presentation/management/AIModelSettings';
+export { createHostAIAppointmentDialog } from './presentation/HostAIAppointmentDialog';
 export { default as ConversationList } from './presentation/management/ConversationList';
 export type { ConversationListPinTarget } from './presentation/management/ConversationList';
 export {

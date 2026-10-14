@@ -12,7 +12,7 @@ Beyond chat, the project explores ways for AI to take part in everyday life: voi
 
 RavenCat is maintained by one person and is still in active development. Some background behavior and cross-device restoration need more testing on real devices; reliability across all phones has not been established.
 
-Public APKs are released as **Preview / Pre-release** builds. Download them from [GitHub Releases](https://github.com/skylucky163/ravencat/releases). **Pinning a message as the context starting point is experimental**: all original message text from the pinned message through the latest message is included in the context, and automatic summary generation pauses. As the conversation grows, this can increase token usage and exceed the model's context limit. After unpinning, automatic summary generation must be re-enabled manually. See the current preview notes for [v2.1.1](docs/releases/v2.1.1.md).
+Public APKs are released as **Preview / Pre-release** builds. Download them from [GitHub Releases](https://github.com/skylucky163/ravencat/releases). **Pinning a message as the context starting point is experimental**: all original message text from the pinned message through the latest message is included in the context, and automatic summary generation pauses. As the conversation grows, this can increase token usage and exceed the model's context limit. After unpinning, automatic summary generation must be re-enabled manually. See the current preview notes for [v2.1.2](docs/releases/v2.1.2.md).
 
 ## What you can do
 

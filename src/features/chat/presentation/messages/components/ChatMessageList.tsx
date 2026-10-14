@@ -11,6 +11,7 @@ import {
   type NativeSyntheticEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { TextSelectionScrollView } from '@platform/device';
 import { FlashList, type FlashListRef, type ListRenderItemInfo } from '@shopify/flash-list';
 
 import type { ChatMessage } from '@features/chat/messages/domain/ChatMessage';
@@ -882,6 +883,7 @@ function ChatMessageList({
 
   return (
     <View style={styles.container} onTouchStart={onDismissInputSurface}>
+      {/* FlashList 按组件类型缓存动画包装；内联函数会在页面更新时重建整张列表。 */}
       <FlashList
         key={sessionId || 'message_list'}
         ref={listRef}
@@ -890,6 +892,7 @@ function ChatMessageList({
         keyExtractor={keyExtractor}
         getItemType={getMessageListItemType}
         CellRendererComponent={probeCellRenderer}
+        renderScrollComponent={TextSelectionScrollView}
         nestedScrollEnabled
         scrollEnabled={isListScrollEnabled}
         contentContainerStyle={styles.contentContainer}

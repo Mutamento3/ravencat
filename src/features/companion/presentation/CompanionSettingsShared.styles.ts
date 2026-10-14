@@ -24,7 +24,6 @@ export const createStyles = (theme: PresentationTheme) => StyleSheet.create({
   progressText: { marginLeft: theme.spacing.sm, color: theme.colors.text.secondary },
   errorCard: { margin: theme.spacing.lg, marginBottom: 0, padding: theme.spacing.md, borderRadius: theme.radius.md, backgroundColor: theme.colors.surface.default },
   errorText: { color: theme.colors.feedback.error, lineHeight: 20 },
-  errorActions: { marginTop: theme.spacing.md, flexDirection: 'row', justifyContent: 'space-between', gap: theme.spacing.md },
   settingLabel: { fontSize: 16, fontWeight: '600', color: theme.colors.text.primary },
   settingHint: { marginTop: 4, fontSize: 13, color: theme.colors.text.secondary },
   settingValue: { color: theme.colors.brand.primary, fontWeight: '600' },

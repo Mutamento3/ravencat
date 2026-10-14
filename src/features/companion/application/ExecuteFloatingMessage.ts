@@ -50,6 +50,7 @@ export async function executeFloatingMessage(
   const text = data.text?.trim() ?? '';
   const dependencies = getCompanionRuntimeDependencies();
   let succeeded = false;
+  let failureMessage: string | null = null;
   let taskError: Error | null = null;
   let overlayRestored = action !== 'screen';
   let capture: CapturedScreen | null = null;
@@ -103,7 +104,14 @@ export async function executeFloatingMessage(
     }
     const targetResult = await resolveCompanionConversationTarget();
     if ('error' in targetResult) {
-      throw new Error(targetResult.error);
+      // 目标不可用是已知业务结果，由悬浮提示和原生回执收口，不升级为 Headless 异常。
+      failureMessage = targetResult.error;
+      await updateReplyPreview({
+        correlationId,
+        status: 'error',
+        text: failureMessage,
+      });
+      return;
     }
     sessionId = targetResult.session.id;
 
@@ -125,6 +133,7 @@ export async function executeFloatingMessage(
     taskError = error instanceof Error
       ? error
       : new Error('RavenCat 悬浮消息后台任务发生未知错误');
+    failureMessage = taskError.message;
     await updateReplyPreview({
       correlationId,
       sessionId,
@@ -150,13 +159,13 @@ export async function executeFloatingMessage(
     await recordFloatingMessageTaskCompletion({
       correlationId,
       succeeded,
-      error: taskError?.message || null,
+      error: failureMessage,
     });
     console.info('[RavenCatFloatingMessageTask] completed', {
       correlationId,
       action,
       succeeded,
-      error: taskError?.message || null,
+      error: failureMessage,
     });
   }
 

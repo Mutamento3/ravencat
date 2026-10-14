@@ -20,7 +20,14 @@ import { createPromptCenterStyles } from './promptCenterStyles';
 
 export type PromptCenterPage = { kind: 'overview' } | { kind: 'custom' } | { kind: 'tools' } | { kind: 'package'; id: string } | { kind: 'editor'; definitionId: 'foundation.default_core' | 'foundation.visual_grounding' } | { kind: 'userEditor'; promptId?: string } | { kind: 'persona' };
 type Snapshot = Awaited<ReturnType<typeof getDefaultPromptEditor>>;
-const PACKAGE_NAMES: Record<string, string> = { webTools: '联网工具包', protocol: '协议空间', moments: '时刻', wallet: '羽库记账', calls: '通话', memory: '记忆', chat: '聊天与语音', stickers: '表情包', togetherListening: '一起听', host: '主理 AI 专属' };
+const PACKAGE_NAMES: Record<string, string> = { webTools: '联网工具包', protocol: '协议空间', moments: '时刻', wallet: '羽库记账', calls: '通话', memory: '记忆', chat: '语音', stickers: '表情包', togetherListening: '一起听', host: '主理 AI 专属' };
+
+/** 展示按产品用途分包；摘要查询仍由 Chat 拥有，主理工具统一在专属包管理。 */
+function getToolPackageId(tool: Snapshot['tools'][number]): string {
+  if (tool.hostOnly) return 'host';
+  if (tool.name === 'search_chat_summaries') return 'memory';
+  return tool.owner;
+}
 
 interface Props {
   assistants: PromptAssistantOption[];
@@ -169,7 +176,7 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
   const directTools = tools.filter((tool) => directToolNames.has(tool.name));
   const packages = [...new Set([
     ...tools.filter((tool) => tool.hostOnly).map(() => 'host'),
-    ...tools.filter((tool) => !tool.hostOnly).map((tool) => tool.owner),
+    ...tools.filter((tool) => !tool.hostOnly).map(getToolPackageId),
   ])];
   const prompts = assistantId ? details?.userPrompts ?? [] : snapshot?.userPrompts ?? [];
   const editingPrompt = page.kind === 'userEditor' ? prompts.find((item) => item.id === page.promptId) : undefined;
@@ -257,16 +264,16 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
               }}><Text style={[styles.action, busy && styles.muted]}>全局应用</Text></TouchableOpacity>}
           </View>
           {directToolsExpanded && (directTools.length > 0 ? directTools.map((tool) => {
-            const packageId = tool.hostOnly ? 'host' : tool.owner;
+            const packageId = getToolPackageId(tool);
             return row(tool.name, `${PACKAGE_NAMES[packageId] ?? packageId} · ${tool.enabled ? '允许调用' : '单项权限已关闭'}`,
               () => onOpenPage({ kind: 'package', id: packageId }));
           }) : <Text style={styles.body}>{assistant ? '暂无特批工具，进入下方工具包点亮工具旁的星标即可添加。' : '选择 AI 后可在工具包中配置特批工具。'}</Text>)}
         </ThemedSurface>
-        {packages.map((id) => row(PACKAGE_NAMES[id] ?? id, `${tools.filter((tool) => (tool.hostOnly ? 'host' : tool.owner) === id).length} 个工具`, () => onOpenPage({ kind: 'package', id })))}
+        {packages.map((id) => row(PACKAGE_NAMES[id] ?? id, `${tools.filter((tool) => getToolPackageId(tool) === id).length} 个工具`, () => onOpenPage({ kind: 'package', id })))}
       </>}
       {page.kind === 'package' && <>
         <Text style={styles.description}>{assistant ? `点亮星标，将工具设为 ${getAssistantDisplayName(assistant)} 的用户特批工具，直接注入说明与调用参数，无需拆包。右侧开关仍控制调用权限。` : '选择 AI 后可配置星标特批工具；这里仅管理全局默认调用权限。'}</Text>
-        {tools.filter((tool) => (tool.hostOnly ? 'host' : tool.owner) === page.id).map((tool) => <ThemedSurface variant="card" nativeGlass={false} key={tool.name} style={styles.card}>
+        {tools.filter((tool) => getToolPackageId(tool) === page.id).map((tool) => <ThemedSurface variant="card" nativeGlass={false} key={tool.name} style={styles.card}>
           <View style={styles.cardHeader}><Text style={[styles.title, styles.copy]}>{tool.name}</Text>
             {assistantId && <TouchableOpacity accessibilityRole="switch" accessibilityLabel={`直接暴露 ${tool.name}`} accessibilityState={{ checked: directToolNames.has(tool.name), disabled: busy || (tool.hostOnly && !assistant?.isHostAI) }}
               disabled={busy || (tool.hostOnly && !assistant?.isHostAI)} style={styles.starButton}

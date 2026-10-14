@@ -5,12 +5,12 @@ import {
   type GestureResponderEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
-  ScrollView,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { TextSelectionScrollView as ScrollView } from '@platform/device';
 
 import type { createMessageBubbleStyles } from './styles';
 import type { PresentationTheme } from '@shared/theme';
@@ -174,6 +174,9 @@ function OfficialReplicaProcessCard({
       {collapsible ? (
         <TouchableOpacity
           style={styles.moonKimiProcessHeader}
+          accessibilityRole="button"
+          accessibilityLabel={title}
+          accessibilityState={{ expanded }}
           onPress={onToggle}
           activeOpacity={0.8}
         >

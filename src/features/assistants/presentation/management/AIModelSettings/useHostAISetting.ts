@@ -1,5 +1,6 @@
 /** 管理模型设置页面中的主理 AI 查询、任命与撤销状态。 */
 import { getAssistantDisplayName } from '../../../AssistantNickname';
+import { createHostAIAppointmentDialog } from '../../HostAIAppointmentDialog';
 
 import { showAppDialog, type AppDialogButton, type AppDialogTone } from '@shared/ui';
 import { useCallback, useEffect, useState } from 'react';
@@ -125,38 +126,32 @@ export default function useHostAISetting({
         return;
       }
 
-      showAlert(
-        '任命主理 AI',
-        `确定要将「${getAssistantDisplayName(aiAssistant)}」设置为主理 AI 吗？\n\n主理 AI 是 RavenCat 中权限最高的 AI，可以管理其他 AI。在你另行授予相关系统权限后，主理 AI 还可以使用设备控制能力；本次任命不会自动授予 Android 系统权限。\n\n请谨慎选择主理 AI。`,
-        [
-          { text: '取消', style: 'cancel' },
-          {
-            text: '确定',
-            onPress: async () => {
-              try {
-                setIsChangingHost(true);
-                await appointHostAIAssistant(aiAssistant.id);
-                setIsHostAI(true);
-                onUpdated?.({ id: aiAssistant.id, isHostAI: true });
-                showAlert('成功', `「${getAssistantDisplayName(aiAssistant)}」已被设置为主理 AI`, undefined, 'success');
-                await checkHostStatus();
-              } catch (error) {
-                console.error('Failed to set host AI:', error);
-                showAlert('错误', '设置主理 AI 失败', undefined, 'error');
-                setIsHostAI(false);
-              } finally {
-                setIsChangingHost(false);
-              }
-            },
-          },
-        ]
+      const dialog = createHostAIAppointmentDialog(
+        getAssistantDisplayName(aiAssistant),
+        async () => {
+          try {
+            setIsChangingHost(true);
+            await appointHostAIAssistant(aiAssistant.id);
+            setIsHostAI(true);
+            onUpdated?.({ id: aiAssistant.id, isHostAI: true });
+            showAlert('成功', `「${getAssistantDisplayName(aiAssistant)}」已被设置为主理 AI`, undefined, 'success');
+            await checkHostStatus();
+          } catch (error) {
+            console.error('Failed to set host AI:', error);
+            showAlert('错误', '设置主理 AI 失败', undefined, 'error');
+            setIsHostAI(false);
+          } finally {
+            setIsChangingHost(false);
+          }
+        },
       );
+      showAlert(dialog.title, dialog.message, dialog.buttons);
       return;
     }
 
     showAlert(
       '撤销主理 AI',
-      `确定要取消「${getAssistantDisplayName(aiAssistant)}」的主理 AI 身份吗？\n\n该 AI 将失去监管其他 AI 的权限。`,
+      `确定要取消「${getAssistantDisplayName(aiAssistant)}」的主理 AI 身份吗？\n\n该 AI 将失去主理 AI 专属权限，本地伴随会停止，原来的未来日程会废弃，历史记录保留。\n\n撤销后 7 天内不能重新任命任何 AI。`,
       [
         { text: '取消', style: 'cancel' },
         {

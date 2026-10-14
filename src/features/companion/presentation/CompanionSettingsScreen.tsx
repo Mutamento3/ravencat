@@ -5,6 +5,7 @@ import { getAssistantDisplayName,
   appointHostAIAssistant,
   type AIAssistantSummary,
   clearHostAIAppointmentCooldownForDevelopment,
+  createHostAIAppointmentDialog,
   getHostAICooldownStatus,
   listAIAssistantSummaries,
 } from '@features/assistants';
@@ -94,7 +95,8 @@ export default function CompanionSettingsScreen({
       } else {
         setToggleState(product.state.activationStatus);
       }
-      setErrorMessage(resolveCompanionErrorMessage(product.state.lastFailureCode));
+      // 持久化失败码用于运行诊断；页面由当前主理 AI 与开关表达状态，不重放旧错误。
+      setErrorMessage(null);
     } catch (error) {
       setErrorMessage(toMessage(error, '无法读取本地伴随状态。'));
     } finally {
@@ -143,7 +145,6 @@ export default function CompanionSettingsScreen({
 
   const enableCompanion = useCallback(async () => {
     if (!hostAI) {
-      setShowHostPicker(true);
       return;
     }
     if (activationFlowActiveRef.current) return;
@@ -204,29 +205,22 @@ export default function CompanionSettingsScreen({
 
   const chooseHost = useCallback((assistant: AIAssistantSummary) => {
     if (assistant.isBlocked || !assistant.model.trim()) return;
-    showAppDialog({
-      title: `确定让「${getAssistantDisplayName(assistant)}」成为你的主理 AI 吗？`,
-      message: '主理 AI 是你唯一的长期关系核心，也是 RavenCat 中权限最高的 AI：\n• 同一时间只能有一位主理 AI；\n• 本地伴随完全由主理 AI 负责；\n• 主理 AI 会参与长期记忆与其他 AI 的管理；\n• 在你另行授予相关系统权限后，主理 AI 可以使用设备控制能力；任命本身不会自动授予 Android 系统权限；\n• 主理 AI 身份可以随时撤销；撤销后 7 天内不能重新任命任何 AI；\n• 更换主理 AI 会停止当前伴随模式，并废弃原来的伴随安排。\n\n请谨慎确认，这是你真正希望建立深层关系的 AI。',
-      buttons: [
-        { text: '再想想', style: 'cancel' },
-        {
-          text: '确认建立关系',
-          onPress: () => void (async () => {
-            try {
-              const cooldown = await getHostAICooldownStatus();
-              if (cooldown.appointment.isInCooldown) {
-                throw new Error(`撤销主理 AI 后仍需等待 ${cooldown.appointment.remainingDays} 天`);
-              }
-              await appointHostAIAssistant(assistant.id);
-              setShowHostPicker(false);
-              await refresh();
-            } catch (error) {
-              setErrorMessage(toMessage(error, '主理 AI 任命失败。'));
-            }
-          })(),
-        },
-      ],
-    });
+    showAppDialog(createHostAIAppointmentDialog(
+      getAssistantDisplayName(assistant),
+      () => void (async () => {
+        try {
+          const cooldown = await getHostAICooldownStatus();
+          if (cooldown.appointment.isInCooldown) {
+            throw new Error(`撤销主理 AI 后仍需等待 ${cooldown.appointment.remainingDays} 天`);
+          }
+          await appointHostAIAssistant(assistant.id);
+          setShowHostPicker(false);
+          await refresh();
+        } catch (error) {
+          setErrorMessage(toMessage(error, '主理 AI 任命失败。'));
+        }
+      })(),
+    ));
   }, [refresh]);
 
   const clearHostCooldown = useCallback(() => {
@@ -350,7 +344,7 @@ export default function CompanionSettingsScreen({
           </View>
         </ThemedSurface>
 
-        {errorMessage ? <View style={styles.errorCard}><Text style={styles.errorText}>{errorMessage}</Text>{toggleState === 'disabled' ? <><Text style={styles.errorText}>伴随模式当前为关闭状态，不会在后台自动重试。</Text><View style={styles.errorActions}><Button title="重新开启" variant="outline" onPress={() => void enableCompanion()} /></View></> : null}</View> : null}
+        {errorMessage ? <View style={styles.errorCard}><Text style={styles.errorText}>{errorMessage}</Text></View> : null}
 
         {expanded && settings ? <>
           <SectionTitle text="伴随设置" styles={styles} />

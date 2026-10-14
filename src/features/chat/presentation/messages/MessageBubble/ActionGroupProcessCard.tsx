@@ -1,6 +1,6 @@
 /** 渲染一个按时间线连续分段得到的 Agent 行动步骤。 */
 
-import React, { memo, useCallback, useMemo } from 'react';
+import React, { memo, useCallback, useMemo, useRef } from 'react';
 import { useMappingHelper, useRecyclingState } from '@shopify/flash-list';
 import {
   StyleSheet,
@@ -10,6 +10,7 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { releaseTextSelectionFocus } from '@platform/device';
 
 import {
   isToolStatusMessageMetadata,
@@ -52,7 +53,9 @@ function createActionGroupStyles(theme: PresentationTheme) {
       marginVertical: theme.spacing.xs,
     },
     defaultHeader: {
-      minHeight: 28,
+      // 标题整行拥有点击，不把触摸目标限制在短标签的文字宽度内。
+      alignSelf: 'stretch',
+      minHeight: 44,
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: theme.spacing.sm,
@@ -120,6 +123,9 @@ function ActionGroupProcessCard({
   const { getMappingKey } = useMappingHelper();
   // 回收容器切换到另一组时，展开状态和尺寸归新组所有；尺寸变化同步通知列表。
   const [isExpanded, setIsExpanded] = useRecyclingState(false, [group.key]);
+  const currentGroupKey = useRef(group.key);
+  currentGroupKey.current = group.key;
+  const toggleRequest = useRef(0);
   const [bodyHeight, setBodyHeight] = useRecyclingState(0, [group.key]);
   const [contentHeight, setContentHeight] = useRecyclingState(0, [group.key]);
   const isScrollable = isExpanded && bodyHeight > 0 && contentHeight > bodyHeight + 8;
@@ -134,9 +140,16 @@ function ActionGroupProcessCard({
       : activity.responded ? 'AI 已响应，正在处理…' : '等待 AI 响应…'}`
     : group.isRunning ? '行动步骤 · 正在处理…' : '行动步骤';
 
-  const handleToggle = useCallback(() => {
-    setIsExpanded((previous) => !previous);
-  }, [setIsExpanded]);
+  const handleToggle = useCallback(async () => {
+    const request = ++toggleRequest.current;
+    if (isExpanded) {
+      // 原生焦点必须先释放，之后才能卸载选区；异步期间回收的旧卡片不再改变新组状态。
+      await releaseTextSelectionFocus();
+      if (currentGroupKey.current !== group.key || request !== toggleRequest.current) return;
+    }
+    // 连点表达当前标题的同一个目标；旧的异步收起不能反转或覆盖新点击。
+    setIsExpanded(!isExpanded);
+  }, [group.key, isExpanded, setIsExpanded]);
 
   const handleBodyLayout = useCallback((event: LayoutChangeEvent) => {
     setBodyHeight(event.nativeEvent.layout.height);
@@ -209,6 +222,9 @@ function ActionGroupProcessCard({
       <View style={[styles.bubbleWrapper, styles.aiBubbleWrapper, actionStyles.defaultCard]}>
         <TouchableOpacity
           style={actionStyles.defaultHeader}
+          accessibilityRole="button"
+          accessibilityLabel={title}
+          accessibilityState={{ expanded: isExpanded }}
           onPress={handleToggle}
           activeOpacity={0.7}
         >

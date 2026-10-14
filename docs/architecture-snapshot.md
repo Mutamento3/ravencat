@@ -158,6 +158,7 @@
                     ├── translationModelDraft.ts
                     ├── TranslationModelEditScreen.tsx
                     └── types.ts
+                ├── HostAIAppointmentDialog.ts
                 └── management
                     ├── addAIFormHelpers.ts
                     ├── AIModelSettings
@@ -1331,6 +1332,7 @@
             ├── RealtimeSpeechAudioSource.ts
             ├── RebaseLegacyMediaReference.ts
             ├── TemporarySpeechAudioStore.ts
+            ├── TextSelection.tsx
             ├── usePersistentAvatarDraft.ts
             └── VoiceRecording.ts
         ├── index.ts
@@ -1784,6 +1786,24 @@
             ├── LiquidGlassBackdrop.tsx
             ├── LiquidGlassEffect.tsx
             └── types.ts
+    ├── native-text-selection
+        └── android
+            └── src
+                ├── main
+                    └── java
+                        └── expo
+                            └── modules
+                                └── nativetextselection
+                                    ├── NativeTextSelectionModule.kt
+                                    ├── NativeTextSelectionPackage.kt
+                                    ├── SelectionScrollView.kt
+                                    └── TextSelectionFocus.kt
+                └── test
+                    └── java
+                        └── expo
+                            └── modules
+                                └── nativetextselection
+                                    └── TextSelectionFocusTest.kt
     ├── netease-public-data
         ├── android
             └── src

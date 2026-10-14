@@ -37,8 +37,9 @@ export function useChatComposerSurface() {
   }, []);
 
   const keyboardOffset = useMemo(
-    () => activeSurface === 'keyboard' ? keyboardHeight || surfaceHeight : 0,
-    [activeSurface, keyboardHeight, surfaceHeight],
+    // 焦点可能来自 Android 的自动转移；只有真实键盘事件可以拥有避让高度。
+    () => activeSurface === 'keyboard' ? keyboardHeight : 0,
+    [activeSurface, keyboardHeight],
   );
 
   return {

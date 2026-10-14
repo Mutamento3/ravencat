@@ -43,6 +43,11 @@ const native = {
   View: 'View', Text: 'Text', TouchableOpacity: 'TouchableOpacity',
   StyleSheet: { create: (value) => value, hairlineWidth: 1 },
 };
+let finishFocusRelease;
+const textSelection = { releaseTextSelectionFocus: () => finishFocusRelease ? new Promise((resolve) => {
+  finishFocusRelease.resolve = resolve;
+  if (finishFocusRelease.resolvers) finishFocusRelease.resolvers.push(resolve);
+}) : Promise.resolve() };
 const processCard = { __esModule: true, default: (props) => React.createElement('ProcessCard', props, props.expanded ? props.children : null) };
 const styles = { createMessageBubbleStyles: () => ({}) };
 const contents = {
@@ -53,6 +58,7 @@ const contents = {
 };
 const defaultStub = (name) => ({ __esModule: true, default: name });
 const Bubble = load('src/features/chat/presentation/messages/MessageBubble/index.tsx', {
+  '@platform/device': textSelection,
   react: React, 'react-native': native, '@shared/theme': themeApi, '@shopify/flash-list': flash,
   './styles': styles, './Avatar': { Avatar: 'Avatar' }, './ReplyQuote': { ReplyQuote: 'Quote' },
   './TokenInfo': { TokenInfo: 'TokenInfo' }, './ReasoningHeader': { ReasoningHeader: 'ReasoningHeader' },
@@ -64,13 +70,42 @@ const Bubble = load('src/features/chat/presentation/messages/MessageBubble/index
 const bubbleProps = (id) => ({ messageId: id, text: `思考 ${id}`, isMe: false, senderType: 'reasoning', onPreviewFile: () => {}, reasoningSurface: theme.id === 'moon-kimi' ? 'official-replica' : 'default' });
 function header(renderer) { return renderer.root.findByType(theme.id === 'moon-kimi' ? 'ProcessCard' : 'ReasoningHeader'); }
 function expanded(renderer) { const props = header(renderer).props; return props.expanded ?? props.isExpanded; }
+async function verifyRepeatedToggle(toggle, isExpanded) {
+  // 同一次渲染里的连续点击表达相同目标，不能相互反转。
+  let first;
+  let second;
+  act(() => { first = toggle(); second = toggle(); });
+  await act(async () => { await Promise.all([first, second]); });
+  assert.equal(isExpanded(), true, '连续点展开仍应展开');
+  finishFocusRelease = { resolvers: [] };
+  act(() => { first = toggle(); second = toggle(); });
+  assert.equal(isExpanded(), true, '释放原生选区前保留正文');
+  await act(async () => {
+    for (const resolve of finishFocusRelease.resolvers) resolve();
+    await Promise.all([first, second]);
+  });
+  assert.equal(isExpanded(), false, '连续点收起不能又翻回展开');
+  finishFocusRelease = null;
+  await act(async () => toggle());
+  finishFocusRelease = { resolvers: [] };
+  act(() => { first = toggle(); second = toggle(); });
+  await act(async () => { finishFocusRelease.resolvers[1](); await second; });
+  assert.equal(isExpanded(), false);
+  await act(async () => toggle());
+  assert.equal(isExpanded(), true, '等待旧操作时仍能再次展开');
+  await act(async () => { finishFocusRelease.resolvers[0](); await first; });
+  assert.equal(isExpanded(), true, '迟到的旧收起不能覆盖后来点击展开的意图');
+  finishFocusRelease = null;
+  await act(async () => toggle());
+}
 for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   theme = { ...theme, id };
   let renderer;
   act(() => { renderer = create(React.createElement(Bubble, bubbleProps(101))); });
   assert.equal(expanded(renderer), false);
+  await verifyRepeatedToggle(() => header(renderer).props.onToggle(), () => expanded(renderer));
   const previousLayouts = layouts;
-  act(() => header(renderer).props.onToggle());
+  await act(async () => header(renderer).props.onToggle());
   assert.equal(expanded(renderer), true);
   assert.equal(renderer.root.findByType('Body').props.selectable, true, '各主题的思维链正文应启用原生选择');
   assert.ok(layouts > previousLayouts, '展开改变列表项高度时应通知列表重新布局');
@@ -88,7 +123,7 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   }
   act(() => renderer.update(React.createElement(Bubble, bubbleProps(102))));
   assert.equal(expanded(renderer), false, '回收实例换消息后不能继承上一条思维链的展开状态');
-  act(() => header(renderer).props.onToggle());
+  await act(async () => header(renderer).props.onToggle());
   assert.equal(expanded(renderer), true);
   if (id === 'moon-kimi') {
     assert.equal(header(renderer).props.scrollable, false, '新消息不能继承上一条的滚动尺寸');
@@ -100,7 +135,7 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   act(() => renderer.update(React.createElement(Bubble, bubbleProps(101))));
   assert.equal(expanded(renderer), false, '回收回上一条消息时也不能继承另一条思维链的展开状态');
   if (id === 'moon-kimi') {
-    act(() => header(renderer).props.onToggle());
+    await act(async () => header(renderer).props.onToggle());
     act(() => header(renderer).props.onBodyLayout({ nativeEvent: { layout: { height: 100 } } }));
     assert.equal(header(renderer).props.scrollable, false, '新消息尚未测量正文时不能使用旧正文尺寸');
   }
@@ -110,16 +145,17 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
 theme = { ...theme, id: 'default-light' };
 let independent;
 act(() => { independent = create(React.createElement(React.Fragment, null, React.createElement(Bubble, { ...bubbleProps(201), key: 'a' }), React.createElement(Bubble, { ...bubbleProps(202), key: 'b' }))); });
-act(() => independent.root.findAllByType('ReasoningHeader')[0].props.onToggle());
+await act(async () => independent.root.findAllByType('ReasoningHeader')[0].props.onToggle());
 assert.deepEqual(independent.root.findAllByType('ReasoningHeader').map((node) => node.props.isExpanded), [true, false]);
-act(() => independent.root.findAllByType('ReasoningHeader')[1].props.onToggle());
+await act(async () => independent.root.findAllByType('ReasoningHeader')[1].props.onToggle());
 assert.deepEqual(independent.root.findAllByType('ReasoningHeader').map((node) => node.props.isExpanded), [true, true]);
-act(() => independent.root.findAllByType('ReasoningHeader')[0].props.onToggle());
+await act(async () => independent.root.findAllByType('ReasoningHeader')[0].props.onToggle());
 assert.deepEqual(independent.root.findAllByType('ReasoningHeader').map((node) => node.props.isExpanded), [false, true]);
 act(() => independent.unmount());
 console.log('同时挂载的不同气泡状态独立，没有直接共享展开状态');
 
 const ActionGroup = load('src/features/chat/presentation/messages/MessageBubble/ActionGroupProcessCard.tsx', {
+  '@platform/device': textSelection,
   react: React, 'react-native': native, '@expo/vector-icons': { Ionicons: 'Icon' },
   '@shopify/flash-list': { ...flash, useMappingHelper: () => ({ getMappingKey: (key) => key }) },
   '@features/chat/messages/domain': {
@@ -136,7 +172,12 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   const group = { key: 'tools-only', children, isRunning: false };
   let renderer;
   act(() => { renderer = create(React.createElement(ActionGroup, { group })); });
-  act(() => renderer.root.findByType(id === 'moon-kimi' ? 'ProcessCard' : 'TouchableOpacity').props[id === 'moon-kimi' ? 'onToggle' : 'onPress']());
+  const actionHeader = () => renderer.root.findByType(id === 'moon-kimi' ? 'ProcessCard' : 'TouchableOpacity');
+  await verifyRepeatedToggle(
+    () => actionHeader().props[id === 'moon-kimi' ? 'onToggle' : 'onPress'](),
+    () => id === 'moon-kimi' ? actionHeader().props.expanded : renderer.root.findAllByType('Text').some((node) => String(node.props.children).startsWith('已调用：')),
+  );
+  await act(async () => renderer.root.findByType(id === 'moon-kimi' ? 'ProcessCard' : 'TouchableOpacity').props[id === 'moon-kimi' ? 'onToggle' : 'onPress']());
   assert.equal(renderer.root.findAllByType('Body').length, 0, '纯工具步骤不得生成思维链占位');
   const texts = renderer.root.findAllByType('Text').map((node) => node.props.children);
   assert.deepEqual(texts.filter((text) => String(text).startsWith('已调用：')), children.map((child) => child.text), '无思维链的模型仍应完整按顺序展示每个工具步骤');
@@ -147,6 +188,21 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   const activity = { id: 6, senderType: 'system', text: '等待 AI 响应…', metadataJson: JSON.stringify({ type: 'agentActivity', phase: 'started' }) };
   act(() => renderer.update(React.createElement(ActionGroup, { group: { ...group, children: [activity, reasoning, ...children, secondReasoning] } })));
   assert.deepEqual(renderer.root.findAllByType('Body').map((node) => node.props.selectable), [false, true, true], '行动步骤仅思考正文启用原生选择');
+  finishFocusRelease = {};
+  let collapse;
+  act(() => { collapse = renderer.root.findByType(id === 'moon-kimi' ? 'ProcessCard' : 'TouchableOpacity').props[id === 'moon-kimi' ? 'onToggle' : 'onPress'](); });
+  assert.equal(renderer.root.findAllByType('Body').length, 3, '原生选区释放之前正文不能卸载');
+  await act(async () => { finishFocusRelease.resolve(); await collapse; });
+  assert.equal(renderer.root.findAllByType('Body').length, 0, '释放后折叠正文');
+  finishFocusRelease = null;
+  await act(async () => renderer.root.findByType(id === 'moon-kimi' ? 'ProcessCard' : 'TouchableOpacity').props[id === 'moon-kimi' ? 'onToggle' : 'onPress']());
+  finishFocusRelease = {};
+  act(() => { collapse = renderer.root.findByType(id === 'moon-kimi' ? 'ProcessCard' : 'TouchableOpacity').props[id === 'moon-kimi' ? 'onToggle' : 'onPress'](); });
+  act(() => renderer.update(React.createElement(ActionGroup, { group: { ...group, key: 'recycled-group', children: [activity, reasoning, ...children, secondReasoning] } })));
+  await act(async () => renderer.root.findByType(id === 'moon-kimi' ? 'ProcessCard' : 'TouchableOpacity').props[id === 'moon-kimi' ? 'onToggle' : 'onPress']());
+  await act(async () => { finishFocusRelease.resolve(); await collapse; });
+  assert.equal(renderer.root.findAllByType('Body').length, 3, '旧选区释放完成不能折叠回收后正在阅读的新行动步骤');
+  finishFocusRelease = null;
   act(() => renderer.unmount());
 }
 

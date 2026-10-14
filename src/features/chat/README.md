@@ -18,6 +18,8 @@ Chat 拥有单聊、群聊、消息时间线和回复引擎。外部 Feature 只
 - 由 Chat 自己完成消息提交后的 preview 和交付能力调用；
 - 提供 ChatScreen、路由、会话、群聊、消息气泡与输入区；
 - 展开的思维链／行动步骤卡片中，每条思维链正文使用一个 Android 原生文字选区，可跨段落、列点和代码块拖动手柄选取复制。Markdown 保留标题、行内格式和列点，表格以文字分栏显示；工具状态与其他思维链不合并进当前选区。
+- 文字选择的焦点不触发聊天列表／卡片滚动，折叠前由原生适配释放选区再卸载正文；输入区只根据真实键盘事件占位，自动转移的焦点不借用历史键盘高度。原生边界见 [原生文字选择](../../../modules/native-text-selection/README.md)。
+- FlashList 分页定位修正期间只暂停消费滚动事件，恢复时必须处理末次原生位置；否则手势恰在暂停期间结束时，渲染窗口会停留在旧位置并持续空白。`postinstall` 通过 `scripts/patch-flash-list-scroll-settle.cjs` 修正依赖的事件所有者，保留最新 SyntheticEvent 的生命周期，不重放中间事件、不新增等待计时器。升级列表依赖时审查此补丁；行为验证为 `npm run verify:chat-scroll-settle`。
 - 消息下方的用量提示显示 API 返回的总量、输入、输出及缓存命中率（缓存命中 / 输入）；缓存统计随消息 metadata 保存，没有数据的旧消息或服务商显示「未提供」。多气泡仍只在用量尾段展示。对话设置可按角色关闭单聊提示，默认开启；paper-note 与 moon-kimi 固定关闭并冻结开关，切回其他主题恢复用户选择。
 - 通过 conversation、messages、group、reply 各自的运行时端口接收 Host 注入的能力。
 - 拥有语音消息的 transcript、播放状态、气泡展示和 T1/T3 原子提交；Speech 只负责 STT/TTS，Media 只负责 canonical 音频资产。

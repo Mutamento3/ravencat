@@ -1110,11 +1110,14 @@ const floatingReleasedCaptures = [];
 let floatingCaptureAccepted = true;
 let floatingCaptureError = null;
 let floatingPersistCount = 0;
+let floatingTargetFailure = null;
+const floatingReplyPreviews = [];
+const floatingTaskCompletions = [];
 const floatingLayer = {
   async updateTargetPreview() {},
-  async updateReplyPreview() {},
+  async updateReplyPreview(preview) { floatingReplyPreviews.push(preview); },
   async completeScreenCaptureVisibility() { return floatingCaptureAccepted; },
-  async recordFloatingMessageTaskCompletion() {},
+  async recordFloatingMessageTaskCompletion(completion) { floatingTaskCompletions.push(completion); },
 };
 const floatingDeps = {
   chat: {
@@ -1148,10 +1151,13 @@ const floatingDeps = {
 const floatingMessageExecutorModule = loadTypeScriptModuleWithMocks(
   'src/features/companion/application/ExecuteFloatingMessage.ts',
   {
+    '@features/assistants': {
+      getAssistantDisplayName: (assistant) => assistant.name,
+    },
     '@features/floatingLayer': floatingLayer,
     './CompanionConversationTarget': {
       buildCompanionAIRequestConfig: () => ({}),
-      resolveCompanionConversationTarget: async () => ({
+      resolveCompanionConversationTarget: async () => floatingTargetFailure ?? ({
         ai: { id: 'assistant-floating', name: 'Host AI' },
         session: { id: 'session-floating', name: 'Floating session' },
       }),
@@ -1191,12 +1197,50 @@ await floatingMessageExecutorModule.executeFloatingMessage({
   text: '你好',
   correlationId: 'floating-correlation',
 });
-floatingSendOutcome = 'failure_before_commit';
+
+// 已知目标不可用通过提示与失败回执收口，不触发 React Native 的 Headless ERROR。
+const sendCountBeforeTargetFailures = floatingSendCalls.length;
+for (const failure of [
+  { reason: 'host_ai_unavailable', error: '请先设置主理 AI 后再继续。' },
+  { reason: 'host_ai_unavailable', error: '主理 AI 已更换，本次对话目标已失效。' },
+  { reason: 'host_ai_blocked', error: '当前主理 AI 已被限制，暂时无法继续。' },
+  { reason: 'session_unavailable', error: '未找到主理 AI 的 canonical conversation。' },
+]) {
+  floatingTargetFailure = failure;
+  const correlationId = `floating-target-${failure.reason}`;
+  await floatingMessageExecutorModule.executeFloatingMessage({
+    action: 'message', text: '你好', correlationId,
+  });
+  assert.deepEqual(floatingReplyPreviews.at(-1), {
+    correlationId, status: 'error', text: failure.error,
+  });
+  assert.deepEqual(floatingTaskCompletions.at(-1), {
+    correlationId, succeeded: false, error: failure.error,
+  });
+}
+assert.equal(floatingSendCalls.length, sendCountBeforeTargetFailures, '目标不可用不得提交消息或调用 AI');
+
+// 发送前接管的截图在目标不可用时仍须释放，不能进入附件持久化。
 await floatingMessageExecutorModule.executeFloatingMessage({
+  action: 'screen', correlationId: 'floating-screen-without-host',
+});
+const releaseCountBeforeMissingHost = floatingReleasedCaptures.length;
+floatingTargetFailure = { reason: 'host_ai_unavailable', error: '请先设置主理 AI 后再继续。' };
+await floatingMessageExecutorModule.executeFloatingMessage({
+  action: 'message', text: '', correlationId: 'floating-image-without-host',
+  screenshotCorrelationId: 'floating-screen-without-host',
+});
+assert.equal(floatingReleasedCaptures.length, releaseCountBeforeMissingHost + 1);
+assert.equal(floatingPersistCount, 0);
+floatingTargetFailure = null;
+floatingReleasedCaptures.length = 0;
+
+floatingSendOutcome = 'failure_before_commit';
+await assert.rejects(floatingMessageExecutorModule.executeFloatingMessage({
   action: 'message',
   text: '失败回复',
   correlationId: 'floating-failed-correlation',
-}).catch(() => undefined);
+}), /模拟提交前失败/, '真实发送故障仍须暴露');
 
 // 截图只暂存；用户显式发送时才持久化附件并调用 Chat。
 floatingSendOutcome = 'success';
@@ -1298,6 +1342,7 @@ assistantDb.exec(`
     id TEXT PRIMARY KEY,
     agent_id TEXT NOT NULL,
     name TEXT NOT NULL,
+    nickname TEXT,
     avatar TEXT,
     avatar_media_asset_id TEXT,
     model TEXT NOT NULL,
@@ -1323,8 +1368,8 @@ assistantDb.exec(`
     updated_at TEXT NOT NULL
   );
   INSERT INTO ai_assistants VALUES
-    ('ai-1', 'agent-1', '主理', 'avatar-1', NULL, 'model-1', 'secret-key', 'very-long-prompt', 1, 'session-1', '2026-08-01T00:00:00.000Z'),
-    ('ai-2', 'agent-2', '候选', NULL, NULL, 'model-2', 'secret-key-2', 'another-prompt', 0, 'session-2', '2026-08-02T00:00:00.000Z');
+    ('ai-1', 'agent-1', '主理', NULL, 'avatar-1', NULL, 'model-1', 'secret-key', 'very-long-prompt', 1, 'session-1', '2026-08-01T00:00:00.000Z'),
+    ('ai-2', 'agent-2', '候选', NULL, NULL, NULL, 'model-2', 'secret-key-2', 'another-prompt', 0, 'session-2', '2026-08-02T00:00:00.000Z');
   INSERT INTO ai_blacklist VALUES ('block-1', 'ai-2', '2099-01-01T00:00:00.000Z');
   INSERT INTO sessions VALUES
     ('session-1', 'ai-1', '2026-08-01', '最近消息', '2026-08-01T00:01:00.000Z', '2026-08-01T00:00:00.000Z', '2026-08-01T00:01:00.000Z'),
@@ -1363,6 +1408,7 @@ assert.deepEqual(
     id: 'ai-1',
     agentId: 'agent-1',
     name: '主理',
+    nickname: null,
     avatar: 'avatar-1',
     avatarMediaAssetId: null,
     model: 'model-1',
@@ -1381,12 +1427,12 @@ assert.deepEqual(
     {
       id: 'ai-1',
       isBlocked: false,
-      fields: ['agentId', 'avatar', 'avatarMediaAssetId', 'canonicalConversationId', 'id', 'isBlocked', 'isHostAI', 'model', 'name'],
+      fields: ['agentId', 'avatar', 'avatarMediaAssetId', 'canonicalConversationId', 'id', 'isBlocked', 'isHostAI', 'model', 'name', 'nickname'],
     },
     {
       id: 'ai-2',
       isBlocked: true,
-      fields: ['agentId', 'avatar', 'avatarMediaAssetId', 'canonicalConversationId', 'id', 'isBlocked', 'isHostAI', 'model', 'name'],
+      fields: ['agentId', 'avatar', 'avatarMediaAssetId', 'canonicalConversationId', 'id', 'isBlocked', 'isHostAI', 'model', 'name', 'nickname'],
     },
   ],
   '助手摘要只能返回界面所需字段，并保留候选禁用状态',
