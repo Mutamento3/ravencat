@@ -103,7 +103,7 @@ export async function runChatVisibleAgent(params: RunChatVisibleAgentParams): Pr
         kind: 'canonical',
         commit: createStandaloneTimelineCommit(params.runId, repository, allocateItemIndex),
       },
-      isTimelineHidden: replyDependencies.tools.isTimelineHidden, stopRuntime: cancellation.stop,
+      stopRuntime: cancellation.stop,
       replyRunId: params.runId, finalAssistantPolicy: params.finalAssistantPolicy, timelineSink,
     });
     const projectEvent = async (event: AgentRunEvent): Promise<void> => {

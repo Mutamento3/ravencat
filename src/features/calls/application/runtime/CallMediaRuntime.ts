@@ -1,14 +1,14 @@
 /** Headless 任务持有的唯一媒体会话；React 展示端只订阅状态和调用命令。 */
 import type { AIProfile } from '@features/assistants';
-import { listAIAssistants } from '@features/assistants';
-import { getCurrentUserProfile, type UserProfile } from '@features/profile';
+import { listAIAssistants, subscribeAIAssistantUpdated } from '@features/assistants';
+import { getCurrentUserProfile, subscribeUserProfileUpdated, type UserProfile } from '@features/profile';
 import { startRealtimeSpeechToText, type RealtimeSpeechToTextSession } from '@features/speech';
 import { realtimeSpeechAudioSource, type RealtimeSpeechAudioSourceSession } from '@platform/device';
 import type { CallSession } from '../../domain/CallSession';
 import type { CallEvent } from '../../domain/CallEvent';
 import { acceptCall, endCall, rejectCall } from '../lifecycle';
 import { getCallSession, listCallEvents } from '../queries/GetCallSession';
-import { loadCallBackgroundUri } from '../CallBackgroundSettings';
+import { loadCallBackgroundUri, subscribeCallBackgroundChanged } from '../CallBackgroundSettings';
 import { appendCallErrorEvent } from '../events/AppendCallSystemEvent';
 import { appendCallCameraStateEvent } from '../events/AppendCallCameraStateEvent';
 import { subscribeCallTranscriptFacts } from '../events/CallTranscriptFacts';
@@ -331,7 +331,7 @@ export function createCallMediaRuntime(callId: string) {
             groupContextPrimaryLimit: aiProfile.groupContextPrimaryLimit,
             groupContextSecondaryLimit: aiProfile.groupContextSecondaryLimit,
             systemPrompt: aiProfile.systemPrompt || undefined,
-            enableTools: false,
+            enableTools: aiProfile.enableTools,
             allowMultipleBubbles: false,
             isHostAI: aiProfile.isHostAI,
             isBlocked: aiProfile.isBlocked,
@@ -643,6 +643,9 @@ export function createCallMediaRuntime(callId: string) {
   let terminalResolved: () => void = () => undefined;
   const terminal = new Promise<void>(resolve => { terminalResolved = resolve; });
   let stopped = false;
+  let aiAppearanceRevision = 0;
+  let userAppearanceRevision = 0;
+  let backgroundRevision = 0;
   let stopPromise: Promise<void> | null = null;
   const stopMedia = (terminalCall?: CallSession): Promise<void> => {
     if (stopPromise) return stopPromise;
@@ -670,6 +673,23 @@ export function createCallMediaRuntime(callId: string) {
   };
   const initialize = async () => {
     cleanups.push(registerCallMediaOwner(callId, stopMedia));
+    cleanups.push(subscribeAIAssistantUpdated(assistant => {
+      if (stopped || assistant.id !== call?.aiAssistantId) return;
+      aiAppearanceRevision++;
+      setAIProfile(assistant);
+    }));
+    cleanups.push(subscribeUserProfileUpdated(profile => {
+      if (stopped) return;
+      userAppearanceRevision++;
+      setUserProfile({ name: profile.name, avatar: profile.avatar });
+    }));
+    cleanups.push(subscribeCallBackgroundChanged(assistantId => {
+      if (stopped || assistantId !== call?.aiAssistantId) return;
+      const revision = ++backgroundRevision;
+      void loadCallBackgroundUri(assistantId).then(uri => {
+        if (!stopped && revision === backgroundRevision) setBackgroundUri(uri);
+      }).catch(error => console.warn('[Calls] 已提交的背景暂时无法展示：', error));
+    }));
     cleanups.push(subscribeCallTranscriptFacts(event => {
       if (stopped || event.callId !== callId) return;
       // 晚到的查询不能覆盖刚收到的 commit；事件身份用于与历史读取去重。
@@ -697,14 +717,19 @@ export function createCallMediaRuntime(callId: string) {
       if (call) await stopMedia(call);
       throw new Error('通话在媒体初始化前已经结束');
     }
+    const initialAIRevision = aiAppearanceRevision;
+    const initialUserRevision = userAppearanceRevision;
+    const initialBackgroundRevision = backgroundRevision;
     const [assistants, user, storedBackground, route] = await Promise.all([
       listAIAssistants(), getCurrentUserProfile(),
       call ? loadCallBackgroundUri(call.aiAssistantId) : Promise.resolve(null), audio.getRouteState(),
     ]);
     if (stopped) return;
-    setAIProfile(assistants.find(assistant => assistant.id === call?.aiAssistantId) || null);
-    setUserProfile(user ? { name: user.name, avatar: user.avatar } : null);
-    setBackgroundUri(storedBackground); receive(route);
+    // 初次读取不能覆盖期间收到的已提交设置；各事实分别维护读取版本。
+    if (initialAIRevision === aiAppearanceRevision) setAIProfile(assistants.find(assistant => assistant.id === call?.aiAssistantId) || null);
+    if (initialUserRevision === userAppearanceRevision) setUserProfile(user ? { name: user.name, avatar: user.avatar } : null);
+    if (initialBackgroundRevision === backgroundRevision) setBackgroundUri(storedBackground);
+    receive(route);
   };
   // 在结束入口外等待输入退场，AI 自己挂断时不会等待当前调用自身。
   const drain = async () => { await Promise.all(pendingInputs); };

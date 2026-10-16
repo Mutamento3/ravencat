@@ -34,6 +34,8 @@ import type {
 } from './group/domain/GroupChatRepository';
 
 export { interruptAbandonedGroupSpeechPlans } from './group/application/GroupSpeechTermination';
+export { configureChatTurnPresentation, configureTurnDisplayPacing, freezeTurnDisplays, interruptSessionTurnDisplays, recoverTurnPresentationDisplays, interruptChatRunPresentation } from './reply/application/ChatTurnPresentationRuntime';
+export { chatTurnPresentationRepository } from './reply/infrastructure/SQLiteChatTurnPresentationRepository';
 
 export {
   configureAssistantMessageArrivalRuntime,
@@ -144,6 +146,7 @@ export interface ChatRuntimeDependencies {
   currentUserDirectory: ChatGroupRuntimeDependencies['currentUserDirectory'];
   canonicalUserMessage?: ChatMessageRuntimeDependencies['canonicalUserMessage'];
   regeneration?: ChatMessageRuntimeDependencies['regeneration'];
+  turnPresentation: ChatMessageRuntimeDependencies['turnPresentation'];
   legacyChatAttachments?: ChatMessageRuntimeDependencies['legacyChatAttachments'];
   database: ChatConversationRuntimeDependencies['database'];
   media: ChatReplyRuntimeDependencies['media'];
@@ -168,6 +171,7 @@ export function configureChatRuntimeDependencies(
     messages: dependencies.repositories.messages,
     assistantDirectory: dependencies.assistantDirectory,
     turns: dependencies.repositories.turns,
+    turnPresentation: dependencies.turnPresentation,
     legacyChatAttachments: dependencies.legacyChatAttachments,
     canonicalUserMessage: dependencies.canonicalUserMessage,
     regeneration: dependencies.regeneration,
@@ -225,6 +229,7 @@ export {
   emitChatMessagesUpdated,
   emitChatMessagesPatched,
   emitChatMessagesReloadRequested,
+  emitChatTurnExecutionChanged,
   emitChatTypingStatusChanged,
   emitChatRegenerationChanged,
 } from './messages/events/ChatEvents';
@@ -260,3 +265,5 @@ export { conversationTurnRepository } from './reply/infrastructure/SQLiteConvers
 export { configureChatImageModels, resolveChatRecognitionModel, notifyChatImageModelsChanged } from './reply/application/ChatImageModels';
 export { chatImageSettingsRepository } from './reply/infrastructure/SQLiteChatImageSettingsRepository';
 export { initializeChatImageModelInTransaction } from './reply/infrastructure/SQLiteChatImageSettingsRepository';
+
+export { recordAssistantNicknameChangeInTransaction } from './messages/application/RecordAssistantNicknameChange';

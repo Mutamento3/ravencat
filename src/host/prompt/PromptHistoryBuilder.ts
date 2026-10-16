@@ -1,6 +1,7 @@
 /** 单聊、群聊与通话消费来源摘要快照；主客背景只读且受本轮输入上界限制。 */
 import {
   getChatSummaryContext,
+  getChatInterruptedTurnContext,
   getChatBackgroundContexts,
   buildSharedChatRecordText,
   getMessageSharedRecord,
@@ -119,7 +120,18 @@ export class PromptHistoryBuilder {
       }
       timeline = timeline.slice(start);
     }
-    const messages: PromptPackMessage[] = timeline.map((item) => ({
+    const fromInputId = timeline.reduce((min, item) => item.messageId !== undefined ? Math.min(min, item.messageId) : min, Number.MAX_SAFE_INTEGER);
+    // 未消费输入区间由 Chat 的固定输入组装器拥有；查询前就排除它，不重复读取后再丢弃。
+    const toInputId = protectedIds.reduce((min, id) => Math.min(min, id), upperBound?.messageId ?? Number.MAX_SAFE_INTEGER);
+    const interrupted = fromInputId >= toInputId ? []
+      : await getChatInterruptedTurnContext(params.sessionId, fromInputId, toInputId);
+    const contextByInput = new Map<number, typeof interrupted>();
+    for (const run of interrupted) {
+      const context = contextByInput.get(run.inputHighWatermark) ?? [];
+      context.push(run);
+      contextByInput.set(run.inputHighWatermark, context);
+    }
+    const messages: PromptPackMessage[] = timeline.flatMap((item): PromptPackMessage[] => [{
       role: item.speaker === 'assistant' ? 'assistant' : 'user',
       content: item.source === 'call' && item.callBoundary === undefined
         ? `[Call transcript][${item.speaker}][${item.callId}][${item.timestamp}] ${item.content}`
@@ -127,7 +139,12 @@ export class PromptHistoryBuilder {
       ...(item.messageId !== undefined ? { sourceMessageId: item.messageId } : {}),
       ...(item.eventId !== undefined ? { sourceCallEventId: item.eventId } : {}),
       ...(item.logicalIdentity !== null ? { logicalMessageId: item.logicalIdentity } : {}),
-    }));
+    }, ...(item.messageId === undefined ? [] : contextByInput.get(item.messageId) ?? []).map(run => ({
+      role: 'assistant' as const,
+      // 作为有来源的历史资料提供，不构造缺少配对调用的 role=tool，也不指示重放。
+      content: run.content,
+      logicalMessageId: `interrupted:${run.runId}`,
+    }))]);
     const summaryContent = snapshot.contextSegments.length ? SUMMARY_HISTORY_NOTICE
       + snapshot.contextSegments.map((segment) => JSON.stringify({ content: segment.content,
         discussionStart: segment.sourceStartAt, discussionEnd: segment.sourceEndAt, timeZone: segment.timeZone })).join('\n') : '';

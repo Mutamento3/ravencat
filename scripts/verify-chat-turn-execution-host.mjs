@@ -70,11 +70,16 @@ const chatReplyAbortModuleUrl = transpileToModuleUrl(
 const chatStub = `import { isChatReplyRunCancellationError } from '${chatReplyAbortModuleUrl}';
 const conversationTurnRepository = null;
 const executeUserReplyTurn = null;
-const sessionRepository = null;`;
+const sessionRepository = null;
+const emitChatMessagesReloadRequested = () => {};
+const emitChatTurnExecutionChanged = () => {};
+const interruptChatRunPresentation = async () => {};
+const emitChatTypingStatusChanged = () => {};
+const emitChatRegenerationChanged = () => {};`;
 
 const coordinatorSource = read('src/host/runtime/ConversationTurnCoordinator.ts');
 const chatCompositionImportPattern =
-  /import\s*\{[\s\S]*?\}\s*from\s*['"]@features\/chat\/composition['"];/;
+  /import\s*\{[^;]*?\}\s*from\s*['"]@features\/chat\/composition['"];/;
 const stubbedCoordinatorSource = coordinatorSource
   .replace(chatCompositionImportPattern, chatStub)
   .replace(chatCompositionImportPattern, '')
@@ -580,7 +585,7 @@ const awaitMessageArrival = async (...args) => { globalThis.__arrivalCalls.push(
 // 真实后台入口与启动门组合；不以 helper 名称或源码循环写法代替业务行为。
 const runnerUrl = transpileToModuleUrl(read('src/host/composition/runPendingBackupRestoreCompletion.ts'));
 const { runPendingBackupRestoreCompletion } = await import(runnerUrl);
-const bootstrapState = { events: [], ready: false, bootstrapGate: null, firstSessionGate: null, fail: false, execution: [] };
+const bootstrapState = { events: [], ready: false, bootstrapGate: null, firstSessionGate: null, fail: false, execution: [], hostStops: new Map(), hostFinishes: [] };
 globalThis.__HEADLESS_BOOTSTRAP_TEST__ = bootstrapState;
 globalThis.__HEADLESS_RESTORE_RUNNER__ = runPendingBackupRestoreCompletion;
 const restoreStubUrl = transpileToModuleUrl(`
@@ -604,6 +609,19 @@ const readyUrl = transpileToModuleUrl(read('src/host/composition/ensureHostDatab
 const taskNativeUrl = transpileToModuleUrl(`export const AppState = { currentState: 'background' };`);
 const taskChatUrl = transpileToModuleUrl(`export function emitChatMessagesUpdated() {}`);
 const taskLogUrl = transpileToModuleUrl(`export function logTurnTimeline() {}`);
+const taskLifetimeNativeUrl = transpileToModuleUrl(`
+export async function getConversationExecutionRemainingTime() { return 60_000; }
+export function waitForConversationExecutionStop(id) {
+  return new Promise(resolve => globalThis.__HEADLESS_BOOTSTRAP_TEST__.hostStops.set(id, resolve));
+}
+export async function finishConversationExecution(id) {
+  const state = globalThis.__HEADLESS_BOOTSTRAP_TEST__;
+  state.hostFinishes.push(id);
+  state.hostStops.get(id)('completed');
+}`);
+const taskLifetimeUrl = transpileToModuleUrl(read('src/host/runtime/ConversationExecutionLifetime.ts')
+  .replace("from '@platform/device'", `from '${taskLifetimeNativeUrl}'`)
+  .replace("from '@shared/diagnostics/TurnTimelineLog'", `from '${taskLogUrl}'`));
 const taskCoordinatorUrl = transpileToModuleUrl(`
   export function getConversationTurnCoordinator() {
     return { async executeTurnFromHost(id, options) {
@@ -620,11 +638,12 @@ const taskUrl = transpileToModuleUrl(read('src/host/runtime/ConversationTurnHead
   .replace("from '@features/chat/composition'", `from '${taskChatUrl}'`)
   .replace("from '@shared/diagnostics/TurnTimelineLog'", `from '${taskLogUrl}'`)
   .replace("from '../composition/ensureHostDatabaseReady'", `from '${readyUrl}'`)
-  .replace("from './ConversationTurnCoordinator'", `from '${taskCoordinatorUrl}'`));
+  .replace("from './ConversationTurnCoordinator'", `from '${taskCoordinatorUrl}'`)
+  .replace("from './ConversationExecutionLifetime'", `from '${taskLifetimeUrl}'`));
 const { runConversationTurnHeadlessTask } = await import(taskUrl);
 bootstrapState.bootstrapGate = deferred();
 bootstrapState.firstSessionGate = deferred();
-const headless = runConversationTurnHeadlessTask({ sessionIds: ['first', 'second'], deliveryTiming: 'paced' });
+const headless = runConversationTurnHeadlessTask({ sessionIds: ['first', 'second'], deliveryTiming: 'paced', hostId: 'normal-host', executionDeadlineAt: Date.now() + 60_000 });
 await flush();
 assert.deepEqual(bootstrapState.events, ['restore', 'bootstrap']);
 assert.deepEqual(bootstrapState.execution, [], 'bootstrap 完成前禁止 claim');
@@ -635,7 +654,15 @@ bootstrapState.firstSessionGate.resolve();
 await headless;
 assert.deepEqual(bootstrapState.execution, [['first', 'immediate'], ['second', 'immediate']]);
 bootstrapState.execution = []; bootstrapState.fail = true; bootstrapState.ready = false;
-await assert.rejects(runConversationTurnHeadlessTask({ sessionIds: ['fail'] }), /bootstrap failed/);
+await assert.rejects(runConversationTurnHeadlessTask({ sessionIds: ['fail'], hostId: 'failed-host', executionDeadlineAt: Date.now() + 60_000 }), /bootstrap failed/);
+assert.deepEqual(bootstrapState.hostFinishes, ['normal-host', 'failed-host'], '成功或启动门失败都必须释放自己的原生执行期');
+const { withConversationExecutionLifetime } = await import(taskLifetimeUrl);
+await withConversationExecutionLifetime({ hostId: 'timeout-host', executionDeadlineAt: Date.now() + 60_000 }, async ({ signal }) => {
+  bootstrapState.hostStops.get('timeout-host')('execution_host_timeout');
+  await flush();
+  assert.equal(signal.aborted, true, '原生截止事件须传播到模型与工具使用的取消信号');
+  assert.equal(signal.reason, 'execution_host_timeout');
+});
 assert.deepEqual(bootstrapState.execution, [], '初始化失败不开放业务读取');
 delete globalThis.__HEADLESS_BOOTSTRAP_TEST__; delete globalThis.__HEADLESS_RESTORE_RUNNER__;
 

@@ -13,6 +13,7 @@ import { AppTextInput } from '@shared/ui';
 
 import type { PresentationTheme } from '@shared/theme';
 import type { createInputAreaStyles } from './chatInputStyles';
+import { CHAT_INPUT_MAX_LENGTH } from './chatInputLimits';
 
 type InputAreaStyles = ReturnType<typeof createInputAreaStyles>;
 
@@ -114,7 +115,7 @@ export function MoonKimiComposer({
             onChangeText={onChangeText}
             placeholder={disabled ? disabledPlaceholder : '尽管问，带图也行'}
             placeholderTextColor={theme.colors.text.tertiary}
-            maxLength={500}
+            maxLength={CHAT_INPUT_MAX_LENGTH}
             autoGrow
             textAlignVertical="center"
             scrollEnabled

@@ -7,7 +7,7 @@ import {
 
 export function createWalletChatReplyGateway(): WalletChatReplyGateway {
   return {
-    async generateReply({ aiProfile, prompt, newRecords }) {
+    async generateReply({ aiProfile, triggerData, newRecords }) {
       // 解析 canonical conversation 也必须在 try 内：网关契约是返回结构化错误，
       // 不是把数据库/解析失败抛给 Wallet。
       let sessionId: string | null = null;
@@ -16,7 +16,7 @@ export function createWalletChatReplyGateway(): WalletChatReplyGateway {
         sessionId = conversation.id;
         const result = await requestProactiveChatReply({
           sessionId: conversation.id,
-          currentInput: prompt,
+          currentInput: triggerData,
           aiConfig: {
             id: aiProfile.id,
             agentId: aiProfile.agentId,

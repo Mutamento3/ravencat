@@ -3,6 +3,8 @@
 export interface HostCooldownStatus {
   isInCooldown: boolean;
   remainingDays: number;
+  revokedAIId: string | null;
+  endAt: string | null;
 }
 
 export const HOST_AI_APPOINTMENT_COOLDOWN_MS = 168 * 60 * 60 * 1000;
@@ -66,7 +68,7 @@ export interface IAIHostRepository {
   setHostAI(aiId: string): Promise<boolean>;
   revokeHostAI(aiId: string): Promise<boolean>;
   checkHostCooldown(): Promise<HostCooldownStatus>;
-  clearAppointmentCooldownForDevelopment(): Promise<void>;
+  releaseAppointmentCooldown(actorAIId: string): Promise<boolean>;
   blockAI(params: BlockAIParams): Promise<BlockedAIRecord>;
   unblockAI(blacklistId: string): Promise<boolean>;
   getBlockedAIs(blockedByAIId?: string): Promise<BlockedAIRecord[]>;

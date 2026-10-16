@@ -1,3 +1,4 @@
+import type { DatabaseTransactionExecutor } from '@platform/persistence';
 /** 定义聊天会话实体与仓储端口。 */
 
 /**
@@ -45,6 +46,7 @@ export interface ChatSession {
 export interface ISessionRepository {
   getCanonicalConversation(aiId: string): Promise<ChatSession | null>;
   resolveCanonicalConversation(aiId: string, now?: Date): Promise<ChatSession>;
+  resolveCanonicalConversationInTransaction(transaction: DatabaseTransactionExecutor, aiId: string, now: Date): Promise<ChatSession>;
   /** 按会话 ID 定位 canonical conversation；notification / recovery / turn 路径使用。 */
   getSession(sessionId: string): Promise<ChatSession | null>;
   /** 推进非破坏式历史边界，返回边界消息 ID；没有消息时返回 null。 */

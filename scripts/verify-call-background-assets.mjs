@@ -12,6 +12,7 @@ function load(relative, mocks = {}) {
   }).outputText;
   const module = { exports: {} };
   new Function('require', 'module', 'exports', source)((name) => {
+    if (name === '@shared/errors/SettingChangeConflictError') return load('src/shared/errors/SettingChangeConflictError.ts');
     assert.ok(Object.hasOwn(mocks, name), `缺少运行依赖：${name}`);
     return mocks[name];
   }, module, module.exports);
@@ -204,6 +205,7 @@ const sharedMocks = {
     getItem: async (key) => settings.get(key) ?? null, removeItem: async (key) => { settings.delete(key); },
   } },
   '@shared/runtime/RuntimeSlot': slot,
+  './WallpaperChanged': load('src/features/profile/application/WallpaperChanged.ts'),
   '@platform/persistence': { databaseCoordinator: coordinator },
   '@platform/device/DeviceMediaService': {
     isAppCacheFileUri,

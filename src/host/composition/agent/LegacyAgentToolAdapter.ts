@@ -37,6 +37,7 @@ export function convertLegacyToolResult(
       status: 'success',
       data: result.data,
       modelContent: result.message,
+      ...(result.modelImages ? { modelImages: result.modelImages } : {}),
       ...(metadata ? { metadata } : {}),
     };
   }

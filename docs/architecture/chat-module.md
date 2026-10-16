@@ -183,6 +183,8 @@ official-replica presentation
 
 `toolNames` 保留真实 runtime identity，`displayNames` 保存 presentation alias。Presentation alias 不得反向参与 authorization、schema validation 或 execution。
 
+所有工具调用都进入同一状态记录与历史上下文通道，不按工具类型隐藏。通话卡片、语音和表情包消息是业务输出，不能替代调用记录。工具意图提出时创建批次状态，执行前被参数或授权校验拒绝的调用也保留失败状态。通话请求成功后停止模型续轮属于等待外部动作，canonical 提交仍保存已完成的工具记录；真实用户取消和 supersede 继续服从原有提交 fence。
+
 ## 11. Streaming 与 persistence
 
 Streaming 只改变增量传输与临时投影，不改变最终消息 ownership。稳定顺序事件由 Chat reply persistence 处理：

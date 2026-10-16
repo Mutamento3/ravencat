@@ -1,7 +1,7 @@
 /** 群聊详情页，协调群消息时间线、输入、召唤成员与群聊操作。 */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, ToastAndroid, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Animated, ScrollView, ToastAndroid, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -309,6 +309,7 @@ export default function GroupChatDetail({
 
   useChatTimelineSync({
     sessionId,
+    messages,
     isTyping,
     setIsTyping,
     setMessages,
@@ -819,11 +820,11 @@ export default function GroupChatDetail({
           />
         )}
 
-        <View style={{ marginBottom: keyboardOffset }}>
+        <Animated.View style={{ marginBottom: keyboardOffset }}>
           {selection.selecting
             ? <ChatSelectionFooter count={selection.count} isDeleting={selection.isDeleting} paddingBottom={Math.max(insets.bottom, 8)} onDelete={selection.requestDelete} onShare={() => { void share.open(selection.anchorMessageIds); }} />
             : renderFooter(Math.max(insets.bottom, 8))}
-        </View>
+        </Animated.View>
       </View>
 
       {editingMessage && (

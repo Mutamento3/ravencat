@@ -51,7 +51,7 @@ export async function assemblePromptPackForRuntimeContext(
   runtimeContext: AIReplyRuntimeContext
 ) {
   const toolsDescription = canUseToolsInRuntimeContext(aiConfig, runtimeContext)
-    ? getChatReplyRuntimeDependencies().tools.buildDescription(buildRuntimeAIToolsConfig(aiConfig, runtimeContext))
+    ? getChatReplyRuntimeDependencies().tools.buildDescription(runtimeContext.allowedToolNames!)
     : undefined;
   const mcpServices = canUseToolsInRuntimeContext(aiConfig, runtimeContext)
     ? runtimeContext.mcpServices

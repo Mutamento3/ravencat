@@ -12,6 +12,7 @@ interface WallpaperProviderProps {
     load(): Promise<StoredWallpaperState>;
     setGlobal(slot: WallpaperSlot, uri: string | null, chatKeys: readonly string[]): Promise<void>;
     setConversation(key: string, uri: string | null): Promise<void>;
+    subscribe(listener: () => void): () => void;
   };
 }
 
@@ -40,18 +41,18 @@ export const WallpaperProvider: React.FC<WallpaperProviderProps> = ({ children, 
   }, [persistence]);
 
   useEffect(() => {
-    void refresh().catch((error) => console.error('[Wallpaper] 背景加载失败：', error));
-    return () => { readRevision.current += 1; };
-  }, [refresh]);
+    const update = () => { void refresh().catch((error) => console.error('[Wallpaper] 背景加载失败：', error)); };
+    const unsubscribe = persistence.subscribe(update);
+    update();
+    return () => { unsubscribe(); readRevision.current += 1; };
+  }, [persistence, refresh]);
 
   const changeGlobal = useCallback(async (slot: WallpaperSlot, uri: string | null, chatKeys: string[] = []) => {
     await persistence.setGlobal(slot, uri, chatKeys);
-    await refresh();
-  }, [persistence, refresh]);
+  }, [persistence]);
   const changeConversation = useCallback(async (key: string, uri: string | null) => {
     await persistence.setConversation(key, uri);
-    await refresh();
-  }, [persistence, refresh]);
+  }, [persistence]);
   const setDefaultAppWallpaper = useCallback(() => changeGlobal('app', null), [changeGlobal]);
   const setCustomAppWallpaper = useCallback((uri: string) => changeGlobal('app', uri), [changeGlobal]);
   const setDefaultChatWallpaper = useCallback((keys: string[] = []) => changeGlobal('chat', null, keys), [changeGlobal]);

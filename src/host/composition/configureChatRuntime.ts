@@ -11,10 +11,20 @@ import {
   sessionRepository,
   configureChatFavoriteRuntime,
   SQLiteChatFavoriteRepository,
+  configureChatTurnPresentation,
+  chatTurnPresentationRepository,
+  configureTurnDisplayPacing,
+  freezeTurnDisplays,
+  interruptSessionTurnDisplays,
+  applyAssistantMessageArrivalSnapshot,
 } from '@features/chat/composition';
 import { clearDB, getDBInfo } from '@platform/persistence';
 import {
   PERSISTENT_MEDIA_CATEGORY,
+  awaitTurnDisplayArrival,
+  setTurnDisplayOpen,
+  setTurnDisplayActive,
+  finishMessageArrival,
   persistentMediaStore,
   readVisionImageAsBase64,
 } from '@platform/device';
@@ -25,12 +35,10 @@ import {
   requireAuxiliaryModel,
   resolveAuxiliaryModel,
   subscribeAuxiliaryModelsChanged,
-  acknowledgeAssistantNicknameNotice,
 } from '@features/assistants';
 import {
   buildToolsDescription,
   getRuntimeAllowedToolNamesForAI,
-  isToolTimelineHidden,
   cancelHostAgentRun,
   runHostAgent,
   resolveMcpExposure,
@@ -47,7 +55,7 @@ import {
   assembleResolvedLedgerPromptPack,
   assembleResolvedStandalonePromptPack,
 } from '@host/prompt';
-import { prepareTogetherListeningHostModelRun } from '@host/runtime/TogetherListeningRunPreparation';
+import { prepareHostModelRun } from '@host/runtime/HostModelRunPreparation';
 import { getConversationTurnCoordinator } from '../runtime/ConversationTurnCoordinator';
 import {
   MEDIA_ASSET_STORAGE_BACKEND,
@@ -63,6 +71,10 @@ export function configureChatRuntime(): void {
   }
   configured = true;
   configureChatFavoriteRuntime(new SQLiteChatFavoriteRepository());
+  configureChatTurnPresentation(chatTurnPresentationRepository);
+  configureTurnDisplayPacing(awaitTurnDisplayArrival, setTurnDisplayOpen, async messageIds => {
+    applyAssistantMessageArrivalSnapshot(await finishMessageArrival(messageIds));
+  }, setTurnDisplayActive);
 
   configureChatImageModels({
     repository: chatImageSettingsRepository,
@@ -73,6 +85,7 @@ export function configureChatRuntime(): void {
   subscribeAuxiliaryModelsChanged(notifyChatImageModelsChanged);
   configureChatRuntimeDependencies({
     mutations: { isRunCurrent: (transaction, runId) => conversationTurnRepository.isRunCurrentInTransaction(transaction, runId) },
+    turnPresentation: { freeze: freezeTurnDisplays, interrupt: interruptSessionTurnDisplays },
     repositories: {
       messages: messageRepository,
       sessions: sessionRepository,
@@ -142,7 +155,7 @@ export function configureChatRuntime(): void {
       cancel: cancelHostAgentRun,
     },
     runPreparation: {
-      prepare: prepareTogetherListeningHostModelRun,
+      prepare: prepareHostModelRun,
     },
     tools: {
       createContext: (params) => new ToolContext({
@@ -155,23 +168,13 @@ export function configureChatRuntime(): void {
           ledger: ledgerRepository,
         },
       }),
-      buildDescription: (config) => {
-        const description = buildToolsDescription(config);
-        if (description || config.enableTools !== true || !(config.allowedToolNames?.length)) {
-          return description;
-        }
-        // MCP-only 时没有 Built-in 描述，但模型仍会从 Agent Registry 收到 MCP schema。
-        return '【工具运行要求】本轮可用工具及参数以 function schema 为准；只在查询真实数据或执行用户明确动作时调用。';
-      },
+      buildDescription: buildToolsDescription,
       getRuntimeAllowedNames: getRuntimeAllowedToolNamesForAI,
       resolveAllowedNames: resolveAllowedToolNames,
       resolveMcpExposure,
       resolveRuntimeContext: resolveToolRuntimeContext,
-      // MCP 清单读取和真实远端调用都进入 Chat 时间线；隐藏策略只保留 Feature 自有裁决。
-      isTimelineHidden: isToolTimelineHidden,
     },
     prompt: {
-      acknowledgeNicknameNotice: acknowledgeAssistantNicknameNotice,
       assembleChat: assembleResolvedChatPromptPack,
       assembleLedger: assembleResolvedLedgerPromptPack,
       assembleStandalone: assembleResolvedStandalonePromptPack,

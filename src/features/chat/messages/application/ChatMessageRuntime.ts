@@ -66,6 +66,10 @@ export interface ChatMessageRuntimeDependencies {
   assistantDirectory: Pick<ChatAssistantDirectory, 'getBlockState'>;
   /** T1/T3 事务使用的回合仓储；具体回合生命周期仍由 reply/Host 持有。 */
   turns: IConversationTurnRepository;
+  turnPresentation: {
+    freeze(sessionId: string): Promise<(committed: boolean) => Promise<void>>;
+    interrupt(sessionId: string): Promise<void>;
+  };
   /** M3a legacy Chat attachment migration 的 Media/Host 窄端口。 */
   legacyChatAttachments?: ChatAttachmentMediaAssetPort;
   /** canonical 用户消息 commit 后通知 Host 启动受控执行宿主。 */

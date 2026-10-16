@@ -10,6 +10,8 @@ import type { PresentationTheme } from '@shared/theme';
 interface ChatHeaderProps {
   aiName?: string | null;
   isTyping?: boolean;
+  /** 普通单聊使用持久执行事实；未提供时保留群聊等既有输入状态契约。 */
+  statusText?: string | null;
   onOpenMenu?: () => void;
   paddingTop?: number;
   onGoBack?: () => void;
@@ -85,21 +87,12 @@ const createStyles = (theme: PresentationTheme) =>
       alignItems: 'center',
       gap: theme.spacing.sm,
     },
-    typingOverlay: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    typingText: {
-      fontSize: 17,
-      color: theme.components.navigation.titleColor,
-      fontWeight: '500',
-    },
   });
 
 function ChatHeader({
   aiName,
   isTyping = false,
+  statusText,
   onOpenMenu,
   paddingTop = 0,
   onGoBack,
@@ -114,6 +107,7 @@ function ChatHeader({
   const [localMuted, setLocalMuted] = React.useState(isMuted);
   const effectiveMuted = onToggleMute ? isMuted : localMuted;
   const handleToggleMute = onToggleMute ?? (() => setLocalMuted((value) => !value));
+  const title = statusText === undefined ? (isTyping ? '对方正在输入...' : aiName) : statusText ?? aiName;
 
   if (isMoonKimi) {
     return (
@@ -125,7 +119,7 @@ function ChatHeader({
         {onTitlePress ? (
           <TouchableOpacity style={styles.moonKimiTitleContainer} activeOpacity={0.7} onPress={onTitlePress}>
             <View style={styles.moonKimiTitleRow}>
-              <Text style={styles.headerTitle} numberOfLines={1}>{aiName}</Text>
+              <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
               <Text style={styles.moonKimiTitleMeta}>思考</Text>
               <ChevronRight size={18} strokeWidth={1.65} color={theme.colors.text.secondary} />
             </View>
@@ -133,7 +127,7 @@ function ChatHeader({
         ) : (
           <View style={styles.moonKimiTitleContainer}>
             <View style={styles.moonKimiTitleRow}>
-              <Text style={styles.headerTitle} numberOfLines={1}>{aiName}</Text>
+              <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
               <Text style={styles.moonKimiTitleMeta}>思考</Text>
               <ChevronRight size={18} strokeWidth={1.65} color={theme.colors.text.secondary} />
             </View>
@@ -167,13 +161,7 @@ function ChatHeader({
       </View>
 
       <View style={styles.titleContainer}>
-        {isTyping ? (
-          <View style={styles.typingOverlay}>
-            <Text style={styles.typingText}>对方正在输入...</Text>
-          </View>
-        ) : (
-          <Text style={styles.headerTitle}>{aiName}</Text>
-        )}
+        <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
       </View>
 
       <View style={[styles.headerSide, styles.headerSideRight]}>

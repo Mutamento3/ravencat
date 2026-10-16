@@ -1,3 +1,4 @@
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 /** LISTEN-2 eligibility、reconciliation、Prompt 注入与单轮 snapshot 一致性验证。 */
 
 import assert from 'node:assert/strict';
@@ -362,6 +363,7 @@ const mismatchBlock = promptBlock.createTogetherListeningRuntimePromptBlock({
 assert.doesNotMatch(mismatchBlock.content, /你与用户正在一起听/);
 
 write('node_modules/@shared/prompt/index.js', `
+exports.CHAT_PROMPT_READING_FLOW = ${JSON.stringify(CHAT_PROMPT_READING_FLOW)};
 exports.estimateTextTokens = (text) => Math.ceil(text.length / 4);
 `);
 write('node_modules/@features/prompting/index.js', `
@@ -385,6 +387,7 @@ exports.promptPackBlockFactory = {
   createProtocolPromptBlock: async () => block('protocol_space', 'context.protocol_space', 'protocol', { slot: 'user_rules' }),
   createUserIdentityBlock: () => block('user_identity_summary', 'context.user_identity', 'identity', { protection: 'overridable' }),
   createMomentSocialInboxBlock: async () => block('moments_social_inbox', 'context.moments_social_inbox', ''),
+  createInteractionEnvironmentBlock: () => block('interaction_environment', 'context.interaction_environment', 'environment'),
   createRecentChatWindowBlock: () => block('recent_chat_window', 'history.recent_chat', '', { slot: 'history', placement: 'history' }),
   createTimeAwarenessBlock: () => block('time_awareness', 'context.time_awareness', 'time'),
   createScenarioContextBlock: () => null,
@@ -411,7 +414,8 @@ exports.renderHostPromptProviderBlock = async (id) => ({
   'context.group_chat': block('group_chat_context', id, 'group', 'scenario'),
   'context.moments_social_inbox': block('moments_social_inbox', id, '', 'dynamic_context'),
   'context.passive_memory': block('passive_memory', id, '', 'dynamic_context'),
-  'context.assistant_nickname': block('assistant_nickname', id, '', 'dynamic_context'),
+  'context.assistant_nickname': block('assistant_nickname', id, '', 'persona'),
+  'context.host_cooldown': block('host_cooldown', id, '', 'dynamic_context'),
 }[id]);
 `);
 for (const relativePath of [
@@ -462,8 +466,11 @@ const preparedAutonomous = await runPreparation.prepareTogetherListeningHostMode
 });
 const autonomousPack = await resolvedAssembler.assembleResolvedChatPromptPack({
   sessionId: 'chat-1', currentInput: 'System wake', aiConfig, toolContext,
+  additionalBlocks: [...preparedAutonomous.additionalPromptBlocks,
+    { key: 'persona', definitionId: 'scenario.raven_cat_ai_schedule', content: 'schedule rules', title: 'rules', slot: 'output_contract', protection: 'locked', required: true, status: 'ready', placement: 'system' },
+    { key: 'persona', definitionId: 'context.raven_cat_ai_schedule', content: 'schedule facts', title: 'facts', slot: 'dynamic_context', protection: 'locked', required: true, status: 'ready', placement: 'system' },
+  ],
   runtimeContext: { capabilities: ['raven_cat.autonomous'], triggerSource: 'raven_cat_ai_schedule' },
-  additionalBlocks: preparedAutonomous.additionalPromptBlocks,
 });
 assert.equal(runReads, 1, '同一个 autonomous run 只能 capture 一次');
 assert.deepEqual(preparedAutonomous.dynamicAllowedToolNames, allTogetherTools);

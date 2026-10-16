@@ -86,7 +86,7 @@ const { editChatMessage } = load('src/features/chat/messages/application/EditCha
   '../../group/application/ChatGroupRuntime': { getChatGroupRuntimeDependencies: () => ({ groups }) },
   '../domain/chatMessageMetadata': metadata,
   '../domain/ChatMessageEditing': policy,
-  '../events/ChatEvents': { emitChatMessagesPatched: (patch) => patches.push(patch) },
+  '../events/ChatEvents': { emitChatMessagesPatched: (patch) => patches.push(patch), emitChatTurnExecutionChanged() {} },
 });
 const time = '2026-10-07T08:00:00.000Z';
 function insert(session, text, sender = 'user', metadataJson = null) {

@@ -339,7 +339,6 @@ assert.deepEqual(
 const fakeToolModule = new Proxy({}, {
   get: (_target, property) => {
     if (typeof property !== 'string') return undefined;
-    if (property === 'createChangeOwnAvatarTool') return () => ({ name: 'change_own_avatar', definition: { name: 'change_own_avatar', description: '', parameters: {} } });
     return {
       name: property,
       definition: { name: property, description: '', parameters: {} },
@@ -348,6 +347,7 @@ const fakeToolModule = new Proxy({}, {
 });
 
 const registryModule = loadModule(registryPath, (specifier) => {
+  if (specifier === './ApplicationSettingsTools') return { applicationSettingsTools: [] };
   if (specifier === '@platform/agentRuntime') return { AgentToolRegistry: class {} };
   if (specifier === './LegacyAgentToolAdapter') return { LegacyAgentToolAdapter: class {} };
   if (specifier === '@features/phoneTools/neteaseComposition') {

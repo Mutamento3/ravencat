@@ -24,6 +24,9 @@ export class ChatReplyRunCancelledError extends Error {
 export function assertChatReplyNotAborted(
   runtimeContext: AIReplyRuntimeContext
 ): void {
+  if (runtimeContext.executionDeadlineAt !== undefined && performance.now() >= runtimeContext.executionDeadlineAt) {
+    throw new Error('execution_host_timeout');
+  }
   if (runtimeContext.abortSignal?.aborted) {
     throw new ChatReplyRunCancelledError('aborted');
   }

@@ -13,6 +13,7 @@ export {
   runTogetherListeningNotificationActionHeadlessTask,
 } from './notifications/TogetherListeningNotificationActionHeadlessTask';
 export { runConversationTurnHeadlessTask } from './runtime/ConversationTurnHeadlessTask';
+export { runHostRelationshipReplyHeadlessTask } from './runtime/HostRelationshipReplyHeadlessTask';
 export { runCallExecutionHeadlessTask } from './runtime/CallExecutionHeadlessTask';
 export { configurePromptingRuntime } from './composition/configurePromptingRuntime';
 export { default as AuxiliaryModelsRouteContent, parseCapabilityKind } from './navigation/AuxiliaryModelsRouteContent';

@@ -28,6 +28,8 @@ function load(relativePath, dependencies = {}) {
 let call = { id: 'call-1', aiAssistantId: 'ai-1', direction: 'outgoing', state: 'active', acceptedAt: new Date().toISOString() };
 let currentRuntime;
 const backgroundReads = [];
+let backgroundChanged, aiUpdated, userUpdated;
+let backgroundUri = 'file:///role-background.jpg';
 let speechCallbacks;
 let audioCallbacks;
 const deletedFrames = [];
@@ -135,7 +137,8 @@ const application = {
     if (deferEventRead) return new Promise(resolve => { finishEventRead = () => resolve(snapshot); });
     return snapshot;
   },
-  async loadCallBackgroundUri(assistantId) { backgroundReads.push(assistantId); return 'file:///role-background.jpg'; },
+  async loadCallBackgroundUri(assistantId) { backgroundReads.push(assistantId); return backgroundUri; },
+  subscribeCallBackgroundChanged: listener => { backgroundChanged = listener; return () => { backgroundChanged = null; }; },
   async appendCallCameraStateEvent() {},
   async appendCallErrorEvent() {},
   async attachCallSnapshot() { return { callId: call.id }; },
@@ -159,8 +162,10 @@ const runtimeModule = load('src/features/calls/application/runtime/CallMediaRunt
   'react-native': { AppState: { addEventListener: () => ({ remove() {} }) } },
   'expo-image-picker': {},
   'expo-camera': { Camera: { async requestMicrophonePermissionsAsync() { return { granted: true }; } } },
-  '@features/assistants': { async listAIAssistants() { return [{ id: 'ai-1', name: 'AI' }]; } },
-  '@features/profile': { async getCurrentUserProfile() { return { name: '用户' }; } },
+  '@features/assistants': { async listAIAssistants() { return [{ id: 'ai-1', name: 'AI' }]; },
+    subscribeAIAssistantUpdated: listener => { aiUpdated = listener; return () => { aiUpdated = null; }; } },
+  '@features/profile': { async getCurrentUserProfile() { return { name: '用户' }; },
+    subscribeUserProfileUpdated: listener => { userUpdated = listener; return () => { userUpdated = null; }; } },
   '@features/speech': {
     async startRealtimeSpeechToText(options) {
       speechStarts += 1;
@@ -236,6 +241,18 @@ try {
   assert.equal(currentRuntime.call.id, call.id);
   assert.deepEqual(backgroundReads, [call.aiAssistantId], '通话根据会话中的角色读取背景');
   assert.equal(currentRuntime.backgroundUri, 'file:///role-background.jpg');
+  await act(async () => {
+    backgroundUri = 'file:///ai-new-background.jpg';
+    backgroundChanged('unrelated-ai');
+    assert.equal(backgroundReads.length, 1, '其他角色设置不刷新当前通话');
+    backgroundChanged(call.aiAssistantId);
+    aiUpdated({ id: 'ai-1', name: '公开新名称', avatar: 'file:///ai-new-avatar.png' });
+    userUpdated({ name: '用户', avatar: 'file:///user-new-avatar.png' });
+  });
+  assert.equal(currentRuntime.backgroundUri, backgroundUri, '通话期间立即显示已提交背景');
+  assert.equal(currentRuntime.aiProfile.name, '公开新名称');
+  assert.equal(currentRuntime.aiProfile.avatar, 'file:///ai-new-avatar.png');
+  assert.equal(currentRuntime.userProfile.avatar, 'file:///user-new-avatar.png');
   let opening;
   await act(async () => {
     await currentRuntime.startRealtimeSpeech();

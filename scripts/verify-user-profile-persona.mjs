@@ -14,6 +14,7 @@ function load(relative, mocks = {}) {
   }).outputText;
   const module = { exports: {} };
   new Function('require', 'module', 'exports', compiled)((name) => {
+    if (name === '@shared/errors/SettingChangeConflictError') return load('src/shared/errors/SettingChangeConflictError.ts');
     assert.ok(Object.hasOwn(mocks, name), `${relative} 缺少依赖 ${name}`);
     return mocks[name];
   }, module, module.exports);

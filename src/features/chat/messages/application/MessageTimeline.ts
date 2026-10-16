@@ -80,6 +80,7 @@ export interface MergeTimelineMessagesResult {
 export interface SubscribeConversationTimelineParams {
   sessionId: string;
   getAfterId: () => number | null;
+  getLoadedMessageIds: () => readonly number[];
   onReplace?: (messages: ChatMessage[]) => void | Promise<void>;
   onAppend?: (messages: ChatMessage[]) => void | Promise<void>;
   onRemove?: (messageIds: readonly number[]) => void | Promise<void>;
@@ -341,6 +342,7 @@ export function subscribeConversationTimeline(
   const {
     sessionId,
     getAfterId,
+    getLoadedMessageIds,
     onReplace,
     onAppend,
     onRemove,
@@ -390,6 +392,7 @@ export function subscribeConversationTimeline(
         const result = await syncConversationTimelineOnce({
           sessionId,
           getAfterId,
+          getLoadedMessageIds,
           onError,
           forceReload: hasPendingReload,
           ...consumePendingPatchState(),
@@ -469,7 +472,7 @@ export function subscribeConversationTimeline(
 async function syncConversationTimelineOnce(
   params: Pick<
     SubscribeConversationTimelineParams,
-    'sessionId' | 'getAfterId' | 'onError'
+    'sessionId' | 'getAfterId' | 'getLoadedMessageIds' | 'onError'
   > & TimelinePatchSyncState,
   deps: TimelineDeps = {}
 ): Promise<TimelineSyncResult> {
@@ -477,7 +480,14 @@ async function syncConversationTimelineOnce(
   const repo = deps.repository ?? getChatMessageRuntimeDependencies().messages;
   const afterId = getAfterId();
 
-  if (!afterId || forceReload) {
+  if (forceReload) {
+    return {
+      mode: 'replace',
+      messages: await repo.getReloadWindowMessages(sessionId, params.getLoadedMessageIds()),
+    };
+  }
+
+  if (!afterId) {
     const initialResult = await openConversationTimeline({ sessionId }, deps);
 
     if (!initialResult.success) {

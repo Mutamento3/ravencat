@@ -13,7 +13,6 @@ import type {
 import { promptPackAssembler } from './PromptPackAssembler';
 import { promptPackCompiler } from './compiler';
 import { createDeviceBatteryPromptBlocks } from './DeviceBatteryPromptBlock';
-import { getCurrentUserProfile } from '@features/profile';
 import { promptPackBlockFactory } from './PromptPackBlockFactory';
 
 const BATTERY_PRESET_ITEM = {
@@ -52,7 +51,7 @@ export async function assembleResolvedStandalonePromptPack(
   const currentInput = { role: 'user' as const, content: params.currentInput };
   const includeNickname = params.assistantId && ['call.post_user_hangup', 'together_listening.post_user_decline', 'raven_cat.ai_schedule_trigger'].includes(params.scenarioId);
   const nicknameBlocks = includeNickname ? [await promptPackBlockFactory.createAssistantNicknameBlock(
-    params.assistantId!, (await getCurrentUserProfile()).name, false,
+    params.assistantId!,
   )] : [];
   return promptPackCompiler.compile({
     scenario: params.scenarioId,
@@ -75,8 +74,8 @@ export async function assembleResolvedStandalonePromptPack(
     recentMessages: [],
     currentInput,
     preset: { ...resolved.preset, items: [...resolved.preset.items,
-      ...(includeNickname ? [{ definitionId: 'context.assistant_nickname', slot: 'dynamic_context' as const,
-        sortOrder: 190, enabled: true, required: false, protection: 'locked' as const }] : []),
+      ...(includeNickname ? [{ definitionId: 'context.assistant_nickname', slot: 'persona' as const,
+        sortOrder: 32, enabled: true, required: false, protection: 'locked' as const }] : []),
     ] },
   });
 }

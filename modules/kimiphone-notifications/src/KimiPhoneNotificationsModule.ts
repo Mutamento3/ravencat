@@ -72,6 +72,7 @@ export interface NativeNotificationResponse extends NativeNotificationRouteData 
 }
 
 export interface PostConversationNotificationRequest {
+  turnRunId?: string;
   /** 子通知 ID：`kimiphone-msg-<conversationKey>-<eventId>`，逐段唯一 */
   displayId: string;
   /** 子通知幂等键：同 eventId 重发更新同一条子通知；建议 `logicalMessageId:segmentIndex` */
@@ -149,6 +150,9 @@ type KimiPhoneNotificationEvents = {
 };
 
 declare class KimiPhoneNotificationsNativeModule extends NativeModule<KimiPhoneNotificationEvents> {
+  awaitTurnDisplayArrival(runId: string, conversationKey: string): Promise<boolean>;
+  setTurnDisplayOpen(runIds: string[], open: boolean): Promise<void>;
+  setTurnDisplayActive(runId: string, active: boolean): Promise<void>;
   getMessageArrivalSnapshot(): Promise<NativeMessageArrivalSnapshot>;
   beginMessageArrival(observer: NativeMessageArrivalObserver, messageIds: number[]): Promise<NativeMessageArrivalSnapshot>;
   awaitMessageArrival(conversationKey: string, messageId: number): Promise<NativeMessageArrivalSnapshot>;
@@ -169,6 +173,7 @@ declare class KimiPhoneNotificationsNativeModule extends NativeModule<KimiPhoneN
   /** 按会话聚合 key 撤销：direct = `ai:<aiId>`，group = `group:<groupId>`；null 撤销全部 */
   cancelConversationNotifications(conversationKey?: string | null): Promise<void>;
   cancelIncomingCallNotification(callId: string): Promise<void>;
+  leaveCallScreen(callId: string, finished: boolean): Promise<void>;
   consumePendingNotificationResponses(): Promise<NativeNotificationResponse[]>;
   getNotificationDiagnostics(scopeKey?: string | null): Promise<NativeNotificationDiagnostics>;
   /** 显式用户操作：Android 14+ 打开本应用 FSI 系统授权页；API < 34 返回 false */
@@ -184,6 +189,9 @@ const nativeModule = requireNativeModule<KimiPhoneNotificationsNativeModule>(
 const emitter = new EventEmitter<KimiPhoneNotificationEvents>(nativeModule);
 
 export const getMessageArrivalSnapshot = () => nativeModule.getMessageArrivalSnapshot();
+export const awaitTurnDisplayArrival = (runId: string, conversationKey: string) => nativeModule.awaitTurnDisplayArrival(runId, conversationKey);
+export const setTurnDisplayOpen = (runIds: string[], open: boolean) => nativeModule.setTurnDisplayOpen(runIds, open);
+export const setTurnDisplayActive = (runId: string, active: boolean) => nativeModule.setTurnDisplayActive(runId, active);
 export const beginMessageArrival = (observer: NativeMessageArrivalObserver, messageIds: number[]) =>
   nativeModule.beginMessageArrival(observer, messageIds);
 export const awaitMessageArrival = (conversationKey: string, messageId: number) =>
@@ -235,6 +243,11 @@ export function cancelConversationNotifications(conversationKey?: string | null)
 
 export function cancelIncomingCallNotification(callId: string): Promise<void> {
   return nativeModule.cancelIncomingCallNotification(callId);
+}
+
+/** 由宿主退出路由前调用；App 外接听的来电先退回原任务，媒体清理继续执行。 */
+export function leaveCallScreen(callId: string, finished: boolean): Promise<void> {
+  return nativeModule.leaveCallScreen(callId, finished);
 }
 
 export function consumePendingNotificationResponses(): Promise<NativeNotificationResponse[]> {

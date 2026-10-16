@@ -157,15 +157,9 @@ const replyPersistenceMock = {
     projectionLog.persistedReplies.push({ ...params, visibleSegments });
   },
 };
-const metadataMock = {
-  buildMessageMetadata: (_aiConfig, _runtimeContext, extra = {}) => ({ ...extra }),
-  buildChatToolStatusMessageMetadata: (params) => ({
-    kind: 'tool_status',
-    status: params.status,
-    toolNames: params.toolNames,
-    displayNames: params.toolDisplayNames,
-  }),
-};
+const metadataMock = loadTypeScriptModule('src/features/chat/reply/application/ChatReplyMetadata.ts', {
+  './ReplyPolicy': loadTypeScriptModule('src/features/chat/reply/application/ReplyPolicy.ts'),
+});
 const presentationModule = loadTypeScriptModule(
   'src/features/chat/reply/agent/ToolReplyPresentation.ts',
   {
@@ -279,20 +273,7 @@ const projectorModule = loadTypeScriptModule(
         markFailed() {}
       },
     },
-    './ChatAgentTimeline': {
-      ChatAgentTimeline: class {
-        constructor() {}
-        startStep() {}
-        reconcileModelTurn() {}
-        appendDelta() {}
-        startToolStatus() {}
-        completeToolCall() {}
-        shouldWaitForExternalAction() { return false; }
-        closeRun() {}
-        clear() {}
-        buildCommitItems() { return []; }
-      },
-    },
+    './ChatAgentTimeline': timelineModule,
     './ToolReplyPresentation': presentationModule,
   },
 );
@@ -308,9 +289,7 @@ let capturedLegacyExecutionContext = null;
 const runtimeToolContextCalls = [];
 
 const chatRuntimeDependencies = {
-  tools: {
-    isTimelineHidden: () => false,
-  },
+  tools: {},
   agent: {
     run: async ({ modelGateway, createLegacyContext, ...request }) => {
       assert.equal(typeof createLegacyContext, 'function');
@@ -538,7 +517,7 @@ assert.deepEqual(historyProvider.requests[0].messages, [
   {
     role: 'assistant',
     content: '先查询',
-    reasoning_content: ' ',
+    reasoning_content: '',
     tool_calls: [{
       id: 'call-history',
       type: 'function',
@@ -551,11 +530,7 @@ assert.deepEqual(historyProvider.requests[0].messages, [
     name: 'lookup',
     content: '查询结果',
   },
-  {
-    role: 'system',
-    content: '本次 Agent run 还可调用 7 次工具，本轮最多提出 3 个工具调用。请控制调用数量；信息足够时直接给出本次 Agent run 的最终输出。',
-  },
-], 'Runtime assistant/tool history 保持原映射，动态预算提示后置');
+], 'Runtime assistant/tool history 保持原映射，正常续轮不追加额度提示');
 
 const continuationProvider = createProvider([response({ text: 'continuation ok' })]);
 const continuationGateway = new baseAIClientGatewayModule.BaseAIClientAgentModelGateway({
@@ -571,10 +546,6 @@ await continuationGateway.runTurn(genericTurnRequest({
 assert.deepEqual(continuationProvider.requests[0].messages.slice(0, 3), [
   { role: 'user', content: '既有历史' },
   { role: 'system', content: '只执行完成前的受限决策。' },
-  {
-    role: 'system',
-    content: '本次 Agent run 还可调用 7 次工具，本轮最多提出 3 个工具调用。请控制调用数量；信息足够时直接给出本次 Agent run 的最终输出。',
-  },
 ], 'completion continuation 指令必须以机器 system context 进入同一个模型历史');
 
 const finalProvider = createProvider([response({ text: 'final ok' })]);
@@ -655,6 +626,8 @@ async function runChatCase({
   controller = new AbortController(),
   failProjection = false,
   callbacks = {},
+  persistence = legacyPersistenceMock,
+  runtimeContext = { replyRunId: 'run-1' },
 }) {
   resetProjectionLog();
   failNextPersistence = failProjection;
@@ -679,7 +652,7 @@ async function runChatCase({
     repository: createRepository(),
     callbacks,
     runtimeContext: {
-      replyRunId: 'run-1',
+      ...runtimeContext,
       memoryParticipation: 'off',
       abortSignal: controller.signal,
       allowedToolNames: tools.map((tool) => tool.descriptor.name),
@@ -690,7 +663,7 @@ async function runChatCase({
       enableTools,
     },
     client: provider,
-    persistence: legacyPersistenceMock,
+    persistence,
   });
   if (!capturedRunResult) {
     throw new Error('生产 ChatAgentReplyFlow 未返回 AgentRunResult');
@@ -762,7 +735,7 @@ let disabledToolExecutions = 0;
 await assert.rejects(
   () => runChatCase({
     responses: [response({
-      toolCalls: [toolCall('call-disabled', 'lookup', {})],
+      toolCalls: [toolCall('call-disabled', 'lookup', { secret: 'private-tool-argument' })],
       isToolCall: true,
       finishReason: 'tool_calls',
     })],
@@ -772,7 +745,14 @@ await assert.rejects(
     })],
     enableTools: false,
   }),
-  /Chat Agent run failed/,
+  (error) => {
+    assert.match(error.message, /Chat Agent run failed/u);
+    assert.match(error.diagnosticText, /MODEL_PROTOCOL_ERROR/u);
+    assert.match(error.diagnosticText, /run-1/u);
+    assert.match(error.diagnosticText, /lookup.*未执行/u);
+    assert.doesNotMatch(error.diagnosticText, /private-tool-argument/u, '诊断不得持久化工具参数');
+    return true;
+  },
   'tools disabled 时意外 tool call 必须在 proposal 前失败',
 );
 assert.equal(capturedRunResult.terminalCode, 'MODEL_PROTOCOL_ERROR');
@@ -899,6 +879,58 @@ assert.equal(oneTool.result.toolCallCount, 1);
 assert.equal(oneTool.projectionLog.persistedReplies.length, 2, '工具前言与最终回复必须各投递一次');
 assert.equal(oneTool.projectionLog.statusMessages.length, 1);
 assert.equal(oneTool.projectionLog.statusUpdates.length, 1);
+assert.equal(JSON.parse(oneTool.projectionLog.statusUpdates[0].patch.metadataJson).replyRunId, 'run-1', '上游已有的运行编号保持不变');
+
+// 主理身份变更等主动回复没有上游 run 编号，工具与正文仍须保存执行层生成的同一身份。
+for (const modelTransport of ['complete', 'stream']) {
+  for (const failed of [false, true]) {
+    const generated = await runChatCase({
+      modelTransport,
+      runtimeContext: { triggerSource: 'host_relationship' },
+      responses: [
+        response({ text: '先发送表情', toolCalls: [toolCall('generated-sticker', 'select_sticker', {})],
+          isToolCall: true, finishReason: 'tool_calls' }),
+        response({ text: '说明执行结果' }),
+      ],
+      tools: [createTool('select_sticker', async () => failed
+        ? { status: 'error', code: 'STICKER_NOT_FOUND', message: '表情不存在', modelContent: '表情不存在' }
+        : { status: 'success', data: {}, modelContent: '表情已发送' })],
+    });
+    const runId = generated.result.runId;
+    assert.equal(runId, 'run-generated');
+    assert.equal(capturedLegacyContext.sharedState.replyRunId, runId);
+    for (const message of generated.projectionLog.statusMessages) {
+      assert.equal(JSON.parse(message.metadataJson).replyRunId, runId, '工具开始时已有真实运行归属');
+    }
+    for (const update of generated.projectionLog.statusUpdates) {
+      const metadata = JSON.parse(update.patch.metadataJson);
+      assert.equal(metadata.replyRunId, runId, '完成或失败更新不能丢失运行归属');
+      assert.equal(metadata.status, failed ? 'failed' : 'completed');
+    }
+    for (const reply of generated.projectionLog.persistedReplies) {
+      assert.equal(reply.runtimeContext.replyRunId, runId, '前言和最终回复与工具属于同一次运行');
+    }
+  }
+}
+
+await assert.rejects(
+  () => runChatCase({
+    responses: [
+      response({ text: 'private-assistant-prelude', toolCalls: [toolCall('before-failure', 'lookup', { q: 'private-query' })],
+        isToolCall: true, finishReason: 'tool_calls' }),
+      response({ text: '' }),
+    ],
+    tools: [createTool('lookup', async () => ({
+      status: 'success', data: { secret: 'private-tool-data' }, modelContent: 'private-observation',
+    }))],
+  }),
+  (error) => {
+    assert.match(error.diagnosticText, /lookup.*成功/u, '后续模型失败不能把已执行成功的工具记为未执行');
+    assert.doesNotMatch(error.diagnosticText, /private-(?:assistant-prelude|query|tool-data|observation)/u,
+      '持久诊断只能含安全标识与状态，不能复制模型正文或工具数据');
+    return true;
+  },
+);
 
 const visibleMcpTools = await runChatCase({
   responses: [
@@ -969,13 +1001,13 @@ assert.equal(budgetReached.result.terminalCode, 'COMPLETED');
 assert.equal(budgetReached.provider.requests.length, 11, '十个工具回合后必须保留最终回答轮次');
 assert.equal(budgetReached.result.toolCallCount, 30, '十轮、每轮三个工具必须允许完整执行 30 次');
 assert.equal(budgetReached.provider.requests.at(-1).method, 'chat', '最终回答轮次不得携带工具');
-assert.equal(
-  budgetReached.provider.requests[0].messages.some((message) => (
-    message.role === 'system' && String(message.content).includes('还可调用 30 次工具')
-  )),
-  true,
-  '模型开始工具循环时必须知道剩余调用额度',
-);
+assert.deepEqual(budgetReached.provider.requests[0].messages, [{ role: 'user', content: '请处理' }],
+  '正常工具请求保持原始输入，不播报 Runtime 内部额度');
+for (let index = 1; index < budgetReached.provider.requests.length - 1; index += 1) {
+  const previous = budgetReached.provider.requests[index - 1].messages;
+  assert.deepEqual(budgetReached.provider.requests[index].messages.slice(0, previous.length), previous,
+    '每次消耗额度后的正常续轮仍保留上一请求的完整消息前缀');
+}
 assert.equal(
   budgetReached.provider.requests.at(-1).messages.some((message) => (
     message.role === 'system' && String(message.content).includes('工具调用阶段已经结束')
@@ -1138,7 +1170,65 @@ const waitExternal = await runChatCase({
 assert.equal(waitExternal.result.terminalCode, 'CANCELLED_BY_USER');
 assert.equal(waitExternal.provider.requests.length, 1, '视频来电提交后不得继续请求模型');
 assert.equal(waitExternal.projectionLog.persistedReplies.length, 0, '等待外部通话时不得补发助手文本');
-assert.equal(waitExternal.projectionLog.statusMessages.length, 0, '单独视频来电不显示重复工具状态');
+assert.equal(waitExternal.projectionLog.statusMessages.length, 1, '单独视频来电也保存工具调用记录');
+assert.equal(waitExternal.projectionLog.statusUpdates.length, 1);
+assert.deepEqual(JSON.parse(waitExternal.projectionLog.statusUpdates[0].patch.metadataJson).toolNames, ['requestVideoCall']);
+assert.equal(JSON.parse(waitExternal.projectionLog.statusUpdates[0].patch.metadataJson).status, 'completed');
+
+// 通话停止模型续轮时，真实 complete/stream 回复链仍将调用记录交给 canonical T3。
+for (const modelTransport of ['complete', 'stream']) {
+  for (const commitOutcome of ['committed', 'fence_failed']) {
+    const commits = [];
+    const call = await runChatCase({
+      modelTransport,
+      responses: [response({
+        toolCalls: [toolCall('canonical-video', 'requestVideoCall', { reason: '想见你' })],
+        isToolCall: true, finishReason: 'tool_calls',
+      })],
+      tools: [createTool('requestVideoCall', async () => ({
+        status: 'success', data: { callId: 'call-canonical' }, modelContent: '视频电话请求已提交。',
+        metadata: { suppressAssistantReply: true },
+      }))],
+      persistence: { persistsIntermediates: false, commitAgentTimeline: async (params) => {
+        commits.push(params);
+        return { outcome: commitOutcome, messages: commitOutcome === 'committed'
+          ? params.items.map(({ message }, index) => ({ ...message, id: index + 1 })) : [] };
+      } },
+    });
+    assert.equal(call.result.terminalCode, 'CANCELLED_BY_USER');
+    assert.equal(call.provider.requests.length, 1, '通话成功后 complete/stream 均不追加模型请求');
+    assert.equal(commits.length, 1, '内部停止仍进入已有 T3 fence，失效 run 不旁路写入');
+    assert.equal(commits[0].items.length, 1, '通话仅提交调用记录，不补发空助手消息');
+    const message = commits[0].items[0].message;
+    assert.equal(message.senderType, 'system');
+    assert.equal(message.text, '调用完成：视频电话');
+    assert.deepEqual(JSON.parse(message.metadataJson).toolNames, ['requestVideoCall']);
+    assert.equal(JSON.parse(message.metadataJson).status, 'completed');
+  }
+}
+
+// 执行前参数拒绝也有失败历史，不能因没有 tool_call_started 而丢掉这次调用。
+for (const modelTransport of ['complete', 'stream']) {
+  let executed = 0;
+  const commits = [];
+  await runChatCase({
+    modelTransport,
+    responses: [response({ toolCalls: [toolCall('invalid-voice', 'send_voice_message', {})],
+      isToolCall: true, finishReason: 'tool_calls' }), response({ text: '语音没有发送成功' })],
+    tools: [createTool('send_voice_message', async () => { executed++; }, {
+      inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+    })],
+    persistence: { persistsIntermediates: false, commitAgentTimeline: async (params) => {
+      commits.push(params);
+      return { outcome: 'committed', messages: params.items.map(({ message }, index) => ({ ...message, id: index + 1 })) };
+    } },
+  });
+  assert.equal(executed, 0);
+  const message = commits[0].items.find(({ message }) => message.senderType === 'system').message;
+  assert.equal(message.text, '调用失败：发送语音');
+  assert.equal(JSON.parse(message.metadataJson).status, 'failed');
+  assert.deepEqual(JSON.parse(message.metadataJson).toolNames, ['send_voice_message']);
+}
 
 // canonical Agent timeline：四个稳定行为案例（顺序、delta 更新、同批工具、工具失败）。
 function createTimelineTurn(overrides = {}) {
@@ -1170,7 +1260,7 @@ function timelineCommitKinds(timeline, runId) {
 }
 
 // Case 1：reasoning step1 → tool step1 → reasoning step2 → assistant step2。
-const reasoningToolTimeline = new timelineModule.ChatAgentTimeline('case-1-run', () => false);
+const reasoningToolTimeline = new timelineModule.ChatAgentTimeline('case-1-run');
 reasoningToolTimeline.startStep(1);
 reasoningToolTimeline.appendDelta(1, 'reasoning', '第一步思考');
 reasoningToolTimeline.reconcileModelTurn(1, createTimelineTurn({
@@ -1200,7 +1290,7 @@ assert.deepEqual(
 );
 
 // Case 2：无 reasoning，tool step1 → assistant step2。
-const toolAssistantTimeline = new timelineModule.ChatAgentTimeline('case-2-run', () => false);
+const toolAssistantTimeline = new timelineModule.ChatAgentTimeline('case-2-run');
 toolAssistantTimeline.startStep(1);
 toolAssistantTimeline.reconcileModelTurn(1, createTimelineTurn({
   toolCalls: [modelToolCall('case-2-tool', 'lookup')],
@@ -1220,12 +1310,13 @@ assert.deepEqual(
 assert.deepEqual(timelineCommitKinds(toolAssistantTimeline, 'case-2-run'), ['tool', 'assistant']);
 
 // Sticker intent 不建立旁路写入；它必须作为空正文、结构化 metadata 的 assistant item 进入 T3。
-const stickerTimeline = new timelineModule.ChatAgentTimeline('sticker-run', () => true);
+const stickerTimeline = new timelineModule.ChatAgentTimeline('sticker-run');
 stickerTimeline.startStep(1);
 stickerTimeline.reconcileModelTurn(1, createTimelineTurn({
   toolCalls: [modelToolCall('sticker-select', 'select_sticker')],
   finishReason: 'tool_calls',
 }));
+stickerTimeline.startToolStatus(1);
 stickerTimeline.completeToolCall(1, 'sticker-select', {
   status: 'success',
   data: {
@@ -1257,14 +1348,15 @@ const stickerItems = stickerTimeline.buildCommitItems({
   finalAssistantPolicy: 'commit_as_reply',
   finalStepIndex: 2,
 });
-assert.equal(stickerItems.length, 1, '隐藏工具与空 final 不得产生多余文本消息');
-assert.equal(stickerItems[0].message.senderType, 'assistant');
-assert.equal(stickerItems[0].message.text, '');
-assert.equal(JSON.parse(stickerItems[0].message.metadataJson).sticker.name, '开心猫猫');
+assert.equal(stickerItems.length, 2, '表情包发送同时保存工具状态和媒体消息，空 final 不生成正文');
+assert.equal(stickerItems[0].message.senderType, 'system');
+assert.deepEqual(JSON.parse(stickerItems[0].message.metadataJson).toolNames, ['select_sticker']);
+assert.equal(stickerItems[1].message.senderType, 'assistant');
+assert.equal(stickerItems[1].message.text, '');
+assert.equal(JSON.parse(stickerItems[1].message.metadataJson).sticker.name, '开心猫猫');
 
 const orderedTimeline = new timelineModule.ChatAgentTimeline(
   'canonical-run',
-  () => false,
 );
 orderedTimeline.startStep(1);
 orderedTimeline.appendDelta(1, 'reasoning', '先思考');
@@ -1317,7 +1409,7 @@ for (const { message } of orderedItems) {
   );
 }
 
-const multiToolTimeline = new timelineModule.ChatAgentTimeline('case-4-run', () => false);
+const multiToolTimeline = new timelineModule.ChatAgentTimeline('case-4-run');
 multiToolTimeline.startStep(1);
 multiToolTimeline.appendDelta(1, 'reasoning', '先检查 A 和 B');
 multiToolTimeline.reconcileModelTurn(1, createTimelineTurn({
@@ -1349,7 +1441,7 @@ assert.deepEqual(
   ['reasoning', 'tool', 'reasoning', 'tool', 'assistant'],
 );
 
-const deltaTimeline = new timelineModule.ChatAgentTimeline('delta-run', () => false);
+const deltaTimeline = new timelineModule.ChatAgentTimeline('delta-run');
 deltaTimeline.startStep(1);
 deltaTimeline.appendDelta(1, 'assistant', '相同');
 const firstDeltaIdentity = deltaTimeline.snapshots()[0].clientMessageId;
@@ -1358,7 +1450,7 @@ assert.equal(deltaTimeline.snapshots().length, 1, 'delta：assistant delta 只�
 assert.equal(deltaTimeline.snapshots()[0].clientMessageId, firstDeltaIdentity);
 assert.equal(deltaTimeline.snapshots()[0].text, '相同文本');
 
-const batchTimeline = new timelineModule.ChatAgentTimeline('batch-run', () => false);
+const batchTimeline = new timelineModule.ChatAgentTimeline('batch-run');
 batchTimeline.startStep(1);
 batchTimeline.reconcileModelTurn(1, createTimelineTurn({
   toolCalls: [modelToolCall('call-a', 'first'), modelToolCall('call-b', 'second')],
@@ -1375,7 +1467,6 @@ assert.equal(
 
 const phonePackageTimeline = new timelineModule.ChatAgentTimeline(
   'phone-package-run',
-  () => false,
   {},
 );
 phonePackageTimeline.startStep(1);
@@ -1389,7 +1480,9 @@ phonePackageTimeline.reconcileModelTurn(1, createTimelineTurn({
 }));
 phonePackageTimeline.startToolStatus(1);
 let phonePackageTool = phonePackageTimeline.snapshots().find((item) => item.kind === 'tool');
-assert.equal(phonePackageTool.text, '正在调用：cloudmusic.search_songs');
+assert.equal(phonePackageTool.text, '准备调用：cloudmusic.search_songs');
+phonePackageTimeline.markToolStarted(1, 'phone-package-call');
+assert.equal(phonePackageTimeline.snapshots().find(item => item.kind === 'tool').text, '正在调用：cloudmusic.search_songs');
 assert.deepEqual(phonePackageTool.toolNames, ['phone_package_call_tool']);
 assert.deepEqual(phonePackageTool.toolDisplayNames, ['cloudmusic.search_songs']);
 phonePackageTimeline.completeToolCall(1, 'phone-package-call', {
@@ -1400,7 +1493,7 @@ assert.equal(phonePackageTool.text, '调用完成：cloudmusic.search_songs');
 assert.deepEqual(phonePackageTool.toolNames, ['phone_package_call_tool']);
 assert.deepEqual(phonePackageTool.toolDisplayNames, ['cloudmusic.search_songs']);
 
-const failedTimeline = new timelineModule.ChatAgentTimeline('failure-run', () => false);
+const failedTimeline = new timelineModule.ChatAgentTimeline('failure-run');
 failedTimeline.startStep(1);
 failedTimeline.reconcileModelTurn(1, createTimelineTurn({
   toolCalls: [modelToolCall('call-failed', 'lookup')],
@@ -1434,7 +1527,7 @@ assert.match(failedTool.text, /调用失败/);
       committedParams = params;
       return { outcome: 'committed', messages: params.items.map(({ message }, index) => ({ ...message, id: index + 1 })) };
     } } },
-    isTimelineHidden: () => false, stopRuntime: () => {}, replyRunId: 'package-projector', finalAssistantPolicy: 'commit_as_reply',
+    stopRuntime: () => {}, replyRunId: 'package-projector', finalAssistantPolicy: 'commit_as_reply',
   });
   await projector.handleEvent({ type: 'model_turn_started', stepIndex: 1 });
   await projector.projectModelTurn(1, createTimelineTurn({
@@ -1443,10 +1536,16 @@ assert.match(failedTool.text, /调用失败/);
   await projector.handleEvent({ type: 'model_turn_started', stepIndex: 2 });
   await projector.projectModelTurn(2, createTimelineTurn({ assistantText: '正式回复' }));
   await projector.completeRun({ terminalCode: 'COMPLETED', steps: [
-    { stepIndex: 1, toolCalls: [{ outcome: { status: 'success', data: {}, modelContent: '已拆封', metadata: { openedToolPackageId: 'memory' } } }] },
+    { stepIndex: 1, toolCalls: [
+      { outcome: { status: 'success', data: {}, modelContent: '已拆封', metadata: { toolPackageChange: { packageId: 'memory', action: 'open' } } } },
+      { outcome: { status: 'success', data: {}, modelContent: '已收起', metadata: { toolPackageChange: { packageId: 'memory', action: 'close' } } } },
+      { outcome: { status: 'error', code: 'TEST_FAILED', modelContent: '失败', metadata: { toolPackageChange: { packageId: 'failed-package', action: 'open' } } } },
+    ] },
     { stepIndex: 2, toolCalls: [] },
   ] });
-  assert.deepEqual(committedParams.openedToolPackageIds, ['memory']);
+  assert.deepEqual(committedParams.toolPackageChanges, [
+    { packageId: 'memory', action: 'open' }, { packageId: 'memory', action: 'close' },
+  ], '开关按执行顺序交给提交 owner，失败的操作不进入状态提交');
 }
 
 // 工具直接结束的真实 Runtime → canonical projector 链路，不制造空 final step。
@@ -1455,7 +1554,7 @@ const outputSessionId=scope==='group'?'group-session':'session-1';
 for (const [toolName, data, expectedText] of [
   ['select_sticker', {
     discriminator: 'ravencat.sticker.send.v1',
-    sticker: JSON.parse(stickerItems[0].message.metadataJson).sticker,
+    sticker: JSON.parse(stickerItems[1].message.metadataJson).sticker,
   }, ''],
   ['send_voice_message', {
     discriminator: 'ravencat.chat.voice_message.send.v1', transcript: '晚安，我陪着你',
@@ -1477,7 +1576,7 @@ for (const [toolName, data, expectedText] of [
       commits.push(params);
       return { outcome: 'committed', messages: params.items.map(({ message }, index) => ({ ...message, id: index + 1 })) };
     } } },
-    isTimelineHidden: () => true, stopRuntime: () => {}, replyRunId: runId,
+    stopRuntime: () => {}, replyRunId: runId,
     finalAssistantPolicy: 'commit_as_reply',
   });
   const registry = new AgentToolRegistry();
@@ -1509,14 +1608,19 @@ for (const [toolName, data, expectedText] of [
   assert.equal(result.terminalCode, 'COMPLETED');
   await projector.completeRun(result);
   assert.equal(commits.length, 1, '工具结束仍进入唯一 canonical 提交出口');
-  assert.equal(commits[0].items.length, 1, '单独发送不产生多余文本或工具状态气泡');
-  assert.equal(commits[0].items[0].message.senderType, 'assistant');
-  assert.equal(commits[0].items[0].message.text, expectedText);
-  assert.equal(commits[0].items[0].message.sessionId,outputSessionId,'输出属于执行会话');
+  assert.equal(commits[0].items.length, 2, '单独发送同时提交工具记录和媒体消息');
+  const toolMessage = commits[0].items[0].message;
+  assert.equal(toolMessage.senderType, 'system');
+  assert.equal(JSON.parse(toolMessage.metadataJson).status, 'completed');
+  assert.deepEqual(JSON.parse(toolMessage.metadataJson).toolNames, [toolName]);
+  const mediaItem = commits[0].items[1];
+  assert.equal(mediaItem.message.senderType, 'assistant');
+  assert.equal(mediaItem.message.text, expectedText);
+  assert.equal(mediaItem.message.sessionId,outputSessionId,'输出属于执行会话');
   if (toolName === 'send_voice_message') {
-    assert.equal(typeof commits[0].items[0].materializeInTransaction, 'function', '语音仍由 T3 物化媒体');
+    assert.equal(typeof mediaItem.materializeInTransaction, 'function', '语音仍由 T3 物化媒体');
   } else {
-    assert.equal(JSON.parse(commits[0].items[0].message.metadataJson).sticker.stickerId, 'sticker-1');
+    assert.equal(JSON.parse(mediaItem.message.metadataJson).sticker.stickerId, 'sticker-1');
   }
 }
 }
@@ -1537,7 +1641,7 @@ for (const terminalCode of ['COMPLETED', 'MODEL_REQUEST_FAILED', 'CANCELLED_BY_U
       committed = params.items.map(({ message }) => message);
       return { outcome: 'committed', messages: committed.map((message, index) => ({ ...message, id: index + 1 })) };
     } } },
-    isTimelineHidden: () => false, stopRuntime: () => {}, replyRunId: 'activity-run',
+    stopRuntime: () => {}, replyRunId: 'activity-run',
     finalAssistantPolicy: 'record_as_activity',
   });
   await projector.handleEvent({ type: 'model_turn_started', stepIndex: 1 });

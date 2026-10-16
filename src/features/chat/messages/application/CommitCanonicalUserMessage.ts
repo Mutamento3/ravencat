@@ -18,8 +18,8 @@ import {
 import type { ChatMessage, CreateMessageInput } from '../domain/ChatMessage';
 import type { CommitMessageInput, IMessageRepository } from '../domain/MessageRepository';
 import type { IConversationTurnRepository } from '../../reply/domain/ConversationTurnRepository';
-import { clearAgentTransientTimelineRun } from './AgentTransientTimeline';
 import { getChatMessageRuntimeDependencies } from './ChatMessageRuntime';
+import { emitChatTurnExecutionChanged } from '../events/ChatEvents';
 
 export interface CommitCanonicalUserMessageParams {
   message: CreateMessageInput;
@@ -50,53 +50,57 @@ export async function commitCanonicalUserMessage(
   const repository = params.repository ?? getChatMessageRuntimeDependencies().messages;
   const turns = params.turns ?? getChatMessageRuntimeDependencies().turns;
   const sessionId = params.message.sessionId;
-
-  const result = await databaseCoordinator.transaction(
-    { name: 'chat.commit-user-message', feature: 'chat', priority: 'interactive' },
-    async (transaction) => {
-      await turns.ensureTurnStateRowInTransaction(transaction, sessionId);
-      const submission = [...(params.precedingMessages ?? []), { message: params.message, previewText: params.previewText ?? params.message.text }];
-      const inputs = params.materializeMessagesInTransaction
-        ? await params.materializeMessagesInTransaction(transaction, submission) : submission;
-      const messages: ChatMessage[] = [];
-      for (const input of inputs.slice(0, -1)) {
-        messages.push(await repository.commitMessageInTransaction(transaction, input));
-      }
-      const materializedMessage = params.materializeMessageInTransaction
-        ? await params.materializeMessageInTransaction(transaction, inputs[inputs.length - 1].message)
-        : inputs[inputs.length - 1].message;
-      const message = await repository.commitMessageInTransaction(transaction, {
-        message: materializedMessage,
-        previewText: params.previewText ?? materializedMessage.text,
-      });
-      messages.push(message);
-      const supersededRunId = await turns.supersedeActiveRunInTransaction(
-        transaction,
-        sessionId,
-      );
-      return { message, messages, supersededRunId };
-    },
-  );
-
-  // T1 commit 已确认旧 run 丧失所有权；先清除当前 runtime 的展示投影，
-  // 不等待 execution abort 返回 terminal，避免旧、新 run transient 短暂共存。
-  // 事务到这里已经提交：以下都是不可回滚的提交后副作用，任何失败都不得向上冒泡成
-  // “本次消息提交失败”。调用方（例如语音消息）会据此按失败路径删除已经由 committed
-  // 业务事实接管的媒体 backing，造成消息引用的文件丢失。副作用失败只报告。
-  if (result.supersededRunId) {
-    try {
-      clearAgentTransientTimelineRun(result.supersededRunId, sessionId);
-    } catch (error) {
-      console.warn('[CommitCanonicalUserMessage] 清理被 supersede 的 transient timeline 失败', error);
-    }
-  }
-
-  // commit 后更新 UI。
+  const presentation = getChatMessageRuntimeDependencies().turnPresentation;
+  const release = await presentation.freeze(sessionId);
+  let committed = false;
   try {
-    params.notifyUI?.(sessionId);
-  } catch (error) {
-    console.warn('[CommitCanonicalUserMessage] 提交后 UI 通知失败', error);
-  }
 
-  return result;
+    const result = await databaseCoordinator.transaction(
+      { name: 'chat.commit-user-message', feature: 'chat', priority: 'interactive' },
+      async (transaction) => {
+        await turns.ensureTurnStateRowInTransaction(transaction, sessionId);
+        const submission = [...(params.precedingMessages ?? []), { message: params.message, previewText: params.previewText ?? params.message.text }];
+        const inputs = params.materializeMessagesInTransaction
+          ? await params.materializeMessagesInTransaction(transaction, submission) : submission;
+        const messages: ChatMessage[] = [];
+        for (const input of inputs.slice(0, -1)) {
+          messages.push(await repository.commitMessageInTransaction(transaction, input));
+        }
+        const materializedMessage = params.materializeMessageInTransaction
+          ? await params.materializeMessageInTransaction(transaction, inputs[inputs.length - 1].message)
+          : inputs[inputs.length - 1].message;
+        const message = await repository.commitMessageInTransaction(transaction, {
+          message: materializedMessage,
+          previewText: params.previewText ?? materializedMessage.text,
+        });
+        messages.push(message);
+        const supersededRunId = await turns.supersedeActiveRunInTransaction(
+          transaction,
+          sessionId,
+        );
+        return { message, messages, supersededRunId };
+      },
+    );
+    committed = true;
+    emitChatTurnExecutionChanged(sessionId);
+    await presentation.interrupt(sessionId).catch(error => {
+      console.warn('[CommitCanonicalUserMessage] 中断历史刷新失败', error);
+    });
+
+    // T1 已冻结旧批次，提交后恢复的是已确认版本，不能再清空整轮展示。
+    // 事务到这里已经提交：以下都是不可回滚的提交后副作用，任何失败都不得向上冒泡成
+    // “本次消息提交失败”。调用方（例如语音消息）会据此按失败路径删除已经由 committed
+    // 业务事实接管的媒体 backing，造成消息引用的文件丢失。副作用失败只报告。
+
+    // commit 后更新 UI。
+    try {
+      params.notifyUI?.(sessionId);
+    } catch (error) {
+      console.warn('[CommitCanonicalUserMessage] 提交后 UI 通知失败', error);
+    }
+
+    return result;
+  } finally {
+    await release(committed);
+  }
 }

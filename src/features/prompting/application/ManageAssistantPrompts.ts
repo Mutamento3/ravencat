@@ -299,7 +299,9 @@ async function assertAssistantToolEditable(assistantId: string, toolName: string
   if (!tool) throw new Error('工具不存在或不在提示词中心管理');
   if (tool.hostOnly) {
     const assistant = (await dependencies.assistants.listOptions()).find((item) => item.id === assistantId);
-    if (!assistant?.isHostAI) throw new Error('只有主理 AI 可以修改主理专属工具');
+    if (tool.cooldownOnly ? !assistant?.isInHostCooldown : !assistant?.isHostAI) {
+      throw new Error(tool.cooldownOnly ? '只有冷静期中的原主理 AI 可以配置此工具' : '只有主理 AI 可以修改主理专属工具');
+    }
   }
 }
 

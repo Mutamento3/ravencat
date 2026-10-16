@@ -67,13 +67,8 @@ import {
   getAgentTimelineRenderKey,
 } from '@features/chat/messages/application/AgentTransientTimeline';
 import { getChatInteractionProfile, useTheme } from '@shared/theme';
-import {
-  classifyTailMutation,
-  isNewMessagePromptEligible,
-  resolveBottomFollowState,
-  shouldShowTimeSeparator,
-  type MessageListSnapshot,
-} from './chatMessageListState';
+import { shouldShowTimeSeparator } from './chatMessageListState';
+import { useChatBottomFollow } from './useChatBottomFollow';
 import {
   IDLE_HISTORY_PAGINATION_GATE,
   applyScrollDemandToGate,
@@ -84,9 +79,9 @@ import {
   shouldRequestBootstrapPage,
   type HistoryPaginationGate,
 } from './chatHistoryPagination';
-import { useArrivedAssistantMessages } from './useArrivedAssistantMessages';
+import { reloadTurnDisplayHistory, retainTurnDisplayHistory } from '../../../reply/application/ChatTurnPresentationRuntime';
+import { setChatEventBus } from '../../../messages/events/ChatEvents';
 
-const AUTO_FOLLOW_BOTTOM_THRESHOLD_PX = 120;
 const EMPTY_ATTACHMENTS: ChatAttachment[] = [];
 /** 主动生活 anchor 定位最多向前追加的历史分页次数，避免为定位无限翻历史。 */
 const ANCHOR_MAX_PAGE_ATTEMPTS = 4;
@@ -303,6 +298,15 @@ function ChatMessageList({
   const theme = useTheme();
   const styles = useMemo(() => createMessageListStyles(theme), [theme]);
   const interactionProfile = getChatInteractionProfile(theme);
+  useEffect(() => sessionId ? retainTurnDisplayHistory(sessionId) : undefined, [sessionId]);
+  useEffect(() => {
+    if (!sessionId) return;
+    const reload = () => { void reloadTurnDisplayHistory(sessionId, messages).catch(error => console.error('[ChatMessageList] 展示历史读取失败', error)); };
+    reload();
+    return setChatEventBus({ emit: (name, payload) => {
+      if (payload.sessionId === sessionId && name !== 'typingStatusChanged' && name !== 'turnExecutionChanged') reload();
+    } });
+  }, [sessionId, messages]);
   // 非流式多气泡主题消费统一的分段到达投影。
   const isCanonicalSegmentedAssistant = ownsCanonicalSegmentedAssistantPresentation(
     interactionProfile
@@ -310,25 +314,16 @@ function ChatMessageList({
   const { messages: completeTimelineMessages } = useAgentTransientTimeline(
     sessionId,
     messages,
-    { suppressTransientAssistantText: isCanonicalSegmentedAssistant },
+    isCanonicalSegmentedAssistant,
   );
-  const visibleTimelineMessages = useMemo(() => completeTimelineMessages.filter((message) =>
+  const timelineMessages = useMemo(() => completeTimelineMessages.filter((message) =>
     !hiddenRunId || message.turnRunId !== hiddenRunId || message.turnItemIndex == null
   ), [completeTimelineMessages, hiddenRunId]);
-  const timelineMessages = useArrivedAssistantMessages(visibleTimelineMessages, isCanonicalSegmentedAssistant);
-  const bottomFollowPausedRef = useRef(Boolean(selection) || pauseAutoScroll);
-  bottomFollowPausedRef.current = Boolean(selection) || pauseAutoScroll;
   const listRef = useRef<FlashListRef<RenderedMessageItem> | null>(null);
-  const isFollowingBottomRef = useRef(true);
-  const isUserDraggingRef = useRef(false);
-  const followBottomFrameRef = useRef<number | null>(null);
   const anchorConsumedRef = useRef(false);
   const anchorPageAttemptsRef = useRef(0);
   const anchorFrameRef = useRef<number | null>(null);
-  const previousSnapshotRef = useRef<MessageListSnapshot>({ keys: [] });
-  const committedTimelineRef = useRef<readonly ChatMessage[]>([]);
   const renderedItemCacheRef = useRef(new Map<string, RenderedMessageItem>());
-  const [showNewMessagePrompt, setShowNewMessagePrompt] = useState(false);
   const [isListScrollEnabled, setIsListScrollEnabled] = useState(true);
 
   // 历史分页状态。全部走 ref：滚动回调每次都会读写它们，
@@ -409,10 +404,6 @@ function ChatMessageList({
   requestOlderPageRef.current = requestOlderPage;
 
   useEffect(() => {
-    isFollowingBottomRef.current = true;
-    isUserDraggingRef.current = false;
-    previousSnapshotRef.current = { keys: [] };
-    committedTimelineRef.current = [];
     anchorConsumedRef.current = false;
     anchorPageAttemptsRef.current = 0;
     // 推进 generation 而不是复用同一个 idle gate：这样上一个会话在飞的请求
@@ -421,30 +412,11 @@ function ChatMessageList({
     previousContentOffsetYRef.current = null;
     contentHeightRef.current = null;
     viewportHeightRef.current = 0;
-    setShowNewMessagePrompt(false);
     setIsListScrollEnabled(true);
     renderedItemCacheRef.current.clear();
   }, [sessionId, interactionProfile.enableAssistantMessageSegmentation]);
 
-  const followBottomAfterLayout = useCallback(() => {
-    if (bottomFollowPausedRef.current || !isFollowingBottomRef.current) {
-      return;
-    }
-    if (followBottomFrameRef.current !== null) {
-      cancelAnimationFrame(followBottomFrameRef.current);
-    }
-    followBottomFrameRef.current = requestAnimationFrame(() => {
-      followBottomFrameRef.current = null;
-      if (!bottomFollowPausedRef.current && isFollowingBottomRef.current) {
-        listRef.current?.scrollToEnd({ animated: false });
-      }
-    });
-  }, []);
-
   useEffect(() => () => {
-    if (followBottomFrameRef.current !== null) {
-      cancelAnimationFrame(followBottomFrameRef.current);
-    }
     if (anchorFrameRef.current !== null) {
       cancelAnimationFrame(anchorFrameRef.current);
     }
@@ -575,44 +547,28 @@ function ChatMessageList({
     return nextRenderedData;
   }, [timelineMessages, aiAssistant, aiAssistants, translations, interactionProfile]);
 
-  const renderedMessageKeys = useMemo(
-    () => renderedData.map((item) => item.key),
-    [renderedData]
-  );
-
-  const handleListLayoutCommit = useCallback(() => {
-    if (!timelineMessages.length) {
-      previousSnapshotRef.current = { keys: [] };
-      committedTimelineRef.current = timelineMessages;
-      return;
-    }
-
-    const mutation = classifyTailMutation({
-      previous: previousSnapshotRef.current,
-      messages: renderedData.map((item) => item.msg),
-      keys: renderedMessageKeys,
-    });
-
-    if (mutation.type === 'initial' || (!bottomFollowPausedRef.current && isFollowingBottomRef.current)) {
-      setShowNewMessagePrompt(false);
-      // 跟随只消费消息事实变化；展开思维链等局部布局变化应保留阅读位置。
-      // 在 FlashList 提交布局后再滚动，同一条消息的流式增长也走这个入口。
-      if (
-        committedTimelineRef.current !== timelineMessages
-        && (mutation.type === 'append' || mutation.type === 'unchanged')
-      ) {
-        followBottomAfterLayout();
-      }
-    } else if (
-      mutation.type === 'append'
-      && mutation.appendedMessages.some(isNewMessagePromptEligible)
-    ) {
-      setShowNewMessagePrompt(true);
-    }
-
-    previousSnapshotRef.current = { keys: renderedMessageKeys };
-    committedTimelineRef.current = timelineMessages;
-  }, [followBottomAfterLayout, renderedData, renderedMessageKeys, timelineMessages]);
+  const {
+    showNewMessagePrompt,
+    requestBottomFollow,
+    stopFollowingBottom,
+    handleListLayoutCommit,
+    handleScroll: updateBottomFollowOnScroll,
+    handleScrollBeginDrag,
+    handleUserScrollEnd,
+    handleMomentumScrollBegin,
+    handleTouchStart,
+    handleTouchEnd,
+    finishTouch,
+    handleNewMessagePromptPress,
+  } = useChatBottomFollow({
+    sessionId,
+    enableAssistantMessageSegmentation: interactionProfile.enableAssistantMessageSegmentation,
+    paused: Boolean(selection) || pauseAutoScroll,
+    listRef,
+    timelineMessages,
+    renderedData,
+    onDismissInputSurface,
+  });
 
   // 主动生活「查看当时的聊天」一次性定位：目标消息在当前窗口内则直接滚动过去；
   // 不在时有限追加历史分页再试，仍找不到就保持默认底部位置，不影响正常进入会话。
@@ -628,8 +584,7 @@ function ChatMessageList({
     );
     if (anchorIndex >= 0) {
       anchorConsumedRef.current = true;
-      isFollowingBottomRef.current = false;
-      setShowNewMessagePrompt(false);
+      stopFollowingBottom();
       anchorFrameRef.current = requestAnimationFrame(() => {
         anchorFrameRef.current = null;
         listRef.current?.scrollToIndex({ index: anchorIndex, viewPosition: 0.35, animated: false });
@@ -645,24 +600,11 @@ function ChatMessageList({
     }
     anchorPageAttemptsRef.current += 1;
     void requestOlderPageRef.current('anchor');
-  }, [anchorMessageId, renderedData, hasMore, isLoadingMore]);
+  }, [anchorMessageId, renderedData, hasMore, isLoadingMore, stopFollowingBottom]);
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    const isNearBottom = distanceFromBottom <= AUTO_FOLLOW_BOTTOM_THRESHOLD_PX;
-
-    // 内容增长和程序化滚动不能改变用户意图；只有用户手势可以退出 follow。
-    isFollowingBottomRef.current = resolveBottomFollowState({
-      followingBottom: isFollowingBottomRef.current,
-      isUserInteracting: isUserDraggingRef.current,
-      isNearBottom,
-    });
-
-    if (isNearBottom) {
-      isFollowingBottomRef.current = true;
-      setShowNewMessagePrompt(false);
-    }
+    const isUserScrollActive = updateBottomFollowOnScroll(event);
+    const { contentOffset, layoutMeasurement } = event.nativeEvent;
 
     const decision = resolveScrollDemandDecision({
       contentOffsetY: contentOffset.y,
@@ -670,7 +612,7 @@ function ChatMessageList({
       viewportHeight: layoutMeasurement.height,
       hasMore: hasMoreRef.current,
       isPageInFlight: olderPageGateRef.current.inFlight,
-      isUserScrollActive: isUserDraggingRef.current,
+      isUserScrollActive,
     });
 
     previousContentOffsetYRef.current = contentOffset.y;
@@ -681,29 +623,7 @@ function ChatMessageList({
     }
 
     olderPageGateRef.current = applyScrollDemandToGate(olderPageGateRef.current, decision);
-  }, []);
-
-  const handleScrollBeginDrag = useCallback(() => {
-    isUserDraggingRef.current = true;
-  }, []);
-
-  const updateFollowStateAtUserScrollEnd = useCallback(
-    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-      const isNearBottom = distanceFromBottom <= AUTO_FOLLOW_BOTTOM_THRESHOLD_PX;
-      isFollowingBottomRef.current = resolveBottomFollowState({
-        followingBottom: isFollowingBottomRef.current,
-        isUserInteracting: true,
-        isNearBottom,
-      });
-      isUserDraggingRef.current = false;
-      if (isNearBottom) {
-        setShowNewMessagePrompt(false);
-      }
-    },
-    []
-  );
+  }, [updateBottomFollowOnScroll]);
 
   const handleNestedScrollActiveChange = useCallback((isActive: boolean) => {
     // Do not remove casually: this is the FlashList side of the Moon Kimi reasoning
@@ -807,12 +727,6 @@ function ChatMessageList({
     [resolveProbeIdentity]
   );
 
-  const handleNewMessagePromptPress = useCallback(() => {
-    isFollowingBottomRef.current = true;
-    listRef.current?.scrollToEnd({ animated: true });
-    setShowNewMessagePrompt(false);
-  }, []);
-
   /**
    * 内容高度不足以产生滚动时的补页。
    *
@@ -854,11 +768,11 @@ function ChatMessageList({
       // 视口高度由布局回调拥有；滚动事件可能先报告新高度，不能提前覆盖比较基准。
       // 键盘或输入面板改变视口时保留贴底意图，消息自身展开不改变视口。
       if (previousHeight > 0 && height !== previousHeight) {
-        followBottomAfterLayout();
+        requestBottomFollow();
       }
       requestBootstrapPageIfContentTooShort();
     },
-    [followBottomAfterLayout, requestBootstrapPageIfContentTooShort]
+    [requestBottomFollow, requestBootstrapPageIfContentTooShort]
   );
 
   if (!timelineMessages.length) {
@@ -882,7 +796,12 @@ function ChatMessageList({
   }
 
   return (
-    <View style={styles.container} onTouchStart={onDismissInputSurface}>
+    <View
+      style={styles.container}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={finishTouch}
+    >
       {/* FlashList 按组件类型缓存动画包装；内联函数会在页面更新时重建整张列表。 */}
       <FlashList
         key={sessionId || 'message_list'}
@@ -901,15 +820,14 @@ function ChatMessageList({
         keyboardShouldPersistTaps="handled"
         scrollEventThrottle={32}
         maintainVisibleContentPosition={{
+          // 原生维护阅读锚点和初始底部排布；持续贴底由 useChatBottomFollow 拥有。
           startRenderingFromBottom: true,
         }}
         onScroll={handleScroll}
         onScrollBeginDrag={handleScrollBeginDrag}
-        onScrollEndDrag={updateFollowStateAtUserScrollEnd}
-        onMomentumScrollBegin={() => {
-          isUserDraggingRef.current = true;
-        }}
-        onMomentumScrollEnd={updateFollowStateAtUserScrollEnd}
+        onScrollEndDrag={handleUserScrollEnd}
+        onMomentumScrollBegin={handleMomentumScrollBegin}
+        onMomentumScrollEnd={handleUserScrollEnd}
         onLayout={handleListLayout}
         onCommitLayoutEffect={handleListLayoutCommit}
         onContentSizeChange={handleContentSizeChange}

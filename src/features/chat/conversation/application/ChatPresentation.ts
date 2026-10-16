@@ -5,7 +5,7 @@ import type { AIProfile } from '@features/assistants';
 import type { ChatSession } from '../domain/SessionRepository';
 import type { UserProfile } from '@features/profile';
 import { getCurrentUserProfile } from '@features/profile';
-import { emitChatMessagesReloadRequested } from '../../messages/events/ChatEvents';
+import { emitChatMessagesReloadRequested, emitChatTurnExecutionChanged } from '../../messages/events/ChatEvents';
 
 export async function getCanonicalChatConversation(aiId: string): Promise<ChatSession | null> {
   return getChatConversationRuntimeDependencies().sessions.getCanonicalConversation(aiId);
@@ -15,6 +15,7 @@ export async function clearChatConversationHistory(sessionId: string): Promise<n
   const boundary = await getChatConversationRuntimeDependencies().sessions
     .clearConversationHistory(sessionId);
   await getChatMessageRuntimeDependencies().regeneration?.onInvalidated(sessionId);
+  emitChatTurnExecutionChanged(sessionId);
   emitChatMessagesReloadRequested(sessionId);
   return boundary;
 }

@@ -6,7 +6,6 @@ export {
   getAuthorizedToolDefinitionsForAI,
   getRuntimeAllowedToolNamesForAI,
   getToolPermissionDescriptors,
-  isToolTimelineHidden,
   resolveAllowedToolNames,
   resolveToolRuntimeContext,
 } from './createAgentToolRegistry';

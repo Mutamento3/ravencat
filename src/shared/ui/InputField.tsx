@@ -24,6 +24,7 @@ export interface InputFieldProps {
   keyboardType?: 'default' | 'number-pad' | 'decimal-pad' | 'numeric' | 'email-address' | 'phone-pad' | 'url';
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
   autoCorrect?: boolean;
+  editable?: boolean;
   numberOfLines?: number;
   textAlignVertical?: 'auto' | 'top' | 'bottom' | 'center';
 }
@@ -75,6 +76,7 @@ export default function InputField({
   keyboardType,
   autoCapitalize,
   autoCorrect,
+  editable,
   numberOfLines,
   textAlignVertical,
 }: InputFieldProps) {
@@ -97,6 +99,7 @@ export default function InputField({
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize}
         autoCorrect={autoCorrect}
+        editable={editable}
         numberOfLines={numberOfLines}
         textAlignVertical={textAlignVertical}
       />

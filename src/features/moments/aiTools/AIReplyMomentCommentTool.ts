@@ -48,7 +48,9 @@ export async function execute(
     throwIfAbortSignalAborted(context.abortSignal);
     if (error instanceof MomentDomainError) {
       if (error.code === 'empty_content') return { success: false, error: '回复内容不能为空' };
-      return { success: false, error: '未找到该评论或所属时刻不可见' };
+      if (error.code === 'comment_not_found' || error.code === 'moment_not_visible') {
+        return { success: false, error: '未找到该评论或所属时刻不可见，尚未回复。不要重复使用失效或猜测的 commentId；已知 momentId 时用 getMomentDetail 重新读取评论区，否则用 searchMoments 的 commentKeyword 按评论原文查找，再使用详情返回的 commentId 回复。' };
+      }
     }
     console.error('[AIReplyMomentCommentTool] Failed:', error);
     return { success: false, error: '回复失败' };

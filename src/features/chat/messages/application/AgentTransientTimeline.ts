@@ -21,6 +21,7 @@ interface AgentTransientTimelineItem {
   sessionId: string;
   runId: string;
   stepIndex: number;
+  segmentIndex?: number;
   sequence: number;
   kind: AgentTransientTimelineKind;
   /** 当前展示所需消息；不得把它交给历史 cache 或 persistence。 */
@@ -32,6 +33,7 @@ export interface AgentTransientTimelineSnapshot {
   runId: string;
   sequence: number;
   stepIndex: number;
+  segmentIndex?: number;
   kind: AgentTransientTimelineKind;
   status: 'streaming' | 'running' | 'sent' | 'completed' | 'failed';
   text: string;
@@ -40,8 +42,16 @@ export interface AgentTransientTimelineSnapshot {
   time: string;
   toolNames?: readonly string[];
   toolDisplayNames?: readonly string[];
+  toolExecutionStarted?: boolean;
   apiMessageId?: string | null;
   assistantAsActivity?: boolean;
+  interrupted?: boolean;
+  pendingDelivery?: boolean;
+  tokensUsed?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedTokens?: number;
+  metadataJson?: string | null;
 }
 
 export interface ApplyAgentTransientTimelineSnapshotsParams {
@@ -117,7 +127,7 @@ interface RunState {
   readonly sessionId: string;
   readonly runId: string;
   readonly createdOrder: number;
-  readonly items: Map<number, AgentTransientTimelineItem>;
+  readonly items: Map<string, AgentTransientTimelineItem>;
   /** commit 返回后暂存，等历史查询包含同一条消息再移除，避免 commit/reload 空窗闪烁。 */
   replacements: Map<string, ChatMessage>;
 }
@@ -139,6 +149,11 @@ export function getAgentTimelineMessageIdentity(
     return clientMessageId;
   }
   return null;
+}
+
+/** T3 分段会重排连续 itemIndex；混合展示以稳定的 source sequence + segment 为准。 */
+export function getAgentTimelineSourceOrder(message: ChatMessage) {
+  return message.clientMessageId ? parseAgentTimelineClientMessageId(message.clientMessageId) : null;
 }
 
 export function isAgentTransientTimelineMessage(
@@ -268,10 +283,12 @@ function buildTransientMessageFromSnapshot(
         displayNames: [...(snapshot.toolDisplayNames ?? [])],
         displayText: snapshot.text,
         source: 'chatToolFlow',
+        interrupted: snapshot.interrupted === true,
       })
     : snapshot.assistantAsActivity
       ? JSON.stringify({ type: 'agentActivity', source: 'chatAgentRun', phase: snapshot.kind })
-      : null;
+      : JSON.stringify({ interrupted: snapshot.interrupted === true, pendingDelivery: snapshot.pendingDelivery === true,
+          cachedTokens: snapshot.cachedTokens });
   return {
     id: 0,
     sessionId,
@@ -290,10 +307,12 @@ function buildTransientMessageFromSnapshot(
     replyToId: null,
     replyToText: null,
     status,
-    tokensUsed: 0,
-    promptTokens: 0,
-    completionTokens: 0,
-    metadataJson,
+    segmentIndex: snapshot.segmentIndex ?? 0,
+    tokensUsed: snapshot.tokensUsed ?? 0,
+    promptTokens: snapshot.promptTokens ?? 0,
+    completionTokens: snapshot.completionTokens ?? 0,
+    metadataJson: snapshot.metadataJson
+      ? JSON.stringify({ ...JSON.parse(snapshot.metadataJson), interrupted: snapshot.interrupted === true }) : metadataJson,
   };
 }
 
@@ -319,7 +338,7 @@ export function applyAgentTransientTimelineSnapshots(
         params.agentId,
       ),
     };
-    run.items.set(item.sequence, {
+    run.items.set(snapshot.clientMessageId, {
       ...item,
       message: decorateTransientMessage(item),
     });
@@ -364,7 +383,7 @@ function buildRunRenderMessages(run: RunState): ChatMessage[] {
     if (identity && replacementKeys.has(identity)) {
       continue;
     }
-    rendered.push({ message, sequence: item.sequence, segmentIndex: 0 });
+    rendered.push({ message, sequence: item.sequence, segmentIndex: message.segmentIndex ?? 0 });
   }
   for (const [identity, message] of run.replacements) {
     const parsed = parseAgentTimelineClientMessageId(identity)!;

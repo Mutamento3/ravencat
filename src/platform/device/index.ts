@@ -1,4 +1,7 @@
 export {
+  awaitTurnDisplayArrival,
+  setTurnDisplayOpen,
+  setTurnDisplayActive,
   addMessageArrivalListener,
   getMessageArrivalSnapshot,
   beginMessageArrival,
@@ -38,6 +41,11 @@ export { detectImageAnimation, inspectImageAnimation } from './ImageAnimation';
 export { inspectLocalImage, readLocalImageAsBase64, ImageFileReadError } from './InspectLocalImage';
 export { prepareVisionImage, readVisionImageAsBase64 } from './PrepareVisionImage';
 export {
+  cropImageToAspect,
+  type CropImageToAspectParams,
+  type CroppedAspectImage,
+} from './CropImageToAspect';
+export {
   TemporarySpeechAudioStore,
   clearTemporarySpeechAudioForFactoryReset,
   temporarySpeechAudioStore,
@@ -62,6 +70,10 @@ export {
 } from './DeviceObserver';
 export {
   startConversationTurnExecutionHost,
+  waitForConversationExecutionStop,
+  finishConversationExecution,
+  getConversationExecutionRemainingTime,
+  startHostRelationshipReplyExecution,
   type ConversationTurnExecutionStartOptions,
 } from './ConversationTurnExecutionHost';
 export { createRandomUUID } from './randomUUID';

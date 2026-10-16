@@ -1,3 +1,4 @@
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -52,6 +53,7 @@ const blockMetadata = loadTypeScriptModule(
 const { PromptPackCompiler } = loadTypeScriptModule(
   'src/host/prompt/compiler/PromptPackCompiler.ts',
   {
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
     '../tokenBudget': tokenBudget,
     './promptBlockMetadata': blockMetadata,
   },
@@ -59,6 +61,7 @@ const { PromptPackCompiler } = loadTypeScriptModule(
 const promptBuiltInContent = loadTypeScriptModule(
   'src/host/prompt/PromptBuiltInContent.ts',
 );
+let hostCooldown = { isInCooldown: true, revokedAIId: 'a', remainingDays: 7, endAt: '2026-10-22T00:00:00.000Z' };
 const { PromptPackBlockFactory } = loadTypeScriptModule(
   'src/host/prompt/PromptPackBlockFactory.ts',
   {
@@ -68,6 +71,7 @@ const { PromptPackBlockFactory } = loadTypeScriptModule(
     },
     '@features/assistants': {
       agentRegistryService: { getSummary: async () => ({ entries: [], text: '' }) },
+      getHostAICooldownStatus: async () => ({ appointment: hostCooldown }),
     },
     '@features/moments': {
       loadMomentActorDirectory: async () => ({
@@ -78,6 +82,24 @@ const { PromptPackBlockFactory } = loadTypeScriptModule(
     '@shared/prompt': {},
   },
 );
+
+const cooldownFactory = new PromptPackBlockFactory();
+const cooldownAI = { id: 'a', enableTools: true };
+assert.equal((await cooldownFactory.createHostCooldownBlock({ id: 'b' })).status, 'omitted');
+const cooldownBlock = await cooldownFactory.createHostCooldownBlock(cooldownAI);
+assert.match(cooldownBlock.content, /剩余 7 天/);
+assert.equal(cooldownBlock.truncatable, false);
+assert.doesNotMatch(cooldownBlock.content, /无法调用|当前无法提前解除/);
+for (const aiConfig of [cooldownAI, { ...cooldownAI, enableTools: false }]) {
+  const fact = await cooldownFactory.createHostCooldownBlock(aiConfig);
+  assert.equal(fact.content, cooldownBlock.content, '冷静期事实不随工具权限变化');
+  assert.doesNotMatch(fact.content, /release_host_cooldown|工具|schema/, '事实块不承担工具指引');
+}
+assert.doesNotMatch(cooldownBlock.content, /当前无法提前解除/, '权限开放后不保留旧限制');
+hostCooldown = { ...hostCooldown, remainingDays: 3 };
+assert.match((await cooldownFactory.createHostCooldownBlock(cooldownAI)).content, /剩余 3 天/, '剩余天数每轮读取动态事实');
+hostCooldown = { ...hostCooldown, isInCooldown: false };
+assert.equal((await cooldownFactory.createHostCooldownBlock(cooldownAI)).status, 'omitted');
 
 const RealDate = Date;
 const fixedLocalTime = new RealDate(2026, 7, 30, 8, 27, 59);
@@ -110,14 +132,9 @@ assert.equal(
 );
 // MCP 服务摘要的契约是「结构与顺序」，不是具体措辞：
 // 用户配置的名称与简介必须逐项 JSON 包裹（防多行简介伪装成指令），
-// 接在本轮工具说明之后，并告知模型该用哪两个入口工具。改文案不应让本组断言变红。
-const toolsWithMcpBlock = new PromptPackBlockFactory().createToolsDescriptionBlock(
-  'search_stickers\nselect_sticker\nsend_voice_message',
+// 独立服务块保留 JSON 边界，并告知模型该用哪两个入口工具。
+const toolsWithMcpBlock = new PromptPackBlockFactory().createMcpServicesBlock(
   [{ name: '日历', description: '日程读写' }],
-);
-assert.ok(
-  toolsWithMcpBlock.content.startsWith('search_stickers\nselect_sticker\nsend_voice_message'),
-  '工具说明必须位于 MCP 服务摘要之前',
 );
 assert.ok(
   toolsWithMcpBlock.content.includes('{"name":"日历","description":"日程读写"}'),
@@ -198,6 +215,17 @@ const preset = {
 };
 const requiredBlocks = [budgetBlocks[0], budgetBlocks[2]];
 const compiler = new PromptPackCompiler();
+const socialBlock = { key: 'moments_social_inbox', content: '社交事实', status: 'ready', placement: 'system', required: false };
+const cooldownPack = compiler.compile({
+  scenario: 'chat.private_reply', blocks: [...requiredBlocks, cooldownBlock, socialBlock], recentMessages, currentInput,
+  preset: { ...preset, items: [...preset.items,
+    { definitionId: 'context.host_cooldown', slot: 'dynamic_context', sortOrder: 195, enabled: true, required: false, protection: 'locked' },
+    { definitionId: 'context.moments_social_inbox', slot: 'dynamic_context', sortOrder: 125, enabled: true, required: false, protection: 'locked' },
+  ] },
+});
+assert.ok(cooldownPack.dynamicSystemPrompt.indexOf('社交事实') < cooldownPack.dynamicSystemPrompt.indexOf('冷静期剩余'));
+assert.ok(!cooldownPack.stableSystemPrompt.includes('冷静期剩余'), '剩余天数不能污染稳定前缀');
+assert.equal(cooldownPack.modelMessages.at(-2).role, 'system', '冷静期放在历史之后、当前输入之前');
 const pack = compiler.compile({
   scenario: 'chat.private_reply',
   blocks: requiredBlocks,

@@ -3,7 +3,11 @@
  * 页面 runtime 在 T1 commit 后调用本模块启动 Headless JS service，
  * 由具备 Android 后台生命周期的原生 service 持有回复执行，不依赖 React 页面存活。
  */
-import { startConversationTurnTask } from '../../../modules/conversation-turn-runtime';
+import { startConversationTurnTask, startHostRelationshipReplyTask } from '../../../modules/conversation-turn-runtime';
+export { waitForConversationExecutionStop, finishConversationExecution, getConversationExecutionRemainingTime } from '../../../modules/conversation-turn-runtime';
+
+/** 用户身份操作的即时唤醒，不借用 canonical 用户消息或页面执行。 */
+export const startHostRelationshipReplyExecution = startHostRelationshipReplyTask;
 
 export interface ConversationTurnExecutionStartOptions {
   correlationId?: string | null;

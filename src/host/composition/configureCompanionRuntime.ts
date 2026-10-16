@@ -50,7 +50,7 @@ import {
   resolveMcpExposure,
 } from './agent';
 import { completePendingBackupRestore } from './completePendingBackupRestore';
-import { prepareTogetherListeningHostModelRun } from '../runtime/TogetherListeningRunPreparation';
+import { prepareHostModelRun } from '../runtime/HostModelRunPreparation';
 
 let configured = false;
 
@@ -103,7 +103,7 @@ export function configureCompanionRuntime(): void {
       }),
     },
     runPreparation: {
-      prepare: prepareTogetherListeningHostModelRun,
+      prepare: prepareHostModelRun,
     },
     tools: {
       createContext: (params) => new ToolContext({

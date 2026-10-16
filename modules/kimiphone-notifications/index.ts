@@ -1,4 +1,7 @@
 export {
+  awaitTurnDisplayArrival,
+  setTurnDisplayOpen,
+  setTurnDisplayActive,
   addMessageArrivalListener,
   getMessageArrivalSnapshot,
   beginMessageArrival,
@@ -7,6 +10,7 @@ export {
   addNotificationResponseListener,
   cancelConversationNotifications,
   cancelIncomingCallNotification,
+  leaveCallScreen,
   cancelTogetherListeningPresentation,
   clearNativeNotificationDataForFactoryReset,
   consumePendingNotificationResponses,

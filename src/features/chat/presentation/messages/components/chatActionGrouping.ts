@@ -20,7 +20,7 @@ interface AgentActivityLifecycle {
 export interface ActionGroupPresentationItem {
   readonly kind: 'action-group';
   readonly key: string;
-  readonly runKey: string;
+  readonly runKey: string | null;
   readonly children: readonly ChatMessage[];
   readonly isRunning: boolean;
   readonly activityLifecycle: AgentActivityLifecycle | null;
@@ -76,14 +76,15 @@ export function isActionProcessMessage(message: ChatMessage): boolean {
 }
 
 export function buildActionGroupPresentationKey(
-  runKey: string,
+  runKey: string | null,
   anchorMessage: ChatMessage
 ): string {
-  return `${ACTION_GROUP_KEY_PREFIX}${runKey}:${getAgentTimelineRenderKey(anchorMessage)}`;
+  return `${ACTION_GROUP_KEY_PREFIX}${runKey ?? 'standalone'}:${getAgentTimelineRenderKey(anchorMessage)}`;
 }
 
 function isActionGroupRunning(children: readonly ChatMessage[]): boolean {
   return children.some((message) => {
+    if (parseMessageMetadata(message)?.interrupted === true) return false;
     if (message.status === 'pending' || message.status === 'streaming') {
       return true;
     }
@@ -94,7 +95,7 @@ function isActionGroupRunning(children: readonly ChatMessage[]): boolean {
 }
 
 function createActionGroup(
-  runKey: string,
+  runKey: string | null,
   children: readonly ChatMessage[],
   activityLifecycle: AgentActivityLifecycle | null,
 ): ActionGroupPresentationItem {
@@ -113,7 +114,8 @@ function createActionGroup(
  * 线性扫描 canonical presentation timeline。
  *
  * 只有相邻、同 run 的 reasoning / tool status 会进入同一组；任何普通消息都会立即
- * flush 当前组。无法解析可靠 run identity 的 legacy 过程消息保持原样，不猜测归属。
+ * flush 当前组。缺少 run identity 的工具状态独立成卡，不推断它与相邻消息的归属；
+ * 其他没有运行身份的旧过程消息保持原样。
  */
 export function segmentContiguousAgentActions(
   messages: readonly ChatMessage[]
@@ -162,7 +164,9 @@ export function segmentContiguousAgentActions(
     const runKey = resolvePresentationRunIdentity(message).key;
     if (!runKey) {
       flushCurrentGroup();
-      result.push({ kind: 'message', message });
+      result.push(isToolStatusMessageMetadata(parseMessageMetadata(message))
+        ? createActionGroup(null, [message], null)
+        : { kind: 'message', message });
       continue;
     }
 

@@ -33,6 +33,8 @@ export interface RequestProactiveChatReplyParams {
   deliveryTriggerSource?: string | null;
   /** 原生通知分域；不写入 Chat 消息 metadata。 */
   notificationScope?: string | null;
+  abortSignal?: AbortSignal;
+  executionDeadlineAt?: number;
 }
 
 export interface ProactiveChatReplySegment {
@@ -67,6 +69,9 @@ export async function requestProactiveChatReply(
   const repository = getChatMessageRuntimeDependencies().messages;
   const correlationId = params.correlationId || undefined;
   const runtimeContext: AIReplyRuntimeContext = {
+    inputSource: 'application',
+    abortSignal: params.abortSignal,
+    executionDeadlineAt: params.executionDeadlineAt,
     correlationId,
     triggerSource: params.triggerSource,
     triggerReason: params.triggerReason,
@@ -74,6 +79,7 @@ export async function requestProactiveChatReply(
     relatedEntityId: params.relatedEntityId ?? null,
     capabilities: params.capabilities,
     batchModelInput: params.batchModelInput,
+    forceAppendUserText: true,
     promptBlocks: params.promptBlocks,
     deliveryTiming: 'immediate',
     deliveryTriggerSource: params.deliveryTriggerSource ?? params.triggerSource,

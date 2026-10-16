@@ -199,6 +199,7 @@ async function runCase({
   signal,
   collectEvents = true,
   beforeComplete,
+  resolveVisibleToolNames,
   onRuntimeCreated,
 }) {
   const registry = new AgentToolRegistry();
@@ -233,6 +234,7 @@ async function runCase({
     signal,
     eventSink: collectEvents ? (event) => events.push(event) : undefined,
     beforeComplete,
+    resolveVisibleToolNames,
   });
   return { result, gateway, executions, events, clock };
 }
@@ -524,6 +526,20 @@ assert.equal(
   '无工具能力时模型意外 tool call 必须是协议错误',
 );
 assert.equal(disabledUnexpectedTool.executions.length, 0, '无工具能力时绝不执行意外 tool call');
+assert.equal(disabledUnexpectedTool.result.steps[0].modelTurn.toolCalls[0].name, 'lookup',
+  '协议拒绝必须保留模型请求的工具名，供 owner 在失败后诊断');
+assert.equal(disabledUnexpectedTool.result.steps[0].toolCalls.length, 0, '记录模型请求不能伪造已执行工具结果');
+const hiddenSchemaRequest = await runCase({
+  turns: [createTurn({ toolCalls: [createToolCall('closed-moments', 'getMomentDetail', { momentId: 'private-moment' })] })],
+  tools: [createTool('getMomentDetail', async () => ({ status: 'success', data: {}, modelContent: '不应执行' }))],
+  resolveVisibleToolNames: () => [],
+});
+assert.equal(hiddenSchemaRequest.result.terminalCode, 'MODEL_PROTOCOL_ERROR');
+assert.equal(hiddenSchemaRequest.executions.length, 0, '已授权但未暴露的工具仍禁止执行');
+assert.equal(hiddenSchemaRequest.result.steps[0].modelTurn.toolCalls[0].name, 'getMomentDetail',
+  '工具包未展开导致的协议拒绝也必须留下请求名称');
+assert.equal(hiddenSchemaRequest.events.some((event) => event.type === 'tool_call_proposed'), false,
+  '诊断记录不能把协议拒绝变成工具提案');
 assert.equal(
   disabledUnexpectedTool.events.some((event) => event.type === 'tool_call_proposed'),
   false,

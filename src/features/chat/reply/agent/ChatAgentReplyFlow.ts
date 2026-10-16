@@ -56,17 +56,22 @@ export async function runChatAgentReplyFlow({
   aiConfig,
   repository,
   callbacks = {},
-  runtimeContext = {},
+  runtimeContext: providedRuntimeContext = {},
   policy,
   client,
   persistence,
   timelineSink: providedTimelineSink,
 }: RunChatAgentReplyFlowParams): Promise<ChatAgentReplyFlowResult> {
+  // 主动回复也可能由此生成运行编号；执行、工具状态和正文必须消费同一份身份。
+  const runtimeContext = {
+    ...providedRuntimeContext,
+    replyRunId: providedRuntimeContext.replyRunId || buildLogicalMessageId(),
+  };
   assertChatReplyNotAborted(runtimeContext);
   const modelTransport = policy.modelTransport;
-  const runId = runtimeContext.replyRunId || buildLogicalMessageId();
+  const runId = runtimeContext.replyRunId;
   const timelineSink = persistence.persistsIntermediates === false
-    ? providedTimelineSink ?? createAgentTransientTimelineSink({
+    ? providedTimelineSink ?? persistence.timelineSink ?? createAgentTransientTimelineSink({
         sessionId,
         agentId: aiConfig.agentId,
       })
@@ -105,7 +110,6 @@ export async function runChatAgentReplyFlow({
     projection: persistence.persistsIntermediates === false
       ? { kind: 'canonical', commit: requireAgentTimelineCommitPort(persistence) }
       : { kind: 'legacy', persistence },
-    isTimelineHidden: dependencies.tools.isTimelineHidden,
     stopRuntime: linkedCancellation.stop,
     replyRunId: runId,
     finalAssistantPolicy: 'commit_as_reply',
@@ -115,6 +119,7 @@ export async function runChatAgentReplyFlow({
   let hasToolCall = false;
   let hasExecutedTool = false;
   const projectEvent = async (event: AgentRunEvent): Promise<void> => {
+    persistence.observeRunEvent?.(event);
     observeEvent(event);
     if (event.type === 'model_turn_completed') {
       await projector.projectModelTurn(
@@ -124,6 +129,7 @@ export async function runChatAgentReplyFlow({
       return;
     }
     await projector.handleEvent(event);
+    if (event.type === 'tool_call_started') await persistence.recordToolExecutionStarted?.();
   };
   const eventQueue = modelTransport === 'stream'
     ? new AgentRunEventQueue(projectEvent)

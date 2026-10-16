@@ -27,6 +27,9 @@ import {
   executeUserReplyTurn,
   emitChatRegenerationChanged,
   emitChatTypingStatusChanged,
+  emitChatMessagesReloadRequested,
+  emitChatTurnExecutionChanged,
+  interruptChatRunPresentation,
   isChatReplyRunCancellationError,
   type CanonicalUserMessageCommittedPayload,
   type ConversationTurnRun,
@@ -54,6 +57,8 @@ type DeliveryTiming = CanonicalUserMessageCommittedPayload['deliveryTiming'];
 
 /** 一轮 run 的执行上下文（由触发方透传给 run 执行）。 */
 export interface ConversationTurnRunContext {
+  signal?: AbortSignal;
+  executionDeadlineAt?: number;
   aiConfig?: AIConfig;
   replyCallbacks?: ReplyCallbacks;
   deliveryTiming?: DeliveryTiming;
@@ -167,14 +172,20 @@ export function createConversationTurnCoordinator(
     context: ConversationTurnRunContext,
   ): Promise<void> {
     let regenerationError: string | undefined;
+    const revokeCancelled = (reason: string) => deps.turns.revoke(run,
+      context.signal?.aborted ? 'failed' : 'cancelled', context.signal?.aborted ? String(context.signal.reason) : reason);
     try {
+      if (context.signal?.aborted || (context.executionDeadlineAt !== undefined && performance.now() >= context.executionDeadlineAt)) {
+        await deps.turns.revoke(run, 'failed', String(context.signal?.reason ?? 'execution_host_timeout'));
+        return;
+      }
       if (abort.signal.aborted) {
-        await deps.turns.revoke(run, 'cancelled', 'cancelled_before_execution');
+        await revokeCancelled('cancelled_before_execution');
         return;
       }
       const aiConfig = context.aiConfig ?? await deps.resolveAIConfig(sessionId);
       if (abort.signal.aborted) {
-        await deps.turns.revoke(run, 'cancelled', 'cancelled_during_preparation');
+        await revokeCancelled('cancelled_during_preparation');
         return;
       }
       if (!aiConfig) {
@@ -182,7 +193,9 @@ export function createConversationTurnCoordinator(
         await deps.turns.revoke(run, 'failed', 'assistant_unavailable');
         return;
       }
-      const outcome = await deps.executeTurn({
+      emitChatTypingStatusChanged(sessionId, true, context.correlationId || run.runId);
+      const execution = deps.executeTurn({
+        executionDeadlineAt: context.executionDeadlineAt,
         run,
         aiConfig,
         signal: abort.signal,
@@ -190,6 +203,17 @@ export function createConversationTurnCoordinator(
         deliveryTiming: context.deliveryTiming,
         correlationId: context.correlationId,
       });
+      const outcome = context.signal ? await new Promise<UserReplyTurnOutcome>((resolve, reject) => {
+        const signal = context.signal!;
+        const stopped = () => {
+          signal.removeEventListener('abort', stopped);
+          reject(new Error(String(signal.reason)));
+        };
+        signal.addEventListener('abort', stopped, { once: true });
+        // 迟到的执行仍有完成／拒绝消费者；事实资格由下面的 T4 和原 T3 fence 收口。
+        execution.then(resolve, reject).finally(() => signal.removeEventListener('abort', stopped));
+        if (signal.aborted) stopped();
+      }) : await execution;
       if (outcome === 'committed') {
         logTurnTimeline('assistant_turn_committed', {
           sessionId,
@@ -200,11 +224,16 @@ export function createConversationTurnCoordinator(
       // run 仍 active 但无任何提交：revoke 收尾，不得留 active 悬挂。
       if (outcome === 'empty_reply') {
         if (!abort.signal.aborted) regenerationError = '未生成新回复，已恢复原消息';
-        await deps.turns.revoke(run, abort.signal.aborted ? 'cancelled' : 'failed', 'empty_reply');
+        if (abort.signal.aborted) await revokeCancelled('empty_reply');
+        else await deps.turns.revoke(run, 'failed', 'empty_reply');
       }
       // fence_failed：本 run 已失去所有权，安静结束（用户消息事务已触发新一轮 claim）。
     } catch (error) {
-      if (!isChatReplyRunCancellationError(error)) {
+      if (context.signal?.aborted || (context.executionDeadlineAt !== undefined && performance.now() >= context.executionDeadlineAt)) {
+        const reason = String(context.signal?.reason ?? 'execution_host_timeout');
+        try { await interruptChatRunPresentation(run.runId, reason); }
+        finally { await deps.turns.revoke(run, 'failed', reason); }
+      } else if (!isChatReplyRunCancellationError(error)) {
         if (!abort.signal.aborted) regenerationError = reasonOf(error);
         try {
           await deps.turns.revoke(run, 'failed', reasonOf(error));
@@ -217,6 +246,10 @@ export function createConversationTurnCoordinator(
         }
       }
     } finally {
+      // T4 的持久终态提交后再刷新展示，不能以执行函数的 finally 代替事务完成。
+      emitChatTurnExecutionChanged(sessionId);
+      emitChatMessagesReloadRequested(sessionId);
+      emitChatTypingStatusChanged(sessionId, false, context.correlationId || run.runId);
       if (run.kind === 'regenerate') emitChatRegenerationChanged(sessionId, regenerationError);
       // identity-safe cleanup：禁止旧 run 删除新 run 的句柄。
       const current = activeHandles.get(sessionId);
@@ -232,9 +265,14 @@ export function createConversationTurnCoordinator(
     context: ConversationTurnRunContext,
   ): Promise<void> {
     const abort = new AbortController();
+    const onHostStopped = () => abort.abort(context.signal!.reason);
+    context.signal?.addEventListener('abort', onHostStopped, { once: true });
+    if (context.signal?.aborted) onHostStopped();
     if (!acceptingTurns) abort.abort('CANCELLED_BY_USER');
-    const completion = Promise.resolve().then(() => executeRun(sessionId, run, abort, context));
+    const completion = Promise.resolve().then(() => executeRun(sessionId, run, abort, context))
+      .finally(() => context.signal?.removeEventListener('abort', onHostStopped));
     activeHandles.set(sessionId, { runId: run.runId, kind: run.kind, abort, completion });
+    emitChatTurnExecutionChanged(sessionId);
     logTurnTimeline('turn_claimed', { sessionId, runId: run.runId });
     return completion;
   }
@@ -348,6 +386,7 @@ export function createConversationTurnCoordinator(
         deliveryTiming: payload.deliveryTiming,
       });
       if (!accepted) {
+        logTurnTimeline('execution_host_start_failed', { sessionId, correlationId: payload.correlationId });
         // 不兜底在页面执行：待回复事实留在游标/高水位中，由启动恢复或后续触发按 orphan 语义接管。
         console.warn('[ConversationTurnCoordinator] execution host 启动被拒绝：', {
           sessionId,
@@ -495,7 +534,18 @@ export function getConversationTurnCoordinator(): ConversationTurnCoordinator {
       executeTurn: (params) => executeUserReplyTurn(params),
       resolveAIConfig: resolveSessionAIConfig,
       executionHost: {
-        start: (sessionIds, options) => startConversationTurnExecutionHost(sessionIds, options),
+        async start(sessionIds, options) {
+          const attempts = await conversationTurnRepository.beginExecutionHostRequests(sessionIds);
+          for (const sessionId of sessionIds) emitChatTurnExecutionChanged(sessionId);
+          let accepted = false;
+          try {
+            accepted = await startConversationTurnExecutionHost(sessionIds, options);
+            return accepted;
+          } finally {
+            await conversationTurnRepository.finishExecutionHostRequests(attempts, accepted);
+            for (const sessionId of sessionIds) emitChatTurnExecutionChanged(sessionId);
+          }
+        },
       },
     });
   }

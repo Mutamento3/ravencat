@@ -30,6 +30,17 @@ export default function useChatScreen({
     loadAIAssistants: () => Promise<AIProfile[]>;
     removeAIAssistant: (aiId: string) => Promise<void>;
   };
+  useEffect(() => {
+    setCurrentAI(current => {
+      if (!current) return current;
+      const updated = aiList.find(ai => ai.id === current.id);
+      if (!updated) return current;
+      if (current.name === updated.name && current.nickname === updated.nickname
+        && current.avatar === updated.avatar && current.avatarMediaAssetId === updated.avatarMediaAssetId) return current;
+      return { ...current, name: updated.name, nickname: updated.nickname, avatar: updated.avatar,
+        avatarMediaAssetId: updated.avatarMediaAssetId };
+    });
+  }, [aiList, currentAI?.id]);
   const {
     currentSubScreen,
     filePreviewParams,

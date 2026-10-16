@@ -6,6 +6,7 @@ const MINI_PROGRAM_ROUTES: Record<string, Href> = {
   wallet: '/wallet',
   auxiliaryModels: '/auxiliary-models',
   mcpTools: '/mcp-tools',
+  webSearch: '/web-search' as Href,
   memory: '/memory' as Href,
   promptCenter: '/prompt-center' as Href,
   ravenCatCompanion: '/raven-cat',

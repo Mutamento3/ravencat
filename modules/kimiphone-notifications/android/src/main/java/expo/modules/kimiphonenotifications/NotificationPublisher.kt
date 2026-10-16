@@ -97,7 +97,9 @@ internal object NotificationPublisher {
     return conversationMutex.withLock {
       conversationOperationGate.readLock().lock()
       try {
-        return@withLock synchronized(conversationOperationLock(conversationKey)) {
+        return@withLock MessageArrivalProgress.publishTurn(payload.optionalString("turnRunId"),
+          postResult("cancelled", false, displayId, "turn_display_interrupted")) {
+          synchronized(conversationOperationLock(conversationKey)) {
           val (legacyDisplayIds, upsert) = synchronized(conversationStateLock) {
             // 升级前展示的合并形态通知（全应用汇总 + 每会话合并）一次性清理，避免新旧并存。
             val legacyDisplayIds = NotificationStateStore.consumeLegacyMergedNotificationCleanup(context).orEmpty()
@@ -182,6 +184,7 @@ internal object NotificationPublisher {
           updateConversationSummary(context, conversationKey, state, summaryAvatar)
           NotificationStateStore.recordDiagnostics(context, scopeKey, aiId, sessionId, true, null)
           postResult("posted", true, displayId, null)
+          }
         }
       } catch (error: RuntimeException) {
         val errorMessage = error.message ?: error.javaClass.simpleName

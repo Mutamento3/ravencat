@@ -85,6 +85,7 @@ exports.DEFAULT_PRIVATE_CONTEXT_PRIMARY_LIMIT = 30;
 compileProductionModule('src/features/speech/application/SpeechText.ts');
 compileProductionModule('src/features/speech/application/SpeechProviderCatalog.ts');
 compileProductionModule('src/features/chat/messages/infrastructure/ChatMessageMutationSql.ts');
+compileProductionModule('src/features/chat/reply/infrastructure/ChatTurnPresentationSql.ts');
 
 for (const relativePath of [
   'src/features/calls/application/CallPromptBlocks.ts',
@@ -1812,6 +1813,46 @@ scenario('统一输入入口按相位打断在途播放并广播回合相位', a
     '相位序列必须为 generating -> speaking -> generating(新回合) -> idle'
   );
   unsubscribe();
+});
+
+scenario('工具与语音重叠时优先展示工具，插话后旧工具不得覆盖新回合', async () => {
+  const callId = 'call-tool-phase';
+  const playback = deferred();
+  const toolFinished = deferred();
+  const finalReply = deferred();
+  let firstCallbacks;
+  let count = 0;
+  const service = new CallTurnRuntimeService({
+    async processReply(params) {
+      count++;
+      if (count === 1) {
+        firstCallbacks = params;
+        params.onSpeechSentence('先查一下。', { synthesisText: '先查一下。', modelSnapshot: null });
+        params.onToolExecutionChanged(true);
+        await toolFinished.promise;
+        params.onToolExecutionChanged(false);
+        await finalReply.promise;
+      }
+      return { status: 'completed', userEvent: null, aiEvent: { id: 'ai' }, text: '结果', callEnded: false };
+    },
+    enqueueSpeech: () => playback.promise,
+    interruptForUserSpeech: async () => true,
+    endCall: async () => { throw new Error('不应挂断'); },
+    aiEndGraceMs: 0,
+  });
+  const first = service.run({ callId, userText: '查询', aiConfig: createAIConfig() });
+  await waitFor(() => Boolean(firstCallbacks), '回复未启动');
+  assert.equal(callReplyRuns.getCallReplyRunPhase(callId), 'using_tool');
+  toolFinished.resolve();
+  await waitFor(() => callReplyRuns.getCallReplyRunPhase(callId) === 'speaking', '工具结束后仍有语音，应回到说话');
+  playback.resolve();
+  await waitFor(() => callReplyRuns.getCallReplyRunPhase(callId) === 'generating', '语音播完但模型未结束，应回到思考');
+  const second = await service.submitUserInput({ callId, userText: '等等', aiConfig: createAIConfig() });
+  assert.equal(second.status, 'completed');
+  firstCallbacks.onToolExecutionChanged(true);
+  assert.equal(callReplyRuns.getCallReplyRunPhase(callId), 'idle', '旧工具事件不得恢复已结束的回合');
+  finalReply.resolve();
+  assert.equal((await first).status, 'cancelled');
 });
 
 scenario('流式句子切分只在句末标点处切分且跳过换行', async () => {

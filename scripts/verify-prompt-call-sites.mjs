@@ -11,7 +11,6 @@ const EXPECTED_CALL_SITES = new Map([
   ['features/calls/application/runtime/OutgoingCallDecision.ts', /assembleChatPromptPack/],
   ['features/calls/application/runtime/PostUserHangUpFollowUp.ts', /scenarioId: 'call\.post_user_hangup'/],
   ['features/togetherListening/application/PostUserDeclineFollowUp.ts', /scenarioId: 'together_listening\.post_user_decline'/],
-  ['features/calls/application/runtime/ProcessCallAIReply.ts', /promptPack\.systemPrompt/],
   ['features/chat/group/application/GroupSpeakerPlanning.ts', /assembleStandalone/],
   ['features/chat/reply/application/ResolveChatImageModelInput.ts', /scenarioId: 'vision\.ocr'/],
   ['platform/agentRuntime/BaseAIClientAgentModelGateway.ts', /buildAgentModelMessages/],

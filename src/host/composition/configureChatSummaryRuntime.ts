@@ -83,8 +83,8 @@ async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSumma
       const toolPolicy = { isHostAI: assistant!.isHostAI, enableTools: assistant!.enableTools, triggerSource: 'chat',
         memoryParticipation: 'read_write' as const, allowedToolNames: persistentNames };
       const allowedToolNames = getRuntimeAllowedToolNamesForAI(toolPolicy);
-      const toolsDescription = buildToolsDescription(toolPolicy);
       const mcp = assistant!.enableTools ? await resolveMcpExposure(assistant!.id) : { services: [] };
+      const toolsDescription = buildToolsDescription(allowedToolNames);
       const pack = await assembleResolvedSummaryPromptPack({ sessionId: input.conversationId, aiConfig, toolContext,
         currentInput, allowedToolNames, toolsDescription, mcpServices: mcp.services },
       secondary ? createSecondaryChatSummaryPromptBlock() : createChatSummaryPromptBlock());

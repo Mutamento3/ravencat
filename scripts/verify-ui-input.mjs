@@ -85,6 +85,8 @@ assert.equal(ref.current, null);
 // 字段名称不是密码语义；只有调用方明确声明的敏感输入才遮蔽。
 await act(async () => { rendered = create(React.createElement(Field, { label: 'API Key', value: 'key', autoGrow: true, onChangeText() {} })); });
 assert.notEqual(rendered.root.findByType('Input').props.secureTextEntry, true);
+await act(async () => rendered.update(React.createElement(Field, { label: 'API Key', value: 'key', editable: false, onChangeText() {} })));
+assert.equal(rendered.root.findByType('Input').props.editable, false);
 await act(async () => rendered.update(React.createElement(Input, { value: 'token', secureTextEntry: true, autoCapitalize: 'none', autoCorrect: false, onChangeText() {} })));
 assert.equal(rendered.root.findByType('Input').props.secureTextEntry, true);
 assert.equal(rendered.root.findByType('Input').props.multiline, false);

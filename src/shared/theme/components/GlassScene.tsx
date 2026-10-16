@@ -33,17 +33,21 @@ export function GlassSceneProvider({
   );
 }
 
+/** 默认是纯装饰背景；采样交互页面时由页面显式开启触摸与无障碍，效果层须放在源外。 */
 export function GlassBackdrop({
   children,
   sceneId,
+  accessibilityElementsHidden = true,
+  importantForAccessibility = 'no-hide-descendants',
+  pointerEvents = 'none',
   ...viewProps
 }: GlassBackdropProps) {
   return (
     <LiquidGlassBackdrop
       {...viewProps}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-      pointerEvents="none"
+      accessibilityElementsHidden={accessibilityElementsHidden}
+      importantForAccessibility={importantForAccessibility}
+      pointerEvents={pointerEvents}
       sceneId={sceneId}
     >
       {children}

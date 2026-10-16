@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { bootstrapSqlite, createSqliteExecutor, DATABASE_SCHEMA_VERSION } from './helpers/sqlite-bootstrap-fixture.mjs';
 const tables = db => db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name);
-const data = db => tables(db).map(name=>({name, rows:db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()}));
+const data = db => tables(db).filter(name=>name!=='assistant_nickname_changes').map(name=>({name, rows:db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()}));
 const structure = db => db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all().map(row => row.type !== 'table' ? row : ({
  ...row, sql: undefined,
  columns: db.prepare(`PRAGMA table_info("${row.name}")`).all().map(({cid,...column}) => column).sort((a,b)=>a.name.localeCompare(b.name)),
@@ -16,12 +16,19 @@ function check(db){
 const create = () => {const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON');return db;};
 // 旧版本没有用户备注列与修改历史，升级 fixture 必须还原真实旧结构。
 function removeNicknameSchema(db) {
- db.exec('DROP TABLE assistant_nickname_changes; ALTER TABLE ai_assistants DROP COLUMN nickname;');
+ db.exec('DROP TABLE IF EXISTS assistant_nickname_changes; ALTER TABLE ai_assistants DROP COLUMN nickname;');
  removeSummaryModelSchema(db);
 }
 function removeSummaryModelSchema(db) {
  db.exec('ALTER TABLE chat_summary_request_settings DROP COLUMN model_config_id; ALTER TABLE chat_summary_request_settings DROP COLUMN group_trigger_count;');
 }
+
+function installLegacyNicknameAudit(db) {
+ db.exec(`CREATE TABLE assistant_nickname_changes (id INTEGER PRIMARY KEY AUTOINCREMENT,
+ assistant_id TEXT NOT NULL REFERENCES ai_assistants(id) ON DELETE CASCADE, previous_nickname TEXT,
+ nickname TEXT, acknowledged INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);`);
+}
+
 function seed(db){
  const t='2026-10-10T12:00:00.000Z';
  db.prepare("INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated_at) VALUES ('ai-proof','agent-proof','测试角色','test-model',?,?)").run(t,t);
@@ -71,6 +78,69 @@ for(const retired of ['memories','memory_entries','capability_bindings','raven_c
 assert.ok(!tables(db).includes('call_background_legacy_migration'),'新库不创建旧文件迁移标记');
 seed(db);check(db);
 const before=data(db), schema=structure(db);
+// 130 的展示快照已存在，新增运行状态列不得改变可见版本或回合资格。
+const observableUpgrade=create(); await bootstrapSqlite(createSqliteExecutor(observableUpgrade)); seed(observableUpgrade);
+installLegacyNicknameAudit(observableUpgrade);
+observableUpgrade.exec(`INSERT INTO conversation_turn_state(session_id,reply_cursor,revision,updated_at) VALUES ('direct-proof',0,7,'2026-10-15');
+ INSERT INTO conversation_turn_runs(run_id,session_id,kind,reply_cursor_at_claim,input_high_watermark,revision_at_claim,status,created_at)
+ VALUES ('display-proof','direct-proof','user_reply',0,41,7,'superseded','2026-10-15');
+ INSERT INTO chat_turn_presentations(run_id,session_id,state,updated_at) VALUES ('display-proof','direct-proof','interrupted','2026-10-15');
+ INSERT INTO chat_turn_display_items(run_id,identity,version,snapshot_json,shown_version,shown_json)
+ VALUES ('display-proof','display-proof:1',2,'{"text":"hidden tail"}',1,'{"text":"shown prefix"}');
+ ALTER TABLE conversation_turn_state DROP COLUMN host_request_revision;
+ ALTER TABLE conversation_turn_state DROP COLUMN host_request_input_id;
+ ALTER TABLE conversation_turn_state DROP COLUMN host_request_status;
+ ALTER TABLE conversation_turn_state DROP COLUMN host_request_at;
+ ALTER TABLE chat_turn_presentations DROP COLUMN phase;
+ ALTER TABLE chat_turn_presentations DROP COLUMN phase_at;
+ PRAGMA user_version=130;`);
+const savedDisplay=observableUpgrade.prepare('SELECT * FROM chat_turn_display_items').all();
+const observableExecutor=createSqliteExecutor(observableUpgrade);
+await assert.rejects(bootstrapSqlite({ ...observableExecutor, execAsync: async sql => {
+ if(sql.includes('PRAGMA user_version =')) throw new Error('运行状态迁移提交失败');
+ return observableExecutor.execAsync(sql);
+} }),/运行状态迁移提交失败/);
+assert.equal(observableUpgrade.prepare('PRAGMA user_version').get().user_version,130);
+assert.equal(observableUpgrade.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('chat_turn_presentations') WHERE name='phase'").get().n,0);
+assert.deepEqual(observableUpgrade.prepare('SELECT * FROM chat_turn_display_items').all(),savedDisplay);
+await bootstrapSqlite(createSqliteExecutor(observableUpgrade));
+assert.deepEqual(observableUpgrade.prepare('SELECT * FROM chat_turn_display_items').all(),savedDisplay);
+assert.equal(observableUpgrade.prepare('SELECT revision FROM conversation_turn_state').get().revision,7);
+assert.equal(observableUpgrade.prepare('SELECT phase FROM chat_turn_presentations').get().phase,'preparing');
+assert.equal(observableUpgrade.prepare('PRAGMA user_version').get().user_version,DATABASE_SCHEMA_VERSION);
+check(observableUpgrade); observableUpgrade.close();
+// 131 的真机故障：过程没有屏幕回执、完成后卡在交付、输入被误判为展示中断。
+const publicationUpgrade=create(); await bootstrapSqlite(createSqliteExecutor(publicationUpgrade)); seed(publicationUpgrade);
+for (const [runId, status, displayState, reason] of [
+ ['old-process','superseded','interrupted','new_input'],
+ ['old-pacing','committed','interrupted','new_input'],
+ ['old-finished','committed','open',null],
+ ['old-restarted','committed','interrupted','process_restarted'],
+ ['old-timeout','committed','interrupted','execution_host_timeout'],
+]) {
+ publicationUpgrade.prepare(`INSERT INTO conversation_turn_runs(run_id,session_id,kind,reply_cursor_at_claim,input_high_watermark,revision_at_claim,status,created_at)
+ VALUES (?,'direct-proof','user_reply',0,41,2,?,'2026-10-15')`).run(runId,status);
+ publicationUpgrade.prepare(`INSERT INTO chat_turn_presentations(run_id,session_id,state,reason,updated_at) VALUES (?,'direct-proof',?,?,'2026-10-15')`).run(runId,displayState,reason);
+ const add = (identity, kind, text, canonical, published) => {
+  let messageId = null;
+  if(canonical) messageId=Number(publicationUpgrade.prepare(`INSERT INTO messages(session_id,text,is_me,sender_type,created_at) VALUES ('direct-proof',?,0,?,'2026-10-15')`).run(text,kind==='tool'?'system':kind).lastInsertRowid);
+  const json=JSON.stringify({runId,kind,text});
+  publicationUpgrade.prepare(`INSERT INTO chat_turn_display_items(run_id,identity,version,snapshot_json,shown_version,shown_json,message_id) VALUES (?,?,1,?,?,?,?)`).run(runId,identity,json,published?1:0,published?json:null,messageId);
+ };
+ add(runId+':process','reasoning','可恢复的过程',status==='committed',false);
+ add(runId+':body','assistant','已经交付',status==='committed',true);
+ if(!['old-finished','old-restarted'].includes(runId)) add(runId+':tail','assistant','未交付尾部',status==='committed',false);
+}
+installLegacyNicknameAudit(publicationUpgrade);
+publicationUpgrade.exec('PRAGMA user_version=131');
+await bootstrapSqlite(createSqliteExecutor(publicationUpgrade));
+assert.equal(publicationUpgrade.prepare("SELECT shown_json FROM chat_turn_display_items WHERE identity='old-process:process'").get().shown_json.includes('可恢复的过程'),true);
+assert.equal(publicationUpgrade.prepare("SELECT shown_json FROM chat_turn_display_items WHERE identity='old-process:tail'").get().shown_json,null);
+assert.equal(publicationUpgrade.prepare("SELECT shown_json FROM chat_turn_display_items WHERE identity='old-pacing:tail'").get().shown_json.includes('未交付尾部'),true);
+assert.equal(publicationUpgrade.prepare("SELECT state FROM chat_turn_presentations WHERE run_id='old-finished'").get().state,'completed');
+assert.equal(publicationUpgrade.prepare("SELECT state FROM chat_turn_presentations WHERE run_id='old-restarted'").get().state,'completed');
+assert.equal(publicationUpgrade.prepare("SELECT shown_json FROM chat_turn_display_items WHERE identity='old-timeout:tail'").get().shown_json,null);
+check(publicationUpgrade); publicationUpgrade.close();
 // 120/121 的库确实没有新列；升级保留原资料，后续启动不覆盖关闭选择。
 for (const version of [120, 121]) {
  const previous=create(); await bootstrapSqlite(createSqliteExecutor(previous)); seed(previous);
@@ -146,11 +216,37 @@ assert.deepEqual(data(nicknameUpgrade),beforeNicknameUpgrade);check(nicknameUpgr
 // 125 升级保留请求参数、群归属、正文与进度；模型选择初始化为明确的所属模型模式。
 const modelUpgrade=create();await bootstrapSqlite(createSqliteExecutor(modelUpgrade));seed(modelUpgrade);
 modelUpgrade.exec("INSERT INTO chat_summary_request_settings(conversation_id,timeout_seconds,max_output_tokens) VALUES ('group-proof',600,2048);");
+installLegacyNicknameAudit(modelUpgrade);
 removeSummaryModelSchema(modelUpgrade);modelUpgrade.exec('PRAGMA user_version=125;');
 await bootstrapSqlite(createSqliteExecutor(modelUpgrade));
 assert.deepEqual({...modelUpgrade.prepare("SELECT * FROM chat_summary_request_settings WHERE conversation_id='group-proof'").get()},
  {conversation_id:'group-proof',timeout_seconds:600,max_output_tokens:2048,model_config_id:null,group_trigger_count:40});
 check(modelUpgrade);modelUpgrade.close();
+// 126 的三轮状态直接清空重建；所有其他业务资料和升级原子性保持不变。
+const packageUpgrade=create();await bootstrapSqlite(createSqliteExecutor(packageUpgrade));seed(packageUpgrade);
+packageUpgrade.exec("INSERT INTO chat_tool_package_exposure VALUES ('direct-proof','ai-proof','memory'); INSERT INTO chat_tool_package_exposure VALUES ('direct-proof','ai-proof','neteaseMusic');");
+const packageExpected=data(packageUpgrade).map(table=>table.name==='chat_tool_package_exposure'?{...table,rows:[]}:table);
+installLegacyNicknameAudit(packageUpgrade);
+packageUpgrade.exec(`DROP TABLE chat_tool_package_exposure;
+ CREATE TABLE chat_tool_package_exposure (
+  session_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  assistant_id TEXT NOT NULL REFERENCES ai_assistants(id) ON DELETE CASCADE,
+  package_id TEXT NOT NULL, remaining_turns INTEGER NOT NULL CHECK(remaining_turns BETWEEN 1 AND 3),
+  PRIMARY KEY(session_id,assistant_id,package_id));
+ INSERT INTO chat_tool_package_exposure VALUES ('direct-proof','ai-proof','memory',1);
+ INSERT INTO chat_tool_package_exposure VALUES ('direct-proof','ai-proof','neteaseMusic',3);
+ PRAGMA user_version=126;`);
+const packageBefore=data(packageUpgrade), packageBeforeSchema=structure(packageUpgrade), packageRaw=createSqliteExecutor(packageUpgrade);
+await assert.rejects(bootstrapSqlite({...packageRaw,execAsync:async sql=>{
+ if(sql.includes('PRAGMA user_version ='))throw new Error('注入工具包迁移提交失败');
+ return packageRaw.execAsync(sql);
+}}),/注入工具包迁移提交失败/);
+assert.deepEqual(data(packageUpgrade),packageBefore);assert.deepEqual(structure(packageUpgrade),packageBeforeSchema);
+assert.equal(packageUpgrade.prepare('PRAGMA user_version').get().user_version,126);
+await bootstrapSqlite(packageRaw);
+assert.deepEqual(data(packageUpgrade),packageExpected);assert.deepEqual(structure(packageUpgrade),schema);
+assert.equal(packageUpgrade.prepare('PRAGMA user_version').get().user_version,DATABASE_SCHEMA_VERSION);
+check(packageUpgrade);packageUpgrade.close();
 const failed=create();const raw=createSqliteExecutor(failed);
 await assert.rejects(bootstrapSqlite({...raw,execAsync:async sql=>{
  if(sql.includes('CREATE UNIQUE INDEX'))throw new Error('注入索引失败');

@@ -21,7 +21,6 @@ export class CompleteModelTurnAdapter {
     const response = await this.provider.chatWithTools(request.messages, request.tools, {
       toolChoice: request.toolChoice,
       includeSystemPrompt: request.includeSystemPrompt,
-      enforceReasoningContent: request.enforceReasoningContent,
       allowReasoningLengthRetry: false,
       signal: request.signal,
     });

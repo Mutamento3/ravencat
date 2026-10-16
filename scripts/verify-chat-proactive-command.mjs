@@ -155,6 +155,8 @@ assert.equal(processTrace.repository, repository);
 assert.equal(processTrace.userMessageId, 0);
 assert.equal(processTrace.runtimeContext.triggerSource, 'raven_cat_contact');
 assert.equal(processTrace.runtimeContext.triggerReason, 'task_reminder');
+assert.equal(processTrace.runtimeContext.forceAppendUserText, true, '操作输入必须保留历史末条用户消息');
+assert.equal(processTrace.runtimeContext.inputSource, 'application', '机器触发资料不能伪装用户新发言');
 assert.equal(processTrace.runtimeContext.relatedEntityId, 'attempt-1');
 // 窗口条数不再由主动消息命令固定，统一在执行链路按 AI 配置的单聊·主解析。
 assert.equal(processTrace.runtimeContext.recentWindowLimit, undefined);

@@ -1,10 +1,11 @@
 /** 管理 Chat shell 使用的 AI 助手列表状态。 */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AIProfile } from '@features/assistants';
 import {
   deleteAIAssistant,
   listAIAssistants,
+  subscribeAIAssistantUpdated,
 } from '@features/assistants';
 import { withArrivedConversationPreview } from './arrivedConversationPreview';
 import { getAssistantMessageArrivalSnapshot } from '../../reply/delivery/AssistantMessageArrival';
@@ -38,6 +39,12 @@ export default function useAIAssistants() {
     void loadFlight.then(clearFlight, clearFlight);
     return loadFlight;
   }, []);
+
+  useEffect(() => subscribeAIAssistantUpdated(() => {
+    // 已提交的资料让旧列表读取失效，新读取继续复用消息到达快照的既有投影。
+    loadFlightRef.current = null;
+    void loadAIAssistants().catch(error => console.error('[Chat] 助手资料更新后列表刷新失败：', error));
+  }), [loadAIAssistants]);
 
   const removeAIAssistant = useCallback(async (aiId: string) => {
     await deleteAIAssistant(aiId);

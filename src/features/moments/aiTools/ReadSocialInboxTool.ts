@@ -33,9 +33,13 @@ export async function execute(args: ReadSocialInboxArgs, context: MomentToolCont
     });
     return {
       success: true,
-      message: summary.totalUnreadCount === 0
-        ? 'Social Inbox 当前没有未读事件。'
-        : `${formatSocialInboxSummary(summary)}\nnextCursor: ${JSON.stringify(summary.nextCursor)}\n${summary.nextCursor === null ? '当前查询已到末页。' : '还有下一页，可用此 nextCursor 继续读取摘要。'}`,
+      message: [
+        summary.totalUnreadCount === 0
+          ? 'Social Inbox 当前没有未读事件。'
+          : `${formatSocialInboxSummary(summary)}\nnextCursor: ${JSON.stringify(summary.nextCursor)}\n${summary.nextCursor === null ? '当前查询已到末页。' : '还有下一页，可用此 nextCursor 继续读取摘要。'}`,
+        '这里只列未读事件；getMomentDetail 成功读取后，事件会离开未读列表，已读不等于已回复，时刻和评论仍可查询。',
+        '继续处理看过的内容：已知 momentId 就直接调用 getMomentDetail；不知道 ID 就用 searchMoments 按作者、正文 keyword 或评论 commentKeyword 查找，再读取详情并使用返回的 commentId 回复。不要从未读列表为空推断内容不存在，也不要猜测 ID。',
+      ].join('\n\n'),
       data: summary,
     };
   } catch (error) {

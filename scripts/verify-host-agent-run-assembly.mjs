@@ -142,7 +142,7 @@ const assembly = loadTypeScriptModule(assemblyPath, {
       return {
         packageToolNames: selected,
         visibleToolNames: () => [],
-        instructions: () => ({ catalog: '固定工具目录', state: '本轮展开状态' }),
+        instructions: () => ({ catalog: '固定工具目录' }),
         metaToolNames: selected.length > 0
           ? ['open_tool_package']
           : [],
@@ -201,7 +201,7 @@ assert.deepEqual(
   'Host 保留内置授权，工具包仅收窄暴露，MCP 仍走固定 meta-tools',
 );
 assert.deepEqual(capturedRuntimeRequest.resolveVisibleToolNames(), ['built_in', 'open_tool_package', 'mcp_list_tools', 'mcp_call_tool']);
-assert.deepEqual(capturedModelInstructions, { catalog: '固定工具目录', state: '本轮展开状态' });
+assert.deepEqual(capturedModelInstructions, { catalog: '固定工具目录' });
 assert.equal(disposeCount, 1, '成功后必须释放 MCP lifecycle');
 await assert.rejects(
   assembly.cancelHostAgentRun({ runId: 'success' }),

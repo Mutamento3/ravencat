@@ -6,6 +6,8 @@ import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
+import React from 'react';
+import { act, create } from 'react-test-renderer';
 
 const root = path.resolve(import.meta.dirname, '..');
 const db = new DatabaseSync(':memory:');
@@ -18,6 +20,7 @@ const rows = () => db.prepare('SELECT id, payload FROM messages ORDER BY id').al
   .map((row) => ({ ...JSON.parse(row.payload), id: row.id }));
 const state = { transactions: 0, writes: 0, failAt: null, dispatches: 0, failHost: false, previews: [], scheduled: [], rotations: 0 };
 const runtime = {
+  turnPresentation: { freeze: async () => async () => {}, interrupt: async () => {} },
   assistantDirectory: { getBlockState: async () => ({ isBlocked: false }) },
   messages: {
     async commitMessageInTransaction(_transaction, { message, previewText }) {
@@ -100,12 +103,13 @@ function load(relativePath) {
   }).outputText;
   const requireModule = (specifier) => {
     if (boundaries[specifier]) return boundaries[specifier];
+    if (specifier === './ChatTurnPresentationRuntime') return { getChatInterruptedTurnContext: async () => [] };
     if (specifier === '@features/chat/messages/domain') return load('src/features/chat/messages/domain/chatMessageMetadata.ts');
     if (specifier.endsWith('/ChatMessageRuntime') || specifier === './ChatMessageRuntime') {
       return { getChatMessageRuntimeDependencies: () => runtime };
     }
     if (specifier.endsWith('/AgentTransientTimeline')) return { clearAgentTransientTimelineRun() {} };
-    if (specifier.endsWith('/ChatEvents')) return { emitChatMessagesUpdated() {}, emitChatGroupSpeechPlanChanged() {}, setChatEventBus() {} };
+    if (specifier.endsWith('/ChatEvents')) return { emitChatMessagesUpdated() {}, emitChatTurnExecutionChanged() {}, emitChatGroupSpeechPlanChanged() {}, setChatEventBus() {} };
     if (specifier === './ChatGroupRuntime') return { getChatGroupRuntimeDependencies: () => groupRuntime };
     if (specifier === './GroupAutoInvocationScheduler') return { scheduleGroupAutoInvocation: (input) => state.scheduled.push(input) };
     if (specifier === './GroupChatMessaging') return { invokeGroupChat() {} };
@@ -246,6 +250,98 @@ for (const source of sources) {
   assert.deepEqual(metadata.getMessageReplyQuote(group), snapshot, '群聊保存同样的媒体引用快照');
 }
 assert.equal(metadata.buildReplyQuoteModelText({ replyToText: '旧引用', metadataJson: null }), '[引用：旧引用]');
+
+// 输入区交接使用真实 React hook；落库故意挂起，验证受理与提交完成的职责边界。
+global.IS_REACT_ACT_ENVIRONMENT = true;
+const pendingSubmissions = [];
+let activeCall = null;
+const hookModule = { exports: {} };
+const hookCode = ts.transpileModule(fs.readFileSync(path.join(root, 'src/features/chat/presentation/messages/ChatDetail/useChatSendFlow.ts'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const hookMocks = {
+  react: React,
+  './ChatAttachmentDraftFiles': { retainChatAttachmentDraftFiles: () => () => {} },
+  '../../../messages/application/MessageTimeline': timeline,
+  '../../../messages/application/SendUserMessage': { sendUserMessage: params => new Promise((resolve, reject) => pendingSubmissions.push({ params, resolve, reject })) },
+  '../../../conversation/application/ChatCallGateway': {
+    getActiveChatCall: async () => activeCall,
+    isChatSendBlockedByCall: load('src/features/chat/conversation/application/ChatCallGateway.ts').isChatSendBlockedByCall,
+  },
+  '../../../messages/domain/chatMessageMetadata': metadata,
+  '../../../conversation/application/ChatTogetherListeningGateway': {},
+  '../../../messages/application/UserVoiceMessageRecording': {},
+};
+new Function('require', 'module', 'exports', hookCode)(id => {
+  assert.ok(Object.hasOwn(hookMocks, id), id);
+  return hookMocks[id];
+}, hookModule, hookModule.exports);
+let composer;
+function Composer() {
+  const [text, setText] = React.useState('第一条');
+  const [messages, setMessages] = React.useState([]);
+  const [error, setError] = React.useState(null);
+  const lastMessageIdRef = React.useRef(null);
+  const flow = hookModule.exports.useChatSendFlow({
+    sessionId: 's1', aiAssistant: { id: 'ai-1' }, aiRequestConfig: { id: 'ai-1' },
+    messages, setMessages, setError, setIsTyping() {}, lastMessageIdRef,
+  });
+  composer = { ...flow, text, setText, messages, error };
+  return null;
+}
+let composerSurface;
+try {
+  await act(async () => { composerSurface = create(React.createElement(Composer)); });
+  let sending;
+  let finished = false;
+  let accepted = 0;
+  await act(async () => {
+    sending = composer.sendMessage(composer.text, null, [], { onQueued: () => {
+      accepted++;
+      composer.setText('');
+    } });
+    sending.then(() => { finished = true; });
+  });
+  assert.equal(composer.text, '', '落库仍挂起时输入区就应清空');
+  assert.equal(composer.messages.length, 1, '清空时消息已由乐观气泡接管');
+  assert.equal(finished, false, '附件提交生命周期仍等待持久化结束');
+  await act(async () => composer.setText('第二条还没发'));
+  const first = pendingSubmissions.shift();
+  assert.equal(first.params.text, '第一条');
+  await act(async () => {
+    const canonicalMessage = { ...composer.messages[0], id: 9001, status: 'sent' };
+    first.resolve({ success: true, userMessage: canonicalMessage, userMessages: [canonicalMessage] });
+    assert.equal(await sending, true);
+  });
+  assert.equal(accepted, 1);
+  assert.equal(composer.text, '第二条还没发', '旧提交完成不得清空后来输入的文字');
+  assert.equal(composer.messages.length, 1, '落库后仍正常替换乐观气泡');
+
+  await act(async () => {
+    sending = composer.sendMessage(composer.text, null, [image], { onQueued: () => composer.setText('') });
+  });
+  assert.equal(composer.text, '');
+  const failedSubmission = pendingSubmissions.shift();
+  assert.equal(failedSubmission.params.attachments[0], image);
+  await act(async () => {
+    failedSubmission.reject(new Error('发送失败用例'));
+    assert.equal(await sending, true);
+  });
+  assert.ok(composer.messages.slice(1).every(message => message.status === 'failed'), '受理后失败由气泡承载');
+  assert.equal(composer.error, '发送失败用例');
+
+  activeCall = { state: 'active', chatSessionId: 's1', aiAssistantId: 'ai-1' };
+  await act(async () => composer.setText('被通话拦截的草稿'));
+  const beforeBlocked = composer.messages;
+  await act(async () => {
+    assert.equal(await composer.sendMessage(composer.text, null, [], { onQueued: () => composer.setText('') }), false);
+  });
+  assert.equal(composer.text, '被通话拦截的草稿', '发送检查拒绝时必须保留输入');
+  assert.equal(composer.messages, beforeBlocked);
+  assert.equal(pendingSubmissions.length, 0);
+} finally {
+  if (composerSurface) await act(async () => composerSurface.unmount());
+}
 
 db.close();
 console.log('图文原子发送、单次回复、独立重发、乐观替换、群聊整批提交与图片预览几何验证通过。');

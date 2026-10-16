@@ -12,13 +12,12 @@ export function getTrimmedAPIConfig({ apiBaseUrl, apiKey }: { apiBaseUrl: string
   };
 }
 
-export function validateAddAIForm({ name, apiBaseUrl, apiKey, selectedModel }: { name: string; apiBaseUrl: string; apiKey: string; selectedModel: string }) {
-  return Boolean(
-    name.trim()
-    && apiBaseUrl.trim()
-    && apiKey.trim()
-    && selectedModel
-  );
+export function getAddAIFormError({ name, apiBaseUrl, apiKey, selectedModel }: { name: string; apiBaseUrl: string; apiKey: string; selectedModel: string }): string | null {
+  if (!name.trim()) return '请填写 AI 名称。';
+  if (!apiBaseUrl.trim()) return '请填写 API 地址。';
+  if (!apiKey.trim()) return '请填写 API Key。';
+  if (!selectedModel) return '请选择模型。';
+  return null;
 }
 
 export function getCurrentAddAIStep({ apiBaseUrl, apiKey, selectedModel }: { apiBaseUrl: string; apiKey: string; selectedModel: string }) {

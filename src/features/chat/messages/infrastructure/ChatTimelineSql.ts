@@ -60,7 +60,7 @@ export function timelineOrderedMessagesCte(
       ${expressions.createdAt} AS timeline_order_created_at,
       ${expressions.anchorId} AS timeline_order_anchor_id,
       ${expressions.itemIndex} AS timeline_order_item_index
-    FROM messages m
+    FROM chat_visible_messages m
     LEFT JOIN chat_timeline_run_anchors a
       ON a.session_id = m.session_id
       AND a.turn_run_id = m.turn_run_id

@@ -6,6 +6,7 @@ import {
   sqlitePromptDefaultsRepository,
 } from '@features/prompting/composition';
 import { getAssistantDisplayName,
+  getHostAICooldownStatus,
   aiAssistantRepository,
   assistantToolPermissionRepository,
 } from '@features/assistants';
@@ -38,9 +39,12 @@ export function configurePromptingRuntime(): void {
     assistantPrompts: sqlitePromptingRepository,
     assistants: {
       async listOptions() {
-        return (await aiAssistantRepository.listSummaries()).map((assistant) => ({ id: assistant.id, name: getAssistantDisplayName(assistant), isHostAI: assistant.isHostAI }));
+        const { appointment } = await getHostAICooldownStatus();
+        return (await aiAssistantRepository.listSummaries()).map((assistant) => ({ id: assistant.id, name: getAssistantDisplayName(assistant), isHostAI: assistant.isHostAI,
+          isInHostCooldown: appointment.isInCooldown && appointment.revokedAIId === assistant.id }));
       },
       async list() {
+        const { appointment } = await getHostAICooldownStatus();
         return (await aiAssistantRepository.getAll()).map((assistant) => ({
           id: assistant.id,
           name: assistant.name,
@@ -51,6 +55,7 @@ export function configurePromptingRuntime(): void {
           enableTools: assistant.enableTools === true,
           allowMultipleBubbles: assistant.allowMultipleBubbles,
           isHostAI: assistant.isHostAI,
+          isInHostCooldown: appointment.isInCooldown && appointment.revokedAIId === assistant.id,
         }));
       },
     },

@@ -11,6 +11,7 @@ type ValueRef<T> = { current: T };
 
 interface UseChatTimelineSyncParams {
   sessionId?: string | null;
+  messages: ChatMessage[];
   isTyping: boolean;
   setIsTyping: BooleanStateSetter;
   setMessages: MessageStateSetter;
@@ -19,12 +20,15 @@ interface UseChatTimelineSyncParams {
 
 export function useChatTimelineSync({
   sessionId,
+  messages,
   isTyping,
   setIsTyping,
   setMessages,
   lastMessageIdRef,
 }: UseChatTimelineSyncParams) {
   const isTypingRef = useRef(isTyping);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   useEffect(() => {
     isTypingRef.current = isTyping;
@@ -39,6 +43,7 @@ export function useChatTimelineSync({
     const unsubscribe = messageTimeline.subscribe({
       sessionId,
       getAfterId: () => lastMessageIdRef.current,
+      getLoadedMessageIds: () => messagesRef.current.map(message => message.id),
       onReplace: (messages) => {
         setMessages(messages);
         lastMessageIdRef.current = messageTimeline.getLastMessageId(messages);

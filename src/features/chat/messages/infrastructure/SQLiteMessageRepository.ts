@@ -29,6 +29,7 @@ import { cancelRegenerationInTransaction } from './ChatMessageMutationSql';
 import type { ChatRecordStatistics } from '../domain/ChatRecordStatistics';
 
 interface MessageRow {
+  turn_presentation_state?: string;
   id: number;
   session_id: string;
   agent_id: string | null;
@@ -248,7 +249,7 @@ export class MessageRepository implements IMessageRepository {
   async getMessageById(messageId: number): Promise<ChatMessage | null> {
     try {
       const db = databaseCoordinator.openTaskExecutor({ name: 'chat.getMessageById', feature: 'chat', priority: 'interactive' });
-      const row = await db.getFirstAsync<MessageRow>('SELECT * FROM messages WHERE id = ?', [messageId]);
+      const row = await db.getFirstAsync<MessageRow>('SELECT * FROM chat_visible_messages WHERE id = ?', [messageId]);
 
       if (!row) return null;
       return this.mapRowToEntity(row);
@@ -265,7 +266,7 @@ export class MessageRepository implements IMessageRepository {
     try {
       const db = databaseCoordinator.openTaskExecutor({ name: 'chat.getMessageByClientMessageId', feature: 'chat', priority: 'interactive' });
       const row = await db.getFirstAsync<MessageRow>(
-        `SELECT * FROM messages
+        `SELECT * FROM chat_visible_messages
          WHERE session_id = ? AND client_message_id = ?
          LIMIT 1`,
         [sessionId, clientMessageId]
@@ -324,7 +325,7 @@ export class MessageRepository implements IMessageRepository {
          LIMIT ?
        )
        SELECT m.* FROM page p
-       JOIN messages m ON m.id = p.id
+       JOIN chat_visible_messages m ON m.id = p.id
        ORDER BY ${timelineProjectionOrderBy(normalizedOrder, 'p')}`,
       [sessionId, ...queryParams, limit + 1]
     );
@@ -364,6 +365,29 @@ export class MessageRepository implements IMessageRepository {
       [sessionId, JSON.stringify(excludedMessageIds), limit],
     );
     return rows.reverse().map((row) => this.mapRowToEntity(row));
+  }
+
+  async getReloadWindowMessages(sessionId: string, loadedMessageIds: readonly number[]): Promise<ChatMessage[]> {
+    const db = databaseCoordinator.openTaskExecutor({ name: 'chat.reload-window', feature: 'chat', priority: 'interactive' });
+    // 刷新保持页面已有的持久窗口。身份解析与读取共用一个 SQLite 快照，
+    // 临时发送 ID 或已删除行不能把窗口边界推到库中不存在的位置。
+    const orderedMessagesCte = timelineOrderedMessagesCte(
+      `m.session_id = ? AND m.id > COALESCE((
+        SELECT visible_after_message_id FROM sessions WHERE id = m.session_id
+      ), 0)`,
+    );
+    const rows = await db.getAllAsync<MessageRow>(
+      `${orderedMessagesCte}, loaded_window AS (
+        SELECT MIN(id) AS start_id FROM ordered_messages
+        WHERE id IN (SELECT value FROM json_each(?))
+      )
+      SELECT * FROM ordered_messages
+      WHERE (SELECT start_id FROM loaded_window) IS NULL OR id >= (SELECT start_id FROM loaded_window)
+      ORDER BY ${timelineProjectionOrderBy('DESC')}
+      LIMIT CASE WHEN (SELECT start_id FROM loaded_window) IS NULL THEN 20 ELSE -1 END`,
+      [sessionId, JSON.stringify(loadedMessageIds)],
+    );
+    return rows.reverse().map(row => this.mapRowToEntity(row));
   }
 
   async getNewerMessages(sessionId: string, afterId: number): Promise<ChatMessage[]> {
@@ -407,7 +431,7 @@ export class MessageRepository implements IMessageRepository {
       priority: 'interactive',
     });
     const rows = await db.getAllAsync<MessageRow>(
-      `SELECT * FROM messages
+      `SELECT * FROM chat_visible_messages
        WHERE session_id = ?
          AND is_me = 1
          AND json_extract(metadata_json, '$.type') IS NOT 'callStatus'
@@ -461,7 +485,7 @@ export class MessageRepository implements IMessageRepository {
       condition = 'id = ?';
     }
     const rows = await transaction.getAllAsync<MessageRow>(
-      `SELECT * FROM messages WHERE session_id = ? AND ${condition}
+      `SELECT * FROM chat_visible_messages WHERE session_id = ? AND ${condition}
        AND COALESCE(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.type') END, '')
          IN ('', 'toolStatus', 'agentActivity') ORDER BY id`,
       [sessionId, identity],
@@ -524,7 +548,7 @@ export class MessageRepository implements IMessageRepository {
     const db = executor ?? databaseCoordinator.openTaskExecutor({ name: 'chat.getMessagesByLogicalMessageId', feature: 'chat', priority: 'interactive' });
     // 联删判断属于删除事务；SQL 失败必须使整笔删除回滚，不能伪装成没有关联消息。
     const rows = await db.getAllAsync<MessageRow>(
-      `SELECT * FROM messages WHERE session_id = ? AND logical_message_id = ? ORDER BY segment_index ASC, id ASC`,
+      `SELECT * FROM chat_visible_messages WHERE session_id = ? AND logical_message_id = ? ORDER BY segment_index ASC, id ASC`,
       [sessionId, logicalMessageId],
     );
     return rows.map((row) => this.mapRowToEntity(row));
@@ -541,7 +565,7 @@ export class MessageRepository implements IMessageRepository {
   ): Promise<number | null> {
     const db = databaseCoordinator.openTaskExecutor({ name: 'chat.findSentAssistantMessageIdByRelatedEntity', feature: 'chat', priority: 'runtime' });
     const row = await db.getFirstAsync<{ id: number }>(
-      `SELECT id FROM messages
+      `SELECT id FROM chat_visible_messages
        WHERE sender_type = 'assistant'
          AND status = 'sent'
          AND metadata_json LIKE ?
@@ -662,7 +686,7 @@ export class MessageRepository implements IMessageRepository {
         metadata_json: string;
       }>(
         `SELECT id, session_id, metadata_json
-         FROM messages
+         FROM chat_visible_messages
          WHERE ${where.join(' AND ')}
          ORDER BY id ASC
          LIMIT ?`,
@@ -686,7 +710,7 @@ export class MessageRepository implements IMessageRepository {
     try {
       const db = databaseCoordinator.openTaskExecutor({ name: 'chat.getMessageCount', feature: 'chat', priority: 'interactive' });
       const result = await db.getFirstAsync<{ count?: number }>(
-        'SELECT COUNT(*) as count FROM messages WHERE session_id = ?',
+        'SELECT COUNT(*) as count FROM chat_visible_messages WHERE session_id = ?',
         [sessionId]
       );
       return result?.count || 0;
@@ -701,7 +725,7 @@ export class MessageRepository implements IMessageRepository {
       const db = databaseCoordinator.openTaskExecutor({ name: 'chat.getUnreadCountByAI', feature: 'chat', priority: 'interactive' });
       const result = await db.getFirstAsync<{ count?: number }>(
         `SELECT COUNT(*) as count
-         FROM messages m
+         FROM chat_visible_messages m
          INNER JOIN sessions s ON s.id = m.session_id
          WHERE s.ai_assistant_id = ?
            AND m.is_me = 0
@@ -724,7 +748,7 @@ export class MessageRepository implements IMessageRepository {
       // 群消息的 session_id 即 groupId，不经 sessions 表 join。
       const result = await db.getFirstAsync<{ count?: number }>(
         `SELECT COUNT(*) as count
-         FROM messages
+         FROM chat_visible_messages
          WHERE session_id = ?
            AND is_me = 0
            AND sender_type = 'assistant'
@@ -1420,6 +1444,9 @@ export class MessageRepository implements IMessageRepository {
   }
 
   private mapRowToEntity(row: MessageRow): ChatMessage {
+    if (row.turn_presentation_state === 'interrupted') {
+      row = { ...row, metadata_json: JSON.stringify({ ...(row.metadata_json ? JSON.parse(row.metadata_json) : {}), interrupted: true }) };
+    }
     return {
       id: row.id,
       sessionId: row.session_id,

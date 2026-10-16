@@ -2,7 +2,7 @@
 import { getAssistantDisplayName } from '@features/assistants';
 import { showAppDialog } from '@shared/ui';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, ActivityIndicator, Text, TouchableOpacity, ToastAndroid } from 'react-native';
+import { View, ActivityIndicator, Animated, Text, TouchableOpacity, ToastAndroid } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ChatHeader from '../components/ChatHeader';
@@ -21,6 +21,7 @@ import { canEditChatMessage } from '../../../messages/domain/ChatMessageEditing'
 import { copyTextToClipboard } from '@platform/device';
 import ChatBackground from '../components/ChatBackground';
 import { useChatDetail } from './useChatDetail';
+import { useChatTurnExecutionStatus } from './useChatTurnExecutionStatus';
 import { useChatRegeneration } from './useChatRegeneration';
 import { useAttachmentDraft } from './useAttachmentDraft';
 import { translateMessageText } from '@features/integrations';
@@ -231,6 +232,7 @@ export default function ChatDetailModule({
     retrySend,
   } = useChatDetail(sessionId, aiAssistant, onCallCreated, isActive);
   const regeneration = useChatRegeneration(sessionId, refresh);
+  const executionStatus = useChatTurnExecutionStatus(sessionId ?? null);
 
   const handleSelectionDeleted = useCallback((ids: readonly number[]) => {
     const deleted = new Set(ids);
@@ -271,13 +273,15 @@ export default function ChatDetailModule({
   const handleSend = useCallback(async () => {
     if (inputText.trim().length === 0 && readyAttachments.length === 0) return;
 
-    const wasQueued = await withAttachmentSubmission((attachments) => sendMessage(inputText.trim(), replyTo, attachments), (queued) => queued);
-    if (!wasQueued) {
-      return;
-    }
-
-    setInputText('');
-    setReplyTo(null);
+    await withAttachmentSubmission(
+      (attachments) => sendMessage(inputText.trim(), replyTo, attachments, {
+        onQueued: () => {
+          setInputText('');
+          setReplyTo(null);
+        },
+      }),
+      (queued) => queued,
+    );
   }, [inputText, replyTo, readyAttachments, sendMessage, withAttachmentSubmission]);
 
   const handleStickerPress = useCallback(async (sticker: StickerMessageSnapshot) => {
@@ -476,7 +480,7 @@ export default function ChatDetailModule({
           ) : (
             <ChatHeader
               aiName={headerTitle}
-              isTyping={isTyping || regeneration.sourceRunId !== null}
+              statusText={executionStatus ?? (regeneration.sourceRunId !== null ? '等待重写执行宿主' : null)}
               onOpenMenu={onOpenMenu}
               paddingTop={headerPaddingTop}
               onGoBack={onGoBack}
@@ -515,7 +519,7 @@ export default function ChatDetailModule({
             onDismissInputSurface={dismissInputSurface}
           />
 
-          <View style={{ marginBottom: keyboardOffset }}>
+          <Animated.View style={{ marginBottom: keyboardOffset }}>
             {selection.selecting ? (
               <ChatSelectionFooter count={selection.count} isDeleting={selection.isDeleting} paddingBottom={Math.max(insets.bottom, 8)} onDelete={selection.requestDelete} onShare={() => { void share.open(selection.anchorMessageIds); }} />
             ) : (
@@ -559,7 +563,7 @@ export default function ChatDetailModule({
                 surfaceHeight={surfaceHeight}
               />
             )}
-          </View>
+          </Animated.View>
 
         </View>
 

@@ -79,6 +79,7 @@ function screen() {
     'react-native': { Alert: { alert: (title, _message, buttons) => alerts.push({ title, buttons }) } },
     'expo-image-picker': imagePicker,
     '@features/calls': {
+      subscribeCallBackgroundChanged: () => () => {},
       loadCallBackgroundUri: async (id) => { backgroundReads.push(id); return backgrounds.get(id) ?? null; },
       setCustomCallBackground: async (input) => { backgroundWrites.push(input); backgrounds.set(input.assistantId, input.sourceUri); return input.sourceUri; },
       clearCallBackground: async (id) => { backgroundWrites.push({ clearedAssistantId: id }); backgrounds.delete(id); },

@@ -57,6 +57,8 @@ Agent run 只自动注入轻量社交摘要，可按 Moment 聚合点赞；summa
 
 AI 读取详情只传 momentId，可信 viewer 来自 run；完整结果包含作者/时间、正文、地点、持久图片语义、点赞、全部评论与 reply 关系，内部 deliveryId 不要求模型提供。
 
+已读不等于已回复。详情与 Inbox 工具结果明确说明：事件离开未读列表后，已知 momentId 可再次读取；丢失定位时，通过 searchMoments 的作者、正文 keyword 或评论 commentKeyword 找回，再从完整详情取得 commentId 回复。目标 ID 失效时，工具返回重新查询的纠正路径，不自动重试或猜测 ID。
+
 ```text
 captureMomentDetailForAgent：同一 SQLite snapshot 读取 ACL、cutoff、评论、点赞
 → 完整解析展示身份并成功构造结果

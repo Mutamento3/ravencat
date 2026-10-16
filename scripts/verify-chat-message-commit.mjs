@@ -248,6 +248,7 @@ assert.equal(orderingFactPatch.messages[0].turnItemIndex, 1);
   const unsubscribe = subscribeConversationTimeline({
     sessionId: 's1',
     getAfterId: () => 60,
+    getLoadedMessageIds: () => [41, 60],
     onReplace: () => {
       throw new Error('messagesUpdated 不得替换已加载历史');
     },
@@ -258,6 +259,27 @@ assert.equal(orderingFactPatch.messages[0].turnItemIndex, 1);
 
   await globalThis.__TEST_TIMELINE_EVENT_BUS__.emit('messagesUpdated', { sessionId: 's1' });
   assert.deepEqual(appended.map((message) => message.id), [61]);
+  unsubscribe();
+}
+
+// 发送／回复收尾要求替换事实时，读取范围仍由当前已加载窗口提供。
+{
+  const ids = Array.from({ length: 50 }, (_, index) => index + 11);
+  let replacement;
+  const repository = {
+    getReloadWindowMessages: async (sessionId, loadedIds) => {
+      assert.equal(sessionId, 'reload-window');
+      assert.deepEqual(loadedIds, ids);
+      return [...ids, 61].map(id => ({ ...baseTimelineMessage, id, sessionId }));
+    },
+    getMessages: async () => { throw new Error('重载不得把已加载窗口裁成首屏'); },
+  };
+  const unsubscribe = subscribeConversationTimeline({
+    sessionId: 'reload-window', getAfterId: () => 60, getLoadedMessageIds: () => ids,
+    onReplace: messages => { replacement = messages; },
+  }, { repository });
+  await globalThis.__TEST_TIMELINE_EVENT_BUS__.emit('messagesReloadRequested', { sessionId: 'reload-window' });
+  assert.deepEqual(replacement.map(message => message.id), [...ids, 61]);
   unsubscribe();
 }
 
@@ -332,6 +354,13 @@ for (const sessionId of ['direct-delete', 'group-delete']) {
   assert.equal(pageCursors.at(-1), cursor, '删除最早可见消息也必须保留原分页边界');
   while (history.hasMore) await act(async () => { await history.loadMore(); });
   assert.deepEqual(history.messages.map((message) => message.id), rows.map((message) => message.id), '继续上滑应完整加载所有未删除消息');
+  repository.getReloadWindowMessages = async (_sessionId, ids) => {
+    assert.deepEqual(ids, history.messages.map(message => message.id), '刷新范围读取当前窗口，不捕获订阅建立时的旧数组');
+    return rows.map(message => ({ ...message }));
+  };
+  await act(async () => { await eventBus.emit('messagesReloadRequested', { sessionId }); });
+  assert.deepEqual(history.messages.map(message => message.id), rows.map(message => message.id),
+    '单聊和群聊收尾重载都保留用户已加载的多页窗口');
   assert.equal(openCount, 1, '删除不能触发首屏重载');
   await act(async () => { renderer.unmount(); });
 }
@@ -851,11 +880,12 @@ export function clearAgentTransientTimelineRun() {
 `);
   const canonicalCommitRuntimeStubUrl = transpileToModuleUrl(`
 export function getChatMessageRuntimeDependencies() {
-  throw new Error('本测试必须显式注入 repository 与 turns');
+  return { turnPresentation: { freeze: async () => async () => {}, interrupt: async () => { throw new Error('展示刷新失败'); } } };
 }
 `);
   const commitCanonicalModuleUrl = transpileToModuleUrl(
     read('src/features/chat/messages/application/CommitCanonicalUserMessage.ts')
+      .replace("from '../events/ChatEvents'", `from '${transpileToModuleUrl(read('src/features/chat/messages/events/ChatEvents.ts'))}'`)
       .replace(
         /from\s*['"]@platform\/persistence['"]/,
         `from '${canonicalCommitPersistenceStubUrl}'`,

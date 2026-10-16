@@ -137,6 +137,8 @@ Android 自适应图标在 development 使用透明的 `assets/adaptive-icon.png
 
 主版本只修改根目录 `package.json` 的 `version`。Expo 配置和 Android 构建读取同一来源；构建编号由 `scripts/app-version.cjs` 按构建时刻生成。`plugins/withAppVersion.js` 负责将这项约定接入生成后的 Android 工程。
 
+开发版加载 Metro 新代码后，已安装 APK 的版本名和构建编号保持不变。「我」页分别展示开发源码版本与安装包版本；源码版本不随每次提交自动递增。开发环境不检查 GitHub 公开 APK 更新，原生改动需要重新安装开发包。
+
 ## 修改后验证
 
 只执行与改动有关的检查，不需要为文档或配置修改构建完整 APK。

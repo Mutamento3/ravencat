@@ -78,10 +78,10 @@ for (const transport of ['complete', 'stream']) {
     turn([call('remember_memory', { query: '新记忆' })]), turn([], '完成'),
   ], transport);
   assert.equal(directRun.result.terminalCode, 'COMPLETED');
-  assert.deepEqual(new Set(directRun.requests[0].names), new Set(['open_tool_package', 'read_memory']));
+  assert.deepEqual(new Set(directRun.requests[0].names), new Set(['open_tool_package', 'close_tool_package', 'read_memory']));
   assert.equal(directRun.requests[0].tools.find(({ name }) => name === 'read_memory').description, '简介 read_memory', '特批工具完整说明由 schema 提供');
-  assert.deepEqual(new Set(directRun.requests[1].names), new Set(['open_tool_package', 'read_memory', 'remember_memory']));
-  assert.equal(directRun.requests[1].names.length, 3, '拆包不得重复暴露特批工具');
+  assert.deepEqual(new Set(directRun.requests[1].names), new Set(['open_tool_package', 'close_tool_package', 'read_memory', 'remember_memory']));
+  assert.equal(directRun.requests[1].names.length, 4, '拆包不得重复暴露特批工具');
   assert.equal(directFixture.exposure.instructions().catalog, directCatalog);
   assert.deepEqual(directFixture.calls.map(({ name }) => name), ['read_memory', 'remember_memory']);
   const fixture = createFixture();
@@ -98,29 +98,62 @@ for (const transport of ['complete', 'stream']) {
     turn([], '正式回复'),
   ], transport);
   assert.equal(result.terminalCode, 'COMPLETED');
-  assert.deepEqual(requests[0].names, ['open_tool_package']);
-  assert.deepEqual(new Set(requests[1].names), new Set(['open_tool_package', 'read_memory', 'netease_search_songs']));
+  assert.deepEqual(requests[0].names, ['open_tool_package', 'close_tool_package']);
+  assert.deepEqual(new Set(requests[1].names), new Set(['open_tool_package', 'close_tool_package', 'read_memory', 'netease_search_songs']));
   assert.deepEqual(requests[1].tools.find(({ name }) => name === 'read_memory').inputSchema.required, ['query']);
   assert.equal(requests[1].tools.find(({ name }) => name === 'read_memory').description, '简介 read_memory', '拆包后完整说明仍随 schema 提供');
   assert.equal(fixture.calls.length, 2);
-  assert.deepEqual(result.steps[0].toolCalls.map(({ outcome }) => outcome.metadata.openedToolPackageId), ['memory', 'neteaseMusic']);
+  assert.deepEqual(result.steps[0].toolCalls.map(({ outcome }) => outcome.metadata.toolPackageChange), [
+    { packageId: 'memory', action: 'open' }, { packageId: 'neteaseMusic', action: 'open' },
+  ]);
   const openedInstructions = fixture.exposure.instructions();
   assert.equal(openedInstructions.catalog, initialInstructions.catalog, '拆包不得改变包级用途目录及工具名');
-  assert.notEqual(openedInstructions.state, initialInstructions.state, '展开状态单独更新');
-  assert.match(openedInstructions.state, /"id":"memory","state":"open"/u);
+  assert.deepEqual(openedInstructions, initialInstructions, '拆包状态由 schema 与 observation 表达，固定提示词保持不变');
   assert.equal(createFixture(undefined, ['memory', 'neteaseMusic']).exposure.instructions().catalog,
     initialInstructions.catalog, '后续回合读取展开事实不得改变固定目录');
+
+  // 主动收起与重新拆包只影响下一请求；固定目录及控制工具 schema 不随状态变化。
+  const managed = createFixture(undefined, ['memory']);
+  const managedCatalog = managed.exposure.instructions().catalog;
+  const switched = await run(managed, [
+    turn([call('close_tool_package', { package_id: 'memory' }), call('open_tool_package', { package_id: 'neteaseMusic' })]),
+    turn([call('netease_search_songs', { query: '继续听歌' })]),
+    turn([call('close_tool_package', { package_id: 'neteaseMusic' }), call('open_tool_package', { package_id: 'memory' })]),
+    turn([call('read_memory', { query: '重新回忆' })]), turn([], '完成'),
+  ], transport);
+  assert.equal(switched.result.terminalCode, 'COMPLETED');
+  assert.ok(switched.requests[0].names.includes('read_memory'));
+  assert.ok(!switched.requests[1].names.includes('read_memory'));
+  assert.ok(switched.requests[1].names.includes('netease_search_songs'));
+  assert.ok(switched.requests[3].names.includes('read_memory'));
+  assert.ok(!switched.requests[3].names.includes('netease_search_songs'));
+  assert.equal(managed.exposure.instructions().catalog, managedCatalog);
+  assert.deepEqual(switched.requests[0].tools.find(({ name }) => name === 'close_tool_package'),
+    switched.requests[3].tools.find(({ name }) => name === 'close_tool_package'));
+  assert.deepEqual(switched.result.steps.flatMap((step) => step.toolCalls.flatMap(({ outcome }) => (
+    outcome.metadata?.toolPackageChange ? [outcome.metadata.toolPackageChange] : []
+  ))), [
+    { packageId: 'memory', action: 'close' }, { packageId: 'neteaseMusic', action: 'open' },
+    { packageId: 'neteaseMusic', action: 'close' }, { packageId: 'memory', action: 'open' },
+  ]);
+
+  const starred = createFixture(['read_memory', 'remember_memory'], ['memory'], ['read_memory']);
+  const starredRun = await run(starred, [turn([call('close_tool_package', { package_id: 'memory' })]),
+    turn([call('read_memory', { query: '常驻工具' })]), turn([], '完成')], transport);
+  assert.deepEqual(new Set(starredRun.requests[1].names), new Set(['open_tool_package', 'close_tool_package', 'read_memory']));
+  assert.equal(starredRun.result.terminalCode, 'COMPLETED', '收起包不能撤下用户特批工具');
+  assert.equal((await starred.registry.get('close_tool_package').execute({ package_id: 'memory' })).metadata, undefined,
+    '重复关闭不产生额外状态变化');
 }
 // 全包特批时没有空拆包入口；关闭调用权限、未知工具与工具总关闭都不能被星标赋权。
 {
   const fixture = createFixture(['read_memory'], [], ['read_memory', 'open_app', 'retired_tool']);
   assert.deepEqual(fixture.exposure.metaToolNames, []);
   assert.deepEqual(fixture.exposure.visibleToolNames(), ['read_memory']);
-  assert.equal(fixture.exposure.instructions().state, '');
   assert.doesNotMatch(fixture.exposure.instructions().catalog, /open_app|retired_tool|本次运行的工具包用途目录/u);
   const { result } = await run(fixture, [turn([call('read_memory', { query: '常驻' })]), turn([], '完成')]);
   assert.equal(result.terminalCode, 'COMPLETED');
-  assert.deepEqual(createFixture([], [], ['read_memory']).exposure.instructions(), { catalog: '', state: '' });
+  assert.deepEqual(createFixture([], [], ['read_memory']).exposure.instructions(), { catalog: '' });
   assert.deepEqual(createFixture([], [], ['read_memory']).exposure.visibleToolNames(), []);
   assert.deepEqual(createFixture(['read_memory'], [], []).exposure.visibleToolNames(), [], '取消星标后恢复拆包流程');
 }
@@ -140,8 +173,10 @@ for (const calls of [[call('open_app', { query: '应用' })], [call('open_tool_p
   const executor = new AgentToolExecutor(fixture.registry);
   const rejected = executor.prepare(call('open_tool_package', { package_id: 'memory' }), { allowedToolNames: fixture.allowedToolNames });
   assert.equal(rejected.outcome.code, 'TOOL_INPUT_INVALID');
+  assert.equal(executor.prepare(call('close_tool_package', { package_id: 'memory' }), { allowedToolNames: fixture.allowedToolNames })
+    .outcome.code, 'TOOL_INPUT_INVALID', '关闭操作同样不能访问未授权包');
   const opened = await fixture.registry.get('open_tool_package').execute({ package_id: 'deviceControl' });
-  assert.equal(opened.metadata, undefined, '重复拆已展开的包不续期');
+  assert.equal(opened.metadata, undefined, '重复拆已展开的包不产生额外状态变化');
 }
 // 参数继续由唯一 Runtime 输入边界校验。
 {
@@ -163,6 +198,6 @@ for (const calls of [[call('open_app', { query: '应用' })], [call('open_tool_p
 {
   const fixture = createFixture([]);
   assert.deepEqual(fixture.exposure.metaToolNames, []);
-  assert.deepEqual(fixture.exposure.instructions(), { catalog: '', state: '' });
+  assert.deepEqual(fixture.exposure.instructions(), { catalog: '' });
 }
 console.log('工具包拆封、即时 schema 暴露、多包、权限隔离、两种传输与预算收口验证通过。');

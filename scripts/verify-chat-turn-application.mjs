@@ -221,8 +221,10 @@ const { buildAssistantTurnItems } = await import(assistantTurnCommitModuleUrl);
 
 const singleTransactionTurnCommitSource = read('src/features/chat/reply/application/SingleTransactionTurnCommit.ts');
 const cleanupStubUrl = transpileToModuleUrl(`export async function releaseMediaAssetCandidates() {}
-export function emitChatMessagesReloadRequested() {}`);
+export function emitChatMessagesReloadRequested() {}
+export function emitChatTurnExecutionChanged() {}`);
 const stubbedSingleTransactionTurnCommitSource = singleTransactionTurnCommitSource
+  .replace(/import\s*\{\s*databaseCoordinator\s*\}\s*from '@platform\/persistence';/, coordinatorStub)
   .replace("from '@features/media'", `from '${cleanupStubUrl}'`)
   .replace("from '../../messages/events/ChatEvents'", `from '${cleanupStubUrl}'`)
   .replace("from '../delivery/AssistantMessageArrival'", `from '${arrivalModuleUrl}'`)
@@ -253,6 +255,7 @@ const stubbedCommitCanonicalUserMessageSource = commitCanonicalUserMessageSource
     coordinatorStub,
   )
   .replace(/from\s*['"]\.\/ChatMessageRuntime['"]/, `from '${chatRuntimeDepsModuleUrl}'`)
+  .replace("from '../events/ChatEvents'", `from '${cleanupStubUrl}'`)
   .replace(/from\s*['"]\.\/MessagePersistence['"]/, `from '${messagePersistenceStubUrl}'`)
   .replace(/from\s*['"]\.\/AgentTransientTimeline['"]/, `from '${agentTransientTimelineStubUrl}'`);
 assert.ok(
@@ -422,7 +425,7 @@ async function setupTurnFixture() {
   globalThis.__TEST_TURN_APP_HOLDER__ = coordinator;
   const turns = new ConversationTurnRepository();
   const messages = new MessageRepository();
-  configureChatMessageRuntime({ turns });
+  configureChatMessageRuntime({ turns, turnPresentation: { freeze: async () => async () => {}, interrupt: async () => {} } });
   return { db, turns, messages };
 }
 
@@ -444,7 +447,7 @@ async function setupTurnFixture() {
   assert.equal(committed.supersededRunId, run.runId, 'T1 必须返回被 supersede 的 runId');
   assert.deepEqual(
     globalThis.__TEST_TURN_APP_TRANSIENT_CLEARS__,
-    [{ sessionId: 's1', runId: run.runId }],
+    [],
     'T1 确认 supersede 后必须立即清除旧 run transient，不等待 Runtime abort terminal',
   );
   assert.equal(getRun(db, run.runId).status, 'superseded', '旧 run 必须置 superseded');
@@ -469,7 +472,7 @@ async function setupTurnFixture() {
   assert.equal(second.supersededRunId, null, '无 active run 时 supersededRunId 必须为 null');
   assert.equal(
     globalThis.__TEST_TURN_APP_TRANSIENT_CLEARS__.length,
-    1,
+    0,
     '无 active run 时不得清除其他 transient',
   );
 }
@@ -610,10 +613,11 @@ async function setupTurnFixture() {
   const finalReplies = [];
   let replyCommittedCount = 0;
   const persistence = createSingleTransactionTurnCommit(run, 'ai1');
+  db.prepare('INSERT INTO chat_tool_package_exposure VALUES (?, ?, ?)').run('s1', 'ai1', 'neteaseMusic');
   const result = await persistence.commitAgentTimeline({
     sessionId: 's1',
     response: { success: true, text: '最终回答' },
-    openedToolPackageIds: ['memory', 'neteaseMusic'],
+    toolPackageChanges: [{ packageId: 'memory', action: 'open' }, { packageId: 'neteaseMusic', action: 'close' }],
     repository: messages,
     runtimeContext: { triggerSource: 'chat' },
     policy: { bubbleDeliveryMode: 'multi-bubble' },
@@ -651,7 +655,7 @@ async function setupTurnFixture() {
   });
 
   assert.equal(result.outcome, 'committed');
-  assert.deepEqual(await persistence.readOpenToolPackageIds(), ['memory', 'neteaseMusic'], '提交接缝接管拆包事实并向下一轮提供持久展开状态');
+  assert.deepEqual(await persistence.readOpenToolPackageIds(), ['memory'], '提交接缝同事务保存打开与关闭，并向下一轮提供最终展开状态');
   assert.deepEqual(persistedSegments.map((payload) => payload.text), ['最终回答'], 'segment delivery 只能处理 assistant');
   assert.deepEqual(finalReplies[0].segments.map((segment) => segment.text), ['最终回答'], 'onFinalReply 只能包含 assistant segment');
   assert.equal(replyCommittedCount, 1, 'assistant 存在时 onReplyCommitted 只触发一次');

@@ -26,7 +26,7 @@ export interface TriggerLedgerAIReplyResult {
 
 export interface WalletChatReplyRequest {
   aiProfile: AIProfile;
-  prompt: string;
+  triggerData: string;
   newRecords: WalletRecord[];
 }
 
@@ -66,8 +66,8 @@ export async function triggerLedgerAIReply(
     return { success: false, payload: null, error: '记账 AI 当前已被拉黑，已跳过自动回复' };
   }
 
-  const prompt = await buildLedgerAIPrompt(newRecords, deps.ledgerRepository);
-  const chatReply = await deps.chatReplyGateway.generateReply({ aiProfile, prompt, newRecords });
+  const triggerData = await buildLedgerTriggerData(newRecords, deps.ledgerRepository);
+  const chatReply = await deps.chatReplyGateway.generateReply({ aiProfile, triggerData, newRecords });
 
   if (chatReply.error || !chatReply.sessionId) {
     return {
@@ -100,7 +100,7 @@ export async function triggerLedgerAIReply(
   };
 }
 
-async function buildLedgerAIPrompt(
+async function buildLedgerTriggerData(
   newRecords: WalletRecord[],
   ledgerRepository: ILedgerRepository
 ): Promise<string> {
@@ -122,10 +122,8 @@ async function buildLedgerAIPrompt(
   const batchExpense = sumAmount(newRecords, 'expense');
   const batchIncome = sumAmount(newRecords, 'income');
 
+  // Wallet 只提供账目资料；交互位置、触发来源与回复要求由 Host 统一装配。
   const lines = [
-    '你正在接收一条来自“羽库”记账应用的自动触发消息。',
-    '这不是用户在聊天框里主动提问，而是用户刚刚连续新增了若干条记账记录。',
-    '',
     '【本次新增记录｜最高优先级】',
     `记录日期：${targetDate || '未知'}`,
     `新增笔数：${newRecords.length}`,
@@ -137,13 +135,6 @@ async function buildLedgerAIPrompt(
     earlierRecords.length > 0
       ? `${getRecordsSummary(earlierRecords)}\n${formatCompactRecords(earlierRecords)}`
       : '今天更早的记录暂无，或无需参考。',
-    '',
-    '【回复要求】',
-    '1. 主要围绕“本次新增记录”回应，今日较早记录只能作为低权重背景。',
-    '2. 保持你自己的人设和语气，自然、口语化、像对用户说话。',
-    '3. 回复控制在 1~3 句，不要写成长报告，不要使用项目符号。',
-    '4. 不要假装自己看到了未提供的数据；如果需要更多信息，可以使用账本工具。',
-    '5. 如果用户明显是在连续补记多条账，就把这批记录当成一次整体行为来回应。',
   ];
 
   return lines.join('\n');

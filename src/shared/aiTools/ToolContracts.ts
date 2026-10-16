@@ -7,6 +7,8 @@ export interface ToolExecuteResult {
   /** 结构化失败原因；缺省时 Agent adapter 返回通用 LEGACY_TOOL_EXECUTION_FAILED。 */
   errorCode?: string;
   data?: unknown;
+  /** 已完成读取的视觉观察，沿用 Agent history 附图契约。 */
+  modelImages?: { url: string }[];
   suppressAssistantReply?: boolean;
 }
 
@@ -27,7 +29,6 @@ export interface Tool<TArgs = any, TContext = any> {
   name: string;
   definition: ToolDefinition;
   execute: (args: TArgs, context: TContext) => Promise<ToolExecuteResult>;
-  presentation?: 'visible' | 'hidden';
   promptDescription?: string;
 }
 

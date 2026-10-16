@@ -6,7 +6,8 @@ import type {
   UpsertCallTimelineEntryParams,
   UpsertCallTimelineEntryResult,
 } from '@features/chat';
-import type { ToolContext } from '@shared/aiTools';
+import type { ToolContext, AgentToolExecutionContext } from '@shared/aiTools';
+import type { AgentRuntimeRequest, AgentRunModelGateway, AgentRunResult } from '@platform/agentRuntime';
 import type { CallAIConfig } from '../../domain/CallAIConfig';
 import type { CallSession } from '../../domain/CallSession';
 import type { ICallRepository } from '../../domain/CallRepository';
@@ -65,6 +66,18 @@ export interface CallChatWritePort {
 }
 
 export interface CallRuntimeDependencies {
+  agent: {
+    prepareTools(aiConfig: CallAIConfig): Promise<{
+      allowedToolNames: string[];
+      toolsDescription: string;
+      mcpServices: { name: string; description: string }[];
+      additionalPromptBlocks: PromptPackBlock[];
+    }>;
+    run(request: AgentRuntimeRequest & {
+      modelGateway: AgentRunModelGateway;
+      createLegacyContext(context: AgentToolExecutionContext): ToolContext;
+    }): Promise<AgentRunResult>;
+  };
   chat: CallChatWritePort;
   repositories: {
     calls: ICallRepository;
@@ -81,6 +94,9 @@ export interface CallRuntimeDependencies {
     recentWindowLimit: number;
     runtimeContext: PromptPackRuntimeContext;
     additionalBlocks: PromptPackBlock[];
+    allowedToolNames?: string[];
+    toolsDescription?: string;
+    mcpServices?: { name: string; description: string }[];
   }): Promise<PromptPack>;
   assembleStandalonePromptPack(
     params: AssembleStandalonePromptPackParams
@@ -92,6 +108,7 @@ export interface CallRuntimeDependencies {
     imageUri: string;
     mimeType?: string | null;
     contextText: string;
+    signal?: AbortSignal;
   }): Promise<{
     parts: (
       | { type: 'text'; text: string }

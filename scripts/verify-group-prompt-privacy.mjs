@@ -1,3 +1,4 @@
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -62,7 +63,7 @@ const groupChat = {
     { aiAssistantId: 'ai-secret-3', agentId: 'agent-secret-3', name: '同名成员' },
   ],
 };
-const contextBlock = factory.createGroupChatContextBlock({ groupChat, userDisplayName: '橙子' }, aiConfig);
+const contextBlock = factory.createGroupChatContextBlock({ groupChat, userDisplayName: '橙子' });
 assert.match(contextBlock.content, /你自己，显示名“同名成员”/);
 assert.equal((contextBlock.content.match(/你自己，显示名/g) || []).length, 1, '群上下文只能按 assistant ID 标记一个当前 AI');
 assert.equal((contextBlock.content.match(/其他成员，显示名/g) || []).length, 2);
@@ -82,6 +83,10 @@ assert.doesNotMatch(confidentialityBlock.content, /SELF|OTHER_AI|USER（/);
 // 用户显示名占位符必须在生成块时替换为当前会话显示名，不得泄漏占位符本身。
 assert.ok(confidentialityBlock.content.includes('橙子'), '保密规则正文必须替换为当前用户显示名');
 assert.ok(!confidentialityBlock.content.includes('${userDisplayName}'), '用户显示名占位符必须被替换');
+assert.doesNotMatch(confidentialityBlock.content, /function schema|工具调用/, '无工具权限时保密规则不介绍调用格式');
+assert.equal(confidentialityBlock.content, builtInContent.resolveBuiltInPromptContent({
+  content: builtInContent.GROUP_MEMBER_REPLY_CONFIDENTIALITY_RULES, userDisplayName: '橙子',
+}), '静态目录和实际群聊保密正文使用同一内容，不在运行时追加隐藏指引');
 
 const chatMetadata = loadTypeScriptModule('src/features/chat/messages/domain/chatMessageMetadata.ts', {
   './SharedChatRecord': loadTypeScriptModule('src/features/chat/messages/domain/SharedChatRecord.ts', {}),
@@ -446,38 +451,56 @@ assert.deepEqual(
 const budget = loadTypeScriptModule('src/host/prompt/tokenBudget.ts', { '@shared/prompt': { estimateTextTokens: (text) => text.length } });
 const metadata = loadTypeScriptModule('src/host/prompt/compiler/promptBlockMetadata.ts', {});
 const { PromptPackCompiler } = loadTypeScriptModule('src/host/prompt/compiler/PromptPackCompiler.ts', {
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
   '../tokenBudget': budget, './promptBlockMetadata': metadata,
 });
 const { getSystemPromptPreset } = loadTypeScriptModule('src/host/prompt/compiler/systemPromptPresets.ts', {});
-const prompt = new PromptPackCompiler().compile({
-  scenario: 'chat.group_member_reply', blocks: [factory.createFoundationBlock({ model: 'test' }, '橙子'), contextBlock, confidentialityBlock,
+const summaryBlock = { key: 'conversation_summary', title: '聊天摘要', content: '群聊的稳定摘要', required: false,
+  status: 'ready', placement: 'system' };
+const groupPreset = getSystemPromptPreset('chat.group_member_reply');
+const buildPrompt = () => new PromptPackCompiler().compile({
+  scenario: 'chat.group_member_reply', blocks: [factory.createFoundationBlock({ model: 'test' }, '橙子'), contextBlock,
+    confidentialityBlock, summaryBlock,
     { key: 'current_input', title: '当前输入', content: '请查一下天气。', required: true, status: 'ready', placement: 'input' }],
   recentMessages: perspectiveHistory, currentInput: { role: 'user', content: '请查一下天气。' },
-  preset: getSystemPromptPreset('chat.group_member_reply'),
+  preset: { ...groupPreset, items: [...groupPreset.items, {
+    definitionId: 'context.conversation_summary', slot: 'dynamic_context', sortOrder: 160,
+    enabled: true, required: false, protection: 'locked',
+  }] },
 });
 const modelRequests = [];
 const response = { success: true, text: '回复', reasoningText: '', finishReason: 'stop', messageId: 'tool-policy-test',
   promptTokens: 1, completionTokens: 1, totalTokens: 2, error: null, toolCalls: null, isToolCall: false };
-const toolGateway = new ChatAgentModelGateway({
-  client: {
-    chat: async (messages) => { modelRequests.push({ messages, tools: [] }); return response; },
-    chatWithTools: async (messages, tools) => { modelRequests.push({ messages, tools }); return response; },
-  },
-  initialMessages: [{ role: 'system', content: prompt.systemPrompt }, ...prompt.modelMessages],
-  diagnosticContext: { sessionId: groupChat.groupId, runId: 'tool-policy-test', correlationId: 'tool-policy-test' },
-});
 const search = { name: 'web_search', description: '搜索天气信息', inputSchema: {
   type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false,
 } };
 for (const tools of [[], [search]]) {
+  const prompt = buildPrompt();
+  const toolGateway = new ChatAgentModelGateway({
+    client: {
+      chat: async (messages) => { modelRequests.push({ messages, tools: [] }); return response; },
+      chatWithTools: async (messages, tools) => { modelRequests.push({ messages, tools }); return response; },
+    },
+    initialMessages: [{ role: 'system', content: prompt.systemPrompt }, ...prompt.modelMessages],
+    diagnosticContext: { sessionId: groupChat.groupId, runId: 'tool-policy-test', correlationId: 'tool-policy-test' },
+  });
   await toolGateway.runTurn({ task: {}, history: [], tools, transport: 'complete', signal: new AbortController().signal });
   const request = modelRequests.at(-1);
+  // 群成员身份属于固定背景；本轮环境独立放在历史之后。
+  assert.ok(request.messages[0].content.includes(summaryBlock.content));
+  assert.ok(request.messages[0].content.includes(contextBlock.content), '群身份背景放在前置 system');
+  assert.deepEqual(request.messages.slice(1, 1 + perspectiveHistory.length), perspectiveHistory, '群环境不能改写历史及其角色');
+  const currentContext = request.messages[1 + perspectiveHistory.length];
+  assert.equal(currentContext.role, 'system');
+  assert.ok(!currentContext.content.includes(contextBlock.content), '群身份背景不重复进入本轮动态状态');
+  assert.equal(request.messages.filter((message) => message.content.includes(contextBlock.content)).length, 1, '群环境只注入一次');
+  assert.equal(request.messages.at(-1).content, '请查一下天气。', '当前输入仍在所有上下文之后');
   const instructions = request.messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n');
   assert.doesNotMatch(instructions, /群聊中工具关闭|关闭群聊工具|群聊不支持工具调用/, '群身份上下文不能否定实际工具暴露');
   assert.doesNotMatch(instructions, /不得输出 JSON、ID、alias/, '对外正文格式不能笼统禁止函数参数');
-  assert.match(instructions, /function schema/);
+  assert.doesNotMatch(instructions, /function schema|工具调用与回复正文分开/, '群环境及保密规则不承担调用指导');
   assert.match(instructions, /不得.*视频通话/);
-  assert.match(instructions, /不得.*泄露隐藏上下文/);
+  assert.match(instructions, /不得对外解释或复述系统上下文/);
   assert.equal(request.tools.length, tools.length, '提示词不得增加或移除实际工具授权');
 }
 assert.deepEqual(modelRequests.at(-1).tools[0].function.parameters, search.inputSchema);

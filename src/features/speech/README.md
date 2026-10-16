@@ -24,11 +24,15 @@ TTS 支持 OpenAI、MiniMax、ElevenLabs、OpenRouter 与自定义 OpenAI 兼容
 | OpenAI tts-1 / tts-1-hd | 正文与 speed，无 instructions 或句内控制标记。 |
 | MiniMax speech-2.8-hd / turbo | emotion、speed；句内 `<#0.5#>` 停顿与官方 `(laughs)`、`(breath)`、`(sighs)` 等声音标记。 |
 | MiniMax speech-2.6、speech-02 的 hd / turbo | emotion、speed 与 `<#0.5#>` 停顿，不开放 2.8 的声音标记；仅 2.6 支持 fluent / whisper 情绪值。 |
-| Eleven v3 / v4 / v4 turbo | 受控的方括号声音、表达与停顿标签，如 `[whispers]`、`[laughs]`、`[short pause]`、`[long pause]`；不使用 SSML break。标签与音色匹配会影响实际效果，不是精确计时。 |
+| Eleven v3 / v4 / v4 turbo | 支持符合语法的任意自然语言 Audio Tags，由 AI 按情境自主决定是否使用及标签内容；`[whispers]`、`[laughs]`、`[short pause]` 等仅为示例，不是白名单。不使用 SSML break。标签与音色匹配会影响实际效果，不是精确计时。 |
 | Eleven multilingual v2 / flash v2.5 / turbo v2.5 | 自然正文、speed 与 `<break time="0.5s" />`，停顿大于 0 且不超过 3 秒；不开放 v3/v4 的方括号标签。 |
 | OpenRouter Voxtral、自定义 OpenAI 兼容服务、动态目录中的未知模型 | 不因兼容接口或厂商名称推断句内控制能力；AI 只获得自然正文和标点规则。自定义服务的用户连接参数仍由其配置决定。 |
 
 MiniMax 停顿范围为 0.01～99.99 秒，最多两位小数，必须位于可朗读正文之间且不能连续使用。音标、发音字典、多说话人和背景音不在当前文本契约中。
+
+Eleven Audio Tags 接受配对的半角 `[标签]`、全角 `［标签］` 和方头 `【标签】`，统一为半角括号，去除标签首尾空格并将内部连续空格统一成一个半角空格；正文与中文标点不参与规范化。每个标签去除首尾空格后为 1～100 个 Unicode 字符，至少包含文字或数字；允许文字、组合音标、数字、空格，以及引号、逗号、句号、问号、感叹号、冒号、分号、顿号、省略号、连字符和破折号。不允许嵌套、括号不匹配、未闭合、换行、控制字符或其他符号。不支持 Audio Tags 的模型仍拒绝这些标签。`synthesisText` 进入 TTS，去标签的 `transcript` 进入消息、字幕与通话事实。
+
+纯声音标签语音消息暂不开放：去除标签后为空仍报错，不调用 TTS。是否允许没有可朗读正文的声音消息属于独立产品决定，需要另行确定转写、预览和上下文应表达什么，不能随标签语法放宽一并改变。
 
 实时通话每轮固定角色 TTS 模型，提示词、流式分句、验证与播放共用该快照。分句器等待句末的文本后继或流结束确认边界，完整保留跨 delta 的标记；句间显式停顿把两侧正文合并为一个合成单元。`aiSpeechText`、TTS 播放事件和字幕只使用转写，控制标记只进入 TTS 输入；播放队列信任已经验证的句子。来电邀请的持久开场白和去电接听决策仍是纯正文，可使用自然语气词和标点；接通后的实时回复才声明厂商句内能力。
 

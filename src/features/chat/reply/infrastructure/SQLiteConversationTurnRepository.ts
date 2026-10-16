@@ -16,7 +16,7 @@ import {
   type DatabaseTransactionExecutor,
   type DatabaseReadExecutor,
 } from '@platform/persistence';
-import { cancelRegenerationInTransaction } from '../../messages/infrastructure/ChatMessageMutationSql';
+import { cancelRegenerationInTransaction, interruptTurnPresentationsInTransaction } from '../../messages/infrastructure/ChatMessageMutationSql';
 import { messageRepository } from '../../messages/infrastructure/SQLiteMessageRepository';
 import {
   ConversationTurnInvariantError,
@@ -29,6 +29,7 @@ import {
   type ConversationTurnCommitResult,
   type ConversationTurnUnrepliedSession,
   type ChatRegenerationState,
+  type ConversationHostStartAttempt,
 } from '../domain/ConversationTurn';
 import { buildSessionPreviewTextFromMessage } from '../../messages/domain';
 import type { IConversationTurnRepository } from '../domain/ConversationTurnRepository';
@@ -76,6 +77,32 @@ function mapRowToRun(row: TurnRunRow): ConversationTurnRun {
 }
 
 export class ConversationTurnRepository implements IConversationTurnRepository {
+  async beginExecutionHostRequests(sessionIds: readonly string[]): Promise<ConversationHostStartAttempt[]> {
+    return databaseCoordinator.transaction({ name: 'chat.host-start-requested', feature: 'chat', priority: 'interactive' }, async tx => {
+      const attempts: ConversationHostStartAttempt[] = [];
+      for (const sessionId of sessionIds) {
+        await this.ensureTurnStateRowInTransaction(tx, sessionId);
+        await tx.runAsync(`UPDATE conversation_turn_state SET host_request_revision = host_request_revision + 1,
+          host_request_input_id = (SELECT MAX(id) FROM messages WHERE session_id = ? AND is_me = 1
+            AND json_extract(metadata_json, '$.type') IS NOT 'callStatus'),
+          host_request_status = 'requested', host_request_at = ? WHERE session_id = ?`,
+        [sessionId, new Date().toISOString(), sessionId]);
+        const row = await tx.getFirstAsync<{ host_request_revision: number; host_request_input_id: number | null }>(
+          'SELECT host_request_revision, host_request_input_id FROM conversation_turn_state WHERE session_id = ?', [sessionId]);
+        attempts.push({ sessionId, requestRevision: row!.host_request_revision, inputHighWatermark: row!.host_request_input_id });
+      }
+      return attempts;
+    });
+  }
+
+  async finishExecutionHostRequests(attempts: readonly ConversationHostStartAttempt[], accepted: boolean): Promise<void> {
+    await databaseCoordinator.transaction({ name: 'chat.host-start-result', feature: 'chat', priority: 'interactive' }, async tx => {
+      for (const attempt of attempts) await tx.runAsync(`UPDATE conversation_turn_state SET host_request_status = ?, host_request_at = ?
+        WHERE session_id = ? AND host_request_revision = ? AND host_request_input_id IS ?`,
+      [accepted ? 'accepted' : 'rejected', new Date().toISOString(), attempt.sessionId, attempt.requestRevision, attempt.inputHighWatermark]);
+    });
+  }
+
   /** 工具自身的业务提交也必须服从新用户消息已经撤销的回合资格。 */
   async isRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, runId: string): Promise<boolean> {
     const row = await transaction.getFirstAsync<{ current: number }>(`SELECT 1 AS current
@@ -190,6 +217,7 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
     transaction: DatabaseTransactionExecutor,
     sessionId: string,
   ): Promise<string | null> {
+    await interruptTurnPresentationsInTransaction(transaction, sessionId, 'new_input');
     await transaction.runAsync('DELETE FROM chat_regeneration_requests WHERE session_id = ?', [sessionId]);
     const state = await transaction.getFirstAsync<Pick<TurnStateRow, 'active_run_id'>>(
       `SELECT active_run_id FROM conversation_turn_state WHERE session_id = ?`,
@@ -283,6 +311,20 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
         await cancelRegenerationInTransaction(transaction, sessionId);
         return null;
       }
+      const toolStarted = await transaction.getFirstAsync(`SELECT 1 FROM chat_turn_display_items
+        WHERE run_id = ? AND json_extract(snapshot_json, '$.toolExecutionStarted') = 1 LIMIT 1`, [state.active_run_id]);
+      if (toolStarted) {
+        const failed = await transaction.runAsync(`UPDATE conversation_turn_runs SET status = 'failed',
+          terminal_reason = 'orphan_after_tool_start', terminal_at = ? WHERE run_id = ? AND status = 'active'`, [now, state.active_run_id]);
+        const released = await transaction.runAsync(`UPDATE conversation_turn_state SET active_run_id = NULL, active_run_kind = NULL,
+          revision = revision + 1, updated_at = ? WHERE session_id = ? AND active_run_id = ? AND revision = ?`,
+        [now, sessionId, state.active_run_id, state.revision]);
+        if (failed.changes !== 1 || released.changes !== 1) {
+          throw new ConversationTurnInvariantError(`工具孤儿收口失去 owner：${state.active_run_id}`);
+        }
+        await interruptTurnPresentationsInTransaction(transaction, sessionId, 'orphan_after_tool_start', state.active_run_id);
+        return null;
+      }
     }
     const runKind: ConversationTurnKind = source ? 'regenerate' : kind;
     // 高水位只统计 canonical 用户消息；通话状态虽标记为用户方向，但不属于 user_reply 输入。
@@ -307,6 +349,7 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
     // idx_turn_runs_single_active 保证每会话最多一个 active run：
     // 必须先 supersede 孤儿再插新 run，否则 INSERT 直接违反部分唯一索引。
     if (mode === 'take_over_orphan' && state.active_run_id !== null) {
+      await interruptTurnPresentationsInTransaction(transaction, sessionId, 'process_restarted', state.active_run_id);
       const superseded = await transaction.runAsync(
         `UPDATE conversation_turn_runs
          SET status = 'superseded', terminal_at = ?
@@ -387,6 +430,7 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
     run: ConversationTurnRun,
     items: ConversationTurnCommitItem[],
     toolPackages: ConversationToolPackageCommit,
+    execution?: { deadlineAt: number; signal?: AbortSignal },
   ): Promise<ConversationTurnCommitResult> {
     if (items.length === 0) {
       throw new ConversationTurnInvariantError(`commitTurn：run ${run.runId} 不允许空条目列表`);
@@ -416,6 +460,9 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
         if (fence.changes === 0) {
           return { outcome: 'fence_failed' };
         }
+        // 截止时间是宿主给本次执行的权限边界；抛错回滚上面的 CAS，再由 T4 记失败。
+        if (execution && performance.now() >= execution.deadlineAt) throw new Error('execution_host_timeout');
+        if (execution?.signal?.aborted) throw new Error('execution_host_stopped');
 
         let mediaAssetCandidates: string[] = [];
         if (run.regenerationSourceRunId) {
@@ -458,23 +505,21 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
         });
 
         if (messages.some((message) => message.senderType === 'assistant')) {
-          // 只有成功提交正式回复才推进轮数；同事务里的 fence 失败和回滚不会消耗有效期。
+          // 开关与正式回复共用 T3 fence；按执行顺序应用，同包的最后一次决定生效。
           const scope = [run.sessionId, toolPackages.assistantId];
-          await transaction.runAsync(
-            `DELETE FROM chat_tool_package_exposure
-             WHERE session_id = ? AND assistant_id = ? AND remaining_turns = 1`, scope,
-          );
-          await transaction.runAsync(
-            `UPDATE chat_tool_package_exposure SET remaining_turns = remaining_turns - 1
-             WHERE session_id = ? AND assistant_id = ?`, scope,
-          );
-          for (const packageId of new Set(toolPackages.openedPackageIds)) {
-            await transaction.runAsync(
-              `INSERT INTO chat_tool_package_exposure (session_id, assistant_id, package_id, remaining_turns)
-               VALUES (?, ?, ?, 3)
-               ON CONFLICT(session_id, assistant_id, package_id) DO UPDATE SET remaining_turns = 3`,
-              [...scope, packageId],
-            );
+          for (const { packageId, action } of toolPackages.changes) {
+            if (action === 'open') {
+              await transaction.runAsync(
+                `INSERT INTO chat_tool_package_exposure (session_id, assistant_id, package_id)
+                 VALUES (?, ?, ?) ON CONFLICT(session_id, assistant_id, package_id) DO NOTHING`,
+                [...scope, packageId],
+              );
+            } else {
+              await transaction.runAsync(
+                `DELETE FROM chat_tool_package_exposure WHERE session_id = ? AND assistant_id = ? AND package_id = ?`,
+                [...scope, packageId],
+              );
+            }
           }
         }
 
@@ -484,6 +529,32 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
            WHERE run_id = ? AND status = 'active'`,
           [now, run.runId],
         );
+        const presentation = await transaction.getFirstAsync(`SELECT 1 FROM chat_turn_presentations WHERE run_id = ?`, [run.runId]);
+        if (presentation) await transaction.runAsync(`UPDATE chat_turn_presentations SET phase = 'delivering', phase_at = ?, updated_at = ?
+          WHERE run_id = ? AND state = 'open'`, [now, now, run.runId]);
+        if (presentation) for (const message of inserted) {
+          const metadata = message.metadataJson ? JSON.parse(message.metadataJson) : {};
+          const snapshot = {
+            runId: run.runId, sequence: metadata.timelineSequence ?? message.turnItemIndex,
+            stepIndex: metadata.stepIndex ?? 1,
+            kind: message.senderType === 'reasoning' ? 'reasoning' : message.senderType === 'assistant' ? 'assistant' : 'tool',
+            status: message.status === 'streaming' ? 'streaming' : 'sent', text: message.text,
+            metadataJson: message.metadataJson, segmentIndex: message.segmentIndex,
+            tokensUsed: message.tokensUsed, promptTokens: message.promptTokens,
+            completionTokens: message.completionTokens, cachedTokens: metadata.cachedTokens,
+            clientMessageId: message.clientMessageId, createdAt: message.createdAt, time: message.time,
+            toolNames: metadata.toolNames, toolDisplayNames: metadata.displayNames,
+            toolExecutions: metadata.toolExecutions,
+          };
+          await transaction.runAsync(`INSERT INTO chat_turn_display_items(run_id, identity, version, snapshot_json, message_id)
+            VALUES (?, ?, 1, ?, ?) ON CONFLICT(run_id, identity) DO UPDATE
+            SET message_id = excluded.message_id, snapshot_json = excluded.snapshot_json,
+                version = chat_turn_display_items.version + 1`,
+          [run.runId, message.clientMessageId!, JSON.stringify(snapshot), message.id]);
+        }
+        // 过程记录已随执行交付；折叠卡片无需展开才能完成本轮交付。
+        if (presentation) await transaction.runAsync(`UPDATE chat_turn_display_items SET shown_version = version, shown_json = snapshot_json
+          WHERE run_id = ? AND message_id IS NOT NULL AND json_extract(snapshot_json, '$.kind') <> 'assistant'`, [run.runId]);
         if (terminal.changes !== 1) {
           throw new ConversationTurnInvariantError(
             `commitTurn：run ${run.runId} 期望为 active，实际影响 ${terminal.changes} 行`,
@@ -507,6 +578,7 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
     return databaseCoordinator.transaction(
       { name: 'chat.revoke-turn', feature: 'chat', priority: 'interactive' },
       async (transaction) => {
+        await interruptTurnPresentationsInTransaction(transaction, run.sessionId, reason, run.runId);
         const now = new Date().toISOString();
         const revoked = await transaction.runAsync(
           `UPDATE conversation_turn_state

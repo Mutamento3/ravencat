@@ -40,7 +40,6 @@ export class ChatAgentToolTimelineProjector {
     callbacks: ProcessAIReplyCallbacks;
     aiConfig: AIReplyConfig;
     runtimeContext: AIReplyRuntimeContext;
-    isTimelineHidden: (toolName: string) => boolean;
     onWaitExternal: () => void;
   }) {}
 
@@ -57,7 +56,7 @@ export class ChatAgentToolTimelineProjector {
   }
 
   async handleEvent(event: AgentRunEvent): Promise<void> {
-    if (event.type === 'tool_call_started') {
+    if (event.type === 'tool_call_proposed') {
       await this.startToolStatus(event.stepIndex);
       return;
     }
@@ -73,11 +72,8 @@ export class ChatAgentToolTimelineProjector {
       return;
     }
     step.statusStarted = true;
-    const timelineToolCalls = this.timelineToolCalls(step.turn.toolCalls);
-    if (
-      timelineToolCalls.length === 0
-      || timelineToolCalls.every((toolCall) => toolCall.name === 'requestVideoCall')
-    ) {
+    const timelineToolCalls = step.turn.toolCalls;
+    if (timelineToolCalls.length === 0) {
       return;
     }
 
@@ -135,7 +131,7 @@ export class ChatAgentToolTimelineProjector {
       return;
     }
 
-    const timelineToolCalls = this.timelineToolCalls(step.turn.toolCalls);
+    const timelineToolCalls = step.turn.toolCalls;
     const outcomes = Array.from(step.completedOutcomes.values());
     if (step.statusMessage) {
       const toolNames = timelineToolCalls.map((toolCall) => toolCall.name);
@@ -176,10 +172,6 @@ export class ChatAgentToolTimelineProjector {
     assertChatReplyNotAborted(this.params.runtimeContext);
   }
 
-  private timelineToolCalls(toolCalls: readonly ModelToolCall[]): ModelToolCall[] {
-    return toolCalls.filter((toolCall) => !this.params.isTimelineHidden(toolCall.name));
-  }
-
   private resolveToolDisplayNames(toolCalls: readonly ModelToolCall[]): string[] {
     return toolCalls.map((toolCall) => resolveToolCallDisplayName(toolCall));
   }
@@ -192,9 +184,9 @@ export class ChatAgentToolTimelineProjector {
       if (!step.statusMessage || step.completedOutcomes.size === step.turn.toolCalls.length) {
         continue;
       }
-      const toolNames = this.timelineToolCalls(step.turn.toolCalls).map((toolCall) => toolCall.name);
+      const toolNames = step.turn.toolCalls.map((toolCall) => toolCall.name);
       const displayNames = this.resolveToolDisplayNames(
-        this.timelineToolCalls(step.turn.toolCalls),
+        step.turn.toolCalls,
       );
       const cancelled = terminalCode === 'CANCELLED_BY_USER' || terminalCode === 'SUPERSEDED';
       await updateToolStatusMessage({

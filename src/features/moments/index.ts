@@ -1,5 +1,6 @@
 /** 朋友圈功能公共出口，包含界面门面、应用层命令、仓储与 AI 工具。 */
 export { MomentsTab, MomentsSettingsView, PublishView } from './presentation';
+export { DEFAULT_MOMENTS_COVER_SOURCE } from './presentation/useMomentsCover';
 export type { PublishMomentDraft } from './presentation';
 export {
   createUserMomentComment,

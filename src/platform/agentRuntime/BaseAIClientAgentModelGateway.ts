@@ -54,7 +54,6 @@ export class BaseAIClientAgentModelGateway implements AgentRunModelGateway {
         if (tools.length === 0) {
           const response = await params.client.chat(messages, {
             includeSystemPrompt: options?.includeSystemPrompt,
-            enforceReasoningContent: options?.enforceReasoningContent,
             allowReasoningLengthRetry: true,
             allowImageContentFallback: this.allowImageContentFallback,
             signal: options?.signal,
@@ -76,7 +75,6 @@ export class BaseAIClientAgentModelGateway implements AgentRunModelGateway {
           const response = await params.client.chatStream(messages, {
             allowImageContentFallback: this.allowImageContentFallback,
             includeSystemPrompt: options?.includeSystemPrompt,
-            enforceReasoningContent: options?.enforceReasoningContent,
             signal: options?.signal,
             onDelta: options?.onDelta,
           });
@@ -125,14 +123,10 @@ export class BaseAIClientAgentModelGateway implements AgentRunModelGateway {
       const instructions = request.toolInstructions;
       const resolvesToolPrompt = slot !== undefined && instructions !== undefined;
       if (resolvesToolPrompt) {
-        const currentContext = [slot.contextBefore, instructions.state, slot.contextAfter].filter(Boolean).join('\n\n');
-        const systemPrompt = [slot.before, instructions.catalog, slot.after,
-          ...(slot.contextMessageIndex === null ? [currentContext] : [])].filter(Boolean).join('\n\n');
+        const systemPrompt = [slot.before, instructions.catalog, slot.after].filter(Boolean).join('\n\n');
         initialMessages = [
           { role: 'system', content: systemPrompt },
-          ...this.initialMessages.map((message, index): ChatMessage => (
-            index === slot.contextMessageIndex ? { role: 'system', content: currentContext } : message
-          )),
+          ...this.initialMessages,
         ];
       }
       const requestParams = {
@@ -140,7 +134,6 @@ export class BaseAIClientAgentModelGateway implements AgentRunModelGateway {
           initialMessages,
           request.history,
           request.toolBudget,
-          request.tools.length > 0,
           request.completionContinuationInstruction,
         ),
         // 完整前置 system 已在请求中，禁止 BaseAIClient 再注入配置里的旧版本。
@@ -203,10 +196,9 @@ export function buildAgentModelMessages(
   initialMessages: readonly ChatMessage[],
   history: readonly ModelHistoryItem[],
   toolBudget?: AgentModelTurnRequest['toolBudget'],
-  hasTools = false,
   completionContinuationInstruction?: string,
 ): ChatMessage[] {
-  const budgetMessage = buildToolBudgetMessage(toolBudget, hasTools);
+  const finalResponseMessage = buildFinalResponseMessage(toolBudget);
   const historyMessages: ChatMessage[] = [];
   let pendingImages: import('@platform/ai').ContentPart[] = [];
   const flushImages = () => {
@@ -227,7 +219,7 @@ export function buildAgentModelMessages(
       }
     } else {
       flushImages();
-      historyMessages.push({ role: 'assistant', content: item.content, reasoning_content: item.reasoningText || ' ',
+      historyMessages.push({ role: 'assistant', content: item.content, reasoning_content: item.reasoningText,
         tool_calls: item.toolCalls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } })) });
     }
   }
@@ -235,35 +227,25 @@ export function buildAgentModelMessages(
   return [
     ...initialMessages,
     ...historyMessages,
-    // 每步变化的预算与收口指令放在真实调用记录之后，保留已完成步骤的连续前缀。
+    // 正常续轮只追加真实调用记录；受限补充或强制收口时才追加机器指令。
     ...(completionContinuationInstruction ? [{
       role: 'system' as const,
       content: completionContinuationInstruction,
     }] : []),
-    ...(budgetMessage ? [budgetMessage] : []),
+    ...(finalResponseMessage ? [finalResponseMessage] : []),
   ];
 }
 
-function buildToolBudgetMessage(
+function buildFinalResponseMessage(
   budget: AgentModelTurnRequest['toolBudget'] | undefined,
-  hasTools: boolean,
 ): ChatMessage | null {
-  if (!budget) {
-    return null;
-  }
-  if (budget.forceFinalResponse) {
+  if (budget?.forceFinalResponse) {
     return {
       role: 'system',
       content: '工具调用阶段已经结束。本轮不得请求任何工具；请仅根据已有上下文和工具结果，给出本次 Agent run 的完整最终输出。',
     };
   }
-  if (!hasTools) {
-    return null;
-  }
-  return {
-    role: 'system',
-    content: `本次 Agent run 还可调用 ${budget.remainingToolCalls} 次工具，本轮最多提出 ${budget.maxToolCallsPerStep} 个工具调用。请控制调用数量；信息足够时直接给出本次 Agent run 的最终输出。`,
-  };
+  return null;
 }
 
 function toProviderToolDefinition(descriptor: AgentToolDescriptor): ToolDefinition {

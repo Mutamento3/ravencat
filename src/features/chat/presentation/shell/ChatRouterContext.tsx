@@ -150,6 +150,7 @@ export function ChatRouterProvider({
   DEFAULT_USER_PROFILE as UserProfile
   );
   const [currentUserReady, setCurrentUserReady] = useState(false);
+  const userProfileReadRevision = useRef(0);
   const [groupListReady, setGroupListReady] = useState(false);
   const groupLoadRevisionRef = useRef(0);
 
@@ -210,23 +211,25 @@ export function ChatRouterProvider({
   const conversationPreparationController = conversationPreparationControllerRef.current;
 
   const loadCurrentUser = useCallback(async () => {
+    const revision = ++userProfileReadRevision.current;
     try {
       const profile = await getCurrentUserProfile();
-      setCurrentUser(profile);
+      if (revision === userProfileReadRevision.current) setCurrentUser(profile);
       return profile;
     } catch (error) {
       console.error('Failed to load current user for chat shell:', error);
 
       const fallback = DEFAULT_USER_PROFILE as UserProfile;
-      setCurrentUser(fallback);
+      if (revision === userProfileReadRevision.current) setCurrentUser(fallback);
       return fallback;
     } finally {
-      setCurrentUserReady(true);
+      if (revision === userProfileReadRevision.current) setCurrentUserReady(true);
     }
   }, []);
 
   useEffect(() => {
     return subscribeUserProfileUpdated((profile) => {
+      userProfileReadRevision.current++;
       setCurrentUser(profile);
       setCurrentUserReady(true);
     });

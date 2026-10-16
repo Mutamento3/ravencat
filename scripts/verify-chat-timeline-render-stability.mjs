@@ -35,24 +35,21 @@ const identity = load('src/features/chat/messages/domain/AgentTimelineIdentity.t
 const timeline = load('src/features/chat/messages/application/AgentTransientTimeline.ts', {
   '../domain/AgentTimelineIdentity': identity,
 });
+const arrival = load('src/features/chat/reply/delivery/AssistantMessageArrival.ts', {
+  '@shared/runtime/RuntimeSlot': load('src/shared/runtime/RuntimeSlot.ts'),
+});
 const transientHook = load('src/features/chat/presentation/messages/components/useAgentTransientTimeline.ts', {
   react,
   '@features/chat/messages/domain/ChatTimelineOrdering': load('src/features/chat/messages/domain/ChatTimelineOrdering.ts'),
   '@features/chat/messages/application/AgentTransientTimeline': timeline,
-});
-const arrival = load('src/features/chat/reply/delivery/AssistantMessageArrival.ts', {
-  '@shared/runtime/RuntimeSlot': load('src/shared/runtime/RuntimeSlot.ts'),
-});
-const arrivalHook = load('src/features/chat/presentation/messages/components/useArrivedAssistantMessages.ts', {
-  react,
   '../../../reply/delivery/AssistantMessageArrival': arrival,
 });
-function render(sessionId, messages, enabled = true, suppressTransientAssistantText = false) {
+function render(sessionId, messages, enabled = true) {
   cursor = 0;
-  const complete = transientHook.useAgentTransientTimeline(sessionId, messages, { suppressTransientAssistantText });
+  const complete = transientHook.useAgentTransientTimeline(sessionId, messages, enabled);
   return {
     complete,
-    visible: arrivalHook.useArrivedAssistantMessages(complete.messages, enabled),
+    visible: complete.messages,
   };
 }
 const messages = [{ id: 1, text: '已有消息', createdAt: '2026-10-05T08:00:00Z' }];
@@ -80,7 +77,10 @@ assert.ok(result.complete.liveRunIds.has('run-a'));
 assert.equal(render('session-a', messages).visible, result.visible, '活跃 run 也不因无关刷新重建');
 timeline.applyAgentTransientTimelineSnapshots({ sessionId: 'session-a', snapshots: [{ ...snapshot, text: '回复继续' }] });
 assert.equal(render('session-a', messages).visible.at(-1).text, '回复继续', '流式更新不能被缓存吞掉');
-assert.equal(render('session-a', messages, true, true).visible.length, 1, '展示选项变化立即生效');
+arrival.applyAssistantMessageArrivalSnapshot({ revision: 3, pendingMessageIds: [1], pendingSessionIds: ['session-a'] });
+assert.equal(render('session-a', messages).visible.length, 1, '待到达的持久消息不影响已交付运行片段');
+assert.equal(render('session-a', messages, false).visible.length, 2, '真流式主题不启用 canonical 分段过滤');
+arrival.applyAssistantMessageArrivalSnapshot({ revision: 4, pendingMessageIds: [], pendingSessionIds: [] });
 
 const olderPage = [{ id: 0, text: '更早消息', createdAt: '2026-10-05T07:59:00Z' }, ...messages];
 assert.equal(render('session-a', olderPage).visible[0].text, '更早消息', '历史分页更新立即生效');

@@ -33,6 +33,7 @@ import { normalizeAssistantResponseText } from '../application/AssistantReplyPer
 import { buildAssistantTurnItems } from '../application/AssistantTurnCommit';
 import { formatMessageTime } from '../application/ChatReplyUtils';
 import type { ConversationTurnCommitItem } from '../domain/ConversationTurn';
+import type { ChatToolExecutionSnapshot } from '../domain/ChatTurnPresentation';
 import type { ChatAgentModelTurn } from './ChatAgentModelGateway';
 import {
   buildToolStatusText,
@@ -65,6 +66,10 @@ export interface AgentTimelineItemSnapshot {
   readonly sequence: number;
   readonly identity: string;
   readonly stepIndex: number;
+  readonly segmentIndex?: number;
+  readonly pendingDelivery?: boolean;
+  readonly toolExecutionStarted?: boolean;
+  readonly toolExecutions?: readonly ChatToolExecutionSnapshot[];
   readonly kind: AgentTimelineItemKind;
   readonly status: AgentTimelineItemStatus;
   readonly text: string;
@@ -74,9 +79,14 @@ export interface AgentTimelineItemSnapshot {
   readonly apiMessageId?: string | null;
   readonly toolNames?: readonly string[];
   readonly toolDisplayNames?: readonly string[];
+  readonly tokensUsed?: number;
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
+  readonly cachedTokens?: number;
 }
 
 interface AgentTimelineItem extends AgentTimelineItemSnapshot {
+  readonly startedToolCallIds?: readonly string[];
   readonly toolCalls: readonly ModelToolCall[];
   readonly outcomes: ReadonlyMap<string, AgentToolOutcome>;
   turn: ChatAgentModelTurn | null;
@@ -120,6 +130,8 @@ export interface AgentTimelineChangedEvent {
 }
 
 export interface AgentTimelineTransientSink {
+  /** 持久展示消费者在批次边界读取增量；不在每个 token 上构造整轮快照。 */
+  onDirty?: (readChanges: () => readonly AgentTimelineItemSnapshot[]) => void;
   onChanged?: (event: AgentTimelineChangedEvent) => void;
   onCommitted?: (event: {
     runId: string;
@@ -144,12 +156,18 @@ export interface BuildAgentTimelineItemsParams {
 export class ChatAgentTimeline {
   private readonly steps = new Map<number, TimelineStep>();
   private readonly items: AgentTimelineItem[] = [];
+  private readonly dirtyItems = new Map<number, AgentTimelineItem>();
+  private readonly readChanges = () => {
+    const items = [...this.dirtyItems.values()];
+    this.dirtyItems.clear();
+    return this.snapshotItems(items);
+  };
   private nextSequence = 1;
 
   constructor(
     private readonly runId: string,
-    private readonly timelineHidden: (toolName: string) => boolean,
     private readonly sink: AgentTimelineTransientSink = {},
+    private readonly presentationPolicy?: Pick<AIReplyPolicy, 'bubbleDeliveryMode'>,
   ) {}
 
   /** model_turn_started 是所有 delta 的前置事件，先建立 step 所有权。 */
@@ -227,17 +245,14 @@ export class ChatAgentTimeline {
     this.publish();
   }
 
-  /** tool_call_started 只在第一次可见时创建同 step 的一条批次 item。 */
+  /** 首次工具意图创建批次记录，参数或授权被拒绝的调用也保留终态。 */
   startToolStatus(stepIndex: number): void {
     const step = this.requireStep(stepIndex);
     if (step.toolItem) {
       return;
     }
     const toolCalls = this.timelineToolCalls(step);
-    if (
-      toolCalls.length === 0
-      || toolCalls.every((toolCall) => toolCall.name === 'requestVideoCall')
-    ) {
+    if (toolCalls.length === 0) {
       return;
     }
     const now = new Date();
@@ -246,8 +261,8 @@ export class ChatAgentTimeline {
     step.toolItem = this.createItem({
       stepIndex,
       kind: 'tool',
-      text: buildToolStatusText(joinToolDisplayNames(toolDisplayNames), 'running'),
-      status: 'running',
+      text: `准备调用：${joinToolDisplayNames(toolDisplayNames)}`,
+      status: 'streaming',
       createdAt: now.toISOString(),
       time: formatMessageTime(now),
       toolCalls,
@@ -269,6 +284,7 @@ export class ChatAgentTimeline {
       throw new Error(`Chat Agent tool call ${toolCallId} completed more than once`);
     }
     step.outcomes.set(toolCallId, outcome);
+    if (step.toolItem) this.markDirty(step.toolItem);
     if (outcome.status === 'success' && isStickerSendIntent(outcome.data)) {
       step.stickerItems.push(this.createStickerTimelineItem(step, toolCallId, outcome.data.sticker));
     }
@@ -288,6 +304,19 @@ export class ChatAgentTimeline {
       toolNames: toolCalls.map((toolCall) => toolCall.name),
       toolDisplayNames,
     });
+    this.publish();
+  }
+
+  markToolStarted(stepIndex: number, toolCallId: string): void {
+    const step = this.requireStep(stepIndex);
+    if (!step.toolItem) this.startToolStatus(stepIndex);
+    const item = step.toolItem!;
+    const replacement = { ...item, toolExecutionStarted: true,
+      startedToolCallIds: [...(item.startedToolCallIds ?? []), toolCallId], status: 'running' as const,
+      text: buildToolStatusText(joinToolDisplayNames([...(item.toolDisplayNames ?? [])]), 'running') };
+    this.items[this.items.indexOf(item)] = replacement;
+    this.markDirty(replacement);
+    step.toolItem = replacement;
     this.publish();
   }
 
@@ -336,7 +365,28 @@ export class ChatAgentTimeline {
   }
 
   snapshots(): readonly AgentTimelineItemSnapshot[] {
-    return this.items.map(toSnapshot);
+    return this.snapshotItems(this.items);
+  }
+
+  private snapshotItems(items: readonly AgentTimelineItem[]): AgentTimelineItemSnapshot[] {
+    return items.flatMap(item => {
+      const snapshot = toSnapshot(item);
+      // 多气泡正文以本次模型 turn 的分段结果建立稳定 identity，避免流式整段
+      // 曾被确认后在拆段时缩短或重复；后续轮次的过程事件不受此等待影响。
+      if (this.presentationPolicy?.bubbleDeliveryMode === 'multi-bubble'
+        && item.kind === 'assistant' && item.status === 'streaming') {
+        return [{ ...snapshot, pendingDelivery: true }];
+      }
+      if (!this.presentationPolicy || item.kind !== 'assistant' || item.status === 'streaming') return [snapshot];
+      const normalized = normalizeAssistantResponseText(item.text, this.presentationPolicy);
+      return normalized.segments.map((text, segmentIndex) => ({ ...snapshot, text, segmentIndex,
+        clientMessageId: buildAgentTimelineClientMessageId(this.runId, item.sequence, segmentIndex),
+        // 与正式消息相同：每次模型请求的统计随尾段交付，不等整轮工具 Loop 的 T3。
+        ...(segmentIndex < normalized.segments.length - 1 ? {
+          tokensUsed: 0, promptTokens: 0, completionTokens: 0, cachedTokens: undefined,
+        } : {}),
+      }));
+    });
   }
 
   /** canonical T3 的唯一纯转换边界。顺序只由 run-local sequence 决定。 */
@@ -485,7 +535,7 @@ export class ChatAgentTimeline {
     if (!step.turn) {
       throw new Error(`Chat Agent tool event references step ${step.stepIndex} before model turn`);
     }
-    return step.turn.toolCalls.filter((toolCall) => !this.timelineHidden(toolCall.name));
+    return step.turn.toolCalls;
   }
 
   private createTextItem(
@@ -574,6 +624,7 @@ export class ChatAgentTimeline {
       turn: params.turn,
     };
     this.items.push(item);
+    this.markDirty(item);
     return item;
   }
 
@@ -587,6 +638,7 @@ export class ChatAgentTimeline {
       throw new Error(`Chat Agent timeline item ${item.identity} is not owned by this run`);
     }
     this.items[index] = replacement;
+    this.markDirty(replacement);
     return replacement;
   }
 
@@ -614,6 +666,7 @@ export class ChatAgentTimeline {
         timelineSequence: item.sequence,
         timelineKind: item.kind,
         stepIndex: item.stepIndex,
+        toolExecutions: toSnapshot(item).toolExecutions,
       }),
     };
   }
@@ -661,6 +714,7 @@ export class ChatAgentTimeline {
         timelineSequence: item.sequence,
         timelineKind: item.kind,
         stepIndex: item.stepIndex,
+        toolExecutions: toSnapshot(item).toolExecutions,
       }),
     };
   }
@@ -766,10 +820,15 @@ export class ChatAgentTimeline {
   }
 
   private publish(): void {
+    this.sink.onDirty?.(this.readChanges);
     this.sink.onChanged?.({
       runId: this.runId,
       items: this.snapshots(),
     });
+  }
+
+  private markDirty(item: AgentTimelineItem): void {
+    if (this.sink.onDirty) this.dirtyItems.set(item.sequence, item);
   }
 
   private resolveToolDisplayNames(toolCalls: readonly ModelToolCall[]): string[] {
@@ -802,7 +861,21 @@ function toSnapshot(item: AgentTimelineItem): AgentTimelineItemSnapshot {
     createdAt: item.createdAt,
     time: item.time,
     apiMessageId: item.turn?.messageId ?? null,
+    ...(item.kind === 'assistant' && item.turn ? {
+      tokensUsed: item.turn.usage.totalTokens,
+      promptTokens: item.turn.usage.promptTokens,
+      completionTokens: item.turn.usage.completionTokens,
+      cachedTokens: item.turn.usage.cachedTokens,
+    } : {}),
     toolNames: item.toolNames,
+    toolExecutionStarted: item.toolExecutionStarted,
+    toolExecutions: item.kind === 'tool' ? item.toolCalls.map(call => {
+      const outcome = item.outcomes.get(call.id);
+      return { toolCallId: call.id, name: call.name, arguments: call.arguments,
+        status: outcome?.status ?? (item.startedToolCallIds?.includes(call.id) ? 'running' : 'proposed'),
+        ...(outcome ? { modelContent: outcome.modelContent } : {}),
+      };
+    }) : undefined,
     toolDisplayNames: item.toolDisplayNames,
   };
 }

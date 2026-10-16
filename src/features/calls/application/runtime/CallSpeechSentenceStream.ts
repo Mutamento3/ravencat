@@ -3,7 +3,7 @@ import { hasSpeechPause, prepareSpeechText, readSpeechMetadata, type ResolvedSpe
 import { CALL_END_MARKER } from '../CallPromptBlocks';
 
 const SENTENCE_TERMINATOR = /[。！？!?…]/;
-const TAG_CLOSERS: Record<string, string> = { '<': '>', '[': ']', '(': ')', '（': '）' };
+const TAG_CLOSERS: Record<string, string> = { '<': '>', '[': ']', '［': '］', '【': '】', '(': ')', '（': '）' };
 
 export interface CallSentenceSpeech {
   synthesisText: string;
@@ -30,15 +30,21 @@ export function createCallSpeechSentenceStream(
   const sentences: string[] = [];
 
   const emitSentence = (rawSentence: string) => {
-    const text = rawSentence
-      .replace(/[\uD83C-\uD83E][\uDC00-\uDFFF]/g, '')
-      .replace(/[\u2600-\u27BF]/g, '')
-      .replace(/[\uFE0F\u200D]/g, '')
-      .trim();
+    const text = rawSentence.trim();
     if (!text) return;
     const prepared = prepareSpeechText(text, metadata?.provider ?? 'openaiCompatible', modelSnapshot?.model ?? '');
-    sentences.push(prepared.transcript);
-    onSentence(prepared.transcript, { synthesisText: prepared.synthesisText, modelSnapshot });
+    // 先验证原始标签，再移除通话正文中的排版与 emoji，避免清理操作修补非法标签。
+    const clean = (value: string) => value
+      .replace(/[\uD83C-\uD83E][\uDC00-\uDFFF]/g, '')
+      .replace(/[\u2600-\u27BF]/g, '')
+      .replace(/[\uFE0F\u200D\r\n]/g, '')
+      .trim();
+    const synthesisText = clean(prepared.synthesisText);
+    const transcript = clean(prepared.transcript);
+    if (!synthesisText) return;
+    if (!transcript) throw new Error('语音正文不能为空，不能只有声音或停顿标记');
+    sentences.push(transcript);
+    onSentence(transcript, { synthesisText, modelSnapshot });
   };
 
   const drainSentences = (final: boolean) => {
@@ -52,7 +58,7 @@ export function createCallSpeechSentenceStream(
 
   const pushSpeechText = (text: string) => {
     // 换行是排版；标签可能跨任意 delta，必须先完整缓冲再判断句意边界。
-    sentenceBuffer += text.replace(/[\r\n]/g, '');
+    sentenceBuffer += text;
     drainSentences(false);
   };
 

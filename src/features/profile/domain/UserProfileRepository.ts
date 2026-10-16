@@ -13,7 +13,7 @@ export interface CommitUserAvatarMediaAssetReferenceInput {
   ownerId: string;
   expectedAvatar: string | null;
   expectedAvatarMediaAssetId: string | null;
-  mediaAssetId: string;
+  mediaAssetId: string | null;
 }
 
 export interface UserAvatarMediaAssetReference {

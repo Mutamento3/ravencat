@@ -329,7 +329,7 @@ function makeTimelineItem(senderType, text, createdAt) {
     makeTimelineItem('system', 'tool running', '2026-08-01T10:01:00.000Z'),
     makeTimelineItem('assistant', '最终回答', '2026-08-01T10:03:00.000Z'),
     makeTimelineItem('system', 'tool completed', '2026-08-01T10:02:00.000Z'),
-  ], { assistantId: 'ai1', openedPackageIds: [] });
+  ], { assistantId: 'ai1', changes: [] });
   assert.equal(result.outcome, 'committed');
   assert.deepEqual(
     result.messages.map((message) => [message.senderType, message.turnItemIndex]),
@@ -562,7 +562,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const result = await repo.commitTurn(run, [
     makeAssistantItem('回答第一段', '2026-08-01T11:01:00.000Z'),
     makeAssistantItem('回答第二段', '2026-08-01T11:01:05.000Z'),
-  ], { assistantId: 'ai1', openedPackageIds: [] });
+  ], { assistantId: 'ai1', changes: [] });
   assert.equal(result.outcome, 'committed', 'fence 通过必须提交');
   assert.equal(result.messageIds.length, 2, '必须返回全部条目 id');
 
@@ -612,7 +612,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   const beforeCount = db.prepare('SELECT COUNT(*) AS c FROM messages').get().c;
   const staleResult = await repo.commitTurn(staleRun, [
     makeAssistantItem('过期回答', '2026-08-01T10:01:00.000Z'),
-  ], { assistantId: 'ai1', openedPackageIds: [] });
+  ], { assistantId: 'ai1', changes: [] });
   assert.equal(staleResult.outcome, 'fence_failed', '被 supersede 的 run commit 必须 fence 失败');
   assert.equal(
     db.prepare('SELECT COUNT(*) AS c FROM messages').get().c,
@@ -639,7 +639,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   assert.equal(getTurnState(db, 's1').active_run_id, null, 'revoke 必须清 active_run_id');
   const cancelledResult = await repo.commitTurn(activeRun, [
     makeAssistantItem('取消后回答', '2026-08-01T10:02:00.000Z'),
-  ], { assistantId: 'ai1', openedPackageIds: [] });
+  ], { assistantId: 'ai1', changes: [] });
   assert.equal(cancelledResult.outcome, 'fence_failed', 'cancel 后 commit fence 必失败');
   assert.equal(
     db.prepare('SELECT COUNT(*) AS c FROM messages').get().c,
@@ -728,7 +728,7 @@ function makeTimelineItem(senderType, text, createdAt) {
         createdAt: '2026-08-01T11:30:00.000Z',
       },
     },
-  ], { assistantId: 'ai1', openedPackageIds: [] });
+  ], { assistantId: 'ai1', changes: [] });
   assert.equal(commitResult.outcome, 'committed');
   assert.deepEqual(
     (await repo.listSessionsWithUnrepliedInput('', 50)).map((s) => s.sessionId),
@@ -737,7 +737,7 @@ function makeTimelineItem(senderType, text, createdAt) {
   );
 }
 
-// 工具包有效期随正式回复原子提交，不按分段、工具项、取消或失败计轮。
+// 工具包开关随正式回复原子提交；不再按轮数自动到期。
 {
   const db = createBaseDatabase();
   addSession(db, 's1'); addSession(db, 's2');
@@ -745,67 +745,71 @@ function makeTimelineItem(senderType, text, createdAt) {
   globalThis.__TEST_TURN_COORDINATOR_HOLDER__ = createCoordinator(db);
   db.exec("INSERT INTO ai_assistants(id) VALUES ('ai2')");
   const repo = new ConversationTurnRepository();
-  const remaining = () => db.prepare('SELECT package_id, remaining_turns FROM chat_tool_package_exposure WHERE session_id = ? AND assistant_id = ? ORDER BY package_id').all('s1', 'ai1').map((row) => [row.package_id, row.remaining_turns]);
+  const open = (packageId) => ({ packageId, action: 'open' });
+  const close = (packageId) => ({ packageId, action: 'close' });
+  const packages = () => repo.listOpenToolPackageIds('s1', 'ai1');
   let next = 0;
   async function claim() {
-    addMessage(db, { sessionId: 's1', text: `用户 ${++next}`, isMe: true, createdAt: new Date().toISOString() });
+    addMessage(db, { sessionId: 's1', text: '用户 ' + (++next), isMe: true, createdAt: new Date().toISOString() });
     return repo.claimIfIdle('s1', 'user_reply');
   }
-  async function reply(openedPackageIds = []) {
+  async function reply(changes = []) {
     const run = await claim();
     const result = await repo.commitTurn(run, [
       makeTimelineItem('reasoning', '思维链', new Date().toISOString()),
       makeAssistantItem('分段一', new Date().toISOString()),
       makeAssistantItem('分段二', new Date().toISOString()),
-    ], { assistantId: 'ai1', openedPackageIds });
+    ], { assistantId: 'ai1', changes });
     assert.equal(result.outcome, 'committed');
     return run;
   }
-  await reply(['memory', 'neteaseMusic', 'memory']);
-  assert.deepEqual(remaining(), [['memory', 3], ['neteaseMusic', 3]]);
-  assert.deepEqual(await new ConversationTurnRepository().listOpenToolPackageIds('s1', 'ai1'), ['memory', 'neteaseMusic'], '新 Repository 从持久事实恢复拆包状态');
+  await reply([open('memory'), open('neteaseMusic'), open('memory')]);
+  assert.deepEqual(await packages(), ['memory', 'neteaseMusic']);
+  assert.deepEqual(await new ConversationTurnRepository().listOpenToolPackageIds('s1', 'ai1'), ['memory', 'neteaseMusic'], '重载读取持续展开事实');
   assert.deepEqual(await repo.listOpenToolPackageIds('s2', 'ai1'), []);
   assert.deepEqual(await repo.listOpenToolPackageIds('s1', 'ai2'), []);
-  db.prepare('INSERT INTO chat_tool_package_exposure VALUES (?, ?, ?, ?)').run('s2', 'ai1', 'memory', 3);
-  db.prepare('INSERT INTO chat_tool_package_exposure VALUES (?, ?, ?, ?)').run('s1', 'ai2', 'memory', 2);
+  db.prepare('INSERT INTO chat_tool_package_exposure VALUES (?, ?, ?)').run('s2', 'ai1', 'memory');
+  db.prepare('INSERT INTO chat_tool_package_exposure VALUES (?, ?, ?)').run('s1', 'ai2', 'memory');
   for (const status of ['cancelled', 'failed']) {
     const run = await claim();
     await repo.revoke(run, status, '测试终态');
-    assert.deepEqual(remaining(), [['memory', 3], ['neteaseMusic', 3]]);
+    assert.deepEqual(await packages(), ['memory', 'neteaseMusic']);
   }
   const stale = await claim();
   await globalThis.__TEST_TURN_COORDINATOR_HOLDER__.transaction({}, (transaction) => repo.supersedeActiveRunInTransaction(transaction, 's1'));
   assert.equal((await repo.commitTurn(stale, [makeAssistantItem('过期回复', new Date().toISOString())], {
-    assistantId: 'ai1', openedPackageIds: ['screenCapture'],
+    assistantId: 'ai1', changes: [close('memory'), open('screenCapture')],
   })).outcome, 'fence_failed');
-  assert.deepEqual(remaining(), [['memory', 3], ['neteaseMusic', 3]]);
+  assert.deepEqual(await packages(), ['memory', 'neteaseMusic'], '过期回合不能打开或关闭包');
   const badRun = await claim();
-  // terminal CAS 在状态更新之后失败，整事务必须把轮数、拆包与消息一起回滚。
+  // terminal CAS 在开关更新后失败，消息与全部包状态必须一起回滚。
   db.prepare("UPDATE conversation_turn_runs SET status = 'failed' WHERE run_id = ?").run(badRun.runId);
   await assert.rejects(repo.commitTurn(badRun, [makeAssistantItem('回滚回复', new Date().toISOString())], {
-    assistantId: 'ai1', openedPackageIds: ['screenCapture'],
+    assistantId: 'ai1', changes: [close('memory'), open('screenCapture')],
   }), /期望为 active/u);
-  assert.deepEqual(remaining(), [['memory', 3], ['neteaseMusic', 3]]);
+  assert.deepEqual(await packages(), ['memory', 'neteaseMusic']);
   db.prepare("UPDATE conversation_turn_runs SET status = 'active' WHERE run_id = ?").run(badRun.runId);
   await repo.revoke(badRun, 'failed', '回滚验证结束');
   const toolRun = await claim();
-  await repo.commitTurn(toolRun, [makeTimelineItem('tool', '只提交工具展示', new Date().toISOString())], { assistantId: 'ai1', openedPackageIds: [] });
-  assert.deepEqual(remaining(), [['memory', 3], ['neteaseMusic', 3]], '没有正式 assistant 回复的展示项不计轮');
-  await reply(['deviceControl']);
-  assert.deepEqual(remaining(), [['deviceControl', 3], ['memory', 2], ['neteaseMusic', 2]]);
-  await reply();
-  assert.deepEqual(remaining(), [['deviceControl', 2], ['memory', 1], ['neteaseMusic', 1]]);
-  await reply();
-  assert.deepEqual(remaining(), [['deviceControl', 1]], '恰好在第三轮正式回复提交后收起旧包');
-  await reply(['memory']);
-  assert.deepEqual(remaining(), [['memory', 3]], '到期后允许再次拆包，重新保留三轮');
-  assert.equal(db.prepare("SELECT remaining_turns FROM chat_tool_package_exposure WHERE session_id = 's2' AND assistant_id = 'ai1'").get().remaining_turns, 3);
-  assert.equal(db.prepare("SELECT remaining_turns FROM chat_tool_package_exposure WHERE session_id = 's1' AND assistant_id = 'ai2'").get().remaining_turns, 2);
+  await repo.commitTurn(toolRun, [makeTimelineItem('tool', '只提交工具展示', new Date().toISOString())], {
+    assistantId: 'ai1', changes: [close('memory'), open('screenCapture')],
+  });
+  assert.deepEqual(await packages(), ['memory', 'neteaseMusic'], '没有正式回复的展示项不提交包开关');
+  for (let index = 0; index < 8; index++) await reply();
+  assert.deepEqual(await packages(), ['memory', 'neteaseMusic'], '多轮未调用不会自动收起');
+  await reply([open('deviceControl'), close('memory'), open('memory'), close('neteaseMusic')]);
+  assert.deepEqual(await packages(), ['deviceControl', 'memory'], '同包先关再开时保持最后一次打开');
+  await reply([open('neteaseMusic'), close('neteaseMusic'), close('memory')]);
+  assert.deepEqual(await packages(), ['deviceControl'], '先开再关时最终关闭，不影响其他包');
+  await reply([open('memory')]);
+  assert.deepEqual(await packages(), ['deviceControl', 'memory'], '主动关闭后仍可再次拆包');
+  assert.deepEqual(await repo.listOpenToolPackageIds('s2', 'ai1'), ['memory']);
+  assert.deepEqual(await repo.listOpenToolPackageIds('s1', 'ai2'), ['memory']);
   db.prepare("DELETE FROM chat_conversations WHERE id = 's1'").run();
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_package_exposure WHERE session_id = 's1'").get().n, 0);
   db.prepare("DELETE FROM ai_assistants WHERE id = 'ai1'").run();
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM chat_tool_package_exposure').get().n, 0);
-  console.log('工具包持久有效期：三轮、分段、多包、隔离、重载、回滚、终态及级联清理验证通过。');
+  console.log('工具包持久开关：持续保留、主动关闭、操作顺序、分段、隔离、重载、回滚、终态及级联清理通过。');
 }
 
 delete globalThis.__TEST_TURN_COORDINATOR_HOLDER__;

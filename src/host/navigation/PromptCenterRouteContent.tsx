@@ -1,7 +1,7 @@
 /** 提示词详情使用真实 Stack 页面；Feature 只传业务页面和标识。 */
 import { useEffect, useState } from 'react';
 import { ActivityIndicator } from 'react-native';
-import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { listPromptAssistantOptions, PromptCenterScreen, type PromptAssistantOption, type PromptCenterPage } from '@features/prompting';
 import useRetainedRouteRefreshRevision from './useRetainedRouteRefreshRevision';
 
@@ -49,6 +49,7 @@ export default function PromptCenterRouteContent({ page }: { page: PromptCenterP
     onOpenGlobalPrompts={() => router.push('/prompt-center/custom')}
     onBack={() => router.back()}
     onOpenMcp={() => router.push('/mcp-tools')}
+    onOpenWebSearch={() => router.push('/web-search' as Href)}
     onOpenUserProfile={() => router.push('/profile')}
     onOpenProtocols={(aiId) => router.push({ pathname: '/chat/[aiId]/protocol', params: { aiId } })} />;
 }

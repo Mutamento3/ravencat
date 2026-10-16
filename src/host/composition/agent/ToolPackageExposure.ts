@@ -1,5 +1,5 @@
 /** Host 按用途冻结已授权工具；拆包只改变 schema 暴露，不改变执行权限。 */
-import type { AgentTool, AgentToolExecutionResult } from '@shared/aiTools';
+import type { AgentTool, AgentToolExecutionResult, JsonSchema } from '@shared/aiTools';
 import type { AgentToolRegistry } from '@platform/agentRuntime';
 import type { PromptToolInstructions } from '@shared/prompt';
 
@@ -10,13 +10,14 @@ export interface ToolPackageRuntimeBinding {
 
 const PACKAGE_DESCRIPTIONS: Record<string, { title: string; whenToUse: string }> = {
   webTools: { title: '联网工具包', whenToUse: '搜索公开信息、读取网页正文，或将公开链接中的文件下载到手机。' },
-  media: { title: '图片与头像', whenToUse: '下载图片到私有媒体库，主动查看图片、用户或 AI 头像，或更换自己的头像。可自主选择自己的头像。' },
+  media: { title: '图片', whenToUse: '下载图片到私有媒体库，或通过媒体 ID 主动查看图片；头像、背景与封面的获取和修改见应用设置工具。' },
+  applicationSettings: { title: '应用设置工具', whenToUse: '获取头像、单聊背景、通话背景、朋友圈封面；自主更换自己的头像、公开名称和背景，或恢复默认。主理 AI 还可管理其他 AI、用户头像、朋友圈封面及玻璃主题全局背景。图片使用媒体 ID，自动居中裁剪，不拉伸。' },
   protocol: { title: '协议空间', whenToUse: '查找、新增、修改或删除当前 AI 常驻注入的提示词与信息；正文已注入，仅阅读无需拆包。' },
   moments: { title: '时刻互动', whenToUse: '浏览或搜索可见时刻、读取详情与未读社交待办；发布文本时刻、评论或回复、点赞或取消，以及撤回自己的时刻或评论。' },
   wallet: { title: '羽库记账', whenToUse: '用户告知收支时主动记账；查询账单与统计、搜索定位、编辑或删除记录。金额不明确先询问。' },
   calls: { title: '通话', whenToUse: '想实时交流时可主动向用户发起来电邀请；视频通话中可按需查看用户当前画面。' },
   memory: { title: '记忆与对话摘要', whenToUse: '主动检索当前 AI 的长期记忆，或按时间与关键词查询对话摘要；保存、修正、删除独立记忆。用于历史资料，不是常驻提示词。' },
-  assistants: { title: 'AI 管理', whenToUse: '拉黑或解除拉黑其他 AI。' },
+  assistants: { title: 'AI 管理', whenToUse: '拉黑或解除拉黑其他 AI；冷静期中的原主理 AI 可自主解除自己的冷静期。' },
   deviceControl: { title: '手机应用操作', whenToUse: '搜索本机可启动应用、打开指定应用，或为应用设置限时软锁、解除软锁。' },
   phoneTools: { title: '手机环境感知', whenToUse: '按需获取手机当前位置及精度、测量时间，查询当前前台应用及受保护状态，或应用前台使用时长；定位需系统授权，页面内容由手机屏幕读取包提供。' },
   screenCapture: { title: '手机屏幕读取', whenToUse: '通过无障碍读取当前页面文字与界面结构，或截图后用本地 OCR 读取可见文字；不理解非文字画面，不操作界面。' },
@@ -28,6 +29,7 @@ const PACKAGE_DESCRIPTIONS: Record<string, { title: string; whenToUse: string }>
 };
 
 export const OPEN_TOOL_PACKAGE_NAME = 'open_tool_package';
+export const CLOSE_TOOL_PACKAGE_NAME = 'close_tool_package';
 
 export function registerToolPackagesForHostRun(input: {
   registry: AgentToolRegistry;
@@ -69,7 +71,8 @@ export function registerToolPackagesForHostRun(input: {
   const packageCatalog = packedTools.size === 0 ? '' : [
     '【本次运行的工具包用途目录】',
     '以下按包概括用途，tools 仅列出本次已授权且需拆包的工具名，不表示包已展开；需要时用 open_tool_package 拆开（拆包不增加权限），具体工具用途与参数见展开后的 function schema。',
-    '普通单聊中，新拆开的包在正式回复提交后保留后续三轮用户与 AI 对话；工具调用、思维链和消息分段不额外计轮。',
+    '普通单聊中，正式回复提交后已拆开的包持续保持展开，不按轮数自动关闭。预计后续还会使用时保持展开；不再需要时主动调用 close_tool_package 收起，减少后续请求携带的参数。其他运行的开关只在当前 run 生效。',
+    '收起工具包只撤下需拆包工具的 schema，不改变调用授权，也不影响用户特批工具的常驻暴露。',
     ...[...packedTools].map(([id, tools]) => JSON.stringify({
       id, ...PACKAGE_DESCRIPTIONS[id],
       tools: tools.map(({ descriptor }) => descriptor.name),
@@ -77,16 +80,18 @@ export function registerToolPackagesForHostRun(input: {
   ].join('\n');
   const catalog = [directCatalog, packageCatalog].filter(Boolean).join('\n\n');
   if (packedTools.size > 0) {
+    // 两个控制工具使用同一份固定目录 enum；开关状态不改写控制工具 schema。
+    const inputSchema: JsonSchema = {
+      type: 'object',
+      properties: { package_id: { type: 'string', enum: [...packedTools.keys()], description: '可用工具包 ID' } },
+      required: ['package_id'],
+      additionalProperties: false,
+    };
     input.registry.register({
       descriptor: {
         name: OPEN_TOOL_PACKAGE_NAME,
         description: '按用途拆开一个工具包；下一次请求起直接提供包内工具与完整参数。可拆开多个；已展开的无需重复拆开。',
-        inputSchema: {
-          type: 'object',
-          properties: { package_id: { type: 'string', enum: [...packedTools.keys()], description: '可用工具包 ID' } },
-          required: ['package_id'],
-          additionalProperties: false,
-        },
+        inputSchema,
         owner: 'host:tool-packages', source: 'local', risk: 'safe_read', idempotency: 'idempotent',
       },
       async execute(value): Promise<AgentToolExecutionResult<unknown>> {
@@ -100,27 +105,39 @@ export function registerToolPackagesForHostRun(input: {
           modelContent: alreadyOpen
             ? `工具包 ${id} 已展开，无需重复拆开，参数以 function schema 为准。`
             : `工具包 ${id} 已拆开。下一次模型请求将直接提供包内工具与完整参数；本轮可立即继续调用。`,
-          ...(alreadyOpen ? {} : { metadata: { openedToolPackageId: id } }),
+          ...(alreadyOpen ? {} : { metadata: { toolPackageChange: { packageId: id, action: 'open' } } }),
+        };
+      },
+    });
+    input.registry.register({
+      descriptor: {
+        name: CLOSE_TOOL_PACKAGE_NAME,
+        description: '不再需要一个已展开工具包时将它收起；下一次请求撤下包内需拆包工具的 schema，用户特批工具仍常驻。之后需要时可再次 open_tool_package。',
+        inputSchema,
+        owner: 'host:tool-packages', source: 'local', risk: 'safe_read', idempotency: 'idempotent',
+      },
+      async execute(value): Promise<AgentToolExecutionResult<unknown>> {
+        const { package_id: id } = value as { package_id: string };
+        const changed = openIds.delete(id);
+        return {
+          status: 'success', data: { packageId: id },
+          modelContent: changed
+            ? `工具包 ${id} 已收起。下一次请求不再提供需拆包工具的 schema；用户特批工具仍常驻，需要时可再次 open_tool_package。`
+            : `工具包 ${id} 已处于收起状态；需要时可用 open_tool_package 展开。`,
+          ...(changed ? { metadata: { toolPackageChange: { packageId: id, action: 'close' } } } : {}),
         };
       },
     });
   }
   return {
     packageToolNames: [...packages.values()].flatMap((tools) => tools.map(({ descriptor }) => descriptor.name)),
-    metaToolNames: packedTools.size > 0 ? [OPEN_TOOL_PACKAGE_NAME] : [],
+    metaToolNames: packedTools.size > 0 ? [OPEN_TOOL_PACKAGE_NAME, CLOSE_TOOL_PACKAGE_NAME] : [],
     visibleToolNames: () => [
       ...directTools.map(({ descriptor }) => descriptor.name),
       ...[...packedTools].flatMap(([id, tools]) => (
         openIds.has(id) ? tools.map(({ descriptor }) => descriptor.name) : []
       )),
     ],
-    instructions: () => ({
-      catalog,
-      state: packedTools.size === 0 ? '' : [
-        '【本轮工具包展开状态】',
-        'open 的包无需重复拆开；包内工具仍须以当前 function schema 为准。',
-        ...[...packedTools.keys()].map((id) => JSON.stringify({ id, state: openIds.has(id) ? 'open' : 'closed' })),
-      ].join('\n'),
-    }),
+    instructions: () => ({ catalog }),
   };
 }

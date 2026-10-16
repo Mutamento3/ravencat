@@ -24,6 +24,7 @@ import { assertImageToolRunCurrent } from './agent/assertImageToolRunCurrent';
 import { configureStickerAnnotationQueue } from '../runtime/StickerAnnotationQueueCoordinator';
 import { configureStickerEmbeddingQueue } from '../runtime/StickerEmbeddingQueueCoordinator';
 import { configureMomentsRuntime } from './configureMomentsRuntime';
+import { configureWebToolsRuntime, sqliteSearchSettingsRepository, secureSearchCredentialStore } from '@features/webTools/composition';
 
 let configured = false;
 
@@ -32,6 +33,8 @@ export function configureHostRuntime(): void {
     return;
   }
   configured = true;
+
+  configureWebToolsRuntime({ settings: sqliteSearchSettingsRepository, credentials: secureSearchCredentialStore });
 
   configureAuxiliaryModelInitializationRuntime();
 

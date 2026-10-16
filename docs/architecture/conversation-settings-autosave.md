@@ -22,7 +22,7 @@ Chat 页面负责交互节奏、输入校验与离开行为。通用草稿确认
 助手资料由 Assistants 命令与 Repository 更新。
 上下文、气泡与 Token 用量展示设置由 updateAIAssistantSettings 提交到助手字段；显示选择保存于 ai_assistants.show_token_usage，不参与模型调用。模型页不编辑或重置这些对话字段。
 名称只提交 name，人设只提交 systemPrompt，头像只提交头像引用。提交回调只回填本次更新的助手字段，并使用最新页面状态合并。
-昵称只提交 nickname；当前值和修改历史由助手 Repository 同事务维护，相同值不新增历史。修改提醒在单聊下一次成功最终回复后确认，不在组装提示词或请求失败时消耗；当前昵称和称呼历史持续作为该 AI 自身的动态上下文提供。
+昵称只提交 nickname；Assistants 在事务内读取真实前值，Host 将当前值更新与 Chat 的操作事件组合提交，相同值不新增事件。当前昵称属于前置身份背景，修改事件固定在聊天时间线，随窗口和摘要消费，不再由最终回复确认或消耗。
 人设仍保存于 ai_assistants.system_prompt，由 Assistants 命令经 databaseCoordinator 提交；提示词中心与后续提示词组装直接读取同一数据库字段，不复制第二份人设。提示词中心的人设详情仅展示，重新获得焦点时读取最新正文。
 头像文件草稿继续由 usePersistentAvatarDraft 管理，媒体引用创建及 CAS 保留原来的事务边界。
 

@@ -19,6 +19,7 @@ class KimiPhoneNotificationsModule : Module() {
   private var responseObserver: ((Map<String, Any?>) -> Unit)? = null
   private var arrivalObserver: ((Map<String, Any?>) -> Unit)? = null
   private val ownedArrivalIds = mutableSetOf<Long>()
+  private val ownedTurnDisplays = mutableSetOf<String>()
 
   private val context: Context
     get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
@@ -69,9 +70,26 @@ class KimiPhoneNotificationsModule : Module() {
         ownedArrivalIds.toList().also { ownedArrivalIds.clear() }
       }
       MessageArrivalProgress.finish(messageIds)
+      synchronized(ownedTurnDisplays) {
+        ownedTurnDisplays.forEach { MessageArrivalProgress.setTurnDisplayActive(it, false) }
+        ownedTurnDisplays.clear()
+      }
     }
 
     AsyncFunction("getMessageArrivalSnapshot") { MessageArrivalProgress.snapshot() }
+
+    AsyncFunction("awaitTurnDisplayArrival") Coroutine { runId: String, conversationKey: String ->
+      MessageArrivalProgress.awaitTurnDisplay(runId, conversationKey)
+    }
+    AsyncFunction("setTurnDisplayOpen") { runIds: List<String>, open: Boolean ->
+      MessageArrivalProgress.setTurnDisplayOpen(runIds, open)
+    }
+    AsyncFunction("setTurnDisplayActive") { runId: String, active: Boolean ->
+      synchronized(ownedTurnDisplays) {
+        if (active) ownedTurnDisplays.add(runId) else ownedTurnDisplays.remove(runId)
+        MessageArrivalProgress.setTurnDisplayActive(runId, active)
+      }
+    }
 
     AsyncFunction("beginMessageArrival") { observer: Map<String, Any?>, messageIds: List<Long> ->
       require(observer["sessionId"] is String && messageIds.isNotEmpty() && messageIds.all { it > 0L })
@@ -134,6 +152,10 @@ class KimiPhoneNotificationsModule : Module() {
       NotificationPublisher.dismissIncomingCall(context, callId)
       null
     }
+
+    AsyncFunction("leaveCallScreen") { callId: String, finished: Boolean ->
+      CallPresentationReturn.leave(callId, finished, appContext.currentActivity)
+    }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
 
     AsyncFunction("consumePendingNotificationResponses") {
       NotificationStateStore.consumePendingResponses(context)

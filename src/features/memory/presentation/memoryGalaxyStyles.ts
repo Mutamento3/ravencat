@@ -3,6 +3,8 @@ import { getThemeById, type PresentationTheme } from '@shared/theme';
 
 export const createMemoryGalaxyStyles = (theme: PresentationTheme) => {
   const starlight = theme.mode === 'dark' ? theme.colors.text.primary : theme.colors.text.inverse;
+  // 玻璃面板采样深色星空，文字沿用共享深色主题的对比度。
+  const panelText = theme.effects.glass.enabled ? getThemeById('default-dark').colors.text : theme.colors.text;
   return StyleSheet.create({
     // 星空需要不透明底色，不能让宿主壁纸透过遮罩形成灰底。
     screen: { flex: 1, backgroundColor: getThemeById('default-dark').colors.background.app },
@@ -29,23 +31,23 @@ export const createMemoryGalaxyStyles = (theme: PresentationTheme) => {
     sheet: { height: '74%', paddingTop: 12 },
     handle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', backgroundColor: theme.colors.border.strong, marginBottom: 12 },
     sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, gap: 12, marginBottom: 16 },
-    sheetName: { color: theme.colors.text.primary, fontSize: 19, fontWeight: '600' },
-    sheetMeta: { color: theme.colors.text.secondary, fontSize: 12, marginTop: 4 },
+    sheetName: { color: panelText.primary, fontSize: 19, fontWeight: '600' },
+    sheetMeta: { color: panelText.secondary, fontSize: 12, marginTop: 4 },
     sheetButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
     tabs: { flexDirection: 'row', paddingHorizontal: 20, gap: 8, paddingBottom: 14 },
     tab: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
     selectedTab: { backgroundColor: theme.colors.surface.muted },
-    tabText: { color: theme.colors.text.secondary, fontSize: 14 },
+    tabText: { color: panelText.secondary, fontSize: 14 },
     activeTabText: { color: theme.colors.brand.primary, fontSize: 14, fontWeight: '600' },
     list: { padding: 20, gap: 12, paddingBottom: 40 },
     search: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 20, marginBottom: 6, paddingHorizontal: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.input },
-    input: { flex: 1, paddingVertical: 14, color: theme.colors.text.primary, fontSize: 14 },
-    groupInput: { padding: 14, color: theme.colors.text.primary, fontSize: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.input },
+    input: { flex: 1, paddingVertical: 14, color: panelText.primary, fontSize: 14 },
+    groupInput: { padding: 14, color: panelText.primary, fontSize: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.input },
     card: { padding: 18, gap: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.raised, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light },
-    body: { fontSize: 15, lineHeight: 24, color: theme.colors.text.primary },
-    meta: { color: theme.colors.text.secondary, fontSize: 12, lineHeight: 18 },
+    body: { fontSize: 15, lineHeight: 24, color: panelText.primary },
+    meta: { color: panelText.secondary, fontSize: 12, lineHeight: 18 },
     row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-    description: { color: theme.colors.text.secondary, fontSize: 13, lineHeight: 21, paddingHorizontal: 20, marginBottom: 12 },
+    description: { color: panelText.secondary, fontSize: 13, lineHeight: 21, paddingHorizontal: 20, marginBottom: 12 },
     error: { color: theme.colors.feedback.error, padding: 20, textAlign: 'center' },
   });
 };

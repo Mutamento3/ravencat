@@ -442,6 +442,29 @@ assert.equal(legacy.length, 2);
 assert.equal(legacy[0].kind, 'message');
 assert.equal(legacy[1].kind, 'message');
 
+// 缺少运行编号的真实工具记录也由行动步骤承载，但不能猜测并入两侧或互相合并。
+for (const status of ['running', 'completed', 'failed']) {
+  const isolatedTools = project([
+    reasoning(1),
+    toolStatus(2, { turnRunId: null }, '发送表情包', status),
+    toolStatus(3, { turnRunId: null }, '其他工具', status),
+    reasoning(4),
+  ]);
+  assert.equal(isolatedTools.length, 4);
+  assertGroup(isolatedTools[1], [2]);
+  assertGroup(isolatedTools[2], [3]);
+  assert.equal(isolatedTools[1].runKey, null, '独立过程卡不伪造运行归属');
+  assert.equal(isolatedTools[1].isRunning, status === 'running');
+  assert.notEqual(isolatedTools[1].key, isolatedTools[2].key);
+}
+
+const failedThenReasoning = project([
+  toolStatus(1, {}, '调用失败：发送表情包', 'failed'),
+  reasoning(2),
+]);
+assert.equal(failedThenReasoning.length, 1);
+assertGroup(failedThenReasoning[0], [1, 2], '有运行身份的失败工具与后续思考仍按时间线归入同一组');
+
 
 // ---------------------------------------------------------------------------
 // E：run tail 归属

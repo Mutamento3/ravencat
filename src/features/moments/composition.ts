@@ -1,4 +1,4 @@
-/** 仅供 Host 装配 Moment Media 的 repository、事务、MediaAsset 与辅助模型端口。 */
+/** 仅供 Host 装配时刻工具快照、媒体 repository、事务、MediaAsset 与辅助模型端口。 */
 import {
   getAuxiliaryModelConfigById,
   listAuxiliaryModelConfigs,
@@ -37,3 +37,4 @@ export function configureMomentsMediaRuntime(
 
 export type { MomentImageAnalysisExecutor } from './application/MomentMediaRuntime';
 export { momentRepository } from './infrastructure/SQLiteMomentRepository';
+export { createMomentToolForRun } from './aiTools/AICreateMomentTool';

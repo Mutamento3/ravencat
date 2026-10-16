@@ -1,5 +1,8 @@
 /** 为应用提供统一 Android 原生通知的发送、撤销、权限、诊断与点击响应。 */
 import {
+  awaitTurnDisplayArrival,
+  setTurnDisplayOpen,
+  setTurnDisplayActive,
   addMessageArrivalListener,
   getMessageArrivalSnapshot,
   beginMessageArrival,
@@ -43,6 +46,7 @@ type NotificationSubscription = {
 
 // 到达节奏与通知权限分开：页面与 Headless 共用原生进度，关闭通知仍正常递增未读。
 export { addMessageArrivalListener, getMessageArrivalSnapshot, beginMessageArrival, awaitMessageArrival, finishMessageArrival };
+export { awaitTurnDisplayArrival, setTurnDisplayOpen, setTurnDisplayActive };
 
 export type {
   AIMessageDeliveryKind,
@@ -91,6 +95,7 @@ export async function sendAIMessageNotification(
   const displayId = `kimiphone-msg-${conversationKey}-${eventId}`;
   try {
     const result = await postConversationNotification({
+      turnRunId: params.turnRunId,
       displayId,
       eventId,
       scopeKey: params.notificationScope || null,

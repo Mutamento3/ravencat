@@ -1,9 +1,8 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { ActivityIndicator, BackHandler } from 'react-native';
 
 import { useCallRuntime } from './CallRuntimeProvider';
 import CallActiveScreen from './CallActiveScreen';
-import CallEndedScreen from './CallEndedScreen';
 import { EmptyState } from '@shared/ui';
 
 interface CallScreenProps {
@@ -17,6 +16,11 @@ export default function CallScreen({ callId, onClose, onMinimize }: CallScreenPr
   const call = runtime?.call;
   const state = call?.state;
   const exitHandledRef = useRef(false);
+  const close = useCallback(() => {
+    if (exitHandledRef.current) return;
+    exitHandledRef.current = true;
+    onClose();
+  }, [onClose]);
 
   // incoming requested/ringing 的唯一 surface 是原生 CallStyle / IncomingCallActivity，
   // RN 不提供任何 incoming UI；异常路由进入 /calls/:id 时由 route guard 退出该页面，
@@ -34,31 +38,23 @@ export default function CallScreen({ callId, onClose, onMinimize }: CallScreenPr
       if (!isNativeIncomingSurface && !isTerminalState) {
         onMinimize();
       } else {
-        onClose();
+        close();
       }
       return true;
     };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBackPress);
     return () => subscription.remove();
-  }, [call, isNativeIncomingSurface, isTerminalState, onClose, onMinimize]);
+  }, [close, isNativeIncomingSurface, isTerminalState, onMinimize]);
 
   useEffect(() => {
-    if (isNativeIncomingSurface && !exitHandledRef.current) {
-      exitHandledRef.current = true;
-      onClose();
+    // 终态即退出展示；媒体退场仍由 Headless 宿主等待，不阻塞返回原位置。
+    if (isNativeIncomingSurface || isTerminalState || runtime?.shouldExit) {
+      close();
     }
-  }, [isNativeIncomingSurface, onClose]);
+  }, [close, isNativeIncomingSurface, isTerminalState, runtime?.shouldExit]);
 
-  useEffect(() => {
-    if (runtime?.shouldExit && !exitHandledRef.current) {
-      exitHandledRef.current = true;
-      onClose();
-    }
-  }, [onClose, runtime?.shouldExit]);
-
-  if (isNativeIncomingSurface) {
-    // guard 退出前不渲染任何通话 UI，避免闪现第二个 incoming surface。
+  if (isNativeIncomingSurface || isTerminalState || runtime?.shouldExit || exitHandledRef.current) {
     return null;
   }
 
@@ -70,14 +66,10 @@ export default function CallScreen({ callId, onClose, onMinimize }: CallScreenPr
         title="找不到这次通话"
         description="通话记录可能已被删除，或链接已经失效。"
         actionText="返回"
-        onAction={onClose}
+        onAction={close}
       />
     );
   }
 
-  if (isTerminalState) {
-    return <CallEndedScreen callId={callId} onClose={onClose} runtime={runtime} />;
-  }
-
-  return <CallActiveScreen callId={callId} onClose={onClose} onMinimize={onMinimize} runtime={runtime} />;
+  return <CallActiveScreen callId={callId} onMinimize={onMinimize} runtime={runtime} />;
 }

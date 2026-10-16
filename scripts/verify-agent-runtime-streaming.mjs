@@ -145,9 +145,7 @@ const chatAgentReplyFlowModule = loadTypeScriptModule(
             steps: [],
           }),
         },
-        tools: {
-          isTimelineHidden: () => false,
-        },
+        tools: {},
       }),
     },
     '../application/ChatReplyRuntime': {

@@ -98,10 +98,12 @@
             ├── proactive-life.tsx
             └── system-access.tsx
         ├── sticker-system.tsx
-        └── wallet
+        ├── wallet
             ├── history
                 ├── [rangeId].tsx
                 └── index.tsx
+            └── index.tsx
+        └── web-search
             └── index.tsx
     ├── features
         ├── assistants
@@ -109,7 +111,7 @@
             ├── AIAssistantManagement.ts
             ├── aiTools
                 ├── BlockAIAssistantTool.ts
-                ├── ChangeOwnAvatarTool.ts
+                ├── ReleaseHostCooldownTool.ts
                 └── UnblockAIAssistantTool.ts
             ├── application
                 ├── AIModelService.ts
@@ -124,6 +126,7 @@
             ├── composition.ts
             ├── domain
                 ├── AIProfile.ts
+                ├── ApplicationSettingsAccess.ts
                 ├── AssistantRepository.ts
                 ├── AssistantToolPermission.ts
                 ├── AssistantVoiceSettingsRepository.ts
@@ -274,7 +277,6 @@
                 └── SQLiteCallRepository.ts
             └── presentation
                 ├── CallActiveScreen.tsx
-                ├── CallEndedScreen.tsx
                 ├── CallRuntimeProvider.tsx
                 ├── CallScreen.tsx
                 ├── components
@@ -366,6 +368,7 @@
                     ├── PersistChatImageAttachment.ts
                     ├── PrepareChatAttachments.ts
                     ├── ReceiveExternalAIMessage.ts
+                    ├── RecordAssistantNicknameChange.ts
                     ├── ResolveChatAttachmentMedia.ts
                     ├── SendUserMessage.ts
                     ├── ShareChatMessages.ts
@@ -428,7 +431,8 @@
                         ├── useAttachmentDraft.ts
                         ├── useChatDetail.ts
                         ├── useChatRegeneration.ts
-                        └── useChatSendFlow.ts
+                        ├── useChatSendFlow.ts
+                        └── useChatTurnExecutionStatus.ts
                     ├── components
                         ├── BottomTabBar.tsx
                         ├── chatActionGrouping.ts
@@ -440,6 +444,7 @@
                         ├── ChatHeader.tsx
                         ├── chatHistoryPagination.ts
                         ├── ChatInputArea.tsx
+                        ├── chatInputLimits.ts
                         ├── chatInputStyles.ts
                         ├── ChatMessageActionMenu.tsx
                         ├── ChatMessageEditor.tsx
@@ -467,7 +472,7 @@
                         ├── TogetherListeningActivityCard.tsx
                         ├── togetherListeningCardViewModel.ts
                         ├── useAgentTransientTimeline.ts
-                        ├── useArrivedAssistantMessages.ts
+                        ├── useChatBottomFollow.ts
                         ├── useChatComposerSurface.ts
                         ├── useChatFavoriteAction.ts
                         ├── useChatMessageSelection.ts
@@ -543,6 +548,7 @@
                     ├── ChatReplyTypes.ts
                     ├── ChatReplyUtils.ts
                     ├── ChatRunMutationFence.ts
+                    ├── ChatTurnPresentationRuntime.ts
                     ├── CommittedAssistantSegmentDelivery.ts
                     ├── ExecuteUserReplyTurn.ts
                     ├── MemoryParticipationPolicy.ts
@@ -561,10 +567,14 @@
                     └── ChatForegroundContext.ts
                 ├── domain
                     ├── ChatImageSettingsRepository.ts
+                    ├── ChatTurnPresentation.ts
+                    ├── ChatTurnPresentationRepository.ts
                     ├── ConversationTurn.ts
                     └── ConversationTurnRepository.ts
                 └── infrastructure
+                    ├── ChatTurnPresentationSql.ts
                     ├── SQLiteChatImageSettingsRepository.ts
+                    ├── SQLiteChatTurnPresentationRepository.ts
                     └── SQLiteConversationTurnRepository.ts
             ├── summary
                 ├── aiTools
@@ -762,6 +772,7 @@
                 ├── AdoptExistingMediaAssets.ts
                 ├── AIImageRuntime.ts
                 ├── AIImageTools.ts
+                ├── CommitCroppedImageSelection.ts
                 ├── CreateMediaAsset.ts
                 ├── MediaAssetBacking.ts
                 ├── MediaAssetCatalog.ts
@@ -929,6 +940,7 @@
             ├── application
                 ├── legacyWallpaperSettings.ts
                 ├── MomentsCoverSettings.ts
+                ├── WallpaperChanged.ts
                 └── WallpaperSettings.ts
             ├── composition.ts
             ├── domain
@@ -1167,8 +1179,20 @@
                 └── walletVisualizationColors.ts
         └── webTools
             ├── application
-                └── WebAgentTools.ts
-            └── index.ts
+                ├── SearchConfiguration.ts
+                ├── WebAgentTools.ts
+                └── WebToolsRuntime.ts
+            ├── composition.ts
+            ├── domain
+                ├── SearchSettings.ts
+                └── SearchSettingsRepository.ts
+            ├── index.ts
+            ├── infrastructure
+                ├── SecureSearchCredentialStore.ts
+                └── SQLiteSearchSettingsRepository.ts
+            └── presentation
+                ├── searchSettingsStyles.ts
+                └── WebSearchSettingsScreen.tsx
     ├── host
         ├── application
             ├── ApplicationUpdates.ts
@@ -1176,6 +1200,7 @@
             └── TransferProtocolToMemory.ts
         ├── composition
             ├── agent
+                ├── ApplicationSettingsTools.ts
                 ├── assertImageToolRunCurrent.ts
                 ├── createAgentToolRegistry.ts
                 ├── HostAgentRunAssembly.ts
@@ -1263,9 +1288,12 @@
             ├── AIMessageDeliveryCoordinator.ts
             ├── CallExecutionHeadlessTask.ts
             ├── ChatSummaryQueueCoordinator.ts
+            ├── ConversationExecutionLifetime.ts
             ├── ConversationTurnCoordinator.ts
             ├── ConversationTurnHeadlessTask.ts
             ├── FloatingConversationProjection.ts
+            ├── HostModelRunPreparation.ts
+            ├── HostRelationshipReplyHeadlessTask.ts
             ├── MemoryEmbeddingQueueCoordinator.ts
             ├── StartupRecoveryCoordinator.ts
             ├── StickerAnnotationQueueCoordinator.ts
@@ -1311,6 +1339,7 @@
                 └── selectChatImage.ts
             ├── Clipboard.ts
             ├── ConversationTurnExecutionHost.ts
+            ├── CropImageToAspect.ts
             ├── DeviceLocation.ts
             ├── DeviceMediaService.ts
             ├── DeviceObserver.ts
@@ -1364,7 +1393,9 @@
             ├── sqlite
                 ├── agentRuntimeSchema.ts
                 ├── aiImageSchema.ts
+                ├── applicationSettingsMigration.ts
                 ├── assistantIdentityMigration.ts
+                ├── assistantNicknameHistoryMigration.ts
                 ├── auxiliaryModelDefaultsSchema.ts
                 ├── backupSnapshot.ts
                 ├── callBackgroundSchema.ts
@@ -1372,6 +1403,8 @@
                 ├── chatRegenerationSchema.ts
                 ├── chatSummarySchema.ts
                 ├── chatToolPackageSchema.ts
+                ├── chatTurnObservabilitySchema.ts
+                ├── chatTurnPresentationSchema.ts
                 ├── companionScheduleMigration.ts
                 ├── connection.ts
                 ├── conversationPinMigration.ts
@@ -1397,7 +1430,8 @@
                 ├── togetherListeningSchema.ts
                 ├── translationModelSchema.ts
                 ├── userProfileSchema.ts
-                └── wallpaperSelectionSchema.ts
+                ├── wallpaperSelectionSchema.ts
+                └── webSearchSchema.ts
             └── typeAssertions.ts
         ├── updates
             ├── DownloadApplicationUpdate.ts
@@ -1419,6 +1453,8 @@
             └── resolveAvatarSource.ts
         ├── diagnostics
             └── TurnTimelineLog.ts
+        ├── errors
+            └── SettingChangeConflictError.ts
         ├── index.ts
         ├── kernel
             └── selfIdentity.ts
@@ -1429,6 +1465,7 @@
             ├── contextWindowLimits.ts
             ├── estimateTextTokens.ts
             ├── index.ts
+            ├── readingFlow.ts
             └── types.ts
         ├── runtime
             ├── abortSignal.ts
@@ -1619,13 +1656,20 @@
     ├── conversation-turn-runtime
         ├── android
             └── src
-                └── main
+                ├── main
                     └── java
                         └── expo
                             └── modules
                                 └── conversationturnruntime
                                     ├── ConversationTurnHeadlessTaskService.kt
+                                    ├── ConversationTurnHostLifetime.kt
                                     └── ConversationTurnRuntimeModule.kt
+                └── test
+                    └── java
+                        └── expo
+                            └── modules
+                                └── conversationturnruntime
+                                    └── ConversationTurnHostLifetimeTest.kt
         ├── index.ts
         └── src
             └── ConversationTurnRuntimeModule.ts
@@ -1748,9 +1792,11 @@
                             └── modules
                                 └── kimiphonenotifications
                                     ├── CallNotificationActionHeadlessTaskService.kt
+                                    ├── CallPresentationReturn.kt
                                     ├── IncomingCallActivity.kt
                                     ├── IncomingCallSurfaceRegistry.kt
                                     ├── KimiPhoneNotificationsModule.kt
+                                    ├── KimiPhoneNotificationsPackage.kt
                                     ├── MessageArrivalProgress.kt
                                     ├── NotificationActionReceiver.kt
                                     ├── NotificationChannelRegistry.kt
@@ -1764,7 +1810,9 @@
                         └── expo
                             └── modules
                                 └── kimiphonenotifications
-                                    └── NotificationDiagnosticsTest.kt
+                                    ├── CallPresentationReturnTest.kt
+                                    ├── NotificationDiagnosticsTest.kt
+                                    └── TurnDisplayProgressTest.kt
         ├── index.ts
         └── src
             └── KimiPhoneNotificationsModule.ts
@@ -1973,7 +2021,10 @@
                                     ├── WebContentParser.kt
                                     ├── WebDownloadStore.kt
                                     ├── WebHttpClient.kt
+                                    ├── WebPageText.kt
                                     ├── WebPrivateImageStore.kt
+                                    ├── WebSearchClient.kt
+                                    ├── WebSearchResults.kt
                                     └── WebToolsModule.kt
                 └── test
                     └── java
@@ -1981,6 +2032,7 @@
                             └── modules
                                 └── webtools
                                     ├── WebPrivateImageStoreTest.kt
+                                    ├── WebSearchResultsTest.kt
                                     ├── WebToolsRealNetworkTest.kt
                                     └── WebToolsTest.kt
 ```

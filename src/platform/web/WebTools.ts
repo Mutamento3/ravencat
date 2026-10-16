@@ -7,10 +7,26 @@ export type WebResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } };
 
+export type WebSearchEngine = 'bing' | 'duckduckgo' | 'tavily' | 'brave';
+export interface WebSearchOptions {
+  engine: WebSearchEngine;
+  apiKey: string | null;
+  depth: 'basic' | 'advanced';
+  timeRange: 'day' | 'week' | 'month' | 'year' | null;
+}
+
+export interface WebPageOptions {
+  startChar?: number;
+  find?: string;
+  documentVersion?: string;
+}
+
 export interface WebSearchResult {
   query: string;
   source: string;
-  items: { title: string; url: string; snippet: string }[];
+  engine: WebSearchEngine;
+  duplicatesRemoved: number;
+  items: { title: string; url: string; snippet: string; score?: number; publishedAt?: string }[];
 }
 
 export interface WebPage {
@@ -19,6 +35,11 @@ export interface WebPage {
   contentType: string;
   text: string;
   truncated: boolean;
+  startChar: number;
+  nextStartChar: number | null;
+  totalChars: number;
+  documentVersion: string;
+  matches: { startChar: number; text: string }[];
   links: { title: string; url: string }[];
 }
 
@@ -34,8 +55,8 @@ export interface WebDownload {
 interface WebToolsNativeModule {
   createRequest(): string;
   cancelRequest(id: string): void;
-  search(id: string, query: string, limit: number): Promise<WebResult<WebSearchResult>>;
-  readPage(id: string, url: string, maxChars: number): Promise<WebResult<WebPage>>;
+  search(id: string, query: string, limit: number, engine: WebSearchEngine, apiKey: string | null, depth: string, timeRange: string | null): Promise<WebResult<WebSearchResult>>;
+  readPage(id: string, url: string, maxChars: number, startChar: number, find: string | null, documentVersion: string | null): Promise<WebResult<WebPage>>;
   download(id: string, url: string, fileName: string | null): Promise<WebResult<WebDownload>>;
   downloadImage(id: string, url: string, fileName: string | null): Promise<WebResult<WebDownload>>;
 }
@@ -58,10 +79,10 @@ async function request<T>(signal: AbortSignal, execute: (id: string) => Promise<
   }
 }
 
-export const searchWeb = (query: string, limit: number, signal: AbortSignal) =>
-  request(signal, (id) => native.search(id, query, limit));
-export const readWebPage = (url: string, maxChars: number, signal: AbortSignal) =>
-  request(signal, (id) => native.readPage(id, url, maxChars));
+export const searchWeb = (query: string, limit: number, signal: AbortSignal, options: WebSearchOptions) =>
+  request(signal, (id) => native.search(id, query, limit, options.engine, options.apiKey, options.depth, options.timeRange));
+export const readWebPage = (url: string, maxChars: number, signal: AbortSignal, options: WebPageOptions = {}) =>
+  request(signal, (id) => native.readPage(id, url, maxChars, options.startChar ?? 0, options.find ?? null, options.documentVersion ?? null));
 export const downloadWebFile = (url: string, fileName: string | null, signal: AbortSignal) =>
   request(signal, (id) => native.download(id, url, fileName));
 

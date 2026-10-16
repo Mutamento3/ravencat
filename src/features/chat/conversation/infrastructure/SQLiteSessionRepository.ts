@@ -43,12 +43,14 @@ export class SessionRepository implements ISessionRepository {
     const database = databaseCoordinator.openTaskExecutor({
       name: 'chat.resolveCanonicalConversation', feature: 'chat', priority: 'interactive',
     });
-    return database.withExclusiveTransactionAsync(async (transaction) => {
-      const existing = await transaction.getFirstAsync<SessionRow>(
-        'SELECT * FROM sessions WHERE ai_assistant_id = ? LIMIT 1', [aiId],
-      );
-      return existing ? this.mapRow(existing) : this.createCanonicalConversation(transaction, aiId, now);
-    });
+    return database.withExclusiveTransactionAsync(transaction => this.resolveCanonicalConversationInTransaction(transaction, aiId, now));
+  }
+
+  async resolveCanonicalConversationInTransaction(transaction: DatabaseTransactionExecutor, aiId: string, now: Date): Promise<ChatSession> {
+    const existing = await transaction.getFirstAsync<SessionRow>(
+      'SELECT * FROM sessions WHERE ai_assistant_id = ? LIMIT 1', [aiId],
+    );
+    return existing ? this.mapRow(existing) : this.createCanonicalConversation(transaction, aiId, now);
   }
 
   async getSession(sessionId: string): Promise<ChatSession | null> {

@@ -2,18 +2,21 @@
 import type { AIProfile } from './domain/AIProfile';
 import type {
   AIAssistantSettingsUpdate,
+  AssistantNicknameChange,
   AIModelSettingsUpdate,
   AIAssistantSummary,
 } from './domain/AssistantRepository';
 import {
   createMediaAssetWithReference,
+  commitCroppedImageSelection,
   MEDIA_ASSET_STORAGE_BACKEND,
   releaseMediaAssetCandidates,
-  resolveMediaAsset,
 } from '@features/media';
 import type { PersistentAvatarDraft } from '@platform/device/DeviceMediaService';
-import { inspectLocalImage } from '@platform/device';
-import type { DatabaseTransactionExecutor } from '@platform/persistence';
+import { databaseCoordinator, type DatabaseTransactionExecutor } from '@platform/persistence';
+import { SettingChangeConflictError } from '@shared/errors/SettingChangeConflictError';
+import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
+import { ApplicationSettingsAccessError } from './domain/ApplicationSettingsAccess';
 import { HostRelationshipError } from './domain/HostRepository';
 import {
   HostAuthorityCoordinator,
@@ -23,10 +26,12 @@ import { aiAssistantRepository } from './infrastructure/SQLiteAssistantRepositor
 import { aiHostRepository } from './infrastructure/SQLiteHostRepository';
 
 export interface AssistantChatSessionGateway {
+  recordNicknameChangeInTransaction(transaction: DatabaseTransactionExecutor, change: AssistantNicknameChange): Promise<() => void>;
   resolveCanonicalConversation(aiId: string): Promise<{
     id: string;
     lastTime?: string | null;
   }>;
+  onHostRelationshipChanged(aiId: string, change: 'appointed' | 'revoked', occurredAt: string): Promise<void>;
   onHostRelationshipRemoved(
     aiId: string,
     reason: 'revoked' | 'deleted'
@@ -112,7 +117,16 @@ export async function updateAIAssistantSettings(
       (await aiAssistantRepository.getAvatarMediaAssetReference(aiId))?.avatarMediaAssetId ?? null;
   }
 
-  const updated = await aiAssistantRepository.updateSettings(aiId, settings);
+  const { updated, notifyNicknameChange } = await databaseCoordinator.transaction({
+    name: 'assistants.update-settings-and-history', feature: 'assistants', priority: 'interactive',
+  }, async transaction => {
+    const result = await aiAssistantRepository.updateSettingsInTransaction(transaction, aiId, settings);
+    const notifyNicknameChange = result.nicknameChange === null ? null
+      : await requireChatSessionGateway().recordNicknameChangeInTransaction(transaction, result.nicknameChange);
+    return { updated: result.updated, notifyNicknameChange };
+  });
+  // 历史与当前值一同提交后，Chat 才刷新时间线和摘要 consumer。
+  if (notifyNicknameChange !== null) notifyNicknameChange();
   if (updated && replacesAvatar) {
     await releaseMediaAssetCandidates([previousAvatarMediaAssetId]);
   }
@@ -165,19 +179,41 @@ export async function updateAIAssistantAvatarFromDraft(
 
 export type AIAssistantUpdatedListener = (assistant: AIProfile) => void;
 
-/** 工具只传当前执行角色；事务内 fence 与头像 CAS 分别保护运行资格和用户的后续编辑。 */
-export async function changeOwnAvatarFromMediaAsset(assistantId: string, mediaAssetId: string, guard: (transaction: DatabaseTransactionExecutor) => Promise<void>) {
+/** 主理身份是可撤销事实，在真正提交设置的事务内裁决，不依赖开跑时的角色快照。 */
+export async function assertApplicationSettingsAccessInTransaction(transaction: DatabaseTransactionExecutor, actorId: string, targetId: string | null): Promise<void> {
+  if (!await aiAssistantRepository.canManageApplicationSettingsInTransaction(transaction, actorId, targetId)) {
+    throw new ApplicationSettingsAccessError();
+  }
+}
+
+/** Assistants 拥有头像引用；文件准备期间的用户编辑由头像 CAS 保护。 */
+export async function changeAssistantAvatarFromMediaAsset(assistantId: string, mediaAssetId: string | null, signal: AbortSignal, guard: (transaction: DatabaseTransactionExecutor) => Promise<void>) {
   const expected = await aiAssistantRepository.getAvatarMediaAssetReference(assistantId);
-  if (!expected) return { changed: false, reason: 'AI 已不存在' };
-  const media = await resolveMediaAsset(mediaAssetId);
-  await inspectLocalImage(media.localUri);
-  const changed = await aiAssistantRepository.replaceAvatarMediaAssetReference({ ownerId: assistantId,
-    expectedAvatar: expected.avatar, expectedAvatarMediaAssetId: expected.avatarMediaAssetId, mediaAssetId }, guard);
-  if (!changed) return { changed: false, reason: '头像在处理期间已被修改或角色已删除，旧请求未覆盖新设置' };
+  if (!expected) throw new SettingChangeConflictError('AI 已被删除，本次头像修改未保存。');
+  const result = await commitCroppedImageSelection({ mediaAssetId, aspect: [1, 1], signal }, async (tx, assetId) => {
+    await guard(tx);
+    const changed = await aiAssistantRepository.tryCommitAvatarMediaAssetReferenceInTransaction(tx, { ownerId: assistantId,
+      expectedAvatar: expected.avatar, expectedAvatarMediaAssetId: expected.avatarMediaAssetId, mediaAssetId: assetId });
+    if (!changed) throw new SettingChangeConflictError('头像在处理期间已被修改或角色已删除，本次操作未覆盖新设置。');
+  });
   await releaseMediaAssetCandidates([expected.avatarMediaAssetId]);
   const assistant = await aiAssistantRepository.getById(assistantId);
   if (assistant) emitAIAssistantUpdated(assistant);
-  return { changed: true, mediaAssetId };
+  return result;
+}
+
+/** 改公开名称不修改用户私有昵称，也不改写历史正文或身份键。 */
+export async function changeAssistantPublicName(assistantId: string, name: string, guard: (transaction: DatabaseTransactionExecutor) => Promise<void>): Promise<void> {
+  const expected = await aiAssistantRepository.getById(assistantId);
+  if (!expected) throw new SettingChangeConflictError('AI 已被删除，本次名称修改未保存。');
+  await databaseCoordinator.transaction({ name: 'assistants.change-public-name', feature: 'assistants', priority: 'interactive' }, async tx => {
+    await guard(tx);
+    if (!await aiAssistantRepository.changeNameInTransaction(tx, assistantId, expected.name, name)) {
+      throw new SettingChangeConflictError('名称已被其他操作修改或角色已删除，本次操作未覆盖新设置。');
+    }
+  });
+  const assistant = await aiAssistantRepository.getById(assistantId);
+  if (assistant) emitAIAssistantUpdated(assistant);
 }
 
 const aiAssistantUpdatedListeners = new Set<AIAssistantUpdatedListener>();
@@ -222,7 +258,11 @@ export async function appointHostAIAssistant(aiId: string): Promise<boolean> {
         '没有可用聊天模型的 AI 不能成为主理 AI'
       );
     }
-    return aiHostRepository.setHostAI(aiId);
+    const appointed = await aiHostRepository.setHostAI(aiId);
+    if (appointed && !assistant.isHostAI) {
+      await requireChatSessionGateway().onHostRelationshipChanged(aiId, 'appointed', new Date().toISOString());
+    }
+    return appointed;
   });
 }
 
@@ -231,7 +271,11 @@ export async function revokeHostAIAssistant(aiId: string): Promise<boolean> {
     const assistant = await aiAssistantRepository.getById(aiId);
     const revoked = await aiHostRepository.revokeHostAI(aiId);
     if (revoked && assistant?.isHostAI) {
-      await requireChatSessionGateway().onHostRelationshipRemoved(aiId, 'revoked');
+      const gateway = requireChatSessionGateway();
+      await Promise.all([
+        gateway.onHostRelationshipChanged(aiId, 'revoked', new Date().toISOString()),
+        gateway.onHostRelationshipRemoved(aiId, 'revoked'),
+      ]);
     }
     return revoked;
   });
@@ -257,12 +301,12 @@ export async function getHostAICooldownStatus() {
   return { appointment };
 }
 
-/** 解除开发设备上的关系冷静期，不改变正式产品规则。 */
-export async function clearHostAIAppointmentCooldownForDevelopment(): Promise<void> {
-  if (!__DEV__) {
-    throw new Error('正式构建不允许清除主理 AI 冷静期');
-  }
-  await aiHostRepository.clearAppointmentCooldownForDevelopment();
+/** 只能由冷静期中的原主理 AI 决定解除，不恢复主理身份。 */
+export async function releaseHostAICooldown(actorAIId: string, signal?: AbortSignal): Promise<boolean> {
+  return hostAuthorityCoordinator.runHostMutation(() => {
+    throwIfAbortSignalAborted(signal);
+    return aiHostRepository.releaseAppointmentCooldown(actorAIId);
+  });
 }
 
 function requireChatSessionGateway(): AssistantChatSessionGateway {

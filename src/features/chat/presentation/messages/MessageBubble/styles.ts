@@ -7,6 +7,9 @@ import { createMessageTextStyles } from './textStyles';
 import { createPaperNoteMessageStyles } from './paperNoteStyles';
 import { createMessageBubbleSupplementStyles } from './supplementStyles';
 
+/** 用户长文本气泡：正文超过该字符数默认折叠，防止一条长消息霸屏。 */
+export const USER_TEXT_COLLAPSE_THRESHOLD = 500;
+
 export function createMessageBubbleStyles(theme: PresentationTheme) {
   const isMoonKimi = isMoonKimiTheme(theme);
   const isPaperNote = isPaperNoteTheme(theme);
@@ -220,6 +223,20 @@ export function createMessageBubbleStyles(theme: PresentationTheme) {
       paddingVertical: 4,
       paddingHorizontal: 0,
       maxWidth: '80%',
+    },
+    // 折叠态裁剪高度约等于 500 字正文的渲染高度；纯文本与 markdown 共用同一裁剪。
+    userTextCollapsedClip: {
+      maxHeight: 480,
+      overflow: 'hidden',
+    },
+    userTextFoldToggle: {
+      marginTop: 6,
+      alignSelf: 'flex-start',
+    },
+    userTextFoldToggleText: {
+      fontSize: 13,
+      color: theme.colors.chat.userText,
+      opacity: 0.75,
     },
     toolStatusBubble: {
       alignSelf: 'flex-start',

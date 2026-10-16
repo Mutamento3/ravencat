@@ -60,6 +60,7 @@ export type AppNotificationData =
   | TogetherListeningNotificationData;
 
 export interface SendAIMessageNotificationParams {
+  turnRunId?: string;
   aiId: string;
   aiName: string;
   message: string;

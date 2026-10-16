@@ -86,12 +86,16 @@ const { messageRepository: messages } = load('src/features/chat/messages/infrast
 const { conversationTurnRepository: turns } = load('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts');
 const events = load('src/features/chat/messages/events/ChatEvents.ts');
 const runtime = load('src/features/chat/messages/application/ChatMessageRuntime.ts');
+const display = load('src/features/chat/reply/application/ChatTurnPresentationRuntime.ts');
+display.configureChatTurnPresentation(load('src/features/chat/reply/infrastructure/SQLiteChatTurnPresentationRepository.ts').chatTurnPresentationRepository);
+display.configureTurnDisplayPacing(async () => true, async () => {}, async () => {}, async () => {});
+const turnPresentation = { freeze: display.freezeTurnDisplays, interrupt: display.interruptSessionTurnDisplays };
 const time = '2026-10-09T10:00:00.000Z';
 const ai = { id: 'ai', agentId: 'agent-ai', name: 'AI', model: 'current-model', apiKey: '', apiBaseUrl: '', enableTools: true };
 const makeMessage = (sessionId, text, extra = {}) => ({
   sessionId, text, senderType: 'assistant', isMe: false, createdAt: time, time: '18:00', status: 'sent', ...extra,
 });
-const commit = (run, values) => turns.commitTurn(run, values.map((message) => ({ message })), { assistantId: 'ai', openedPackageIds: [] });
+const commit = (run, values) => turns.commitTurn(run, values.map((message) => ({ message })), { assistantId: 'ai', changes: [] });
 async function initial(sessionId) {
   db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(sessionId, 'direct');
   db.prepare('INSERT INTO sessions(id, last_message, last_time, updated_at) VALUES (?, ?, ?, ?)').run(sessionId, '', time, time);
@@ -216,12 +220,21 @@ const stopReloadObservation = events.setChatEventBus({ emit: (name) => {
 override('src/features/chat/reply/delivery/AssistantMessageArrival.ts', {
   beginAssistantMessageArrival: async () => { arrivalRegistered = true; },
   finishAssistantMessageArrival: async () => { arrivalRegistered = false; },
+  // 页面 hook 的跨 runtime 兜底订阅；本环境不模拟原生到达端口，给无操作实现。
+  subscribeAssistantMessageArrival: () => () => {},
 });
 override('src/features/chat/reply/application/ProcessAIReply.ts', {
   processAIReply: async (sessionId, text, config, userId, repository, callbacks, context, persistence) => {
     calls.push({ sessionId, text, config, userId, context });
     if (modelBehavior === 'failure') throw new Error('模拟网络失败');
-    const items = modelBehavior === 'empty' ? [] : [{ message: makeMessage(sessionId, '宿主重写完成') }];
+    if (modelBehavior === 'reported_failure') {
+      callbacks.onReplyFailed({ status: 'failed', sessionId, text: '网络连接已中断', previewText: '请求失败', messageId: 0, error: 'network_disconnected' });
+      return;
+    }
+    const items = modelBehavior === 'empty' ? [] : [{ message: makeMessage(sessionId, '宿主重写完成', {
+      clientMessageId: `agent-timeline:${context.replyRunId}:1:0`,
+      metadataJson: JSON.stringify({ timelineSequence: 1, stepIndex: 1 }),
+    }) }];
     await persistence.commitAgentTimeline({ sessionId, response: { text: '宿主重写完成' }, aiConfig: config, callbacks, runtimeContext: context, items });
   },
 });
@@ -230,6 +243,9 @@ mocks['@features/chat/composition'] = {
   executeUserReplyTurn, conversationTurnRepository: turns,
   isChatReplyRunCancellationError: load('src/features/chat/reply/application/ChatReplyAbort.ts').isChatReplyRunCancellationError,
   emitChatRegenerationChanged: events.emitChatRegenerationChanged, emitChatTypingStatusChanged: events.emitChatTypingStatusChanged,
+  emitChatMessagesReloadRequested: events.emitChatMessagesReloadRequested,
+  emitChatTurnExecutionChanged: events.emitChatTurnExecutionChanged,
+  interruptChatRunPresentation: display.interruptChatRunPresentation,
 };
 const { createConversationTurnCoordinator } = load('src/host/runtime/ConversationTurnCoordinator.ts');
 let launches = 0;
@@ -238,7 +254,7 @@ const coordinator = createConversationTurnCoordinator({
   executionHost: { start: async () => { launches += 1; return true; } },
 });
 runtime.configureChatMessageRuntime({
-  messages, turns,
+  messages, turns, turnPresentation,
   regeneration: { onRequested: (sessionId) => coordinator.requestRegenerationFromHost(sessionId), onInvalidated: (sessionId) => coordinator.abortRegeneration(sessionId) },
 });
 const { regenerateChatReply } = load('src/features/chat/reply/application/RegenerateChatReply.ts');
@@ -258,8 +274,27 @@ for (const behavior of ['success', 'failure', 'empty']) {
   assert.equal((await turns.getRegenerationState(`host-${behavior}`)).sourceRunId, null);
 }
 assert.equal(launches, 3);
+// 重写失败仍按替换契约恢复原回复，不能把失败尝试作为普通聊天前缀追加进来。
+const visibleFailure = await initial('visible-failure');
+await turns.requestRegeneration('visible-failure', visibleFailure.target.id);
+const failedPreviewRun = await turns.claimIfIdle('visible-failure', 'user_reply');
+const failedPreview = new display.ChatTurnPresentation(failedPreviewRun, ai.agentId, ai.id);
+await failedPreview.start();
+failedPreview.sink.onDirty(() => [{ runId: failedPreviewRun.runId, sequence: 1, stepIndex: 1, kind: 'reasoning',
+  status: 'streaming', text: '失败重写的尝试预览', clientMessageId: `agent-timeline:${failedPreviewRun.runId}:1:0`, createdAt: time, time: '18:00' }]);
+await failedPreview.flush();
+await turns.revoke(failedPreviewRun, 'failed', 'model_request_failed');
+await failedPreview.finish();
+assert.ok(await messages.getMessageById(visibleFailure.target.id));
+assert.equal(load('src/features/chat/messages/application/AgentTransientTimeline.ts').snapshotAgentTransientTimelineWithReplacements('visible-failure').length, 0);
+// 普通回复的既有错误气泡路径只回调失败；执行 owner 仍要保存真实 T4 原因。
+await initial('reported-failure');
+await messages.commitMessage({ message: makeMessage('reported-failure', '普通聊天的新输入', { isMe: true, senderType: 'user' }), previewText: '普通聊天的新输入' });
+modelBehavior = 'reported_failure';
+await coordinator.executeTurnFromHost('reported-failure');
+assert.equal(db.prepare("SELECT terminal_reason FROM conversation_turn_runs WHERE session_id='reported-failure' AND status='failed'").get().terminal_reason, 'network_disconnected');
 assert.deepEqual(releases, [['audio-host-success']], '旧语音候选仅在成功替换后释放');
-assert.deepEqual(replacementReloads, [true], '替换后的首次刷新必须已登记原有分段到达投影');
+assert.equal(replacementReloads[0], true, '替换后的首次刷新必须已登记原有分段到达投影');
 stopReloadObservation();
 
 // 迟到的原生启动失败只能撤销自己的请求；新请求和它的活句柄继续工作。
@@ -300,7 +335,7 @@ const lateCoordinator = createConversationTurnCoordinator({
   executeTurn: async (params) => { liveParams = params; newModelStarted(); return modelResult; },
 });
 const configureWithCoordinator = (owner) => runtime.configureChatMessageRuntime({
-  messages, turns,
+  messages, turns, turnPresentation,
   regeneration: { onRequested: (sessionId) => owner.requestRegenerationFromHost(sessionId), onInvalidated: (sessionId) => owner.abortRegeneration(sessionId) },
 });
 configureWithCoordinator(lateCoordinator);
@@ -328,7 +363,7 @@ configureWithCoordinator(coordinator);
 
 // 原输入可能已被摘要移出原文，但不能直接注入原回复、工具记录或后续通话。
 let historySnapshot;
-mocks['@features/chat'] = { getChatSummaryContext: async () => historySnapshot };
+mocks['@features/chat'] = { getChatInterruptedTurnContext: async () => [], getChatSummaryContext: async () => historySnapshot };
 const { PromptHistoryBuilder } = load('src/host/prompt/PromptHistoryBuilder.ts');
 const history = new PromptHistoryBuilder();
 historySnapshot = {

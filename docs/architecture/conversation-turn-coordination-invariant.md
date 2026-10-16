@@ -93,7 +93,7 @@ T3 是 canonical assistant 回合的唯一提交点。一个事务必须同时�
 - 写入本轮全部 assistant、reasoning 和 tool timeline items；
 - 更新 session preview；
 - 将 run 标记为 `committed`；
-- 有正式 assistant 回复时推进本会话、本 AI 的工具包有效期，新拆包保存为后续三轮；
+- 有正式 assistant 回复时按工具实际执行顺序保存本会话、本 AI 的工具包开关；
 - 推进游标、清除 active run 并递增 revision。
 
 `regenerate` 的 T3 在同一 fence 内删除源 run 的 canonical 条目（`turn_item_index`
@@ -106,8 +106,11 @@ fence 失败表示 run 已失去提交资格：事务不得写入任何 item、�
 也不得为旧 run 写错误气泡或自动重新提交。canonical assistant 内容不得在 T3 前作为
 最终消息事实落库。
 
-工具包状态随 T3 同事务提交；工具调用、reasoning、分段、失败与取消不单独推进轮数。
-第三轮成功回复提交后旧包到期；模型运行中的拆包只修改 run 内暴露集合，不提前持久化。
+工具包状态随 T3 同事务提交；打开后持续保留，直到 AI 主动关闭，不按轮数到期。
+同一包多次开关以最后一次成功操作为准；失败、取消、supersede、fence 失败和事务回滚不改变持久状态。
+模型运行中的开关只修改 run 内暴露集合，下一次模型请求使用新的 schema，不提前持久化。
+特批工具不受包开关影响；展开集合仍与本次授权相交，状态不能授予调用权限。
+数据库 127 将旧三轮状态表清空重建，不保留临时展开选择；其他业务资料不受影响。
 
 ### T4：revoke
 

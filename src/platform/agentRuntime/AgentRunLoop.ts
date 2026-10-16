@@ -126,6 +126,8 @@ export class AgentRunLoop {
         forceFinalResponse,
         completionContinuation,
       );
+      // 模型已返回的回合先留在运行结果中，方便失败后诊断；记录不代表允许提案或执行。
+      const step = this.recordModelTurn(state, turn, stepIndex);
       const exposedToolNames = new Set(effectiveTools.map((tool) => tool.name));
       if (
         (context.resolveVisibleToolNames || completionContinuation || effectiveTools.length === 0)
@@ -135,7 +137,6 @@ export class AgentRunLoop {
         // 原始 task 更窄，不能让 task allowlist 重新放大这一边界。
         throw new AgentRuntimeTerminalError('MODEL_PROTOCOL_ERROR');
       }
-      const step = this.recordModelTurn(state, turn, stepIndex);
       await emitAgentEvent(context, {
         type: 'model_turn_completed',
         runId: state.runId,

@@ -659,7 +659,9 @@ await runCase(async ({ db, mediaReleaseCalls, events }) => {
     '删除最后一段正文必须连带删除 reasoning',
   );
   assert.deepEqual(events, [
+    { name: 'turnExecutionChanged', sessionId },
     { name: 'messagesDeleted', sessionId, deletedMessageIds: firstDeleted },
+    { name: 'turnExecutionChanged', sessionId },
     { name: 'messagesDeleted', sessionId, deletedMessageIds: secondDeleted },
   ], '单条及推理联删发布精确删除事实，不请求重载');
   assert.deepEqual(

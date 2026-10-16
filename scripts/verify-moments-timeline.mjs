@@ -50,6 +50,7 @@ const mocks = {
   },
   '@features/assistants': {
     listAIAssistants: async () => identity.assistants,
+    getAssistantDisplayName: (assistant) => assistant.name,
   },
   '@features/media': {
     releaseMediaAssetCandidates: async () => undefined,

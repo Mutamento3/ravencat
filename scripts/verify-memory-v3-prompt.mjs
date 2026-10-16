@@ -1,3 +1,4 @@
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 /** V3 的真实 Prompt 组装行为：旧预设、完整原文、追加前缀和 Current Input 隔离。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -37,7 +38,7 @@ let remaining = raw;
 let passiveInput;
 let timelineMessages = [];
 mocks.set('@shared', { DEFAULT_SELF_NAME: '用户' });
-mocks.set('@shared/prompt', load('src/shared/prompt/estimateTextTokens.ts'));
+mocks.set('@shared/prompt', { ...load('src/shared/prompt/estimateTextTokens.ts'), CHAT_PROMPT_READING_FLOW });
 mocks.set('@features/memory', { recallPassiveMemory: async (_assistant, input) => {
   passiveInput = input;
   return [{ id: 'memory', content: '被动记忆的完整正文', summary: '记忆独立摘要', rememberedAt: '2026-10-04T03:00:00.000Z' }];
@@ -47,7 +48,7 @@ mocks.set('@features/moments', {});
 const metadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts');
 const { projectChatContextMessage } = load('src/features/chat/summary/domain/ChatContext.ts');
 const { buildConversationTimeline } = load('src/features/chat/summary/domain/ChatSummaryTimeline.ts');
-mocks.set('@features/chat', { ...metadata, getChatBackgroundContexts: async () => [], getChatSummaryContext: async (_conversation, protectedIds = []) => ({
+mocks.set('@features/chat', { ...metadata, getChatBackgroundContexts: async () => [], getChatInterruptedTurnContext: async () => [], getChatSummaryContext: async (_conversation, protectedIds = []) => ({
   segments, pendingCalls, raw: remaining.filter((item) => !protectedIds.includes(item.messageId)),
   settings: summarySettings, contextSegments: summarySettings.injectEnabled ? contextSegments ?? segments : [],
   timeline: buildConversationTimeline(remaining.filter((item) => !protectedIds.includes(item.messageId)), pendingCalls),
@@ -58,7 +59,8 @@ mocks.set('./providers', { renderHostPromptProviderBlock: async (id, { params })
   if (id === 'context.passive_memory') return factory.createPassiveMemoryBlock({
     currentInput: params.currentInput, aiAssistantId: params.aiConfig.id, runtimeContext: params.runtimeContext,
   });
-  return { key: id === 'context.protocol_space' ? 'protocol_space' : 'moments_social_inbox',
+  return { key: ({ 'context.agent_registry': 'agent_registry_summary', 'context.tool_explanation': 'tool_context_explanation',
+    'context.group_chat': 'group_chat_context' })[id] ?? id.replace(/^context\./, ''),
     content: '', title: id, required: false, status: 'omitted', scenario: 'shared', placement: 'system', truncatable: false };
 } });
 const assembler = load('src/host/prompt/PromptPackAssembler.ts').promptPackAssembler;
@@ -87,6 +89,23 @@ assert.ok(summarized.systemPrompt.includes('Asia/Shanghai'));
 segments = [...segments, { ...segments[0], content: '摘要第二段' }];
 const appended = await assembler.assembleChatPromptPack(params);
 assert.ok(appended.systemPrompt.startsWith(summarized.systemPrompt), '追加摘要必须保留旧摘要的字节前缀');
+// 跨会话背景不变时，新增本会话摘要也必须保留完整的前置 system。
+const defaultBackgroundReader = mocks.get('@features/chat').getChatBackgroundContexts;
+const appendedSegments = segments;
+mocks.get('@features/chat').getChatBackgroundContexts = async () => [{
+  conversationId: 'background-group', kind: 'group', name: '背景群', timeline: [],
+  contextSegments: [{ content: '群里的稳定背景', sourceStartAt: null, sourceEndAt: null, timeZone: 'Asia/Shanghai' }],
+}];
+segments = [];
+const backgroundOnly = await assembler.assembleChatPromptPack(params);
+segments = appendedSegments.slice(0, 1);
+const withBackgroundSummary = await assembler.assembleChatPromptPack(params);
+assert.ok(withBackgroundSummary.systemPrompt.startsWith(backgroundOnly.systemPrompt), '首段摘要应追加在背景之后');
+assert.ok(withBackgroundSummary.systemPrompt.indexOf('群里的稳定背景') < withBackgroundSummary.systemPrompt.indexOf('摘要第一段'));
+segments = appendedSegments;
+const withBackgroundAppend = await assembler.assembleChatPromptPack(params);
+assert.ok(withBackgroundAppend.systemPrompt.startsWith(withBackgroundSummary.systemPrompt), '跨会话背景不能挡在新增摘要之后');
+mocks.get('@features/chat').getChatBackgroundContexts = defaultBackgroundReader;
 // 待总结通话与聊天共用完整上下文；通话状态只追加到动态后缀。
 const callInfo = { callId: 'finished-call', mediaMode: 'video', direction: 'outgoing',
   state: 'ended', startedAt: '2026-10-04T03:59:59.000Z', endReason: 'userEnded',
@@ -155,6 +174,24 @@ for (const event of [errorMessage, toolMessage]) {
   assert.equal(sent.role, 'user');
   assert.ok(!recovered.systemPrompt.includes(event.text));
 }
+// 通话、语音和全部表情包工具，与其他工具共用后续 Prompt 的历史事件通道。
+const mediaToolEvents = ['requestVideoCall', 'send_voice_message', 'search_stickers',
+  'list_sticker_groups', 'list_stickers_in_group', 'select_sticker'].map((toolName, index) => {
+  const status = index === 1 ? 'failed' : 'completed';
+  const text = `${status === 'failed' ? '调用失败' : '调用完成'}：${toolName}`;
+  return eventMessage(50 + index, text, { type: 'toolStatus', source: 'chatToolFlow', status,
+    toolNames: [toolName], displayNames: [toolName], displayText: text, actorName: '小鸦' },
+  status === 'failed' ? 'failed' : 'sent');
+});
+remaining = [raw[0], ...mediaToolEvents.map(project)];
+const afterMediaTools = await assembler.assembleChatPromptPack({ ...params, runtimeContext: { forceAppendUserText: true } });
+assert.deepEqual(afterMediaTools.recentMessages.map((item) => item.sourceMessageId), [1, 50, 51, 52, 53, 54, 55]);
+for (const event of mediaToolEvents) {
+  const history = afterMediaTools.modelMessages.find((item) => item.content === metadata.buildChatSystemEventModelText(event));
+  assert.equal(history.role, 'user');
+  assert.ok(!afterMediaTools.systemPrompt.includes(event.text), '工具历史没有指令权限');
+}
+remaining = [raw[0], project(errorMessage), project(toolMessage)];
 assert.equal(recovered.modelMessages.filter((item) => item.content === params.currentInput).length, 1);
 // 尾部应用事件也是 role=user，但不能被当成 Current Input 去重删除。
 const trailingEvent = await assembler.assembleChatPromptPack({ ...params, runtimeContext: {} });

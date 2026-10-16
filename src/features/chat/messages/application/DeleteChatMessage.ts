@@ -2,7 +2,7 @@
 import { getChatMessageRuntimeDependencies } from './ChatMessageRuntime';
 import { buildSessionPreviewTextFromMessage } from '../domain/chatMessageMetadata';
 import { releaseMediaAssetCandidates } from '@features/media';
-import { emitChatMessagesDeleted } from '../events/ChatEvents';
+import { emitChatMessagesDeleted, emitChatTurnExecutionChanged } from '../events/ChatEvents';
 import { databaseCoordinator } from '@platform/persistence';
 import { getChatGroupRuntimeDependencies } from '../../group/application/ChatGroupRuntime';
 
@@ -63,6 +63,7 @@ export async function deleteChatMessage(messageId: number): Promise<number[]> {
   );
   if (!result) return [];
   await dependencies.regeneration?.onInvalidated(result.sessionId);
+  emitChatTurnExecutionChanged(result.sessionId);
   emitChatMessagesDeleted(result.sessionId, result.deletedMessageIds);
   // 纯文本消息没有任何媒体引用，候选为空时不得触发任何全库 GC。
   await releaseMediaAssetCandidates(result.mediaAssetCandidates);

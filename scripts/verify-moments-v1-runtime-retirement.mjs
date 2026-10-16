@@ -25,7 +25,7 @@ function load(relativePath, requireMock = (specifier) => {
 
 // 此处只验证注册，未执行工具业务；隔离界面、应用服务及其他 Feature 的初始化。
 const placeholder = new Proxy({}, {
-  get: (_target, name) => name === 'createChangeOwnAvatarTool' ? () => ({ name: 'change_own_avatar', definition: { name: 'change_own_avatar', description: '', parameters: {} } }) : ({
+  get: (_target, name) => ({
     name: String(name),
     definition: { name: String(name), description: '', parameters: { type: 'object' } },
   }),
@@ -41,7 +41,7 @@ const registration = load('src/host/composition/agent/createAgentToolRegistry.ts
   if (specifier === '@features/moments') return moments;
   if (specifier === '@platform/agentRuntime') return { AgentToolRegistry };
   if (specifier === './LegacyAgentToolAdapter') return adapter;
-  if (specifier === './assertImageToolRunCurrent') return {};
+  if (specifier === './ApplicationSettingsTools') return { applicationSettingsTools: [] };
   if (specifier === '@features/phoneTools/neteaseComposition') return { productionNetEaseChildTools: [] };
   assert.ok(specifier.startsWith('@features/'), `Registry 未声明依赖：${specifier}`);
   return placeholder;
@@ -72,14 +72,15 @@ const { HOST_PROMPT_DEFINITIONS } = load('src/host/prompt/catalog/hostPromptDefi
   assert.equal(specifier, '../PromptBuiltInContent');
   return content;
 });
-for (const id of ['context.moment_audience_candidates', 'context.moments_social_inbox']) {
+for (const id of ['context.moments_social_inbox']) {
   assert.ok(HOST_PROMPT_DEFINITIONS.some((definition) => definition.id === id), `${id} 必须保持注册`);
 }
 assert.ok(HOST_PROMPT_DEFINITIONS.every((definition) => (
   !definition.supportedScenarios.includes('moments.interaction')
 )), '时刻上下文不得恢复为独立的 V1 模型场景');
 const { getSystemPromptPreset } = load('src/host/prompt/compiler/systemPromptPresets.ts');
-for (const scenario of ['chat.private_reply', 'raven_cat.autonomous_wake']) {
+// 自主唤醒复用普通单聊组装，完整行为由 verify-memory-v3-prompt 覆盖。
+for (const scenario of ['chat.private_reply']) {
   assert.ok(getSystemPromptPreset(scenario).items.some((item) => (
     item.definitionId === 'context.moments_social_inbox' && item.enabled
   )), `${scenario} 必须保留 Social Inbox`);

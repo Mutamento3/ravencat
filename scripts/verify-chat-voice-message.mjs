@@ -1706,7 +1706,7 @@ function createVoiceOutcome(label, preparedMedia, durationMs = 500) {
 
 await scenario('AI 语音：多个 send_voice_message 按模型 tool-call 顺序进入 T3 items', () => {
   const { timeline: timelineModule } = loadChatAgentTimelineModule();
-  const timeline = new timelineModule.ChatAgentTimeline('run-1', () => false);
+  const timeline = new timelineModule.ChatAgentTimeline('run-1');
 
   timeline.startStep(0);
   timeline.reconcileModelTurn(0, {
@@ -1746,7 +1746,7 @@ await scenario('AI 语音：多个 send_voice_message 按模型 tool-call 顺序
 // catalog 复用 asset 的历史 durationMs 不得反向覆盖它。
 await scenario('复用 asset 的历史 duration 不得覆盖本次 AI 语音的业务 duration', async () => {
   const { timeline: timelineModule } = loadChatAgentTimelineModule();
-  const timeline = new timelineModule.ChatAgentTimeline('run-1', () => false);
+  const timeline = new timelineModule.ChatAgentTimeline('run-1');
 
   const batch = createPreparedMediaBatchStub('a', 999);
   timeline.startStep(0);
@@ -1780,7 +1780,7 @@ await scenario('复用 asset 的历史 duration 不得覆盖本次 AI 语音的�
 
 await scenario('AI 语音 fence 失败 / rollback：discard 全部 prepared backing，零 voice message', async () => {
   const { timeline: timelineModule } = loadChatAgentTimelineModule();
-  const timeline = new timelineModule.ChatAgentTimeline('run-1', () => false);
+  const timeline = new timelineModule.ChatAgentTimeline('run-1');
 
   const batchA = createPreparedMediaBatchStub('a');
   const batchB = createPreparedMediaBatchStub('b');
@@ -1819,7 +1819,7 @@ await scenario('AI 语音 fence 失败 / rollback：discard 全部 prepared back
 
 await scenario('AI 语音 T3 成功：每个 voice item 暴露 finalize 与 rollback 两个显式出口', () => {
   const { timeline: timelineModule } = loadChatAgentTimelineModule();
-  const timeline = new timelineModule.ChatAgentTimeline('run-1', () => false);
+  const timeline = new timelineModule.ChatAgentTimeline('run-1');
   timeline.startStep(0);
   timeline.reconcileModelTurn(0, {
     messageId: 'm0',
@@ -1842,7 +1842,7 @@ await scenario('AI 语音 T3 成功：每个 voice item 暴露 finalize 与 roll
   assert.equal(typeof voiceItem.discardAfterRollback, 'function', '必须提供 discardAfterRollback');
 });
 
-await scenario('send_voice_message 工具为 hidden presentation，且空文本直接失败不合成 TTS', async () => {
+await scenario('send_voice_message 空文本直接失败不合成 TTS', async () => {
   let ttsCalls = 0;
   const mediaMock = createMediaMock();
   const { SendVoiceMessageTool } = loadTypeScriptModule('src/features/chat/reply/agent/SendVoiceMessageTool.ts', {
@@ -1856,7 +1856,6 @@ await scenario('send_voice_message 工具为 hidden presentation，且空文本�
     '@platform/device': {},
     '@shared/runtime/abortSignal': { throwIfAbortSignalAborted: () => undefined },
   });
-  assert.equal(SendVoiceMessageTool.presentation, 'hidden');
   for (const text of ['', ' \t\n ']) {
     const result = await SendVoiceMessageTool.execute({ text, on_success: 'finish' }, {
       task: { assistantId: 'assistant-1' },

@@ -40,6 +40,7 @@ let runtime, groupRuntime, snapshot;
 let failHost = false, failNotice = false;
 const dispatched = [], scheduled = [], notices = [], imageInputs = [];
 const boundaries = new Map([
+  ['./ChatTurnPresentationRuntime', { getChatInterruptedTurnContext: async () => [] }],
   ['@features/assistants', { getAssistantDisplayName: (assistant) => assistant.nickname ?? assistant.name }],
   ['expo-crypto', { randomUUID }], ['@platform/persistence', { databaseCoordinator: coordinator }],
   ['@features/stickers', { recordUserStickerUse: async () => {} }],
@@ -68,7 +69,7 @@ function load(relative) {
     if (id.endsWith('/GroupChatManagement')) return { getGroupChat: async (groupId) => groupId === 'missing' ? null : {}, listGroupChats: async () => [{ id: 'target-group', name: '目标群' }] };
     if (id.endsWith('/AgentTransientTimeline')) return { clearAgentTransientTimelineRun() {} };
     if (id === '@shared/runtime/abortSignal') return load('src/shared/runtime/abortSignal.ts');
-    if (id.endsWith('/ChatEvents')) return { emitChatMessagesUpdated() {}, emitChatTypingStatusChanged() {}, emitChatGroupSpeechPlanChanged() { if (failNotice) throw new Error('subscriber failed'); } };
+    if (id.endsWith('/ChatEvents')) return { emitChatMessagesUpdated() {}, emitChatTurnExecutionChanged() {}, emitChatTypingStatusChanged() {}, emitChatGroupSpeechPlanChanged() { if (failNotice) throw new Error('subscriber failed'); } };
     if (id === './GroupAutoInvocationScheduler') return { scheduleGroupAutoInvocation: (params) => scheduled.push(params), acknowledgeGroupInvocationInput() {}, notifyGroupInvocationSettled() {}, cancelGroupAutoInvocation() {} };
     if (id === './GroupChatMessaging') return { invokeGroupChat() {} };
     if (id === './ResolveChatImageModelInput') return { resolveChatImageModelInput: async (params) => { imageInputs.push(params); return { parts: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }] }; } };
@@ -82,7 +83,7 @@ function load(relative) {
 }
 const { MessageRepository } = load('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts');
 const messages = new MessageRepository();
-runtime = { messages, assistantDirectory: { getBlockState: async () => ({ isBlocked: false }) }, turns: {
+runtime = { messages, turnPresentation: { freeze: async () => async () => {}, interrupt: async () => {} }, assistantDirectory: { getBlockState: async () => ({ isBlocked: false }) }, turns: {
   ensureTurnStateRowInTransaction: async () => {}, supersedeActiveRunInTransaction: async () => null,
 }, canonicalUserMessage: { onCommitted: async (params) => { dispatched.push(params); if (failHost) throw new Error('host unavailable'); } } };
 groupRuntime = { currentUserDirectory: { getCurrent: async () => ({ name: '枫渡' }) }, groups: {
@@ -214,7 +215,7 @@ const context = load('src/features/chat/summary/domain/ChatContext.ts').projectC
 assert.match(context.content, /A 的发言/); assert.match(context.content, /agent-a/);
 const timeline = load('src/features/chat/summary/domain/ChatSummaryTimeline.ts').buildConversationTimeline([context], []);
 snapshot = { timeline, segments: [], contextSegments: [], settings: { generationEnabled: true, fixedMessageId: null } };
-boundaries.set('@features/chat', { ...metadata, ...sharedDomain, ...inputBuilder, getChatSummaryContext: async () => snapshot });
+boundaries.set('@features/chat', { ...metadata, ...sharedDomain, ...inputBuilder, getChatInterruptedTurnContext: async () => [], getChatSummaryContext: async () => snapshot });
 const history = load('src/host/prompt/PromptHistoryBuilder.ts').promptHistoryBuilder;
 for (const agentId of ['agent-a', 'agent-b']) {
   const result = await history.loadPrivateSummaryContext({ sessionId: 'test', aiConfig: { id: agentId, agentId }, runtimeContext: { forceAppendUserText: true } });

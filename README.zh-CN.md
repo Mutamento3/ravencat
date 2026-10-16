@@ -12,7 +12,7 @@ RavenCat 希望成为一个私人 AI 家园，让你接入自己喜欢的模型�
 
 这是一个个人维护、持续开发中的项目。部分后台行为和跨设备恢复还需要更多真机验证，暂时不把它视为已经在所有手机上稳定运行的正式产品。
 
-公开安装包以 **Preview / Pre-release（预览版）** 发布，下载见 [GitHub Releases](https://github.com/skylucky163/ravencat/releases)。**固定消息上下文起点属于实验性功能**：固定后，起点至最新消息的全部原文进入上下文，自动生成摘要暂停；对话增长可能增加 Token 消耗并超出模型的上下文额度。取消固定后，自动生成摘要需手动重新开启。当前预览更新说明见 [v2.1.2](docs/releases/v2.1.2.md)。
+公开安装包以 **Preview / Pre-release（预览版）** 发布，下载见 [GitHub Releases](https://github.com/skylucky163/ravencat/releases)。**固定消息上下文起点属于实验性功能**：固定后，起点至最新消息的全部原文进入上下文，自动生成摘要暂停；对话增长可能增加 Token 消耗并超出模型的上下文额度。取消固定后，自动生成摘要需手动重新开启。当前预览更新说明见 [v2.1.3](docs/releases/v2.1.3.md)。
 
 ## 可以做什么
 

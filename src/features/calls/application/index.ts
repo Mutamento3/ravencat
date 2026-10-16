@@ -5,6 +5,9 @@ export {
   clearLegacyCachedCallBackground,
   loadCallBackgroundUri,
   setCustomCallBackground,
+  getCallBackgroundImageSelection,
+  changeCallBackgroundFromMediaAsset,
+  subscribeCallBackgroundChanged,
 } from './CallBackgroundSettings';
 
 export {

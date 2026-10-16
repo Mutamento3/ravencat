@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
+globalThis.__DEV__ = false;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const versionSource = fs.readFileSync(path.join(root, 'scripts/app-version.cjs'), 'utf8');
 function versionAt(version, time) {
@@ -41,6 +42,7 @@ const mocks = {
   '@shared/ui': { UserAvatar: 'UserAvatar' },
   '@shared/theme': { ThemedSurface: 'ThemedSurface', useTheme: () => ({}) },
   '@platform/device/DeviceStatus': { getInstalledApplicationInfo: () => installedInfo },
+  '../../../../package.json': { version: '2.1.2' },
   './ProfileTab.styles': { createProfileStyles: () => ({}) },
 };
 const module = { exports: {} };
@@ -63,5 +65,11 @@ for (const info of [
   installedInfo = info;
   const tree = module.exports.ProfileContent({ profile: { name: '枫渡' }, hasLoadedProfile: true });
   assert.ok(texts(tree).includes(`${info.name} v${info.version} (${info.buildNumber})`));
+  assert.ok(texts(tree).every((text) => !text.includes('开发源码')), '预览版不展示开发源码版本');
 }
-console.log('应用版本验证通过：统一主版本、构建编号递增、个人页跟随已安装版本。');
+globalThis.__DEV__ = true;
+installedInfo = { name: 'KimiPhone', version: '2.1.1', buildNumber: '214100154' };
+const developmentTree = module.exports.ProfileContent({ profile: { name: '枫渡' }, hasLoadedProfile: true });
+assert.ok(texts(developmentTree).includes('KimiPhone · 开发源码 v2.1.2'));
+assert.ok(texts(developmentTree).includes('安装包 v2.1.1 (214100154)'), '开发源码更新后仍保留安装包的真实版本');
+console.log('应用版本验证通过：统一主版本、构建编号递增、开发源码与安装包版本分开显示。');

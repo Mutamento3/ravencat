@@ -11,12 +11,13 @@
 
 import { getChatMessageRuntimeDependencies } from '../../messages/application/ChatMessageRuntime';
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
+import type { IMessageRepository } from '../../messages/domain/MessageRepository';
 import { buildSessionPreviewTextFromMessage } from '../../messages/domain';
 import type {
   ConversationTurnCommitItem,
   ConversationTurnRun,
 } from '../domain/ConversationTurn';
-import { assertChatReplyNotAborted } from './ChatReplyAbort';
+import { assertChatReplyNotAborted, ChatReplyRunCancelledError } from './ChatReplyAbort';
 import {
   normalizeAssistantResponseText,
   type PersistCompletedAssistantReplyParams,
@@ -34,11 +35,14 @@ import type {
 import { deliverCommittedAssistantSegment } from './CommittedAssistantSegmentDelivery';
 import { beginAssistantMessageArrival, finishAssistantMessageArrival } from '../delivery/AssistantMessageArrival';
 import { releaseMediaAssetCandidates } from '@features/media';
-import { emitChatMessagesReloadRequested } from '../../messages/events/ChatEvents';
+import { emitChatMessagesReloadRequested, emitChatTurnExecutionChanged } from '../../messages/events/ChatEvents';
+import type { ChatTurnPresentation } from './ChatTurnPresentationRuntime';
+import { databaseCoordinator } from '@platform/persistence';
 
 export function createSingleTransactionTurnCommit(
   run: ConversationTurnRun,
   assistantId: string,
+  presentation?: ChatTurnPresentation,
 ): AssistantTurnCommitPort {
   let settled = false;
   let outcome: AssistantTurnCommitOutcome | null = null;
@@ -103,8 +107,11 @@ export function createSingleTransactionTurnCommit(
 
     let result;
     try {
+      await presentation?.flush();
       result = await getChatMessageRuntimeDependencies().turns.commitTurn(run, items, {
-        assistantId, openedPackageIds: params.openedToolPackageIds ?? [],
+        assistantId, changes: params.toolPackageChanges ?? [],
+      }, runtimeContext.executionDeadlineAt === undefined ? undefined : {
+        deadlineAt: runtimeContext.executionDeadlineAt, signal: runtimeContext.abortSignal,
       });
     } catch (error) {
       await discardPreparedItems(items);
@@ -123,6 +130,7 @@ export function createSingleTransactionTurnCommit(
     }
 
     outcome = 'committed';
+    emitChatTurnExecutionChanged(sessionId);
     await finalizePreparedItems(items);
     if (run.kind === 'regenerate') {
       try {
@@ -135,6 +143,10 @@ export function createSingleTransactionTurnCommit(
     const assistantSegments = result.messages.filter(
       (message) => message.senderType === 'assistant'
     );
+    if (presentation?.isClosed()) {
+      callbacks.onReplyCommitted?.();
+      return { outcome, messages: result.messages };
+    }
     if (assistantSegments.length === 0) {
       callbacks.notifyUI?.(sessionId);
       // tool/reasoning-only canonical turn 仍然完成一次 commit；完成信号不等于
@@ -146,6 +158,7 @@ export function createSingleTransactionTurnCommit(
     const tracksArrival = Boolean(aiConfig?.id && aiConfig.name && !runtimeContext.suppressAIMessageReceivedEvent);
     const messageIds = assistantSegments.map((message) => message.id);
     const segmentTotal = assistantSegments.length;
+    let deliveryInterrupted = false;
     try {
       if (tracksArrival) {
         await beginAssistantMessageArrival({
@@ -158,18 +171,28 @@ export function createSingleTransactionTurnCommit(
       // 完整事实仍一次读回；展示消费者共享已登记的分段到达投影。
       callbacks.notifyUI?.(sessionId);
       for (const [segmentIndex, message] of assistantSegments.entries()) {
+        if (presentation && !await presentation.publishSegment(message)) {
+          deliveryInterrupted = true;
+          break;
+        }
         await notifyCommittedSegment({
           message,
           segmentIndex,
           segmentTotal,
           sessionId,
           aiConfig,
-          runtimeContext,
+          runtimeContext: presentation ? { ...runtimeContext, arrivalAlreadyScheduled: true } : runtimeContext,
           callbacks,
         });
       }
     } finally {
       if (tracksArrival) await finishAssistantMessageArrival(messageIds);
+    }
+
+    if (deliveryInterrupted) {
+      // T3 已成功，受控宿主仍须结束等待；但未交付尾部不能通过完整回复回调泄漏。
+      callbacks.onReplyCommitted?.();
+      return { outcome, messages: result.messages };
     }
 
     const joinedText = assistantSegments
@@ -205,6 +228,20 @@ export function createSingleTransactionTurnCommit(
 
   return {
     persistsIntermediates: false,
+    decorateCommitRepository: repository => new Proxy(repository, {
+      get(target, key) {
+        if (key === 'commitMessage') return (input: Parameters<IMessageRepository['commitMessage']>[0]) => databaseCoordinator.transaction(
+          { name: 'chat.commit-run-message', feature: 'chat', priority: 'interactive' }, async transaction => {
+            if (!await getChatMessageRuntimeDependencies().turns.isRunCurrentInTransaction(transaction, run.runId)) {
+              throw new ChatReplyRunCancelledError('superseded');
+            }
+            presentation?.assertExecutionActive();
+            return target.commitMessageInTransaction(transaction, input);
+          });
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }),
     readOpenToolPackageIds: () => getChatMessageRuntimeDependencies().turns.listOpenToolPackageIds(run.sessionId, assistantId),
 
     isCommitEligible: () => !settled,

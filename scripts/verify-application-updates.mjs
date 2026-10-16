@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const React = require('react');
 const renderer = require('react-test-renderer');
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+globalThis.__DEV__ = false;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function load(file, dependencies = {}) {
   const source = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
@@ -147,11 +148,12 @@ assert.equal(deleted.length, 3, '校验失败的临时 APK 被清除');
 const dialogs = [];
 let networkCalls = 0;
 let nativeInstallerCalls = 0;
+let skippedVersionReads = 0;
 skipped = null;
 releases = [makeRelease('2.1.0')];
 const provider = load('src/host/shell/ApplicationUpdateProvider.tsx', {
   '@react-native-async-storage/async-storage': {
-    getItem: async () => skipped, setItem: async (_key, value) => { skipped = value; },
+    getItem: async () => { skippedVersionReads++; return skipped; }, setItem: async (_key, value) => { skipped = value; },
   },
   '@platform/device/DeviceStatus': { getInstalledApplicationInfo: () => ({ version: '2.0.0' }) },
   '@platform/updates/GitHubReleases': { fetchApplicationReleases: async () => { networkCalls++; return releases; } },
@@ -191,6 +193,23 @@ assert.equal(networkCalls, priorCalls, '授权后继续安装不重新下载或�
 assert.equal(dialogs.at(-1).title, '更新已下载');
 await renderer.act(async () => { mounted.unmount(); });
 
+globalThis.__DEV__ = true;
+dialogs.length = 0;
+const callsBeforeDevelopment = { network: networkCalls, storage: skippedVersionReads, installer: nativeInstallerCalls };
+await renderer.act(async () => { mounted = renderer.create(tree(false)); });
+await renderer.act(async () => { mounted.update(tree(true)); });
+assert.equal(dialogs.length, 0, '开发版进入前台不弹公开更新提示');
+assert.equal(viewModel.available, null, '开发版没有公开更新红点');
+assert.equal(viewModel.download, null);
+await renderer.act(async () => { viewModel.checkManually(); });
+assert.equal(dialogs.length, 1);
+assert.equal(dialogs[0].title, '开发版更新');
+assert.match(dialogs[0].message, /重新安装开发包/);
+assert.deepEqual({ network: networkCalls, storage: skippedVersionReads, installer: nativeInstallerCalls }, callsBeforeDevelopment,
+  '开发版自动与手动入口均不查询发布、不读取跳过记录、不启动安装器');
+await renderer.act(async () => { mounted.unmount(); });
+globalThis.__DEV__ = false;
+
 let checkButtonPresses = 0;
 const { ProfileContent } = load('src/features/profile/presentation/ProfileContent.tsx', {
   'react-native': { Text: 'Text', TouchableOpacity: 'TouchableOpacity', View: 'View' },
@@ -198,6 +217,7 @@ const { ProfileContent } = load('src/features/profile/presentation/ProfileConten
   '@shared/ui': { UserAvatar: 'Avatar' },
   '@shared/theme': { ThemedSurface: 'Surface', useTheme: () => ({ colors: { feedback: { error: '#f00' }, text: { primary: '#333' } } }) },
   '@platform/device/DeviceStatus': { getInstalledApplicationInfo: () => ({ name: 'RavenCat', version: '2.0.0', buildNumber: '123' }) },
+  '../../../../package.json': { version: '2.1.2' },
   './ProfileTab.styles': { createProfileStyles: () => ({}) },
 });
 const profileProps = { profile: { name: '测试用户' }, hasLoadedProfile: false,
@@ -212,7 +232,15 @@ assert.equal(checkButtonPresses, 1);
 await renderer.act(async () => { mounted.update(React.createElement(ProfileContent, { ...profileProps, checkingUpdates: true, updateProgress: 0.5 })); });
 assert.equal(updateMenuItem().props.disabled, true);
 assert.match(updateMenuItem().props.accessibilityLabel, /下载 50%/);
+globalThis.__DEV__ = true;
+await renderer.act(async () => { mounted.update(React.createElement(ProfileContent, {
+  ...profileProps, availableUpdateVersion: null,
+})); });
+assert.match(updateMenuItem().props.accessibilityLabel, /开发版/);
+assert.doesNotMatch(updateMenuItem().props.accessibilityLabel, /有新版本/);
+assert.equal(updateMenuItem().props.disabled, false, '开发版入口仍可查看更新方式');
 await renderer.act(async () => { mounted.unmount(); });
+globalThis.__DEV__ = false;
 
 let notificationAccess = false;
 let installAccess = false;

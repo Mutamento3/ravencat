@@ -8,6 +8,7 @@ import {
   DEFAULT_USER_PROFILE,
   getCurrentUserProfile,
   updateCurrentUserMomentsCover,
+  subscribeUserProfileUpdated,
   type UserProfile,
 } from '@features/profile';
 
@@ -23,9 +24,16 @@ export function useMomentsCover(refreshRevision = 0) {
   const [isUpdatingCover, setIsUpdatingCover] = useState(false);
 
   useEffect(() => {
-    void getCurrentUserProfile().then(setCurrentUser).catch((error) => {
+    let active = true;
+    let updated = false;
+    const unsubscribe = subscribeUserProfileUpdated(profile => {
+      updated = true;
+      setCurrentUser(profile);
+    });
+    void getCurrentUserProfile().then(profile => { if (active && !updated) setCurrentUser(profile); }).catch((error) => {
       console.error('Failed to load user profile for moments cover:', error);
     });
+    return () => { active = false; unsubscribe(); };
   }, [refreshRevision]);
 
   useEffect(() => {

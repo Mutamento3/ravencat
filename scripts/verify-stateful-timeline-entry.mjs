@@ -87,6 +87,7 @@ for (const relativePath of [
   'src/features/chat/messages/application/UpsertTogetherListeningTimelineEntry.ts',
   'src/features/chat/messages/infrastructure/ChatTimelineSql.ts',
   'src/features/chat/messages/infrastructure/ChatMessageMutationSql.ts',
+  'src/features/chat/reply/infrastructure/ChatTurnPresentationSql.ts',
   'src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts',
 ]) {
   compileProductionModule(relativePath);

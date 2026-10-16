@@ -19,16 +19,14 @@ const PROVIDERS: Record<string, PromptBlockProvider<HostPromptProviderContext, P
   'protocol.prompt': ({ params }) => promptPackBlockFactory.createProtocolPromptBlock(params.aiConfig.id, params.toolContext),
   'tools.context_explanation': ({ params }) => promptPackBlockFactory.createToolContextBlock(params.toolContext),
   'assistants.agent_registry': ({ params }) => promptPackBlockFactory.createAgentRegistrySummaryBlock(params.aiConfig),
-  'assistants.moment_audience_candidates': ({ params }) => promptPackBlockFactory.createMomentAudienceCandidatesBlock(params.aiConfig),
+  'assistants.host_cooldown': ({ params }) => promptPackBlockFactory.createHostCooldownBlock(params.aiConfig),
   'moments.social_inbox': ({ params }) => promptPackBlockFactory.createMomentSocialInboxBlock(params.aiConfig, params.toolContext),
-  'assistants.nickname': ({ params, scenario }) => promptPackBlockFactory.createAssistantNicknameBlock(
-    params.aiConfig.id, params.runtimeContext!.userDisplayName!, scenario === 'chat.private_reply',
-  ),
+  'assistants.nickname': ({ params }) => promptPackBlockFactory.createAssistantNicknameBlock(params.aiConfig.id),
   'chat.group_context': ({ params }) => promptPackBlockFactory.createGroupChatContextBlock(params.runtimeContext || {}),
   'tools.description': ({ params }) => promptPackBlockFactory.createToolsDescriptionBlock(
     params.toolsDescription || '',
-    params.mcpServices || [],
   ),
+  'tools.mcp_services': ({ params }) => promptPackBlockFactory.createMcpServicesBlock(params.mcpServices!),
   'memory.passive': ({ params }) => promptPackBlockFactory.createPassiveMemoryBlock({
     currentInput: params.currentInput, aiAssistantId: params.aiConfig.id, runtimeContext: params.runtimeContext,
   }),

@@ -9,7 +9,7 @@
 - 业务 Prompt 定义由所属 Feature 的 `*PromptDefinitions.ts` 暴露，Host 在 `src/host/prompt/catalog/` 聚合；
 - Chat、Ledger 与复用聊天投递的场景通过 `ResolvedPromptPackAssembler` 编译；2.x 历史预设和绑定仅由只读兼容解析器接入；
 - Calls 去电决策（`call.outgoing_decision`）同样走 resolved Chat Pack，与普通消息共享人设、用户身份、附加提示词与近期历史，仅追加决策场景与 JSON 契约；
-- Calls 挂断跟进、Together Listening 拒绝跟进、群聊管理员与 OCR 通过 `assembleResolvedStandalonePromptPack()` 编译；两级 Chat 摘要通过 `assembleResolvedSummaryPromptPack()` 复用普通单聊稳定前缀，固定来源与任务规则独立注入；Companion AI 日程正式 autonomous run 使用 resolved Chat Pack 与 Feature 场景块；
+- Calls 挂断跟进、Together Listening 拒绝跟进、群聊管理员与 OCR 通过 `assembleResolvedStandalonePromptPack()` 编译；两级 Chat 摘要通过 `assembleResolvedSummaryPromptPack()` 复用普通单聊稳定前缀，固定来源与任务规则独立注入；Companion AI 日程正式 autonomous run 使用 resolved Chat Pack，Feature 日程事实与输出规则保留 system 归属，不转换为 user 输入；
 - `PromptPackCompiler` 是最终 Block 顺序、受保护项、token 预算与 model messages 的唯一权威；
 - 工具续轮和流式续轮复用首轮已编译的 client/system prompt，不重新拼接业务提示词；
 - `BaseAIClient` 只负责请求传输，不拥有业务提示词定义。
@@ -38,7 +38,7 @@ OCR 与 Chat 摘要拥有各自的窄任务 Prompt；Memory 管理员和 Legacy 
 
 下列文件会执行模型请求，但不创建第二套业务提示词：
 
-- `BaseAIClientAgentModelGateway.ts`：Agent Runtime complete / stream 的通用模型请求边界；根据有效工具数量选择无工具或工具 Client 入口，沿用调用方提供的初始消息；Chat 通过 `ChatAgentModelGateway.ts` 适配该实现；
+- `BaseAIClientAgentModelGateway.ts`：Agent Runtime complete / stream 的通用模型请求边界；根据有效工具数量选择无工具或工具 Client 入口，沿用调用方提供的初始消息；Chat 通过 `ChatAgentModelGateway.ts` 适配该实现，通话 `ProcessCallAIReply.ts` 同样委派此网关，不再直接调用模型传输；
 - `ChatAgentReplyFlow.ts`：通过 AgentRuntime 驱动统一模型网关，工具续轮只追加工具结果，不重新组装 Prompt Pack；
 - `HostAgentRunAssembly.ts`：装配 AI 日程正常 autonomous run，使用同一 Registry / Agent Runtime 与模型传输边界；旧 CompanionDecisionContract / ProactiveAgentRunner 不再是生产调用点。
 

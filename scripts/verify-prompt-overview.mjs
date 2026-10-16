@@ -1,3 +1,4 @@
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,22 +27,23 @@ function load(relative, mocks = {}) {
 const estimator = load('src/shared/prompt/estimateTextTokens.ts');
 const budget = load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': estimator });
 const metadata = load('src/host/prompt/compiler/promptBlockMetadata.ts');
-const { PromptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', { '../tokenBudget': budget, './promptBlockMetadata': metadata });
+const { PromptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW }, '../tokenBudget': budget, './promptBlockMetadata': metadata });
 const { getSystemPromptPreset } = load('src/host/prompt/compiler/systemPromptPresets.ts');
 const preset = getSystemPromptPreset('chat.private_reply');
 const draft = (key, content) => ({ key, title: content, content, required: false, status: 'ready', placement: 'system' });
 const history = [{ role: 'user', content: '2020 年的历史' }, { role: 'assistant', content: '过去的回复' }];
 const currentInput = { role: 'user', content: '今天呢？' };
 const blocks = [draft('time_awareness', '现在是 2026 年'), draft('passive_memory', '记忆资料'), draft('moments_social_inbox', '未读社交'), draft('together_listening_runtime', '正在一起听'),
-  draft('conversation_summary', '聊天摘要'), draft('tools_description', '工具能力'), draft('tool_context_explanation', '运行上下文'),
+  draft('conversation_summary', '聊天摘要'), draft('tools_description', '工具能力'), draft('mcp_services', 'MCP 简介'), draft('tool_context_explanation', '运行上下文'),
   draft('agent_registry_summary', '身份池'), draft('protocol_space', '协议资料'), draft('persona', 'AI 人设'), draft('foundation_default_core', '基础规则'),
   { ...draft('persona', '第二条自定义'), definitionId: 'assistant-user:two', slot: 'user_rules', protection: 'editable' },
   { ...draft('persona', '第三条自定义'), definitionId: 'assistant-user:three', slot: 'user_rules', protection: 'editable' },
   { ...draft('current_input', currentInput.content), required: true, placement: 'input' }];
 const pack = new PromptPackCompiler().compile({ scenario: 'chat.private_reply', blocks, recentMessages: history, currentInput, preset });
-// 身份池与工具运行上下文是本轮状态，保留在历史后的 system 中，不污染稳定前缀。
-assert.equal(pack.systemPrompt, '基础规则\n\nAI 人设\n\n协议资料\n\n第二条自定义\n\n第三条自定义\n\n工具能力\n\n聊天摘要');
-assert.deepEqual(pack.modelMessages, [...history, { role: 'system', content: '身份池\n\n运行上下文\n\n正在一起听\n\n未读社交\n\n记忆资料\n\n现在是 2026 年' }, currentInput]);
+// 身份目录是固定背景；本轮触发状态、活动和时间仍在历史后的 system。
+assert.equal(pack.systemPrompt, '基础规则\n\nAI 人设\n\n协议资料\n\n身份池\n\n第二条自定义\n\n第三条自定义\n\n工具能力\n\nMCP 简介\n\n聊天摘要');
+assert.deepEqual(pack.modelMessages, [...history, { role: 'system', content: '运行上下文\n\n正在一起听\n\n未读社交\n\n记忆资料\n\n现在是 2026 年' }, currentInput]);
 assert.equal(pack.modelMessages.filter((message) => message.content === '现在是 2026 年').length, 0);
 assert.ok(!pack.systemPrompt.includes('2026'));
 const disabledTime = new PromptPackCompiler().compile({ scenario: 'chat.private_reply', blocks, recentMessages: history, currentInput,
@@ -85,17 +87,26 @@ const { BaseAIClientAgentModelGateway } = load('src/platform/agentRuntime/BaseAI
 const modelGateway = new BaseAIClientAgentModelGateway({ client: {}, initialMessages: pack.modelMessages,
   toolInstructionsSlot: pack.toolInstructionsSlot, diagnosticContext: {} });
 const requestWithExposure = () => ({ transport: 'complete', history: [],
+  toolBudget: { remainingToolCalls: 30, maxToolCallsPerStep: 3, forceFinalResponse: false },
   tools: toolRegistry.listAllowed([...exposure.visibleToolNames(), ...exposure.metaToolNames]), toolInstructions: exposure.instructions() });
 await modelGateway.runTurn(requestWithExposure());
-await toolRegistry.get('open_tool_package').execute({ package_id: 'memory' });
-await modelGateway.runTurn({ ...requestWithExposure(), history: [{ role: 'tool', toolCallId: 'open-1', name: 'open_tool_package', content: '展开成功' }] });
+const openResult = await toolRegistry.get('open_tool_package').execute({ package_id: 'memory' });
+await modelGateway.runTurn({ ...requestWithExposure(),
+  toolBudget: { remainingToolCalls: 29, maxToolCallsPerStep: 3, forceFinalResponse: false },
+  history: [
+    { role: 'assistant', content: '', toolCalls: [{ id: 'open-1', name: 'open_tool_package', arguments: '{"package_id":"memory"}' }] },
+    { role: 'tool', toolCallId: 'open-1', name: 'open_tool_package', content: openResult.modelContent },
+  ],
+});
 const modelPrefix = modelRequests[0].messages[0].content;
 assert.ok(modelPrefix.indexOf('【用户特批工具】') < modelPrefix.indexOf('聊天摘要'));
 assert.equal(modelPrefix.split('"name":"read_memory"').length - 1, 1);
 assert.equal(modelRequests[1].messages[0].content, modelPrefix, '工具续轮保持稳定前置 system');
+assert.deepEqual(modelRequests[1].messages.slice(0, modelRequests[0].messages.length), modelRequests[0].messages,
+  '拆包并消耗额度后，下一请求仍保留上一请求的完整消息前缀');
 assert.equal(modelRequests[0].includeSystemPrompt, false, '请求不能重复注入旧 system');
-assert.deepEqual(new Set(modelRequests[0].tools.map((tool) => tool.function.name)), new Set(['read_memory', 'open_tool_package']));
-assert.equal(modelRequests[1].tools.length, 3);
+assert.deepEqual(new Set(modelRequests[0].tools.map((tool) => tool.function.name)), new Set(['read_memory', 'open_tool_package', 'close_tool_package']));
+assert.equal(modelRequests[1].tools.length, 4);
 assert.deepEqual(modelRequests[1].messages.slice(1, 3), history, '历史继续保持真实消息角色');
 
 // 默认配置与旧 AI 覆盖共同解析，语言不再受旧英文设置影响。
@@ -262,6 +273,7 @@ const detailsFor = (id) => id === ai.id ? aiDetails : otherDetails;
 const globalSnapshots = [];
 let definitionSaveGate;
 const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx', {
+  '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
   '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname ?? assistant.name },
   '@shared/ui': { Toggle: 'Switch', showAppDialog: ({ title, message, buttons }) => alerts.push([title, message, buttons]) },
   'react-native': native, 'lucide-react-native': { ChevronDown: 'ChevronDown', ChevronRight: 'ChevronRight', Star: 'Star' },
@@ -378,6 +390,12 @@ await renderer.act(async () => button('用户人设').props.onPress());
 assert.equal(stackState.routes.at(-1).name, 'profile');
 await systemBack();
 assert.equal(currentTitle(), '提示词中心');
+const overviewLabels = ['系统基础规则', '人设', '协议空间常驻提示词', 'AI 身份池', '群聊身份背景', '自定义提示词', '工具调用', 'MCP',
+  '历史聊天', '工具运行上下文', '用户状态与一起听', '时刻社交信息', '环境信息', 'AI 当前身份状态', '被动记忆', '手机电量', '当前时间', '本轮回应要求', '当前聊天'];
+const overviewText = text(activeScreen());
+const overviewPositions = overviewLabels.map((label) => overviewText.indexOf(label));
+assert.ok(overviewPositions.every((position, index) => position >= 0 && (index === 0 || position > overviewPositions[index - 1])),
+  '页面真实阅读顺序必须与聊天请求的身份、能力、历史和本轮状态契约对应');
 await renderer.act(async () => expo.useRouter().push('/prompt-center/persona'));
 assert.equal(activeScreen().findByType('Redirect').props.href, '/prompt-center');
 assert.equal(activeScreen().findAllByType('TextInput').length, 0);
@@ -386,6 +404,10 @@ await systemBack();
 assert.ok(activeScreen().findAllByType('Switch').every((item) => item.props.disabled));
 assert.equal(button('编辑对象').props.disabled, true);
 assert.ok(text(activeScreen()).includes('暂无 AI'));
+assert.ok(text(activeScreen()).includes('环境信息'));
+assert.ok(text(activeScreen()).indexOf('时刻社交信息') < text(activeScreen()).indexOf('环境信息'));
+assert.ok(text(activeScreen()).indexOf('环境信息') < text(activeScreen()).indexOf('被动记忆'));
+assert.equal(button('环境信息'), undefined, '环境信息只展示说明，不提供详情跳转');
 await renderer.act(async () => button('系统基础规则').props.onPress());
 assert.equal(activeScreen().findByType('TextInput').props.value, '私密正文不会出现在首页');
 await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('修改后的全局规则'));

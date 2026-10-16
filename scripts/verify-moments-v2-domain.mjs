@@ -86,6 +86,7 @@ const mocks = {
   },
   '@features/assistants': {
     listAIAssistants: async () => identity.assistants,
+    getAssistantDisplayName: (assistant) => assistant.nickname || assistant.name,
   },
   '@features/media': {
     releaseMediaAssetCandidates: async () => undefined,
@@ -263,21 +264,6 @@ assert.equal(
   Object.hasOwn(createTool.definition.parameters.properties, 'mediaAssetIds'),
   false,
   'AI create 第一版不得暴露 mediaAssetIds',
-);
-assert.match(
-  createTool.definition.description,
-  /时刻可见范围候选/u,
-  'aiCreateMoment 必须指向真实的 audience candidate Prompt block',
-);
-assert.match(
-  createTool.definition.parameters.properties.audience.properties.agentIds.description,
-  /时刻可见范围候选/u,
-  'agentIds 参数说明必须与真实 audience candidate 来源一致',
-);
-assert.doesNotMatch(
-  `${createTool.definition.description}\n${createTool.definition.parameters.properties.audience.properties.agentIds.description}`,
-  /AI 身份池摘要/u,
-  'aiCreateMoment 不得继续声称 agentId 来自完整 AI 身份池摘要',
 );
 assert.doesNotMatch(
   read('src/features/moments/presentation/MomentsTab.tsx'),
@@ -799,7 +785,9 @@ assert.ok(
 const hiddenMomentId = selectedMoment.id;
 const hiddenDetail = await detailTool.execute({ momentId: hiddenMomentId }, createToolContext('agent-c', 'AI丙'));
 assert.equal(hiddenDetail.success, false, '不可见 AI 不得读取 Moment 详情');
-assert.equal(hiddenDetail.error, '未找到该时刻');
+const missingDetail = await detailTool.execute({ momentId: 'missing-moment' }, createToolContext('agent-c', 'AI丙'));
+assert.equal(hiddenDetail.error, missingDetail.error, '不可见和不存在必须保持相同失败语义，禁止探测隐藏内容');
+assert.match(hiddenDetail.error, /searchMoments/u, '目标失效后必须提供可见内容的查询入口');
 assert.equal(hiddenDetail.data, undefined, '不可见 AI 不得拿到任何 Moment 数据（含评论）');
 
 const hiddenSearch = await searchTool.execute({}, createToolContext('agent-c', 'AI丙'));

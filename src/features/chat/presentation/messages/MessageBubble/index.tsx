@@ -6,9 +6,10 @@ import { releaseTextSelectionFocus } from '@platform/device';
 import {
   View,
   Text,
+  Pressable,
   type LayoutChangeEvent,
 } from 'react-native';
-import { createMessageBubbleStyles } from './styles';
+import { createMessageBubbleStyles, USER_TEXT_COLLAPSE_THRESHOLD } from './styles';
 import { GlassSurface, isMoonKimiTheme, isPaperNoteTheme, useTheme } from '@shared/theme';
 import { Avatar } from './Avatar';
 import { ReplyQuote } from './ReplyQuote';
@@ -212,6 +213,8 @@ function MessageBubble({
 
   // FlashList 会复用气泡实例；展开状态和滚动尺寸归消息所有，不能随实例传给下一条。
   const [isExpanded, setIsExpanded] = useRecyclingState(false, [messageId]);
+  // 用户长文本的折叠状态同理归 messageId 所有。
+  const [isUserTextExpanded, setIsUserTextExpanded] = useRecyclingState(false, [messageId]);
   const currentMessageId = useRef(messageId);
   currentMessageId.current = messageId;
   const toggleRequest = useRef(0);
@@ -282,6 +285,11 @@ function MessageBubble({
     !isStandaloneStickerMessage &&
     (isMe || (!isMe && !isSystem && !isReasoning));
   const shouldUseMoonKimiUserWidth = isMoonKimi && isMe && !isSystem;
+  // 仅用户自己的长文本默认折叠；AI 回复有分段展示，系统/思维链不走这里。
+  // 语音消息的 transcript 由 VoiceMessageCard 自己承担，不参与折叠。
+  const shouldCollapseUserText =
+    isMe && !isReasoning && !isSystem && !voice && hasTextContent
+    && text.length > USER_TEXT_COLLAPSE_THRESHOLD;
   const shouldUseMoonKimiAssistantWidth = isMoonKimi && !isMe && (!isSystem || shouldRenderToolProcessCard);
   const isReasoningInProgress =
     isReasoning && (messageStatus === 'pending' || messageStatus === 'streaming');
@@ -338,6 +346,23 @@ function MessageBubble({
     setReasoningContentHeight(height);
   }, [setReasoningContentHeight]);
 
+  const textContentNode = !voice ? (
+    <BubbleTextContent
+      selectable={isReasoning}
+      hasTextContent={hasTextContent}
+      shouldUseMarkdown={shouldUseMarkdown}
+      text={text}
+      markdownStyles={markdownStyles}
+      plainTextStyle={plainTextStyle}
+      paragraphSpacing={paragraphSpacing}
+      probeHandlers={layoutProbeHandlers ? {
+        plainTextLines: layoutProbeHandlers.plainTextLines,
+        listOuter: layoutProbeHandlers.listOuter,
+        listItemContent: layoutProbeHandlers.listItemContent,
+      } : undefined}
+    />
+  ) : null;
+
   const bubbleContent = sharedRecord ? <SharedChatRecordCard messageId={messageId} record={sharedRecord} comment={sharedComment} onPreviewFile={onPreviewFile} onLongPress={onAttachmentLongPress} /> : (
     <>
       {hasAttachments ? (
@@ -366,20 +391,23 @@ function MessageBubble({
         />
       ) : null}
 
-      {!voice ? <BubbleTextContent
-        selectable={isReasoning}
-        hasTextContent={hasTextContent}
-        shouldUseMarkdown={shouldUseMarkdown}
-        text={text}
-        markdownStyles={markdownStyles}
-        plainTextStyle={plainTextStyle}
-        paragraphSpacing={paragraphSpacing}
-        probeHandlers={layoutProbeHandlers ? {
-          plainTextLines: layoutProbeHandlers.plainTextLines,
-          listOuter: layoutProbeHandlers.listOuter,
-          listItemContent: layoutProbeHandlers.listItemContent,
-        } : undefined}
-      /> : null}
+      {shouldCollapseUserText ? (
+        <View collapsable={false}>
+          <View style={isUserTextExpanded ? undefined : bubbleStyles.userTextCollapsedClip}>
+            {textContentNode}
+          </View>
+          <Pressable
+            onPress={() => setIsUserTextExpanded(!isUserTextExpanded)}
+            hitSlop={8}
+            accessibilityRole="button"
+            style={bubbleStyles.userTextFoldToggle}
+          >
+            <Text style={bubbleStyles.userTextFoldToggleText}>
+              {isUserTextExpanded ? '收起' : '展开全文'}
+            </Text>
+          </Pressable>
+        </View>
+      ) : textContentNode}
     </>
   );
 

@@ -7,7 +7,7 @@ interface GetMomentDetailArgs { momentId: string }
 
 export const definition = {
   name: 'getMomentDetail',
-  description: '读取时刻完整正文、图片语义、评论区与点赞状态，返回 momentId、各 commentId、回复目标、自己的评论 ID 和本轮 readReceipt。回复或删评论直接用返回的内部 commentId。',
+  description: '读取已读或未读时刻的完整正文、图片语义、评论区与点赞状态，返回 momentId、各 commentId、回复目标、自己的评论 ID 和本轮 readReceipt。收到 Social Inbox 的未读事件时可以主动读取，无需等待用户提醒；先读详情，再按真实内容和本轮已授权能力决定是否互动。回复或删评论直接用返回的内部 commentId。',
   parameters: {
     type: 'object' as const,
     properties: { momentId: { type: 'string' as const, minLength: 1, description: '时刻 ID，从 searchMoments 或 Social Inbox 获取' } },
@@ -24,7 +24,7 @@ export async function execute(args: GetMomentDetailArgs, context: MomentToolCont
     return await readMomentForTool(context, agentId, args.momentId);
   } catch (error) {
     if (error instanceof MomentDomainError && error.code === 'moment_not_visible') {
-      return { success: false, error: '未找到该时刻' };
+      return { success: false, error: '该时刻不存在或对你不可见。不要重复尝试同一 ID；用 searchMoments 按作者、正文 keyword 或评论 commentKeyword 查找当前可见内容，再用返回的 momentId 读取详情。' };
     }
     console.error('[GetMomentDetailTool] Failed:', error);
     return { success: false, error: '获取时刻详情失败' };

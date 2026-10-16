@@ -6,8 +6,9 @@ import { loadStoredWallpaperStateStrict } from './legacyWallpaperSettings';
 import type { WallpaperSelection, WallpaperSlot } from '@shared/theme/wallpaper/types';
 import { databaseCoordinator, type DatabaseTransactionExecutor } from '@platform/persistence';
 import { copyPickedImageToAppStorage, deleteManagedPersistentImageIfExists, isAppCacheFileUri, PERSISTENT_IMAGE_CATEGORY } from '@platform/device/DeviceMediaService';
-import { createMediaAssetWithReference, MEDIA_ASSET_STORAGE_BACKEND, releaseMediaAssetCandidates, resolveMediaAsset } from '@features/media';
+import { commitCroppedImageSelection, createMediaAssetWithReference, MEDIA_ASSET_STORAGE_BACKEND, releaseMediaAssetCandidates, resolveMediaAsset, type CroppedImageSelectionInput } from '@features/media';
 import type { WallpaperAssetSelection, WallpaperRepository } from '../domain/WallpaperRepository';
+import { publishWallpaperChanged } from './WallpaperChanged';
 
 const runtime = createRuntimeSlot<{ repository: WallpaperRepository }>('Profile wallpapers');
 export function configureWallpaperRuntime(repository: WallpaperRepository): void { runtime.configure({ repository }); }
@@ -109,11 +110,35 @@ export async function loadWallpaperState(): Promise<StoredWallpaperState> {
 async function setSelections(keys: readonly string[], uri: string | null): Promise<void> {
   const rows = await selections();
   const expected = [...new Set(keys)].map((key) => rows.find((row) => row.key === key) ?? { key, revision: null });
-  if (uri !== null) return commitImage(uri, expected);
-  await databaseCoordinator.transaction({ name: 'profile.wallpapers.clear', feature: 'profile', priority: 'interactive' }, async (tx) => {
-    for (const row of expected) await runtime.get().repository.commit(tx, row, null);
+  if (uri !== null) await commitImage(uri, expected);
+  else {
+    await databaseCoordinator.transaction({ name: 'profile.wallpapers.clear', feature: 'profile', priority: 'interactive' }, async (tx) => {
+      for (const row of expected) await runtime.get().repository.commit(tx, row, null);
+    });
+    await releaseMediaAssetCandidates(expected.map((row) => 'mediaAssetId' in row ? row.mediaAssetId : null));
+  }
+  publishWallpaperChanged();
+}
+
+/** 查询独立选择，不把主题展示继承伪装成当前会话自己的图片。 */
+export async function getWallpaperImageSelection(key: string) {
+  if (key !== 'app') validateChatKey(key);
+  await ensureWallpaperSelections();
+  const row = (await runtime.get().repository.list()).find(selection => selection.key === key);
+  return { mediaAssetId: row?.mediaAssetId ?? null, legacyUri: row?.legacyUri ?? null };
+}
+
+export async function changeWallpaperFromMediaAsset(key: string, input: CroppedImageSelectionInput,
+  guard: (transaction: DatabaseTransactionExecutor) => Promise<void>) {
+  if (key !== 'app') validateChatKey(key);
+  const expected = (await selections()).find(selection => selection.key === key) ?? { key, revision: null };
+  const result = await commitCroppedImageSelection(input, async (tx, assetId) => {
+    await guard(tx);
+    await runtime.get().repository.commit(tx, expected, assetId);
   });
-  await releaseMediaAssetCandidates(expected.map((row) => 'mediaAssetId' in row ? row.mediaAssetId : null));
+  await releaseMediaAssetCandidates(['mediaAssetId' in expected ? expected.mediaAssetId : null]);
+  publishWallpaperChanged();
+  return result;
 }
 
 export function setGlobalWallpaper(slot: WallpaperSlot, uri: string | null, chatKeys: readonly string[] = []): Promise<void> {

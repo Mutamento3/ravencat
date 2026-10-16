@@ -42,7 +42,7 @@ const processingModule = load('src/features/stickers/infrastructure/SQLiteAIStic
   }),
 });
 const { ConversationTurnRepository } = load('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts', {
-  '@platform/persistence': {}, '../../messages/infrastructure/ChatMessageMutationSql': {},
+  '@platform/persistence': {}, '../../messages/infrastructure/ChatMessageMutationSql': load('src/features/chat/reply/infrastructure/ChatTurnPresentationSql.ts'),
   '../../messages/infrastructure/SQLiteMessageRepository': {}, '../domain/ConversationTurn': {}, '../../messages/domain': {},
 });
 const turns = new ConversationTurnRepository();
@@ -235,45 +235,6 @@ await assert.rejects(aiRepo.create('ai-one', { ...asset, id: 'spare' }, '满库'
 assert.equal((await aiRepo.create('ai-one', asset, '重复', null, 'reused-full', now, noFence)).reused, true);
 await executor.withExclusiveTransactionAsync(tx => repo.createStickerInTransaction(tx, { ...userSticker, id: 'user-spare', mediaAssetId: 'spare' }));
 assert.equal((await repo.listStickers()).length, 2, 'AI 满库不能占用用户配额');
-
-// 头像目标来自执行身份；真实 SQL CAS 拒绝等待期间的用户编辑，回合 fence 拒绝迟到提交。
-const { AIAssistantRepository } = load('src/features/assistants/infrastructure/SQLiteAssistantRepository.ts', {
-  '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => executor } },
-  '@features/profile': {}, '@features/media': {}, '../domain/AIProfile': {},
-  './SQLiteAuxiliaryModelDefaults': {}, './SQLiteAuxiliaryModelRepository': {}, '../domain/HostRepository': {},
-});
-const assistants = new AIAssistantRepository();
-let resolveAvatarMedia = async () => ({ localUri: 'file:///cat.png' });
-const management = load('src/features/assistants/AIAssistantManagement.ts', {
-  '@features/media': { resolveMediaAsset: (...args) => resolveAvatarMedia(...args), releaseMediaAssetCandidates: async () => {} },
-  '@platform/device': { inspectLocalImage: async () => inspect }, '../domain/HostRepository': {},
-  './domain/HostRepository': {}, './application/HostAuthorityCoordinator': { HostAuthorityCoordinator: class {} },
-  './infrastructure/SQLiteAssistantRepository': { aiAssistantRepository: {
-    getAvatarMediaAssetReference: (...args) => assistants.getAvatarMediaAssetReference(...args),
-    replaceAvatarMediaAssetReference: (...args) => assistants.replaceAvatarMediaAssetReference(...args),
-    getById: async id => ({ id, name: id }),
-  } }, './infrastructure/SQLiteHostRepository': { aiHostRepository: {} },
-});
-const { createChangeOwnAvatarTool } = load('src/features/assistants/aiTools/ChangeOwnAvatarTool.ts', {
-  '@features/media': { mediaImageFailure: () => null }, '../AIAssistantManagement': management,
-});
-const avatarTool = createChangeOwnAvatarTool(assertImageToolRunCurrent);
-assert.equal((await avatarTool.execute({ media_asset_id: asset.id }, context('ai-two'))).status, 'success');
-assert.equal((await assistants.getAvatarMediaAssetReference('ai-two')).avatarMediaAssetId, asset.id);
-assert.equal((await assistants.getAvatarMediaAssetReference('ai-one')).avatarMediaAssetId, null);
-let avatarStarted, resumeAvatar;
-const avatarPending = new Promise(resolve => { avatarStarted = resolve; });
-resolveAvatarMedia = async () => { avatarStarted(); return new Promise(resolve => { resumeAvatar = resolve; }); };
-const changingAvatar = avatarTool.execute({ media_asset_id: asset.id }, context('ai-two'));
-await avatarPending;
-db.prepare("UPDATE ai_assistants SET avatar='file:///user-edit.png',avatar_media_asset_id=NULL WHERE id='ai-two'").run();
-resumeAvatar({ localUri: 'file:///cat.png' });
-assert.equal((await changingAvatar).code, 'AVATAR_CHANGE_CONFLICT');
-assert.equal((await assistants.getAvatarMediaAssetReference('ai-two')).avatar, 'file:///user-edit.png');
-resolveAvatarMedia = async () => ({ localUri: 'file:///cat.png' });
-await assert.rejects(avatarTool.execute({ media_asset_id: asset.id }, chatActor), /新消息打断/);
-await assert.rejects(avatarTool.execute({ media_asset_id: asset.id }, groupActor), /群发言任务已结束/);
-assert.equal((await assistants.getAvatarMediaAssetReference('ai-one')).avatarMediaAssetId, null);
 
 // 浏览和选择时带素材 ID 与缺向量提醒；不把本地路径或文件内容交给模型。
 const stickerTools = load('src/features/stickers/aiTools/StickerAgentTools.ts', {

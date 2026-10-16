@@ -89,7 +89,7 @@ const { deleteChatSelection } = load('src/features/chat/messages/application/Del
   '../../group/application/ChatGroupRuntime': { getChatGroupRuntimeDependencies: () => ({ groups }) },
   '../domain/ChatMessageSelection': selectionPolicy,
   '../domain/chatMessageMetadata': metadata,
-  '../events/ChatEvents': { emitChatMessagesDeleted: (sessionId, ids) => deletions.push({ sessionId, ids: [...ids] }) },
+  '../events/ChatEvents': { emitChatMessagesDeleted: (sessionId, ids) => deletions.push({ sessionId, ids: [...ids] }), emitChatTurnExecutionChanged() {} },
 });
 const time = '2026-10-09T08:00:00.000Z';
 function insert(session, text, { sender = 'user', run = null, logical = null, agent = null, metadata: meta = null } = {}) {

@@ -51,24 +51,6 @@ export const createCallStyles = (theme: PresentationTheme) =>
       marginTop: theme.spacing.xs,
       color: 'rgba(255,255,255,0.86)',
     },
-    endedActions: {
-      paddingBottom: 8,
-      alignItems: 'center',
-    },
-    primaryButton: {
-      height: 48,
-      minWidth: 160,
-      paddingHorizontal: 24,
-      borderRadius: 24,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: theme.colors.brand.primary,
-    },
-    primaryButtonText: {
-      fontSize: 15,
-      fontWeight: '700',
-      color: theme.colors.brand.onPrimary,
-    },
     errorText: {
       minHeight: 24,
       fontSize: 13,

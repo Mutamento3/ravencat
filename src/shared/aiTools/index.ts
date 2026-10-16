@@ -26,6 +26,7 @@ export type {
   AgentToolRisk,
   JsonSchema,
   ModelTransportMode,
+  ToolPackageExposureChange,
 } from './AgentToolContracts';
 export { assertAgentToolInputSchema, matchesAgentToolInputSchema } from './AgentToolInputSchema';
 export { applyHostModelRunToolExposure } from './HostModelRunPreparation';

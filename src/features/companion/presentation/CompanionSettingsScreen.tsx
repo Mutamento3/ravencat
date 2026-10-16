@@ -1,10 +1,9 @@
 /** 提供“本地伴随”的正式设置入口。悬浮交互与系统访问由独立页面拥有。 */
 
-import { Ionicons } from '@expo/vector-icons';
+import { ChevronRight, LockKeyhole, UserRoundPlus } from 'lucide-react-native';
 import { getAssistantDisplayName,
   appointHostAIAssistant,
   type AIAssistantSummary,
-  clearHostAIAppointmentCooldownForDevelopment,
   createHostAIAppointmentDialog,
   getHostAICooldownStatus,
   listAIAssistantSummaries,
@@ -65,23 +64,25 @@ export default function CompanionSettingsScreen({
   const [hostAI, setHostAI] = useState<AIAssistantSummary | null>(null);
   const [assistantCandidates, setAssistantCandidates] = useState<AIAssistantSummary[]>([]);
   const [hostPickerLoading, setHostPickerLoading] = useState(false);
+  const [hostPickerError, setHostPickerError] = useState<string | null>(null);
   const [settings, setSettings] = useState<CompanionSettings | null>(null);
   const [toggleState, setToggleState] = useState<CompanionActivationStatus>('disabled');
   const [showHostPicker, setShowHostPicker] = useState(false);
   const [showQuietHours, setShowQuietHours] = useState(false);
   const [quietDraft, setQuietDraft] = useState<{ start: number; end: number } | null>(null);
   const [cooldown, setCooldown] = useState<Awaited<ReturnType<typeof getHostAICooldownStatus>> | null>(null);
-  const [clearingHostCooldown, setClearingHostCooldown] = useState(false);
 
   const expanded = toggleState === 'enabled';
   const transitioning = toggleState === 'enabling' || toggleState === 'disabling';
   const toggleEnabled = toggleState === 'enabled' || toggleState === 'enabling';
+  const appointment = cooldown?.appointment;
+  const hostPickerDisabled = hostAI !== null || !appointment || appointment.isInCooldown || busy || refreshing;
 
   const refresh = useCallback(async () => {
     setRefreshing(hasLoadedRef.current);
     try {
       const product = await loadCompanionProductState();
-      const nextCooldown = __DEV__ && !product.hostAI
+      const nextCooldown = !product.hostAI
         ? await getHostAICooldownStatus()
         : null;
       setHostAI(product.hostAI);
@@ -107,12 +108,13 @@ export default function CompanionSettingsScreen({
   }, []);
 
   const openHostPicker = useCallback(async () => {
+    setHostPickerError(null);
     setHostPickerLoading(true);
     setShowHostPicker(true);
     try {
       setAssistantCandidates(await listAIAssistantSummaries());
     } catch (error) {
-      setErrorMessage(toMessage(error, '无法读取 AI 列表。'));
+      setHostPickerError(toMessage(error, '无法读取 AI 列表。'));
     } finally {
       setHostPickerLoading(false);
     }
@@ -204,51 +206,23 @@ export default function CompanionSettingsScreen({
   }, [refresh]);
 
   const chooseHost = useCallback((assistant: AIAssistantSummary) => {
-    if (assistant.isBlocked || !assistant.model.trim()) return;
     showAppDialog(createHostAIAppointmentDialog(
       getAssistantDisplayName(assistant),
       () => void (async () => {
+        setBusy(true);
+        setHostPickerError(null);
         try {
-          const cooldown = await getHostAICooldownStatus();
-          if (cooldown.appointment.isInCooldown) {
-            throw new Error(`撤销主理 AI 后仍需等待 ${cooldown.appointment.remainingDays} 天`);
-          }
           await appointHostAIAssistant(assistant.id);
           setShowHostPicker(false);
           await refresh();
         } catch (error) {
-          setErrorMessage(toMessage(error, '主理 AI 任命失败。'));
+          setHostPickerError(toMessage(error, '主理 AI 任命失败。'));
+          await refresh();
+        } finally {
+          setBusy(false);
         }
       })(),
     ));
-  }, [refresh]);
-
-  const clearHostCooldown = useCallback(() => {
-    showAppDialog({
-      title: '清除主理 AI 冷静期？',
-      message: '只影响当前开发设备，正式构建中的七天规则不会改变。',
-      buttons: [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '清除并继续测试',
-          onPress: () => {
-            setClearingHostCooldown(true);
-            void clearHostAIAppointmentCooldownForDevelopment()
-              .then(async () => {
-                await refresh();
-                showAppDialog({ title: '已清除', message: '现在可以重新任命主理 AI 继续测试。' });
-              })
-              .catch((error: unknown) => {
-                showAppDialog({
-                  title: '清除失败',
-                  message: error instanceof Error ? error.message : '发生了未知错误。', tone: 'error',
-                });
-              })
-              .finally(() => setClearingHostCooldown(false));
-          },
-        },
-      ],
-    });
   }, [refresh]);
 
   const updateQuietHoursEnabled = useCallback(async (value: boolean) => {
@@ -299,41 +273,44 @@ export default function CompanionSettingsScreen({
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
       >
         <SectionTitle text="主理 AI" styles={styles} />
-        <TouchableOpacity style={styles.hostCard} onPress={() => { if (!hostAI) void openHostPicker(); }} accessibilityRole="button">
-          {hostAI ? (
-            <AIInfoCard
-              name={getAssistantDisplayName(hostAI)}
-              model={hostAI.model}
-              avatarUrl={hostAI.avatar}
-              size="large"
-              style={styles.hostInfoCard}
-            />
-          ) : (
-            <>
-              <View style={styles.placeholderAvatar}><Ionicons name="person-add-outline" size={28} color={theme.colors.brand.primary} /></View>
-              <View style={styles.hostMeta}><Text style={styles.hostName}>待选择主理 AI</Text><Text style={styles.hostHint}>选择唯一的深层关系对象</Text></View>
-            </>
-          )}
-          {!hostAI ? <Ionicons name="chevron-forward" size={20} color={theme.colors.text.tertiary} /> : null}
-        </TouchableOpacity>
-
-        {__DEV__ && !hostAI && cooldown?.appointment.isInCooldown ? (
-          <ThemedSurface variant="card" style={[styles.card, styles.developmentCard]}>
-            <View style={styles.cardContent}>
-              <Text style={styles.settingLabel}>开发关系工具</Text>
-              <Text style={[styles.settingHint, styles.developmentDescription]}>
-                主理 AI 任命冷静期还剩 {cooldown.appointment.remainingDays} 天，仅用于本机开发测试。
-              </Text>
-              <Button
-                title={clearingHostCooldown ? '正在清除...' : '清除主理 AI 冷静期'}
-                variant="outline"
-                onPress={clearHostCooldown}
-                disabled={clearingHostCooldown}
-                style={styles.developmentButton}
+        <ThemedSurface variant="card" style={styles.card}>
+          <TouchableOpacity
+            style={styles.hostCard}
+            onPress={() => void openHostPicker()}
+            disabled={hostPickerDisabled}
+            accessibilityRole="button"
+            accessibilityLabel={hostAI ? getAssistantDisplayName(hostAI) : appointment?.isInCooldown ? '主理 AI 冷静期，暂时无法任命' : '选择主理 AI'}
+            accessibilityState={{ disabled: hostPickerDisabled }}
+          >
+            {hostAI ? (
+              <AIInfoCard
+                name={getAssistantDisplayName(hostAI)}
+                model={hostAI.model}
+                avatarUrl={hostAI.avatar}
+                size="large"
+                style={styles.hostInfoCard}
               />
+            ) : (
+              <>
+                <View style={styles.placeholderAvatar}>
+                  {appointment?.isInCooldown
+                    ? <LockKeyhole size={26} color={theme.colors.text.secondary} />
+                    : <UserRoundPlus size={28} color={theme.colors.brand.primary} />}
+                </View>
+                <View style={styles.hostMeta}>
+                  <Text style={styles.hostName}>{appointment?.isInCooldown ? '主理 AI 冷静期' : '待选择主理 AI'}</Text>
+                  <Text style={styles.hostHint}>{appointment?.isInCooldown ? `剩余 ${appointment.remainingDays} 天，暂时无法任命` : '选择唯一的深层关系对象'}</Text>
+                </View>
+              </>
+            )}
+            {!hostAI && !appointment?.isInCooldown ? <ChevronRight size={20} color={theme.colors.text.tertiary} /> : null}
+          </TouchableOpacity>
+          {!hostAI && appointment?.isInCooldown ? (
+            <View style={styles.hostNotice}>
+              <Text style={styles.hostNoticeText}>冷静期内不能任命任何 AI。可以与原主理 AI 商量，由它决定是否提前解除。</Text>
             </View>
-          </ThemedSurface>
-        ) : null}
+          ) : null}
+        </ThemedSurface>
 
         <SectionTitle text="伴随模式" styles={styles} />
         <ThemedSurface variant="card" style={styles.card}>
@@ -357,17 +334,20 @@ export default function CompanionSettingsScreen({
             </View>
           </ThemedSurface>
 
-          <TouchableOpacity style={styles.entryCard} onPress={() => onOpenScreen('proactive-life')} accessibilityRole="button"><View><Text style={styles.entryTitle}>主动生活</Text><Text style={styles.entryHint}>查看自主醒来、AI 日程与历史活动</Text></View><Ionicons name="chevron-forward" size={20} color={theme.colors.text.tertiary} /></TouchableOpacity>
-          <TouchableOpacity style={styles.entryCard} onPress={() => onOpenScreen('blacklist')}><View><Text style={styles.entryTitle}>窥屏黑名单</Text><Text style={styles.entryHint}>{`已选择 ${settings.userScreenCaptureBlacklist.length} 个应用 · 系统保护固定开启`}</Text></View><Ionicons name="chevron-forward" size={20} color={theme.colors.text.tertiary} /></TouchableOpacity>
+          <TouchableOpacity style={styles.entryCard} onPress={() => onOpenScreen('proactive-life')} accessibilityRole="button"><View><Text style={styles.entryTitle}>主动生活</Text><Text style={styles.entryHint}>查看自主醒来、AI 日程与历史活动</Text></View><ChevronRight size={20} color={theme.colors.text.tertiary} /></TouchableOpacity>
+          <TouchableOpacity style={styles.entryCard} onPress={() => onOpenScreen('blacklist')}><View><Text style={styles.entryTitle}>窥屏黑名单</Text><Text style={styles.entryHint}>{`已选择 ${settings.userScreenCaptureBlacklist.length} 个应用 · 系统保护固定开启`}</Text></View><ChevronRight size={20} color={theme.colors.text.tertiary} /></TouchableOpacity>
         </> : null}
         <View style={styles.bottomGap} />
       </ScrollView>
 
       <ModalSheet visible={showHostPicker} onClose={() => setShowHostPicker(false)} title="选择主理 AI">
         {hostPickerLoading ? <ActivityIndicator color={theme.colors.brand.primary} /> : null}
+        {busy ? <View style={styles.pickerFeedback}><ActivityIndicator color={theme.colors.brand.primary} /><Text style={styles.hostHint}>正在任命主理 AI…</Text></View> : null}
+        {hostPickerError ? <View style={styles.pickerFeedback}><Text style={styles.errorText} accessibilityRole="alert">{hostPickerError}</Text></View> : null}
+        {appointment?.isInCooldown ? <View style={styles.pickerFeedback}><Text style={styles.hostNoticeText}>冷静期剩余 {appointment.remainingDays} 天，暂时无法任命主理 AI。</Text></View> : null}
         <ScrollView style={styles.pickerList}>{assistantCandidates.map((assistant) => {
           const reason = assistant.isBlocked ? '当前已被限制' : !assistant.model.trim() ? '没有可用聊天模型' : assistant.model;
-          const disabled = assistant.isBlocked || !assistant.model.trim();
+          const disabled = hostPickerDisabled || assistant.isBlocked || !assistant.model.trim();
           return <TouchableOpacity key={assistant.id} style={[styles.pickerItem, disabled ? styles.disabledItem : null]} disabled={disabled} onPress={() => chooseHost(assistant)}><AIAvatar name={getAssistantDisplayName(assistant)} avatarUrl={assistant.avatar} size="medium" /><View style={styles.hostMeta}><Text style={styles.hostName}>{getAssistantDisplayName(assistant)}</Text><Text style={styles.hostHint}>{reason}</Text></View></TouchableOpacity>;
         })}</ScrollView>
       </ModalSheet>

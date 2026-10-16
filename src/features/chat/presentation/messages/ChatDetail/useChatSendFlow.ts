@@ -228,7 +228,7 @@ export function useChatSendFlow({
       text: string,
       replyTo: ReplyTarget | null = null,
       attachments: ChatAttachment[] = [],
-      sticker: StickerMessageSnapshot | null = null,
+      { sticker = null, onQueued }: { sticker?: StickerMessageSnapshot; onQueued?: () => void } = {},
     ) => {
       const normalizedText = text.trim();
       if (
@@ -272,6 +272,8 @@ export function useChatSendFlow({
         lastMessageIdRef.current = mergeResult.lastMessageId;
         return mergeResult.changed ? mergeResult.messages : prev;
       });
+      // 气泡与附件持有权已接住本次提交，输入区可立即清空，不等待落库和宿主交接。
+      onQueued?.();
 
       try {
         const result = await sendUserMessage(
@@ -320,7 +322,7 @@ export function useChatSendFlow({
   );
 
   const sendSticker = useCallback(
-    (sticker: StickerMessageSnapshot) => sendMessage('', null, [], sticker),
+    (sticker: StickerMessageSnapshot) => sendMessage('', null, [], { sticker }),
     [sendMessage],
   );
 

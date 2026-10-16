@@ -6,7 +6,8 @@ export type ChatEventName =
   | 'messagesReloadRequested'
   | 'typingStatusChanged'
   | 'regenerationChanged'
-  | 'groupSpeechPlanChanged';
+  | 'groupSpeechPlanChanged'
+  | 'turnExecutionChanged';
 
 export interface ChatEventBusPayload {
   sessionId: string;
@@ -32,6 +33,12 @@ export interface ChatEventBus {
 
 const chatEventBuses = new Set<ChatEventBus>();
 const activeTypingCorrelations = new Map<string, Set<string>>();
+
+/** 只刷新运行事实，不触发整页消息重载或执行重试。 */
+export function emitChatTurnExecutionChanged(sessionId: string): void {
+  for (const bus of chatEventBuses) Promise.resolve(bus.emit('turnExecutionChanged', { sessionId }))
+    .catch(error => console.error('[ChatEvents] 执行状态刷新失败', error));
+}
 
 export function emitChatRegenerationChanged(sessionId: string, regenerationError?: string): void {
   for (const eventBus of chatEventBuses) {

@@ -1,5 +1,5 @@
 /** 在宿主边界规范化设备通知目标，再交给内部路由处理。 */
-import type { Href, Router } from 'expo-router';
+import { CommonActions, type NavigationContainerRef, type ParamListBase } from '@react-navigation/native';
 
 export type ExternalNavigationTarget =
   | {
@@ -165,23 +165,18 @@ export function getExternalNavigationKey(target: ExternalNavigationTarget): stri
   ].join(':');
 }
 
-export function getMessageNavigationHref(
-  target: Extract<ExternalNavigationTarget, { type: 'ai-message' | 'ai-message-summary' | 'group-message' }>
-): string {
-  if (target.type === 'group-message') {
-    return `/chat/groups/${encodeURIComponent(target.groupId)}`;
-  }
-
-  const query = target.sessionId
-    ? `?sessionId=${encodeURIComponent(target.sessionId)}`
-    : '';
-  return `/chat/${encodeURIComponent(target.aiId)}${query}`;
-}
-
-/** 返回已有会话并关闭其上层页面；重排原生 Screen 会破坏 Android 的视图归属。 */
+/** 已有会话只弹出上层页面；新会话压栈，保留列表与原生 Screen 的顺序。 */
 export function openMessageConversation(
-  router: Pick<Router, 'dismissTo'>,
+  navigation: Pick<NavigationContainerRef<ParamListBase>, 'dispatch'>,
   target: Extract<ExternalNavigationTarget, { type: 'ai-message' | 'ai-message-summary' | 'group-message' }>,
 ): void {
-  router.dismissTo(getMessageNavigationHref(target) as Href);
+  const group = target.type === 'group-message';
+  // pop 只在目标已存在时回退；dismissTo 在目标不存在时会替换当前页，丢掉列表。
+  navigation.dispatch(CommonActions.navigate(
+    group ? 'chat/groups/[groupId]' : 'chat/[aiId]/index',
+    group
+      ? { groupId: target.groupId }
+      : { aiId: target.aiId, ...(target.sessionId ? { sessionId: target.sessionId } : {}) },
+    { pop: true },
+  ));
 }

@@ -1,3 +1,4 @@
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 /** 协议空间的旧库迁移、常驻注入与用户 / AI 共同编辑行为。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -124,6 +125,7 @@ const { PromptPackBlockFactory } = load('src/host/prompt/PromptPackBlockFactory.
 });
 const factory = new PromptPackBlockFactory();
 const block = await factory.createProtocolPromptBlock('a', context);
+assert.doesNotMatch(block.content, /工具|schema/, '协议正文常驻，包装文字不介绍未授权工具');
 assert.ok(block.content.includes('用户修改称呼'));
 assert.ok(block.content.includes('每天用中文回应'));
 assert.ok(block.content.includes('记录我们的纪念日'));
@@ -135,6 +137,7 @@ assert.equal((await factory.createProtocolPromptBlock('missing', context, {})).s
 
 const { getSystemPromptPreset } = load('src/host/prompt/compiler/systemPromptPresets.ts');
 const { PromptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
   '../tokenBudget': load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': load('src/shared/prompt/estimateTextTokens.ts') }),
   './promptBlockMetadata': load('src/host/prompt/compiler/promptBlockMetadata.ts'),
 });
@@ -147,6 +150,7 @@ const factoryBoundary = {
   createAgentRegistrySummaryBlock: async () => draft('agent_registry_summary'),
   createMomentSocialInboxBlock: async () => draft('moments_social_inbox'),
   createUserIdentityBlock: () => draft('user_identity_summary'), createTimeAwarenessBlock: () => draft('time_awareness'),
+  createInteractionEnvironmentBlock: () => draft('interaction_environment'),
   createRecentChatWindowBlock: () => draft('recent_chat_window'), createScenarioContextBlock: () => null,
   createAutonomousRecentChatContextBlock: () => draft('recent_chat_window'),
   createAutonomousExecutionTimeBlock: () => draft('time_awareness'),
@@ -154,10 +158,13 @@ const factoryBoundary = {
   createRecentMomentsBlock: async () => draft('recent_moments_summary'),
 };
 const providerKeys = { 'context.agent_registry': 'agent_registry_summary', 'context.moments_social_inbox': 'moments_social_inbox',
-  'context.passive_memory': 'passive_memory', 'context.group_chat': 'group_chat_context' };
+  'context.passive_memory': 'passive_memory', 'context.group_chat': 'group_chat_context', 'context.assistant_nickname': 'assistant_nickname',
+  'context.host_cooldown': 'host_cooldown' };
 const { promptPackAssembler: assembler } = load('src/host/prompt/PromptPackAssembler.ts', {
   './PromptPackBlockFactory': { promptPackBlockFactory: factoryBoundary },
-  './PromptHistoryBuilder': { promptHistoryBuilder: { loadPrivateSummaryContext: async () => ({ messages: [] }), loadRecentMessages: async () => [] } },
+  './PromptHistoryBuilder': { promptHistoryBuilder: { loadPrivateSummaryContext: async () => ({ messages: [] }),
+    loadGroupSummaryContext: async () => ({ messages: [] }), loadBackgroundContext: async () => '', loadRecentMessages: async () => [] } },
+  './compiler/promptBlockMetadata': load('src/host/prompt/compiler/promptBlockMetadata.ts'),
   './compiler/PromptPackCompiler': { promptPackCompiler: compiler }, './compiler/systemPromptPresets': { getSystemPromptPreset },
   './providers': { renderHostPromptProviderBlock: (id, { params }) => id === 'context.protocol_space'
     ? factory.createProtocolPromptBlock(params.aiConfig.id, params.toolContext) : draft(providerKeys[id]) },

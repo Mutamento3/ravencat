@@ -200,7 +200,12 @@ for (const [scenario, requiredDefinitionIds] of isolatedScenarioRequirements) {
     scenario === 'chat.summary',
     `${scenario} 的人设归属应符合任务契约`,
   );
-  assert.ok(![...definitionIds].some((id) => id.includes('tool') || id.includes('history')));
+  assert.ok(!definitionIds.has('history.recent_chat'), '内部任务不额外装载聊天原文');
+  if (scenario === 'vision.ocr') {
+    assert.ok(!definitionIds.has('context.tools_description'), 'OCR 不继承聊天工具说明');
+  } else {
+    assert.ok(definitionIds.has('context.tools_description'), '当前 AI 摘要沿用聊天稳定前缀，工具说明按本轮授权装载');
+  }
 }
 
 console.log('Prompt contract cases 通过（结构化解析、persona 传递与内部场景隔离）。');

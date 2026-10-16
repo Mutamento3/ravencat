@@ -7,6 +7,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MediaType.Companion.toMediaType
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -80,6 +82,8 @@ class WebHttpClient {
     .followRedirects(false)
     .followSslRedirects(false)
     .retryOnConnectionFailure(false)
+    // 固定直连，使公网 DNS 校验作用于实际目标；不把目标解析交给代理绕过边界。
+    // VPN/TUN 仍由系统路由处理，是否覆盖本应用由用户网络配置决定。
     .proxy(Proxy.NO_PROXY)
     .dns(object : Dns {
       override fun lookup(hostname: String): List<InetAddress> =
@@ -89,24 +93,51 @@ class WebHttpClient {
     .build()
 
   fun <T> get(value: String, request: WebRequest, download: Boolean = false, consume: (Response) -> T): T {
+    return execute(value, request, download, emptyMap(), null, consume)
+  }
+
+  fun <T> searchApi(value: String, request: WebRequest, headers: Map<String, String>, jsonBody: String? = null, consume: (Response) -> T): T {
+    return execute(value, request, false, headers, jsonBody, consume)
+  }
+
+  private fun <T> execute(value: String, request: WebRequest, download: Boolean, headers: Map<String, String>, jsonBody: String?, consume: (Response) -> T): T {
     var url = WebUrlPolicy.parse(value)
     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(if (download) 120 else 60)
     val transport = if (download) client.newBuilder().callTimeout(120, TimeUnit.SECONDS).build() else client
     for (hop in 0..5) {
       request.checkActive()
-      val call = transport.newCall(Request.Builder().url(url).header("User-Agent", "RavenCat/2.0").build())
+      val builder = Request.Builder().url(url).header("User-Agent", "RavenCat/2.0")
+      headers.forEach { (name, value) -> builder.header(name, value) }
+      if (jsonBody != null) builder.post(jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
+      val call = transport.newCall(builder.build())
       val remaining = deadline - System.nanoTime()
       if (remaining <= 0) throw WebFailure("WEB_NETWORK_FAILED", "网络请求已超时")
       call.timeout().timeout(remaining, TimeUnit.NANOSECONDS)
       request.attach(call)
       call.execute().use { response ->
         if (response.code in setOf(301, 302, 303, 307, 308)) {
+          // 带密钥的官方 API 不允许重定向，避免凭据或 POST 正文被转交给另一目标。
+          if (headers.isNotEmpty() || jsonBody != null) throw WebFailure("WEB_API_REDIRECT", "搜索服务返回了不允许的重定向")
           if (hop == 5) throw WebFailure("WEB_REDIRECT_LIMIT", "链接重定向次数过多")
           val location = response.header("Location") ?: throw WebFailure("WEB_INVALID_RESPONSE", "重定向缺少目标链接")
           url = WebUrlPolicy.parse(url.resolve(location)?.toString()
             ?: throw WebFailure("WEB_INVALID_RESPONSE", "重定向目标无效"))
         } else {
-          if (!response.isSuccessful) throw WebFailure("WEB_HTTP_ERROR", "网站返回 HTTP ${response.code}")
+          if (!response.isSuccessful) {
+            val code = when {
+              headers.isNotEmpty() && response.code in setOf(401, 403) -> "WEB_API_AUTH_FAILED"
+              headers.isNotEmpty() && response.code in setOf(402, 432, 433) -> "WEB_API_QUOTA_EXCEEDED"
+              response.code == 429 -> "WEB_RATE_LIMITED"
+              else -> "WEB_HTTP_ERROR"
+            }
+            val message = when (code) {
+              "WEB_API_AUTH_FAILED" -> "搜索服务拒绝访问，请检查密钥和账号权限"
+              "WEB_API_QUOTA_EXCEEDED" -> "搜索服务额度或用量上限已耗尽"
+              "WEB_RATE_LIMITED" -> "搜索来源暂时限流，可稍后再试或选择其他已启用来源"
+              else -> "网站返回 HTTP ${response.code}"
+            }
+            throw WebFailure(code, message)
+          }
           request.checkActive()
           return consume(response)
         }

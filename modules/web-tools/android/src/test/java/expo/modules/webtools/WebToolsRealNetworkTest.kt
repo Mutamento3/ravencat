@@ -6,6 +6,16 @@ import org.junit.Test
 
 /** 显式开启的真实来源探针；不把互联网可用性变成离线单测要求。 */
 class WebToolsRealNetworkTest {
+  @Test fun duckDuckGoReturnsSourcesOrAnExplicitUpstreamFailure() {
+    assumeTrue(System.getProperty("webTools.realNetwork") == "true")
+    try {
+      val result = WebSearchClient(WebHttpClient()).search("duckduckgo", "jsoup HTML parser", 5, null, "basic", null, WebRequest())
+      assertTrue((result["items"] as List<*>).isNotEmpty())
+    } catch (failure: WebFailure) {
+      // 真实探针保留上游拒绝原因；不把验证码包装成成功验收。
+      throw AssertionError("DuckDuckGo 探针：${failure.code} ${failure.message}", failure)
+    }
+  }
   @Test fun searchAndReadPublicPage() {
     assumeTrue(System.getProperty("webTools.realNetwork") == "true")
     val client = WebHttpClient()

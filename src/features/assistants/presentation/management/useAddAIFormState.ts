@@ -7,7 +7,7 @@ import { createAIAssistant } from '../../AIAssistantManagement';
 import type { ModelCallConfig } from '../../domain/ModelCallConfig';
 import {
   buildNewAI,
-  validateAddAIForm,
+  getAddAIFormError,
   getCurrentAddAIStep,
 } from './addAIFormHelpers';
 
@@ -54,14 +54,15 @@ export default function useAddAIFormState({ onAdded, onBack }: UseAddAIFormState
   }), [apiBaseUrl, apiKey, selectedModel]);
 
   const handleSave = useCallback(async () => {
-    const isValid = validateAddAIForm({
+    const validationError = getAddAIFormError({
       name,
       apiBaseUrl,
       apiKey,
       selectedModel,
     });
 
-    if (!isValid) {
+    if (validationError) {
+      showAppDialog({ title: '请补全信息', message: validationError, tone: 'warning' });
       return;
     }
 

@@ -10,6 +10,7 @@
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import type { IMessageRepository } from '../../messages/domain/MessageRepository';
 import { buildChatUserMessageModelInput } from './BuildChatBatchAIInput';
+import { getChatInterruptedTurnContext } from './ChatTurnPresentationRuntime';
 import type { ChatContextMessage } from './ChatReplyTypes';
 
 export interface ChatTurnAIInput {
@@ -17,7 +18,7 @@ export interface ChatTurnAIInput {
   userMessages: ChatMessage[];
   /** 逐条展示文本的联接，供 prompt 组装与审计字段使用。 */
   displayText: string;
-  /** 逐条 { role: 'user', content } 序列，真实 role 与顺序。 */
+  /** 用户原文与其后已发生的独立执行记录，保留真实 role 与顺序。 */
   turnInputMessages: ChatContextMessage[];
 }
 
@@ -28,6 +29,7 @@ export async function buildChatTurnAIInput(params: {
   inputHighWatermark: number;
   assistantId: string;
   agentId?: string;
+  isRegeneration?: boolean;
 }): Promise<ChatTurnAIInput> {
   const userMessages = await params.repository.listUserMessagesInRange(
     params.sessionId,
@@ -37,12 +39,24 @@ export async function buildChatTurnAIInput(params: {
 
   const displayLines: string[] = [];
   const turnInputMessages: ChatContextMessage[] = [];
+  const interrupted = params.isRegeneration || userMessages.length === 0 ? []
+    : await getChatInterruptedTurnContext(params.sessionId, params.replyCursorAtClaim + 1, params.inputHighWatermark + 1);
+  const contextByInput = new Map<number, typeof interrupted>();
+  for (const run of interrupted) {
+    const context = contextByInput.get(run.inputHighWatermark) ?? [];
+    context.push(run);
+    contextByInput.set(run.inputHighWatermark, context);
+  }
   for (const message of userMessages) {
     const input = await buildChatUserMessageModelInput(message, params.assistantId, params.agentId);
     if (input.displayText) {
       displayLines.push(input.displayText);
     }
     turnInputMessages.push({ role: 'user', content: input.modelInput });
+    // 未消费区间仍含原任务；把已发生结果放在它与“1 / 2”等新输入之间，而非再把原任务追加到结果之后。
+    for (const run of contextByInput.get(message.id) ?? []) {
+      turnInputMessages.push({ role: 'assistant', content: run.content });
+    }
   }
 
   return {

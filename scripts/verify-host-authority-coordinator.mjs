@@ -120,6 +120,10 @@ let pendingRevoke = null;
 const assistantManagement = loadTypeScriptModule(
   'src/features/assistants/AIAssistantManagement.ts',
   {
+    '@platform/persistence': {},
+    '@shared/runtime/abortSignal': abortSignalRuntime,
+    '@shared/errors/SettingChangeConflictError': {},
+    './domain/ApplicationSettingsAccess': {},
     '@platform/device': {},
     '@features/media': {
       createMediaAssetWithReference: async () => {},
@@ -167,6 +171,7 @@ const assistantManagement = loadTypeScriptModule(
   },
 );
 assistantManagement.configureAssistantRuntime({
+  onHostRelationshipChanged: async () => {},
   ensureInitialSession: async () => ({ session: null }),
   onHostRelationshipRemoved: async (aiId, reason) => {
     relationshipRemovedCalls += 1;

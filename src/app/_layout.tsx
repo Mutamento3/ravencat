@@ -23,6 +23,7 @@ export default function RootLayout() {
           <Stack.Screen name="wallet/index" />
           <Stack.Screen name="auxiliary-models/index" />
           <Stack.Screen name="mcp-tools/index" />
+          <Stack.Screen name="web-search/index" />
           <Stack.Screen name="mcp-tools/new" />
           <Stack.Screen name="mcp-tools/[serverId]" />
           <Stack.Screen name="memory/index" />

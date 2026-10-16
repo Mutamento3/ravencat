@@ -151,7 +151,7 @@ export default function useHostAISetting({
 
     showAlert(
       '撤销主理 AI',
-      `确定要取消「${getAssistantDisplayName(aiAssistant)}」的主理 AI 身份吗？\n\n该 AI 将失去主理 AI 专属权限，本地伴随会停止，原来的未来日程会废弃，历史记录保留。\n\n撤销后 7 天内不能重新任命任何 AI。`,
+      `确定要取消「${getAssistantDisplayName(aiAssistant)}」的主理 AI 身份吗？\n\n该 AI 将失去主理 AI 专属权限，本地伴随会停止，原来的未来日程会废弃，历史记录保留。\n\n撤销后进入 7 天冷静期，期间不能重新任命任何 AI。可以与原主理 AI 商量，由它自行决定是否提前解除。`,
       [
         { text: '取消', style: 'cancel' },
         {

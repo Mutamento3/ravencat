@@ -25,6 +25,7 @@ import { resolveAIReplyPolicy } from './ReplyPolicy';
 import { resolveMemoryParticipationMode } from './MemoryParticipationPolicy';
 import { runChatAgentReplyFlow } from '../agent/ChatAgentReplyFlow';
 import { ChatAgentModelRequestError } from '../agent/ChatAgentModelGateway';
+import { ChatAgentRunFailedError } from '../agent/ChatAgentRunProjector';
 import type {
   AIReplyConfig,
   AIReplyRuntimeContext,
@@ -145,25 +146,6 @@ export async function processAIReply(
       runtimeContext
     );
 
-    const nicknameRevision = promptPack.assistantNicknameNoticeRevision;
-    let nicknameNoticeDelivered = false;
-    const replyCallbacks = nicknameRevision === undefined ? callbacks : {
-      ...callbacks,
-      onFinalReply: (payload: Parameters<NonNullable<ProcessAIReplyCallbacks['onFinalReply']>>[0]) => {
-        nicknameNoticeDelivered = true;
-        callbacks.onFinalReply?.(payload);
-      },
-    };
-    const acknowledgeNicknameNotice = async () => {
-      if (!nicknameNoticeDelivered || nicknameRevision === undefined) return;
-      try {
-        await chatRuntimeDependencies.prompt.acknowledgeNicknameNotice(aiConfig.id, nicknameRevision);
-      } catch (error) {
-        // 回复已经提交；确认失败保留待提醒，不把已交付回复改写成错误气泡。
-        console.warn('[processAIReply] 昵称修改提醒确认失败', error);
-      }
-    };
-
     assertChatReplyNotAborted(runtimeContext);
 
     const client = createAIClient({
@@ -188,7 +170,7 @@ export async function processAIReply(
       toolInstructionsSlot: promptPack.toolInstructionsSlot,
       aiConfig,
       repository: repo,
-      callbacks: replyCallbacks,
+      callbacks,
       runtimeContext,
       client,
       policy,
@@ -196,7 +178,6 @@ export async function processAIReply(
     });
 
     if (agentReplyResult.completed) {
-      await acknowledgeNicknameNotice();
       return;
     }
 
@@ -209,7 +190,7 @@ export async function processAIReply(
       toolInstructionsSlot: promptPack.toolInstructionsSlot,
       aiConfig,
       repository: repo,
-      callbacks: replyCallbacks,
+      callbacks,
       runtimeContext,
       client,
       policy: {
@@ -218,7 +199,6 @@ export async function processAIReply(
       },
       persistence,
     });
-    await acknowledgeNicknameNotice();
   } catch (error) {
     if (isChatReplyRunCancellationError(error)) {
       return;
@@ -254,6 +234,9 @@ function resolveHostRunScenario(runtimeContext: AIReplyRuntimeContext): PromptPa
 function resolveAIReplyErrorMessage(error: unknown): string {
   if (error instanceof ChatAgentModelRequestError) {
     return getErrorDisplayInfo(error).message;
+  }
+  if (error instanceof ChatAgentRunFailedError) {
+    return `处理 AI 回复时发生错误\n\n${error.diagnosticText}`;
   }
   return '处理 AI 回复时发生错误';
 }

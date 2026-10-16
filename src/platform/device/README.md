@@ -19,6 +19,8 @@
 
 `DeviceMediaService.pickCroppedImage` 复用 Expo 的 Android 原生选图与裁剪，返回裁剪后的临时图片或取消结果。调用方申请权限并指定比例：头像 1:1、时刻封面 16:9、背景使用当前屏幕比例；业务 owner 继续负责持久化与绑定。`plugins/withImageCropColors.js` 为生成的 Android 工程配置深浅色实色顶栏与高对比度图标，修改这些原生资源需要重新编译应用。
 
+`cropImageToAspect` 提供无交互的自动裁剪：输入本地图片 URI 与目标宽高比，默认居中裁剪，只缩小不放大、不拉伸、不改动原图，不弹任何界面。文件检查复用 `inspectLocalImage` 契约；动态图沿用 `prepareVisionImage` 的静态帧契约，输出恒为单帧并通过 `sourceWasAnimated` 告知来源。成功的临时文件归调用方使用并清理，动态图的静态帧等中间产物由函数自身清理。`node scripts/verify-image-auto-crop.mjs` 验证横竖互换、同比例、小图不放大、动态图单帧与失败清理。
+
 聊天的「上传图片」由 `selectChatImage` 使用 `expo-image-picker` 的标准 Photo Picker 入口选择单张图片；`quality: 1` 且不编辑，让 Expo 直接复制原始字节。文件大小取实际缓存文件，不信任媒体索引的声明大小，仍保留单图 5 MiB 限制；尺寸使用 Expo 从缓存文件取得的结果。「上传文件」使用文档选择器，两者进入同一附件持久化和视觉输入链路。`npm run verify:chat-image-selection` 验证原图读取配置、实际大小、文件名、取消与错误传播。
 
 真机曾出现系统媒体索引大小 345664 字节、物理原图 346230 字节的异常条目。原生日志确认 Picker 提供的句柄和源流只有 345664 字节，Expo 缓存与源流哈希一致，截断发生在系统提供路径。只重新扫描该原图的系统索引后，同一 URI 的句柄和读取长度恢复为 346230 字节，缓存与原图逐字节一致，DeepSeek 识别成功。错误索引的产生原因尚未确认；此次重扫描是单条系统记录的诊断与修正，产品代码没有自动重扫描。`legacy: true` 对照仍由 Photo Picker 接管、仍然截断，现已移除该无效选项；标准入口在修正索引后的真机回归仍待确认。不设置失败后切换、重试或转码。

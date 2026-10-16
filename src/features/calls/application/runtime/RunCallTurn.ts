@@ -63,6 +63,10 @@ export class CallTurnRuntimeService {
     // 逐句准流式：已经通过 Speech 文本边界的句子立即进入 TTS 队列；
     // 回合播放结束 = 全部句子 promise settle（正常播完、version 作废或被打断）。
     const sentencePromises: Promise<void>[] = [];
+    let usingTool = false;
+    let pendingSentences = 0;
+    const updatePhase = () => setCallReplyRunPhase(params.callId, runId,
+      usingTool ? 'using_tool' : pendingSentences > 0 ? 'speaking' : 'generating');
     let playbackStartedNotified = false;
     let playbackEndedNotified = false;
     const notifyPlaybackEndedOnce = () => {
@@ -75,16 +79,22 @@ export class CallTurnRuntimeService {
     try {
       const reply = await this.dependencies.processReply({
         callId: params.callId,
+        runId,
         userText: params.userText,
         aiConfig: params.aiConfig,
         signal,
+        onToolExecutionChanged: (active) => {
+          usingTool = active;
+          updatePhase();
+        },
         onSpeechSentence: (sentence, speech) => {
           // run fence：回合被取代或取消后，迟到的句子不得再进入 TTS 队列。
           if (!isActiveCallReplyRun(params.callId, runId)) {
             return;
           }
-          // 首句入队即进入 speaking 相位（TTS 合成或播放中都算）。
-          setCallReplyRunPhase(params.callId, runId, 'speaking');
+          // 工具与语音可能重叠；工具期间优先展示工具，播完后回到实际的生成状态。
+          pendingSentences++;
+          updatePhase();
           const isFirstSentence = sentencePromises.length === 0;
           sentencePromises.push(this.dependencies.enqueueSpeech({
             callId: params.callId,
@@ -95,6 +105,9 @@ export class CallTurnRuntimeService {
               playbackStartedNotified = true;
               params.onPlaybackStarted?.();
             } : undefined,
+          }).finally(() => {
+            pendingSentences--;
+            updatePhase();
           }));
         },
       });

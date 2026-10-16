@@ -43,7 +43,7 @@ export interface CompanionRuntimeDependencies {
   };
   tools: {
     createContext(params: Omit<ToolContextParams, 'repositories'>): ToolContext;
-    buildDescription(config: AIToolsConfig): string;
+    buildDescription(allowedToolNames: readonly string[]): string;
     getRuntimeAllowedNames(config: AIToolsConfig): string[];
     resolveAllowedNames(assistantId: string): Promise<string[]>;
     resolveMcpExposure(assistantId: string): Promise<{

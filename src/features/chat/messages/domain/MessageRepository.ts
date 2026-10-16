@@ -132,6 +132,9 @@ export interface IMessageRepository {
     sessionId: string,
     clientMessageId: string
   ): Promise<ChatMessage | null>;
+
+  /** 重读已加载身份覆盖的持久窗口；没有持久身份时按首屏读取，乐观 ID 不作为数据库边界。 */
+  getReloadWindowMessages(sessionId: string, loadedMessageIds: readonly number[]): Promise<ChatMessage[]>;
   
   /**
    * 分页获取历史消息

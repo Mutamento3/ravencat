@@ -235,11 +235,6 @@ assert.match(hostSource, /<ChatRouterProvider/);
 assert.match(hostSource, /\/chat\/\$\{encodeURIComponent\(aiId\)\}/);
 assert.match(
   hostSource,
-  /minimizeCallScreen[\s\S]*refreshCallConversationTimeline\(callId\)[\s\S]*returnFromStackRoute\(\)/,
-  '通话最小化返回聊天页前必须安排时间线恢复同步'
-);
-assert.match(
-  hostSource,
   /const markActiveConversationAsRead = useCallback[\s\S]*markGroupConversationAsRead\(context\.groupId\)[\s\S]*markConversationAsRead\(context\.sessionId, context\.aiId\)/,
   '当前单聊与群聊必须共用同一个前台已读入口'
 );

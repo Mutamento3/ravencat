@@ -2,11 +2,11 @@
  * 维护每通电话唯一的 AI 回复运行态与回合相位，使挂断能同步失效所有迟到结果。
  *
  * 回合相位（architecture.md 5.5）是 calls runtime 的所有权：
- * idle -> generating（模型回复在途）-> speaking（TTS 合成或播放中）-> idle。
+ * generating（模型回复在途）、using_tool（工具执行中）、speaking（TTS 合成或播放中），结束回到 idle。
  * presentation 只能通过订阅读取相位，禁止用局部布尔反推 AI 状态。
  */
 
-export type CallTurnPhase = 'idle' | 'generating' | 'speaking';
+export type CallTurnPhase = 'idle' | 'generating' | 'using_tool' | 'speaking';
 
 interface ActiveCallReplyRun {
   runId: string;

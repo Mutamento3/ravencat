@@ -3,7 +3,6 @@ package expo.modules.webtools
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -21,24 +20,18 @@ class WebToolsModule : Module() {
     }
     Function("cancelRequest") { id: String -> requests[id]?.cancel() }
 
-    AsyncFunction("search") { id: String, query: String, limit: Int ->
+    AsyncFunction("search") { id: String, query: String, limit: Int, engine: String, apiKey: String?, depth: String, timeRange: String? ->
       perform(id) { request ->
-        val url = "https://www.bing.com/search".toHttpUrl().newBuilder()
-          .addQueryParameter("format", "rss").addQueryParameter("q", query).build()
-        client.get(url.toString(), request) { response ->
-          val bytes = readWebBody(response, 1024L * 1024, request)
-          val charset = response.body!!.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
-          WebContentParser.search(String(bytes, charset), query, limit)
-        }
+        WebSearchClient(client).search(engine, query, limit, apiKey, depth, timeRange, request)
       }
     }
-    AsyncFunction("readPage") { id: String, url: String, maxChars: Int ->
+    AsyncFunction("readPage") { id: String, url: String, maxChars: Int, startChar: Int, find: String?, documentVersion: String? ->
       perform(id) { request ->
         client.get(url, request) { response ->
           val bytes = readWebBody(response, 2L * 1024 * 1024, request)
           val type = response.body!!.contentType()
           WebContentParser.page(bytes, type?.charset(null)?.name(), response.request.url.toString(),
-            type?.let { "${it.type}/${it.subtype}" }.orEmpty(), maxChars)
+            type?.let { "${it.type}/${it.subtype}" }.orEmpty(), maxChars, startChar, find, documentVersion)
         }
       }
     }
@@ -64,7 +57,7 @@ class WebToolsModule : Module() {
     }
   }
 
-  private fun perform(id: String, execute: (WebRequest) -> Map<String, Any>): Map<String, Any> {
+  private fun perform(id: String, execute: (WebRequest) -> Map<String, Any?>): Map<String, Any> {
     val request = requests.getValue(id)
     try {
       request.checkActive()

@@ -27,6 +27,7 @@ import { TRANSLATION_SELECTION_SCHEMA } from './translationModelSchema';
 import { AUXILIARY_MODEL_DEFAULTS_SCHEMA } from './auxiliaryModelDefaultsSchema';
 import { CHAT_SUMMARY_SCHEMA, CHAT_TIMELINE_RUN_ANCHOR_SCHEMA } from './chatSummarySchema';
 import { CHAT_TOOL_PACKAGE_EXPOSURE_SCHEMA } from './chatToolPackageSchema';
+import { CHAT_TURN_PRESENTATIONS_SCHEMA } from './chatTurnPresentationSchema';
 import {
   TOGETHER_LISTENING_ACTIVITIES_SCHEMA,
   TOGETHER_LISTENING_CHAT_CREATED_INDEX,
@@ -71,8 +72,10 @@ import { WALLPAPER_SELECTION_SCHEMA } from './wallpaperSelectionSchema';
 import { AGENT_RUNS_SCHEMA, AGENT_STEPS_SCHEMA, AGENT_TOOL_RECEIPTS_SCHEMA } from './agentRuntimeSchema';
 import { CHAT_REGENERATION_REQUESTS_SCHEMA } from './chatRegenerationSchema';
 import { MCP_SERVERS_SCHEMA, MCP_TOOL_GRANTS_SCHEMA, MCP_SERVER_ASSISTANTS_SCHEMA, MCP_TOOL_GRANTS_INDEXES } from './mcpSchema';
+import { WEB_SEARCH_SCHEMA } from './webSearchSchema';
 
 export const SCHEMAS: Record<string, string> = {
+  webSearch: WEB_SEARCH_SCHEMA,
   chatFavorites: CHAT_FAVORITES_SCHEMA,
   callBackgroundSelection: CALL_BACKGROUND_SELECTION_SCHEMA,
   wallpaperSelections: WALLPAPER_SELECTION_SCHEMA,
@@ -126,20 +129,6 @@ export const SCHEMAS: Record<string, string> = {
   `,
 
   hostAIRelationshipState: HOST_AI_RELATIONSHIP_STATE_SCHEMA,
-
-  assistantNicknameChanges: `
-    CREATE TABLE IF NOT EXISTS assistant_nickname_changes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      assistant_id TEXT NOT NULL,
-      previous_nickname TEXT,
-      nickname TEXT,
-      acknowledged INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (assistant_id) REFERENCES ai_assistants(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_assistant_nickname_changes_owner
-      ON assistant_nickname_changes(assistant_id, id);
-  `,
 
   auxiliaryModelConfigs: `
     CREATE TABLE IF NOT EXISTS auxiliary_model_configs (
@@ -347,11 +336,16 @@ export const SCHEMAS: Record<string, string> = {
       revision INTEGER NOT NULL DEFAULT 0,
       active_run_id TEXT NULL REFERENCES conversation_turn_runs(run_id),
       active_run_kind TEXT NULL,
+      host_request_revision INTEGER NOT NULL DEFAULT 0,
+      host_request_input_id INTEGER,
+      host_request_status TEXT,
+      host_request_at TEXT,
       updated_at TEXT NOT NULL
     );
   `,
 
   chatToolPackageExposure: CHAT_TOOL_PACKAGE_EXPOSURE_SCHEMA,
+  chatTurnPresentations: CHAT_TURN_PRESENTATIONS_SCHEMA,
   chatRegenerationRequests: CHAT_REGENERATION_REQUESTS_SCHEMA,
 
   callSessions: `

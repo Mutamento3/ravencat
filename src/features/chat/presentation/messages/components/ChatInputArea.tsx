@@ -18,6 +18,7 @@ import { isMoonKimiTheme, ThemedSurface, useTheme } from '@shared/theme';
 import { MoonKimiComposer } from './MoonKimiComposer';
 import type { MoonKimiQuickAction } from './MoonKimiComposer';
 import { resolveTogetherListeningToolPanelHandler } from './chatToolPanelCapability';
+import { CHAT_INPUT_MAX_LENGTH } from './chatInputLimits';
 import type { ChatComposerSurface } from './useChatComposerSurface';
 import type { ChatVoiceMessageReviewDraft, ChatVoiceRecordingState } from './chatTypes';
 
@@ -416,7 +417,7 @@ export default function ChatInputArea({
             onChangeText={onChangeText}
             placeholder={disabled ? disabledPlaceholder : ''}
             placeholderTextColor={theme.colors.text.tertiary}
-            maxLength={500}
+            maxLength={CHAT_INPUT_MAX_LENGTH}
             autoGrow
             textAlignVertical="top"
             scrollEnabled

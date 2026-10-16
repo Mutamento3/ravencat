@@ -5,6 +5,7 @@ import type { UserProfile } from '../domain/UserProfile';
 import { UserAvatar } from '@shared/ui';
 import { ThemedSurface, useTheme } from '@shared/theme';
 import { getInstalledApplicationInfo } from '@platform/device/DeviceStatus';
+import { version as sourceVersion } from '../../../../package.json';
 import { createProfileStyles } from './ProfileTab.styles';
 
 function ProfileSettingsMenuItem({ title, onPress, danger = false, icon: Icon,
@@ -55,9 +56,14 @@ export function ProfileContent({ profile, hasLoadedProfile, onOpenProfile, onOpe
         disabled={checkingUpdates} hasNotice={availableUpdateVersion !== null}
         detail={updateProgress !== null ? `下载 ${Math.floor(updateProgress * 100)}%`
           : updateDownloaded ? '已下载，点击安装' : checkingUpdates ? '正在检查…'
-            : availableUpdateVersion ? `v${availableUpdateVersion}` : undefined} />
+            : availableUpdateVersion ? `v${availableUpdateVersion}` : __DEV__ ? '开发版' : undefined} />
       <ProfileSettingsMenuItem title="清空所有数据" icon={Trash2} danger onPress={onClearAllData} />
     </ThemedSurface>
-    <View style={styles.versionSection}><Text style={styles.versionText}>{appInfo.name} v{appInfo.version} ({appInfo.buildNumber})</Text></View>
+    <View style={styles.versionSection}>
+      {__DEV__ ? <>
+        <Text style={styles.versionText}>{appInfo.name} · 开发源码 v{sourceVersion}</Text>
+        <Text style={styles.versionText}>安装包 v{appInfo.version} ({appInfo.buildNumber})</Text>
+      </> : <Text style={styles.versionText}>{appInfo.name} v{appInfo.version} ({appInfo.buildNumber})</Text>}
+    </View>
   </>;
 }

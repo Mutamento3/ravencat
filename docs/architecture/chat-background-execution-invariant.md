@@ -5,6 +5,8 @@
 
 `ConversationTurnHeadlessTask` 通过 Host 的 `ensureHostDatabaseReady()` 顺序等待恢复门与普通数据库初始化。设备固定回归需要独立证据，不能通过页面执行兜底解决。
 
+原有 Service 在一次任务执行期间进入有界前台执行，持有独立 CPU 锁；启动回执、软截止取消和十分钟原生收口的具体边界见 [宿主生命周期](./chat-background-execution-lifetime.md)。这不放宽本文的唯一执行宿主、恢复与真机验收约束。
+
 
 本文是普通 Chat AI 回复后台执行的永久架构约束。它保护的是执行生命周期的所有权，
 不是 UI 投影或通知策略。修改 `SendUserMessage`、`ConversationTurnCoordinator`、

@@ -13,6 +13,7 @@ function load(relative, mocks = {}) {
   }).outputText;
   const module = { exports: {} };
   new Function('require', 'module', 'exports', code)((specifier) => {
+    if (specifier === '@shared/errors/SettingChangeConflictError') return load('src/shared/errors/SettingChangeConflictError.ts');
     if (Object.hasOwn(mocks, specifier)) return mocks[specifier];
     if (specifier.startsWith('.')) return load(path.relative(root, path.resolve(root, path.dirname(relative), `${specifier}.ts`)), mocks);
     throw new Error(`未声明的依赖：${specifier}`);

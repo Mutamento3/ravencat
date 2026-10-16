@@ -76,7 +76,8 @@ export function ApplicationUpdateProvider({ enabled, children }: { enabled: bool
   }, [enabled, state.download, showInstaller]);
 
   useEffect(() => {
-    if (!enabled || started.current) return;
+    // 开发环境由 Metro 交付代码，公开 APK 不能覆盖独立的开发包。
+    if (__DEV__ || !enabled || started.current) return;
     started.current = true;
     // 只在本次冷启动进入前台后检查，不阻塞数据库恢复、启动屏或路由。
     void updates.check().then(setPendingAutomaticRelease)
@@ -90,6 +91,13 @@ export function ApplicationUpdateProvider({ enabled, children }: { enabled: bool
   }, [enabled, pendingAutomaticRelease, updates, showRelease]);
 
   const checkManually = useCallback(() => {
+    if (__DEV__) {
+      showAppDialog({
+        title: '开发版更新',
+        message: '开发版通过开发服务器加载代码，不接收 GitHub 预览版 APK 更新。原生功能的改动需要重新安装开发包。',
+      });
+      return;
+    }
     if (state.download?.uri) {
       showInstaller(state.download.uri);
       return;

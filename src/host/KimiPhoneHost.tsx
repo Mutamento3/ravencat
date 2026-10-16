@@ -13,15 +13,16 @@ import React, {
   type ReactNode,
 } from 'react';
 import { View, StyleSheet, AppState, type AppStateStatus } from 'react-native';
-import { type Href, usePathname, useRouter } from 'expo-router';
+import { type Href, useNavigationContainerRef, usePathname, useRouter, useUnstableGlobalHref } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppBackground, ThemeProvider, WallpaperProvider } from '@shared/theme';
 import { AppDialogHost } from '@shared/ui';
-import { loadWallpaperState, setGlobalWallpaper, setConversationWallpaper } from '@features/profile';
+import { loadWallpaperState, setGlobalWallpaper, setConversationWallpaper, subscribeWallpaperChanged } from '@features/profile';
 
 import * as SplashScreen from 'expo-splash-screen';
 
 import { initDatabase } from '@platform/persistence';
+import { leaveCallScreen } from '../../modules/kimiphone-notifications';
 import {
   aiAssistantRepository,
 } from '@features/assistants';
@@ -66,6 +67,7 @@ import {
   interruptAbandonedGroupSpeechPlans,
   setChatForegroundContext,
   applyAssistantMessageArrivalSnapshot,
+  recoverTurnPresentationDisplays,
 } from '@features/chat/composition';
 import { configureHostRuntime } from './composition/configureHostRuntime';
 import { completePendingBackupRestore } from './composition/completePendingBackupRestore';
@@ -136,6 +138,7 @@ const wallpaperPersistence = {
   load: async () => { await initDatabase(); return loadWallpaperState(); },
   setGlobal: setGlobalWallpaper,
   setConversation: setConversationWallpaper,
+  subscribe: subscribeWallpaperChanged,
 };
 
 configureHostRuntime();
@@ -160,6 +163,10 @@ interface HostRouteRuntime {
 }
 
 const HostRouteRuntimeContext = createContext<HostRouteRuntime | null>(null);
+
+// Headless 让通话跨越 Activity 销毁；首次发起/接听的位置必须同样独立于 React 页面存活。
+// 只保留当前通话的完整地址（含会话参数），小窗重开和深链重建不覆盖来源。
+let callScreenOrigin: { callId: string; href: Href } | null = null;
 
 function useHostRouteRuntime(): HostRouteRuntime {
   const runtime = useContext(HostRouteRuntimeContext);
@@ -216,7 +223,9 @@ function HostLifecycle({
   onResetApplicationData: () => void;
 }) {
   const router = useRouter();
+  const navigationContainerRef = useNavigationContainerRef();
   const pathname = usePathname();
+  const currentHref = useUnstableGlobalHref();
   const rootNavigationReady = useRootNavigationReady();
 
   const [sessionRefreshTrigger, setSessionRefreshTrigger] = useState<number>(0);
@@ -368,16 +377,16 @@ function HostLifecycle({
     try {
       applyAssistantMessageArrivalSnapshot(await getMessageArrivalSnapshot());
       const arrival = getAssistantMessageArrivalSnapshot();
-      const aiList = await aiAssistantRepository.getAll();
+      const aiIds = await aiAssistantRepository.listIds();
       const groupChats = await listGroupChats();
       const unreadEntries: [string, number, string, number][] = [];
 
-      for (const ai of aiList) {
-        const key = conversationKeyOfDirect(ai.id);
+      for (const aiId of aiIds) {
+        const key = conversationKeyOfDirect(aiId);
         const revision = (unreadQueryRevisionsRef.current.get(key) ?? 0) + 1;
         unreadQueryRevisionsRef.current.set(key, revision);
-        const unreadCount = await messageRepository.getUnreadCountByAI(ai.id, arrival.pendingMessageIds);
-        unreadEntries.push([ai.id, unreadCount, key, revision]);
+        const unreadCount = await messageRepository.getUnreadCountByAI(aiId, arrival.pendingMessageIds);
+        unreadEntries.push([aiId, unreadCount, key, revision]);
       }
 
       // 群未读按 groupId 并入同一张表，底部 Tab 角标对全量求和自动计入。
@@ -704,6 +713,7 @@ function HostLifecycle({
       recoverRequiredRuntimeState: async () => {
         try {
           // Phase 5A：崩溃孤儿与从未 claim 的待回复区间在此恢复（只等启动，不等执行）。
+          await recoverTurnPresentationDisplays();
           await getConversationTurnCoordinator().recoverConversationTurns();
         } catch (turnRecoveryError) {
           console.warn('[ConversationTurn] 启动恢复失败，将在下次启动重试：', turnRecoveryError);
@@ -790,12 +800,15 @@ function HostLifecycle({
   }, []);
 
   const openCallScreen = useCallback((callId: string) => {
+    if (callScreenOrigin?.callId !== callId && !pathname.startsWith('/calls/')) {
+      callScreenOrigin = { callId, href: currentHref as Href };
+    }
     setCallRuntimeId(callId);
     // 显式打开也已处理这通电话；Router 尚未更新路径时，迟到的恢复查询不能再压入同一页。
     autoRestoreSuppressedCallIdRef.current = callId;
     setMinimizedCallId(null);
     router.push(`/calls/${encodeURIComponent(callId)}` as Href);
-  }, [router]);
+  }, [currentHref, pathname, router]);
 
   const returnFromStackRoute = useCallback(() => {
     if (router.canGoBack()) {
@@ -805,6 +818,20 @@ function HostLifecycle({
 
     router.replace('/' as Href);
   }, [router]);
+
+  const returnFromCallScreen = useCallback((callId: string, finished: boolean) => {
+    const origin = callScreenOrigin?.callId === callId ? callScreenOrigin : null;
+    if (finished && origin) callScreenOrigin = null;
+    void leaveCallScreen(callId, finished).finally(() => {
+      if (origin) {
+        // 原页面仍在栈中就弹回；Activity 已重建时替换通话页，恢复首次进入的位置。
+        router.dismissTo(origin.href);
+      } else {
+        // 直接冷启动打开的通话链接没有 App 内来源，沿用普通栈退出语义。
+        returnFromStackRoute();
+      }
+    }).catch(error => console.warn('[Calls] 退出原生通话展示失败', error));
+  }, [returnFromStackRoute, router]);
 
   const refreshCallConversationTimeline = useCallback(async (callId: string) => {
     try {
@@ -825,16 +852,16 @@ function HostLifecycle({
     setMinimizedCallId(null);
     setCallRuntimeId((current) => current === callId ? null : current);
     void refreshCallConversationTimeline(callId);
-    returnFromStackRoute();
-  }, [refreshCallConversationTimeline, returnFromStackRoute]);
+    returnFromCallScreen(callId, true);
+  }, [refreshCallConversationTimeline, returnFromCallScreen]);
 
   const minimizeCallScreen = useCallback((callId: string) => {
     setCallRuntimeId(callId);
     autoRestoreSuppressedCallIdRef.current = callId;
     setMinimizedCallId(callId);
     void refreshCallConversationTimeline(callId);
-    returnFromStackRoute();
-  }, [refreshCallConversationTimeline, returnFromStackRoute]);
+    returnFromCallScreen(callId, false);
+  }, [refreshCallConversationTimeline, returnFromCallScreen]);
 
   const openAddAIScreen = useCallback(() => {
     router.push('/add-ai' as Href);
@@ -861,7 +888,7 @@ function HostLifecycle({
         return;
       }
 
-      openMessageConversation(router, target);
+      openMessageConversation(navigationContainerRef, target);
       setSessionRefreshTrigger((prev) => prev + 1);
       return;
     }
@@ -875,8 +902,8 @@ function HostLifecycle({
       emitChatMessagesUpdated(sessionId);
     }
 
-    openMessageConversation(router, target);
-  }, [navigateToExternalTargetError, router]);
+    openMessageConversation(navigationContainerRef, target);
+  }, [navigateToExternalTargetError, navigationContainerRef]);
 
   const handleIncomingCallNotification = useCallback(async (payload: ExternalNavigationTarget) => {
     if (payload.type !== 'ai-incoming-call') {
@@ -900,6 +927,7 @@ function HostLifecycle({
     if (payload.notificationAction === 'accept') {
       const accepted = await acceptCall(payload.callId);
       if (accepted.call.state !== 'active') {
+        await leaveCallScreen(payload.callId, true);
         return;
       }
       currentCall = accepted.call;
@@ -1318,6 +1346,7 @@ function HostLifecycle({
       setMinimizedCallId(null);
       setCallRuntimeId(null);
       setInterruptedCallId(null);
+      callScreenOrigin = null;
       setPendingNotificationNavigation(null);
       pendingNotificationNavigationRef.current = null;
       processingExternalNavigationRef.current = false;
@@ -1425,7 +1454,7 @@ function HostLifecycle({
           <CallRuntimeProvider
             callId={dbReady ? callRuntimeId : null}
             minimized={!pathname.startsWith('/calls/')}
-            onMinimizedCallEnded={() => { setMinimizedCallId(null); setCallRuntimeId(null); }}
+            onMinimizedCallEnded={() => { callScreenOrigin = null; setMinimizedCallId(null); setCallRuntimeId(null); }}
           >
             <View style={styles.content}>
               <ApplicationUpdateProvider enabled={dbReady && appState === 'active'}>
@@ -1444,7 +1473,7 @@ function HostLifecycle({
                     sessionId: chatSessionId,
                   });
                   if (target && target.type !== 'ai-incoming-call' && target.type !== 'together-listening') {
-                    openMessageConversation(router, target);
+                    openMessageConversation(navigationContainerRef, target);
                   }
                 }}
               />

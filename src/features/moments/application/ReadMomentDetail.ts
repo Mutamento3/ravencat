@@ -56,6 +56,7 @@ export async function readMomentDetail(
   if (!comments.length) lines.push('暂无评论');
   lines.push('', `你自己的评论 ID: ${JSON.stringify(ownCommentIds)}`);
   lines.push('回复或删除评论时使用上述 commentId；用户不需要提供内部 ID。若有多条候选无法判断，询问具体内容或对象，不要索要 ID。');
+  lines.push('本次读取会将这条时刻已有的未读社交事件标为已读；已读不等于已回复。以后仍可用此 momentId 重新读取，或用 searchMoments 搜索正文、作者及评论找回。');
   const detail = {
     message: lines.join('\n'),
     data: {

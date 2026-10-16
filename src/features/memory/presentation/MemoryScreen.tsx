@@ -1,12 +1,12 @@
 /** 记忆空间以星球呈现，正文和触发词由按需打开的面板管理。 */
 import { showAppDialog } from '@shared/ui';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useId, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import { ChevronLeft, Settings2 } from 'lucide-react-native';
 import { useReducedMotion } from 'react-native-reanimated';
-import { useTheme, useThemedStyles } from '@shared/theme';
+import { GlassBackdrop, GlassSceneProvider, useTheme, useThemedStyles } from '@shared/theme';
 import { selectMemorySpace } from '../application/MemoryCommands';
 import { createMemoryGalaxyStyles } from './memoryGalaxyStyles';
 import GalaxyBackground from './GalaxyBackground';
@@ -27,6 +27,7 @@ interface Props {
 export default function MemoryScreen({ onBack, onOpenSettings, onCreateMemory, onEditMemory, onOpenTrigger }: Props) {
   const theme = useTheme();
   const styles = useThemedStyles(createMemoryGalaxyStyles);
+  const glassSceneId = `memory:${useId()}`;
   const starlight = theme.mode === 'dark' ? theme.colors.text.primary : theme.colors.text.inverse;
   const [assistantId, setAssistantId] = useState<string>();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -73,7 +74,7 @@ export default function MemoryScreen({ onBack, onOpenSettings, onCreateMemory, o
   const removeShootingStar = useCallback(() => setShootingStar(false), []);
   const finishSplash = useCallback(() => setSplashDone(true), []);
 
-  return <View style={styles.screen} onLayout={({ nativeEvent: { layout } }) => setViewport({ width: layout.width, height: layout.height })}>
+  const scene = <>
     {/* 星云动效与前景共用 Screen 的前台生命周期。 */}
     {viewport.width > 0 && <GalaxyBackground width={viewport.width} height={viewport.height} paused={!ambientActive || !splashDone} />}
     <SafeAreaView style={{ flex: 1 }}>
@@ -93,12 +94,19 @@ export default function MemoryScreen({ onBack, onOpenSettings, onCreateMemory, o
     </SafeAreaView>
     {/* 流星 */}
     {ambientActive && shootingStar && <ShootingStar width={viewport.width} height={viewport.height} onDone={removeShootingStar} />}
-    {/* 记忆面板 */}
-    {panelOpen && <MemorySpacePanel key={assistantId} visible={focused} snapshot={snapshot?.selectedSpace?.assistantId === assistantId ? snapshot : null} error={error} busy={busy} refreshing={refreshing} refresh={refresh} run={run} onClose={() => setPanelOpen(false)}
-      onCreateMemory={id => navigateFromPanel(() => onCreateMemory(id))}
-      onEditMemory={(id, memoryId) => navigateFromPanel(() => onEditMemory(id, memoryId))}
-      onOpenTrigger={(id, triggerId) => navigateFromPanel(() => onOpenTrigger(id, triggerId))} />}
-    {/* 开屏动效 */}
-    {!splashDone && <SplashOverlay active={focused && appActive} onFinish={finishSplash} />}
-  </View>;
+  </>;
+
+  return <GlassSceneProvider sceneId={glassSceneId}>
+    <View style={styles.screen} onLayout={({ nativeEvent: { layout } }) => setViewport({ width: layout.width, height: layout.height })}>
+      {/* 只采样当前星空页面；弹窗是背景源的兄弟节点，避免玻璃采样自身。 */}
+      {theme.effects.glass.enabled ? <GlassBackdrop sceneId={glassSceneId} style={styles.screen} pointerEvents="auto" accessibilityElementsHidden={false} importantForAccessibility="auto">{scene}</GlassBackdrop> : scene}
+      {/* 记忆面板 */}
+      {panelOpen && <MemorySpacePanel key={assistantId} visible={focused} snapshot={snapshot?.selectedSpace?.assistantId === assistantId ? snapshot : null} error={error} busy={busy} refreshing={refreshing} refresh={refresh} run={run} onClose={() => setPanelOpen(false)}
+        onCreateMemory={id => navigateFromPanel(() => onCreateMemory(id))}
+        onEditMemory={(id, memoryId) => navigateFromPanel(() => onEditMemory(id, memoryId))}
+        onOpenTrigger={(id, triggerId) => navigateFromPanel(() => onOpenTrigger(id, triggerId))} />}
+      {/* 开屏动效 */}
+      {!splashDone && <SplashOverlay active={focused && appActive} onFinish={finishSplash} />}
+    </View>
+  </GlassSceneProvider>;
 }

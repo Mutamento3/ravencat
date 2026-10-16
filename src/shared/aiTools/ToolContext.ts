@@ -210,14 +210,13 @@ export class ToolContext {
 
     return [
       '【当前运行上下文】',
-      `- 你当前扮演的AI：${actorName}`,
+      `- 你的名称：${actorName}`,
       `- 你的稳定身份ID：${actorAgentId}`,
       `- 当前触发来源：${sourceLabel}`,
       `- 当前触发原因：${reasonLabel}`,
       `- 当前关联对象：${entityLabel}`,
       `- 当前能力边界：${capabilityLabel}`,
-      '- 上述内容用于解释你为什么会被唤起，不代表这些话是用户在聊天框里直接输入的。',
-      '- 回复或执行动作时，应优先围绕当前关联对象，不要擅自扩展到无关对象。',
+      '- 上述内容用于解释你为什么会被唤起，不代表用户输入。',
     ].join('\n');
   }
 
@@ -238,7 +237,7 @@ export class ToolContext {
   #describeTriggerReason(triggerReason: string): string {
     const reasonMap: Record<string, string> = {
       user_message: '用户刚发送了一条聊天消息',
-      user_message_batch: '用户在短时间内连续发送了多条聊天消息',
+      user_message_batch: '用户连续发送了多条聊天消息',
       new_records_batch: '用户刚新增了一批记账记录',
       moment_auto_comment: '系统正在为指定时刻生成自动评论',
       moment_manual_comment: '用户手动要求你为指定时刻生成评论',

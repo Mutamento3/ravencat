@@ -7,6 +7,8 @@
 export type TurnTimelineEvent =
   | 'user_message_committed'
   | 'execution_host_started'
+  | 'execution_host_stopped'
+  | 'execution_host_start_failed'
   | 'turn_claimed'
   | 'model_request_started'
   | 'first_delta_received'
@@ -20,6 +22,7 @@ export interface TurnTimelineContext {
   sessionId?: string;
   runId?: string;
   correlationId?: string;
+  hostId?: string;
 }
 
 export function logTurnTimeline(
@@ -30,6 +33,7 @@ export function logTurnTimeline(
     sessionId: context.sessionId ?? null,
     runId: context.runId ?? null,
     correlationId: context.correlationId ?? null,
+    hostId: context.hostId ?? null,
     atEpochMs: Date.now(),
   });
 }

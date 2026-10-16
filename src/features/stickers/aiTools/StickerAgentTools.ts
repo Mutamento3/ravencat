@@ -318,7 +318,6 @@ export const SearchStickersTool = {
   name: searchStickersDefinition.name,
   definition: searchStickersDefinition,
   execute: searchStickers,
-  presentation: 'hidden' as const,
 };
 
 /** 分组浏览只统计 ready Sticker；分组是显式过滤维度，不是搜索的替代品。 */
@@ -385,21 +384,18 @@ export const ListStickerGroupsTool = {
   name: listStickerGroupsDefinition.name,
   definition: listStickerGroupsDefinition,
   execute: listStickerGroups,
-  presentation: 'hidden' as const,
 };
 
 export const ListStickersInGroupTool = {
   name: listStickersInGroupDefinition.name,
   definition: listStickersInGroupDefinition,
   execute: listStickersInGroup,
-  presentation: 'hidden' as const,
 };
 
 export const SelectStickerTool = {
   name: selectStickerDefinition.name,
   definition: selectStickerDefinition,
   execute: selectSticker,
-  presentation: 'hidden' as const,
 };
 
 export function isStickerSendIntent(value: unknown): value is StickerSendIntent {

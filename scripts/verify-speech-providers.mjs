@@ -5,6 +5,7 @@ import path from 'node:path';
 import ts from 'typescript';
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
+import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-dependencies.mjs';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 function load(file, dependencies = {}) {
@@ -83,6 +84,43 @@ try {
     await gateway.synthesizeSpeechAudio({ baseURL: catalog.getSpeechProvider(provider).baseURL || 'https://custom.example/v1', apiKey: 'test-key', model, metadataJson: null }, { provider, voiceId: 'voice' }, text, {});
     assert.equal(requests.at(-1).body.text ?? requests.at(-1).body.input, text);
   }
+  // Audio Tags 的内容由 AI 自主选择；只验证语法，不把示例变成词汇白名单。
+  for (const model of ['eleven_v3', 'eleven_v4', 'eleven_v4_turbo']) {
+    const guidance = speechText.getSpeechTextGuidance('elevenlabs', model);
+    assert.ok(guidance.includes('自主决定'));
+    assert.ok(guidance.includes('只是示例'));
+    assert.ok(!guidance.includes('只使用列出的标记'));
+    for (const [open, close] of [['[', ']'], ['［', '］'], ['【', '】']]) {
+      const prepared = speechText.prepareSpeechText(`  ${open}  speaking　very softly, with warmth  ${close}嗯……我在，别急！${open}轻声、温柔地说${close}继续吧。  `, 'elevenlabs', model);
+      assert.deepEqual(prepared, {
+        synthesisText: '[speaking very softly, with warmth]嗯……我在，别急！[轻声、温柔地说]继续吧。',
+        transcript: '嗯……我在，别急！ 继续吧。',
+      });
+      await gateway.synthesizeSpeechAudio({ ...catalog.getSpeechProvider('elevenlabs'), baseURL: 'https://api.elevenlabs.io/v1', apiKey: 'key', model }, { provider: 'elevenlabs', voiceId: 'voice' }, prepared.synthesisText, {});
+      assert.equal(requests.at(-1).body.text, prepared.synthesisText);
+      assert.throws(() => speechText.prepareSpeechText(`${open}laughs${close}`, 'elevenlabs', model), /不能只有/);
+    }
+    assert.equal(speechText.prepareSpeechText('[standing] 你好', 'elevenlabs', model).transcript, '你好');
+    assert.equal(speechText.prepareSpeechText(`[${'a'.repeat(100)}]你好`, 'elevenlabs', model).transcript, '你好');
+    assert.equal(speechText.prepareSpeechText(`[${'𠮷'.repeat(100)}]你好`, 'elevenlabs', model).transcript, '你好');
+    assert.equal(speechText.prepareSpeechText('[soft-spoken, “café”! 很轻……]你好', 'elevenlabs', model).transcript, '你好');
+    for (const tag of [
+      '[]', '［　］', '【...】', `[${'a'.repeat(101)}]`,
+      '[soft [laughs]]', '［soft【laughs】］', '【soft(laughs)】',
+      '[soft］', '［soft】', '【soft]', '[soft', '［soft', '【soft', 'soft］', 'soft】',
+      '[soft\nvoice]', '[soft\rvoice]', '[soft\tvoice]', '[\tsoft]', '[soft\u0000voice]', '[soft\u200Bvoice]',
+      '[<break>]', '[soft/voice]', '[voice=soft]', '[soft🙂]', '[soft\\voice]',
+    ]) assert.throws(() => speechText.prepareSpeechText(`${tag}你好`, 'elevenlabs', model), undefined, tag);
+  }
+  for (const [provider, model] of [
+    ['elevenlabs', 'eleven_multilingual_v2'], ['elevenlabs', 'eleven_flash_v2_5'], ['elevenlabs', 'eleven_turbo_v2_5'],
+    ['elevenlabs', 'future-model'], ['minimaxT2aV2', 'speech-2.8-hd'], ['openai', 'tts-1'], ['openaiCompatible', 'custom-model'],
+  ]) {
+    for (const tag of ['[whispers]', '［whispers］', '【轻声】'])
+      assert.throws(() => speechText.prepareSpeechText(`${tag}你好`, provider, model));
+    const text = '嗯……啊，唔！别急——我在。  Really? 好的；继续：听着、慢慢说。';
+    assert.deepEqual(speechText.prepareSpeechText(text, provider, model), { synthesisText: text, transcript: text });
+  }
   for (const [provider, model, text] of [
     ['minimaxT2aV2', 'speech-2.6-hd', '(laughs) 你好'],
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0#>呀'],
@@ -92,7 +130,6 @@ try {
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0.5#>'],
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0.5#>(sighs)<#0.5#>呀'],
     ['elevenlabs', 'eleven_v4', '你好<break time="0.5s" />呀'],
-    ['elevenlabs', 'eleven_v3', '[standing] 你好'],
     ['elevenlabs', 'eleven_multilingual_v2', '[laughs] 你好'],
     ['elevenlabs', 'eleven_flash_v2_5', '你好<break time="3.1s" />呀'],
     ['openai', 'tts-1', '[whispers] 你好'],
@@ -191,9 +228,15 @@ try {
   const expressive = await configuredTool.execute({ text: '[whispers] 嗯，我在。[short pause] 你说吧。' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'expression' });
   assert.equal(expressive.data.transcript, '嗯，我在。 你说吧。');
   assert.equal(synthesized.at(-1).text, '[whispers] 嗯，我在。[short pause] 你说吧。');
+  const normalizedVoice = await configuredTool.execute({ text: '【speaking softly】嗯，我在。［short pause］你说吧。' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'normalized-expression' });
+  assert.equal(normalizedVoice.data.transcript, '嗯，我在。 你说吧。');
+  assert.equal(synthesized.at(-1).text, '[speaking softly]嗯，我在。[short pause]你说吧。');
   const synthesisCount = synthesized.length;
   const invalidText = await configuredTool.execute({ text: '你好<break time="0.5s" />呀' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'invalid' });
   assert.equal(invalidText.code, 'VOICE_TEXT_INVALID');
+  assert.equal(synthesized.length, synthesisCount);
+  const tagOnlyVoice = await configuredTool.execute({ text: '【laughs】' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'tag-only' });
+  assert.equal(tagOnlyVoice.code, 'VOICE_TEXT_INVALID');
   assert.equal(synthesized.length, synthesisCount);
 
   // 通话标记可以跨任意 delta；句间停顿和两侧正文必须同次合成，结束标记不进入声音或字幕。
@@ -202,9 +245,22 @@ try {
   plainCallStream.push('嗯，🙂我在。你说吧。');
   plainCallStream.flush();
   assert.deepEqual(plainCallSentences, ['嗯，我在。', '你说吧。']);
+  for (const text of ['【soft\nvoice】你好。', '［soft🙂］你好。', '【soft［voice］】你好。', '［soft】你好。', '【soft你好。', '【laughs】']) {
+    const stream = callStreams.createCallSpeechSentenceStream(assert.fail, { ...directoryConfig, model: 'eleven_v4' });
+    assert.throws(() => { for (const chunk of text) stream.push(chunk); stream.flush(); }, undefined, text);
+  }
+  const formattedCallSentences = [];
+  const formattedCallStream = callStreams.createCallSpeechSentenceStream((transcript, speech) => formattedCallSentences.push({ transcript, text: speech.synthesisText }), { ...directoryConfig, model: 'eleven_v4' });
+  formattedCallStream.push('【轻声】嗯，🙂我\n在。你说吧。');
+  formattedCallStream.flush();
+  assert.deepEqual(formattedCallSentences, [{ transcript: '嗯，我在。', text: '[轻声]嗯，我在。' }, { transcript: '你说吧。', text: '你说吧。' }]);
   for (const [provider, model, text] of [
     ['minimaxT2aV2', 'speech-2.8-hd', '[[END_CALL]]嗯，(laughs)我在。<#0.5#>你说吧。晚安。'],
     ['elevenlabs', 'eleven_v4', '[[END_CALL]][whispers]我在。[short pause]你说吧。晚安。'],
+    ...['eleven_v3', 'eleven_v4', 'eleven_v4_turbo'].flatMap((model) => [
+      ['elevenlabs', model, '[[END_CALL]]［softly, with warmth!］我在。［short pause］你说吧。晚安。'],
+      ['elevenlabs', model, '[[END_CALL]]【轻声、温柔地说。】我在。【dramatic pause】你说吧。晚安。'],
+    ]),
     ['elevenlabs', 'eleven_multilingual_v2', '[[END_CALL]]我在。<break time="0.5s" />你说吧。晚安。'],
   ]) {
     const snapshot = { ...directoryConfig, model, metadataJson: JSON.stringify({ provider, voiceId: 'voice' }), modelConfigId: 'call-voice', modelConfigName: '通话声音' };
@@ -222,6 +278,7 @@ try {
         assert.equal(sentence.speech.modelSnapshot, snapshot);
         assert.doesNotMatch(sentence.transcript, /[<>\[\]()]/);
         assert.ok(!sentence.speech.synthesisText.includes('END_CALL'));
+        assert.doesNotMatch(sentence.speech.synthesisText, /[［］【】]/);
       }
       return sentences;
     };
@@ -237,35 +294,90 @@ try {
   const replySnapshot = { ...directoryConfig, modelConfigId: 'call-first', modelConfigName: '通话快照' };
   let currentCallVoice = replySnapshot;
   let observedBlocks;
+  let observedCallConfig;
+  const callModelRequests = [];
+  const runtimeBoundaries = { ...agentToolSchemaDependencies };
+  const runtimeCache = new Map();
+  function loadRuntime(file) {
+    if (runtimeCache.has(file)) return runtimeCache.get(file);
+    const module = { exports: {} };
+    runtimeCache.set(file, module.exports);
+    const output = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    new Function('require', 'module', 'exports', output)((name) => {
+      if (Object.hasOwn(runtimeBoundaries, name)) return runtimeBoundaries[name];
+      const base = path.resolve(path.dirname(file), name);
+      for (const suffix of ['.ts', '/index.ts']) {
+        if (name.startsWith('.') && fs.existsSync(base + suffix)) return loadRuntime(base + suffix);
+      }
+      assert.fail(`未装配的 Agent 边界：${name}`);
+    }, module, module.exports);
+    return module.exports;
+  }
+  runtimeBoundaries['@platform/ai'] = loadRuntime('src/platform/ai/agent/AgentModelGateway.ts');
+  runtimeBoundaries['@shared/aiTools'] = { ...loadRuntime('src/shared/aiTools/AgentToolInputSchema.ts') };
+  runtimeBoundaries['@shared/runtime/abortSignal'] = loadRuntime('src/shared/runtime/abortSignal.ts');
+  runtimeBoundaries['@shared/diagnostics/TurnTimelineLog'] = { logTurnTimeline() {} };
+  const agentRuntime = loadRuntime('src/platform/agentRuntime/index.ts');
+  const registry = new agentRuntime.AgentToolRegistry();
+  registry.register({ descriptor: { name: 'lookAtUser', description: '观察', owner: 'calls', source: 'local',
+    risk: 'safe_read', idempotency: 'idempotent', inputSchema: { type: 'object' } },
+    execute: async () => ({ status: 'success', modelContent: '未提供画面' }) });
+  const callHistory = [{ role: 'assistant', content: '之前的回复', reasoning_content: '  已有思考\r\n' }];
+  const replyToCall = async (method, options, tools = []) => {
+    callModelRequests.push({ method, tools });
+    currentCallVoice = { ...replySnapshot, model: 'eleven_multilingual_v2' };
+    for (const chunk of ['【speaking ', 'softly】 我在。', '［short ', 'pause］ 你说吧。']) options.onDelta({ type: 'answer_delta', text: chunk });
+    return { success: true, text: '【speaking softly】 我在。［short pause］ 你说吧。' };
+  };
   const callState = { id: 'call', chatSessionId: 'chat', state: 'active' };
   const callReply = load('src/features/calls/application/runtime/ProcessCallAIReply.ts', {
+    '@platform/agentRuntime': agentRuntime,
     '@features/speech': { ...catalog, ...speechText, resolveTextToSpeechModel: async () => currentCallVoice },
-    '@platform/ai': { ...ai, createAIClient: () => ({ chatStreamWithTools: async (_messages, _tools, options) => {
-      currentCallVoice = { ...replySnapshot, model: 'eleven_multilingual_v2' };
-      for (const chunk of ['[whis', 'pers] 我在。', '[short ', 'pause] 你说吧。']) options.onDelta({ type: 'answer_delta', text: chunk });
-      return { success: true, text: '[whispers] 我在。[short pause] 你说吧。' };
-    } }) },
+    '@platform/ai': { ...ai, createAIClient: () => ({
+      chatStreamWithTools: async (_messages, tools, options) => replyToCall('tools', options, tools),
+      chatStream: async (_messages, options) => replyToCall('plain', options),
+    }) },
     '@shared/aiTools': { ToolContext: class {} },
     '@shared/prompt': { DEFAULT_PRIVATE_CONTEXT_PRIMARY_LIMIT: 40 },
     '../snapshots/CallSnapshotLifetime': {},
-    '../../aiTools/LookAtUserTool': { LookAtUserTool: { definition: {} } },
+    '../../aiTools/LookAtUserTool': { LookAtUserTool: { name: 'lookAtUser', definition: {},
+      execute: async () => ({ success: true, data: { status: 'unavailable' } }) } },
     '../events/AppendCallTranscriptEvent': {
       appendUserSpeechText: async ({ text }) => ({ id: 'user', text }),
       appendAISpeechText: async (event) => { callEvents.push(event); return { id: 'ai', ...event }; },
     },
-    './CallRuntimeDependencies': { getCallRuntimeDependencies: () => ({ repositories: { calls: { getSessionById: async () => callState } }, assembleChatPromptPack: async (params) => {
-      observedBlocks = params.additionalBlocks; return { systemPrompt: '', modelMessages: [] };
+    './CallRuntimeDependencies': { getCallRuntimeDependencies: () => ({
+      agent: {
+        prepareTools: async config => ({ allowedToolNames: config.enableTools ? ['lookAtUser'] : [],
+          toolsDescription: '', mcpServices: [], additionalPromptBlocks: [] }),
+        run: request => new agentRuntime.AgentRuntime({ registry, modelGateway: request.modelGateway }).run(request),
+      },
+      repositories: { calls: { getSessionById: async () => callState } }, assembleChatPromptPack: async (params) => {
+      observedBlocks = params.additionalBlocks; observedCallConfig = params.aiConfig;
+      return { systemPrompt: '', modelMessages: callHistory };
     } }) },
     './CallReplyRunState': { isCallReplyCancellationError: () => false },
     './CallSpeechSentenceStream': callStreams,
     '../CallPromptBlocks': callPrompts,
   });
-  const callResult = await callReply.processCallAIReply({ callId: 'call', userText: '在吗', aiConfig: { id: 'assistant' }, signal: new AbortController().signal, onSpeechSentence: (transcript, speech) => callAudio.push({ transcript, speech }) });
+  const callResult = await callReply.processCallAIReply({ callId: 'call', userText: '在吗', aiConfig: { id: 'assistant', enableTools: true }, signal: new AbortController().signal, onSpeechSentence: (transcript, speech) => callAudio.push({ transcript, speech }) });
   assert.equal(callResult.status, 'completed');
   assert.equal(callEvents[0].text, '我在。 你说吧。');
-  assert.equal(callAudio[0].speech.synthesisText, '[whispers] 我在。[short pause] 你说吧。');
+  assert.equal(callAudio[0].speech.synthesisText, '[speaking softly] 我在。[short pause] 你说吧。');
   assert.equal(callAudio[0].speech.modelSnapshot, replySnapshot);
   assert.ok(observedBlocks.find((block) => block.definitionId === 'output.call_plain_spoken_text').content.includes('[short pause]'));
+  assert.equal(callModelRequests.at(-1).method, 'tools');
+  assert.equal(callModelRequests.at(-1).tools.length, 1);
+  currentCallVoice = replySnapshot;
+  const disabledCallResult = await callReply.processCallAIReply({ callId: 'call', userText: '继续聊',
+    aiConfig: { id: 'assistant', enableTools: false }, signal: new AbortController().signal });
+  assert.equal(disabledCallResult.status, 'completed', '关闭工具不影响普通通话和语音合成');
+  assert.equal(observedCallConfig.enableTools, false, '通话不覆盖角色工具总开关');
+  assert.deepEqual(callModelRequests.at(-1), { method: 'plain', tools: [] }, '关闭后请求不携带工具');
+  assert.doesNotMatch(observedBlocks.map((block) => block.content).join('\n'), /lookAtUser/,
+    '通话事实不介绍工具；调用指导只随已授权 schema 暴露');
 
   // 真实 WS 协议只在官方 ready 后返回；中间结果与最终完成屏障保持独立。
   const sockets = [];

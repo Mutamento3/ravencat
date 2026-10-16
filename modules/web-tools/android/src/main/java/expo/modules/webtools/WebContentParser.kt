@@ -2,7 +2,6 @@ package expo.modules.webtools
 
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.io.ByteArrayInputStream
 import java.net.URLDecoder
@@ -18,15 +17,14 @@ object WebContentParser {
       val link = item.selectFirst("link")?.text().orEmpty()
       if (title.isBlank() || link.isBlank()) throw WebFailure("WEB_INVALID_RESPONSE", "搜索结果缺少标题或来源链接")
       // 搜索链接只是来源元数据；是否允许实际访问由联网边界负责。
-      val url = link.toHttpUrlOrNull()?.toString()
-        ?: throw WebFailure("WEB_INVALID_RESPONSE", "搜索来源链接无效")
-      mapOf("title" to title.take(300), "url" to url,
+      mapOf("title" to title.take(300), "url" to link,
         "snippet" to Jsoup.parse(item.selectFirst("description")?.text().orEmpty()).text().take(1000))
-    }.distinctBy { it.getValue("url") }.take(limit)
-    return mapOf("query" to query, "source" to "Bing RSS", "items" to items)
+    }
+    return WebSearchResults.finish("bing", "Bing RSS", query, items, limit)
   }
 
-  fun page(bytes: ByteArray, charset: String?, url: String, contentType: String, maxChars: Int): Map<String, Any> {
+  fun page(bytes: ByteArray, charset: String?, url: String, contentType: String, maxChars: Int,
+    startChar: Int = 0, find: String? = null, documentVersion: String? = null): Map<String, Any?> {
     val html = contentType == "text/html" || contentType == "application/xhtml+xml"
     if (!html && !contentType.startsWith("text/") && contentType !in setOf("application/json", "application/xml")) {
       throw WebFailure("WEB_UNSUPPORTED_CONTENT", "该链接不是网页或文本，请使用 download_file 保存文件")
@@ -39,7 +37,7 @@ object WebContentParser {
       title = document.title().take(300)
       document.select("script, style, nav, header, footer, form, noscript, svg, template, iframe, aside, [hidden], [aria-hidden=true]").remove()
       val content = document.selectFirst("article") ?: document.selectFirst("main") ?: document.body()
-      text = content.wholeText().lines().map(String::trim).filter(String::isNotBlank).joinToString("\n")
+      text = WebPageText.render(content)
       links = content.select("a[href]").mapNotNull { element ->
         val target = element.absUrl("href")
         if (!target.startsWith("https://")) null
@@ -51,8 +49,8 @@ object WebContentParser {
       links = emptyList()
     }
     if (text.isBlank()) throw WebFailure("WEB_EMPTY_CONTENT", "网页没有可读取正文，可能需要登录或执行脚本")
-    return mapOf("url" to url, "title" to title, "contentType" to contentType,
-      "text" to text.take(maxChars), "truncated" to (text.length > maxChars), "links" to links)
+    return WebPageText.window(text, maxChars, startChar, find, documentVersion) +
+      mapOf("url" to url, "title" to title, "contentType" to contentType, "links" to links)
   }
 
   fun fileName(requested: String?, disposition: String?, url: String, suffix: String): String {

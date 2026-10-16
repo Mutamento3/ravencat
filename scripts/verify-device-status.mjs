@@ -1,3 +1,4 @@
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,6 +32,7 @@ const estimator = load('src/shared/prompt/estimateTextTokens.ts');
 const budget = load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': estimator });
 const metadata = load('src/host/prompt/compiler/promptBlockMetadata.ts');
 const { PromptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
   '../tokenBudget': budget, './promptBlockMetadata': metadata,
 });
 const { getSystemPromptPreset } = load('src/host/prompt/compiler/systemPromptPresets.ts');
@@ -58,6 +60,8 @@ const prompting = load('src/features/prompting/application/ManageAssistantPrompt
   }) },
 });
 const resolvedAssembler = load('src/host/prompt/ResolvedPromptPackAssembler.ts', {
+  '@features/profile': { getCurrentUserProfile: async () => ({ name: '用户' }) },
+  './PromptPackBlockFactory': { promptPackBlockFactory: {} },
   '@features/prompting': { ...prompting, listPromptCustomBlocks: async () => [], resolveLegacyPromptPreset: async () => ({ preset }) },
   './PromptPackAssembler': { promptPackAssembler: { assembleChatPromptPack: async (params) => params } },
   './compiler': {}, './DeviceBatteryPromptBlock': { createDeviceBatteryPromptBlocks },

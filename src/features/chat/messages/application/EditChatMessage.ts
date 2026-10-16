@@ -3,7 +3,7 @@ import { databaseCoordinator } from '@platform/persistence';
 import { getChatMessageRuntimeDependencies } from './ChatMessageRuntime';
 import { getChatGroupRuntimeDependencies } from '../../group/application/ChatGroupRuntime';
 import { buildSessionPreviewTextFromMessage } from '../domain/chatMessageMetadata';
-import { emitChatMessagesPatched } from '../events/ChatEvents';
+import { emitChatMessagesPatched, emitChatTurnExecutionChanged } from '../events/ChatEvents';
 import type { ChatMessage } from '../domain/ChatMessage';
 import { canEditChatMessage } from '../domain/ChatMessageEditing';
 
@@ -33,6 +33,7 @@ export async function editChatMessage(input: {
     return message;
   });
   await getChatMessageRuntimeDependencies().regeneration?.onInvalidated(edited.sessionId);
+  emitChatTurnExecutionChanged(edited.sessionId);
   emitChatMessagesPatched({ sessionId: edited.sessionId, updatedMessageIds: [edited.id] });
   return edited;
 }

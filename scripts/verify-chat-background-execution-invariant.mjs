@@ -45,12 +45,17 @@ const chatReplyAbortModuleUrl = transpileToModuleUrl(
 );
 const coordinatorSource = read('src/host/runtime/ConversationTurnCoordinator.ts');
 const chatCompositionImportPattern =
-  /import\s*\{[\s\S]*?\}\s*from\s*['"]@features\/chat\/composition['"];?/;
+  /import\s*\{[^;]*?\}\s*from\s*['"]@features\/chat\/composition['"];?/;
 const stubbedCoordinatorSource = coordinatorSource
   .replace(
     chatCompositionImportPattern,
     `import { isChatReplyRunCancellationError } from '${chatReplyAbortModuleUrl}';
-const executeUserReplyTurn = null;`,
+const executeUserReplyTurn = null;
+const emitChatMessagesReloadRequested = () => {};
+const emitChatTurnExecutionChanged = () => {};
+const interruptChatRunPresentation = async () => {};
+const emitChatTypingStatusChanged = () => {};
+const emitChatRegenerationChanged = () => {};`,
   )
   .replace(
     chatCompositionImportPattern,

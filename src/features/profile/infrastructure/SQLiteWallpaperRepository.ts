@@ -1,6 +1,7 @@
 /** Profile 拥有壁纸 SQL，shared/theme 仅展示解析后的状态。 */
 import { databaseCoordinator, type DatabaseTransactionExecutor } from '@platform/persistence';
 import type { WallpaperAssetSelection, WallpaperRepository } from '../domain/WallpaperRepository';
+import { SettingChangeConflictError } from '@shared/errors/SettingChangeConflictError';
 
 export class SQLiteWallpaperRepository implements WallpaperRepository {
   list(): Promise<WallpaperAssetSelection[]> {
@@ -19,12 +20,12 @@ export class SQLiteWallpaperRepository implements WallpaperRepository {
 
   async commit(transaction: DatabaseTransactionExecutor, expected: WallpaperAssetSelection | { key: string; revision: null }, assetId: string | null): Promise<void> {
     if (expected.key !== 'app' && expected.key !== 'chat' && !await this.conversationExists(transaction, expected.key)) {
-      throw new Error('对话已删除，无法保存聊天背景');
+      throw new SettingChangeConflictError('对话已删除，无法保存聊天背景。');
     }
     const result = expected.revision === null
       ? await transaction.runAsync('INSERT OR IGNORE INTO profile_wallpaper_selections (selection_key, media_asset_id, legacy_uri, revision) VALUES (?, ?, NULL, 0)', [expected.key, assetId])
       : await transaction.runAsync('UPDATE profile_wallpaper_selections SET media_asset_id = ?, legacy_uri = NULL, revision = revision + 1 WHERE selection_key = ? AND revision = ?', [assetId, expected.key, expected.revision]);
-    if (result.changes !== 1) throw new Error('背景选择已被其他操作更改，请重试本次选择');
+    if (result.changes !== 1) throw new SettingChangeConflictError('背景选择已被其他操作更改，本次选择未保存。');
   }
 
   private async conversationExists(transaction: DatabaseTransactionExecutor, key: string): Promise<boolean> {

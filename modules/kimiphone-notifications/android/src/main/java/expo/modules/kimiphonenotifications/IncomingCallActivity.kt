@@ -26,6 +26,7 @@ import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory
  */
 class IncomingCallActivity : Activity() {
   private var registeredCallId: String? = null
+  private var returnToPreviousApp = false
 
   private companion object {
     const val TAG = "IncomingCallActivity"
@@ -33,6 +34,9 @@ class IncomingCallActivity : Activity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // 新 Activity 创建早于原页面 onStop；捕获来电壳盖上去之前的可见性。
+    returnToPreviousApp = savedInstanceState?.getBoolean("returnToPreviousApp")
+      ?: !CallPresentationReturn.isAppVisible
     // Manifest 同样声明了 showWhenLocked/turnScreenOn；API 27+ 显式调用保证生效。
     setShowWhenLocked(true)
     setTurnScreenOn(true)
@@ -66,9 +70,16 @@ class IncomingCallActivity : Activity() {
     super.onDestroy()
   }
 
+  override fun onSaveInstanceState(outState: Bundle) {
+    outState.putBoolean("returnToPreviousApp", returnToPreviousApp)
+    super.onSaveInstanceState(outState)
+  }
+
   /** 接听：显式记录 accept response（渲染壳的 intent action 是 open，不能复用），拉起主 Activity 交给 Host 消费，自身退出。 */
   private fun handleAccept(intent: Intent) {
+    val callId = intent.getStringExtra("callId")?.takeIf { it.isNotBlank() } ?: return
     NotificationResponseDispatcher.buildResponse(intent, "accept")?.let { response ->
+      CallPresentationReturn.accepted(callId, returnToPreviousApp)
       NotificationResponseDispatcher.recordForApp(applicationContext, response)
     }
     dismissSurface(intent)

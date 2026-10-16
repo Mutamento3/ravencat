@@ -75,6 +75,8 @@ export async function deliverCommittedAssistantSegment({
   }
 
   const deliveryPayload: AIMessageReceivedPayload = {
+    arrivalAlreadyScheduled: runtimeContext.arrivalAlreadyScheduled,
+    turnRunId: runtimeContext.arrivalAlreadyScheduled ? runtimeContext.replyRunId : undefined,
     aiId: aiConfig.id,
     agentId: aiConfig.agentId || null,
     aiName: aiConfig.name,

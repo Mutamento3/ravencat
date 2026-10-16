@@ -30,7 +30,6 @@ import { getCallRuntimeDependencies } from '../application/runtime/CallRuntimeDe
 
 interface CallActiveScreenProps {
   callId: string;
-  onClose: () => void;
   onMinimize: () => void;
   runtime: CallRuntimeView;
 }
@@ -52,6 +51,9 @@ function getStateText(call: CallSession, turnPhase: CallTurnPhase, elapsedSecond
     return '正在接通';
   }
   if (call.state === 'active') {
+    if (turnPhase === 'using_tool') {
+      return '正在使用工具…';
+    }
     if (turnPhase === 'speaking') {
       return '正在说话…';
     }
@@ -66,7 +68,7 @@ function getStateText(call: CallSession, turnPhase: CallTurnPhase, elapsedSecond
   return '通话中';
 }
 
-export default function CallActiveScreen({ onClose, onMinimize, runtime }: CallActiveScreenProps) {
+export default function CallActiveScreen({ onMinimize, runtime }: CallActiveScreenProps) {
   const theme = useTheme();
   const styles = useThemedStyles(createCallStyles);
   const insets = useSafeAreaInsets();
@@ -175,9 +177,7 @@ export default function CallActiveScreen({ onClose, onMinimize, runtime }: CallA
   ]);
 
   const handleHangUp = async () => {
-    if (await runtime.hangUp()) {
-      onClose();
-    }
+    await runtime.hangUp();
   };
 
   const handleMinimize = async () => {

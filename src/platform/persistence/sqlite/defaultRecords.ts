@@ -1,5 +1,8 @@
 /** 只补建默认记录；普通启动与恢复出厂均不得覆盖已经保存的用户配置。 */
+import { WEB_SEARCH_DEFAULTS } from './webSearchSchema';
+
 export const DEFAULT_RECORDS_SQL = `
+${WEB_SEARCH_DEFAULTS}
 INSERT OR IGNORE INTO memory_model_settings (id) VALUES (1);
 INSERT OR IGNORE INTO speech_recognition_settings (id) VALUES (1);
 INSERT OR IGNORE INTO translation_settings (id) VALUES (1);

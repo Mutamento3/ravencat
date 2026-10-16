@@ -11,11 +11,17 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { ChatMessage } from '@features/chat/messages/domain/ChatMessage';
 import { sortChatTimelineMessages } from '@features/chat/messages/domain/ChatTimelineOrdering';
 import {
+  getAssistantMessageArrivalSnapshot,
+  projectArrivedAssistantMessages,
+  subscribeAssistantMessageArrival,
+} from '../../../reply/delivery/AssistantMessageArrival';
+import {
   acknowledgeAgentTransientTimelineCommitted,
   agentTransientTimeline,
   getAgentTransientTimelineRevision,
   getAgentTimelineRenderKey,
   getLiveAgentTimelineRunIds,
+  getAgentTimelineSourceOrder,
   isAgentTransientTimelineMessage,
   type AgentTransientTimelineMessage,
 } from '@features/chat/messages/application/AgentTransientTimeline';
@@ -35,18 +41,11 @@ export interface UseAgentTransientTimelineResult {
 export interface MergeTimelineRenderMessagesParams {
   persistedMessages: readonly ChatMessage[];
   transientMessages: readonly ChatMessage[];
-  /**
-   * 非流式多气泡主题下为 true：assistant 最终正文的展示权归 canonical
-   * committed segments + paced reveal。等待正文提交时，同一 run 只展示它之前
-   * 的时间线前缀，后续过程不能越过正文，否则 ActionGroup 会先合并再拆开。
-   */
-  suppressTransientAssistantText?: boolean;
 }
 
 export function mergeTimelineRenderMessages({
   persistedMessages,
   transientMessages,
-  suppressTransientAssistantText = false,
 }: MergeTimelineRenderMessagesParams): ChatMessage[] {
   if (transientMessages.length === 0) {
     return [...persistedMessages];
@@ -66,30 +65,37 @@ export function mergeTimelineRenderMessages({
     // Agent run 只在当前会话尾部产生展示条目，按 store 的 run/sequence 顺序追加。
     merged.push(transientMessage);
   }
-  const orderedMessages = sortChatTimelineMessages(merged);
-  if (!suppressTransientAssistantText) {
-    return orderedMessages;
+  // 后续过程独立可见；正文尚未到达时由稳定占位保留分组边界。
+  // canonical itemIndex 计入拆分后的全部分段，transient sequence 则按原始事件分配。
+  // 只给本次排序建立统一序号，返回原消息，不改写数据库游标或历史 cache。
+  const sourceGroups = new Map<string, { message: ChatMessage; sequence: number; segmentIndex: number }[]>();
+  for (const message of merged) {
+    const source = getAgentTimelineSourceOrder(message);
+    if (!source) continue;
+    const group = sourceGroups.get(source.runId) ?? [];
+    group.push({ message, sequence: source.sequence, segmentIndex: source.segmentIndex });
+    sourceGroups.set(source.runId, group);
   }
-
-  // 先按完整事实排序，再限制每个 run 的可见前缀；用户消息和其他 run 独立展示。
-  const blockedRunIds = new Set<string>();
-  return orderedMessages.filter((message) => {
-    if (
-      isAgentTransientTimelineMessage(message)
-      && message.transientTimelineKind === 'assistant'
-    ) {
-      blockedRunIds.add(message.transientTimelineRunId);
-    }
-    return !message.turnRunId || !blockedRunIds.has(message.turnRunId);
+  const ranks = new Map<ChatMessage, number>();
+  for (const group of sourceGroups.values()) group
+    .sort((a, b) => a.sequence - b.sequence || a.segmentIndex - b.segmentIndex)
+    .forEach((entry, index) => ranks.set(entry.message, index + 1));
+  const originals = new Map<ChatMessage, ChatMessage>();
+  const orderingInput = merged.map(message => {
+    const rank = ranks.get(message);
+    if (!rank) return message;
+    const ordered = { ...message, turnItemIndex: rank };
+    originals.set(ordered, message);
+    return ordered;
   });
+  return sortChatTimelineMessages(orderingInput).map(message => originals.get(message) ?? message);
 }
 
 export function useAgentTransientTimeline(
   sessionId: string | null | undefined,
   persistedMessages: ChatMessage[],
-  options: { suppressTransientAssistantText?: boolean } = {},
+  filterPendingAssistantMessages: boolean,
 ): UseAgentTransientTimelineResult {
-  const { suppressTransientAssistantText = false } = options;
   const subscribe = useCallback((listener: () => void) => (
     sessionId
       ? agentTransientTimeline.subscribe(sessionId, listener)
@@ -100,28 +106,33 @@ export function useAgentTransientTimeline(
     [sessionId],
   );
   const revision = useSyncExternalStore(subscribe, getRevision, getRevision);
-
-  useEffect(() => {
-    if (!sessionId) {
-      return;
-    }
-    acknowledgeAgentTransientTimelineCommitted(sessionId, persistedMessages);
-  }, [sessionId, persistedMessages, revision]);
-
-  return useMemo(() => {
+  const arrival = useSyncExternalStore(subscribeAssistantMessageArrival, getAssistantMessageArrivalSnapshot);
+  const timeline = useMemo(() => {
     // store 的所有变更都会推进 revision；无关的父组件刷新不应创建新 timeline，
     // 否则下游会重新投影全部历史消息。缓存只属于当前渲染，不进入历史 state。
     void revision;
     const transientMessages = agentTransientTimeline.snapshotWithReplacements(sessionId);
+    // 两个来源都先投影到达资格。尚被隐藏的 canonical 行不能确认并清掉已展示的运行片段，
+    // committed replacement 也不能提前放行尚未到达的后续分段。
+    const arrivedPersistedMessages = filterPendingAssistantMessages
+      ? projectArrivedAssistantMessages(persistedMessages, arrival.pendingMessageIds) : persistedMessages;
+    const arrivedTransientMessages = filterPendingAssistantMessages
+      ? projectArrivedAssistantMessages(transientMessages, arrival.pendingMessageIds) : transientMessages;
     return {
+      arrivedPersistedMessages,
       messages: mergeTimelineRenderMessages({
-        persistedMessages,
-        transientMessages,
-        suppressTransientAssistantText,
+        persistedMessages: arrivedPersistedMessages,
+        transientMessages: arrivedTransientMessages,
       }),
       liveRunIds: getLiveAgentTimelineRunIds(sessionId),
     };
-  }, [sessionId, persistedMessages, revision, suppressTransientAssistantText]);
+  }, [sessionId, persistedMessages, revision, filterPendingAssistantMessages, arrival.pendingMessageIds]);
+
+  useEffect(() => {
+    if (sessionId) acknowledgeAgentTransientTimelineCommitted(sessionId, timeline.arrivedPersistedMessages);
+  }, [sessionId, timeline.arrivedPersistedMessages]);
+
+  return timeline;
 }
 
 export function isAgentTimelineRenderMessage(message: ChatMessage): boolean {

@@ -141,7 +141,7 @@ export async function execute(
       message: [
         `当前 AI agentId: ${currentAgentId}。查询包含已读和未读；完整内容与评论区请用 getMomentDetail。`,
         `发布者目录: ${directory.actors.map((actor) => `${actor.displayName}（${actor.actorType}，authorId: ${actor.actorId}）`).join('；')}`,
-        entries.length ? `本页找到 ${entries.length} 条时刻:\n${summary}` : '没有找到匹配的时刻动态。',
+        entries.length ? `本页找到 ${entries.length} 条时刻:\n${summary}` : '没有找到匹配的时刻动态。keyword 匹配正文、地点或作者名称；查评论内容请使用 commentKeyword。只记得看过但尚未评论时，不要加 onlyMyComments；也可省略筛选条件浏览可见时刻。',
         `hasMore: ${hasMore}\nnextCursor: ${JSON.stringify(nextCursor)}`,
         hasMore ? '还有下一页，请保持筛选条件并原样使用 nextCursor 继续查询。' : '当前查询已到末页。',
         '自己的评论 ID 已随列表提供；删除或回复时直接使用工具返回的 ID，不要让用户查找。',

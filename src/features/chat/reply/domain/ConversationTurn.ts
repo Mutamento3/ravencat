@@ -8,6 +8,7 @@
  */
 
 import type { ChatMessage, CreateMessageInput } from '../../messages/domain/ChatMessage';
+import type { ToolPackageExposureChange } from '@shared/aiTools';
 
 /** 普通回复与重写共用回合状态机。 */
 export type ConversationTurnRunStatus =
@@ -75,10 +76,17 @@ export type ConversationTurnCommitResult =
   | { outcome: 'committed'; messageIds: number[]; messages: ChatMessage[]; mediaAssetCandidates?: string[] }
   | { outcome: 'fence_failed' };
 
-/** 随正式回复原子提交的工具包状态；新拆包当轮不消耗后续三轮。 */
+/** 随正式回复原子提交的工具包开关；执行顺序决定同包最后一次操作。 */
 export interface ConversationToolPackageCommit {
   assistantId: string;
-  openedPackageIds: readonly string[];
+  changes: readonly ToolPackageExposureChange[];
+}
+
+/** 仅是宿主启动观测回执的版本；不授予 run 执行或提交资格。 */
+export interface ConversationHostStartAttempt {
+  sessionId: string;
+  requestRevision: number;
+  inputHighWatermark: number | null;
 }
 
 /** recovery 扫描到的待回复会话（keyset 分页元素）。 */

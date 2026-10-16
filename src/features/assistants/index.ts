@@ -1,12 +1,12 @@
 /** AI 助手与辅助模型功能公共出口。 */
 export type { AIProfile, AIConfig } from './domain/AIProfile';
-export { getAssistantDisplayName, getAssistantNicknamePromptContext, acknowledgeAssistantNicknameNotice } from './AssistantNickname';
+export { getAssistantDisplayName, getAssistantNicknamePromptContext } from './AssistantNickname';
 export type * from './domain/AssistantToolPermission';
 export * from './domain/AuxiliaryModel';
 export type { ModelCallConfig } from './domain/ModelCallConfig';
 export { default as CopyToGeneralModel } from './presentation/auxiliaryModels/CopyToGeneralModel';
 export { default as GeneralModelPrefill } from './presentation/auxiliaryModels/GeneralModelPrefill';
-export { createChangeOwnAvatarTool } from './aiTools/ChangeOwnAvatarTool';
+export { ApplicationSettingsAccessError } from './domain/ApplicationSettingsAccess';
 export type {
   AIAssistantSettingsUpdate,
   AIModelSettingsUpdate,
@@ -14,6 +14,7 @@ export type {
   IAIAssistantRepository,
 } from './domain/AssistantRepository';
 export type { IAIHostRepository, HostCooldownStatus, BlockAIParams, BlockedAIRecord } from './domain/HostRepository';
+export { ReleaseHostCooldownTool } from './aiTools/ReleaseHostCooldownTool';
 export {
   HostRelationshipError,
   type HostRelationshipErrorCode,
@@ -38,11 +39,14 @@ export {
   revokeHostAIAssistant,
   runAsCurrentHostAuthority,
   runHostAuthorityMutation,
-  clearHostAIAppointmentCooldownForDevelopment,
+  releaseHostAICooldown,
   updateAIModelSettings,
   updateAIAssistantSettings,
   applyAssistantContextLimits,
   updateAIAssistantAvatarFromDraft,
+  changeAssistantAvatarFromMediaAsset,
+  changeAssistantPublicName,
+  assertApplicationSettingsAccessInTransaction,
   subscribeAIAssistantUpdated,
 } from './AIAssistantManagement';
 export type {

@@ -33,6 +33,7 @@ export type {
 } from './messages/application/UpsertCallTimelineEntry';
 
 // 回复配置与主动回复命令。
+export { getChatInterruptedTurnContext } from './reply/application/ChatTurnPresentationRuntime';
 export type { AIReplyConfig } from './reply/application/ChatReplyTypes';
 export {
   runChatVisibleAgent,

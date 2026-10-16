@@ -269,14 +269,17 @@ const { migrateAssistantIdentityContract } = migrationModule;
   db.exec(`INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at)
     VALUES ('assistant-a', 'actor-a', '旧名称', 'model-a', 'created', 'old-time')`);
 
+  let avatarResolutionCount = 0;
   const assistantRepositoryModule = loadTypeScriptModuleWithMocks(
     'src/features/assistants/infrastructure/SQLiteAssistantRepository.ts',
     {
       '@features/profile': { removeConversationWallpaperInTransaction: async () => [] },
       '@features/media': {
         collectAssistantMediaAssetCandidatesInTransaction: async () => [],
-        resolveMediaAssetReferenceUri: async ({ mediaAssetId, legacyUri }) =>
-          mediaAssetId ? `asset://${mediaAssetId}` : legacyUri,
+        resolveMediaAssetReferenceUri: async ({ mediaAssetId, legacyUri }) => {
+          avatarResolutionCount += 1;
+          return mediaAssetId ? `asset://${mediaAssetId}` : legacyUri;
+        },
       },
       '@platform/persistence': { databaseCoordinator: createCoordinator(db) },
       './SQLiteAuxiliaryModelDefaults': { initializeAssistantAuxiliaryModelsInTransaction: async (transaction, assistantId) => {
@@ -291,6 +294,13 @@ const { migrateAssistantIdentityContract } = migrationModule;
     },
   );
   const repository = new assistantRepositoryModule.AIAssistantRepository();
+  const updateSettings = (id, settings) => createCoordinator(db).openTaskExecutor().withExclusiveTransactionAsync(
+    transaction => repository.updateSettingsInTransaction(transaction, id, settings),
+  );
+
+  assert.deepEqual(await repository.listIds(), ['existing-role', 'assistant-a'],
+    '身份遍历返回全量助手 ID，不要求头像或模型资料可用');
+  assert.equal(avatarResolutionCount, 0, '身份遍历不访问无关的头像文件');
 
   // 表单创建入口必须先形成完整领域实体，再交给 Repository 落库。
   // 这样 AIProfile 扩展必填字段时，由领域工厂和 TypeScript 契约共同暴露遗漏。
@@ -344,7 +354,7 @@ const { migrateAssistantIdentityContract } = migrationModule;
   // 已有数字不自动改写；明确清空必须在真实 SQLite 与领域读取后仍保持 null。
   const existing = await repository.getById('assistant-a');
   assert.equal(existing.showTokenUsage, true, '旧角色迁移后的展示默认值保持开启');
-  await repository.updateSettings('assistant-a', { showTokenUsage: false });
+  await updateSettings('assistant-a', { showTokenUsage: false });
   assert.equal((await new assistantRepositoryModule.AIAssistantRepository().getById('assistant-a')).showTokenUsage, false,
     '关闭 Token 展示经过真实 SQLite 写入与重读后保留');
   assert.equal((await repository.getById(newProfile.id)).showTokenUsage, true, '展示开关不影响其他角色');
@@ -364,8 +374,8 @@ const { migrateAssistantIdentityContract } = migrationModule;
     { temperature: null, top_p: null },
   );
 
-  await repository.updateSettings('assistant-a', { name: '新名称', systemPrompt: '新的人设' });
-  await repository.updateSettings('assistant-a', {
+  await updateSettings('assistant-a', { name: '新名称', systemPrompt: '新的人设' });
+  await updateSettings('assistant-a', {
     privateContextPrimaryLimit: 48, privateContextSecondaryLimit: 12,
     groupContextPrimaryLimit: 60, groupContextSecondaryLimit: 8, allowMultipleBubbles: false,
   });
@@ -395,7 +405,7 @@ const { migrateAssistantIdentityContract } = migrationModule;
     SET avatar = NULL, avatar_media_asset_id = 'asset-current'
     WHERE id = 'assistant-a'
   `).run();
-  await repository.updateSettings('assistant-a', { name: '只改名称' });
+  await updateSettings('assistant-a', { name: '只改名称' });
   assert.deepEqual(
     { ...db.prepare("SELECT avatar, avatar_media_asset_id FROM ai_assistants WHERE id = 'assistant-a'").get() },
     { avatar: null, avatar_media_asset_id: 'asset-current' },
@@ -412,7 +422,7 @@ const { migrateAssistantIdentityContract } = migrationModule;
     '模型更新不拥有头像，也不得覆盖 canonical asset 引用',
   );
 
-  await repository.updateSettings('assistant-a', {
+  await updateSettings('assistant-a', {
     avatar: 'file:///persistent-media/avatars/ai/new.jpg',
     avatarMediaAssetId: null,
   });

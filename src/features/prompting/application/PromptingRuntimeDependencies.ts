@@ -53,6 +53,7 @@ export interface PromptAssistantSummary {
   enableTools: boolean;
   allowMultipleBubbles: boolean;
   isHostAI: boolean;
+  isInHostCooldown?: boolean;
 }
 
 /** 选择编辑对象只需要身份与主理标记，不读取模型密钥或人设正文。 */
@@ -60,6 +61,7 @@ export interface PromptAssistantOption {
   id: string;
   name: string;
   isHostAI: boolean;
+  isInHostCooldown?: boolean;
 }
 
 export type PromptMcpServiceConnectionStatus =
@@ -99,6 +101,8 @@ export interface PromptingRuntimeDependencies {
       callOnly: boolean;
       owner: string;
       hostOnly: boolean;
+      cooldownOnly?: boolean;
+      packageId?: string;
     }[]>;
     listOverrides(assistantId: string): Promise<{ toolName: string; enabled: boolean }[]>;
     set(assistantId: string, toolName: string, enabled: boolean): Promise<void>;

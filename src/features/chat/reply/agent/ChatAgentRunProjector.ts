@@ -41,11 +41,32 @@ export interface AgentTimelineCommitPort {
 
 export class ChatAgentRunFailedError extends Error {
   readonly terminalCode: AgentRunTerminalResult['terminalCode'];
+  readonly diagnosticText: string;
 
-  constructor(terminalCode: AgentRunTerminalResult['terminalCode']) {
-    super(`Chat Agent run failed: ${terminalCode}`);
+  constructor(result: AgentRunTerminalResult) {
+    super(`Chat Agent run failed: ${result.terminalCode}`);
     this.name = 'ChatAgentRunFailedError';
-    this.terminalCode = terminalCode;
+    this.terminalCode = result.terminalCode;
+    // 错误气泡需要跨重启保留线索；只投影编号、工具名和结果码，不携带参数、正文或 observation。
+    const toolLines = result.steps.flatMap((step) => step.modelTurn.toolCalls.map((call) => {
+      const record = step.toolCalls.find((item) => item.toolCall.id === call.id);
+      let status: string;
+      if (!record) {
+        status = result.terminalCode === 'MODEL_PROTOCOL_ERROR' ? '未执行：调用未通过协议检查' : '未记录完成结果';
+      } else if (record.outcome.status === 'success') {
+        status = '成功';
+      } else if (record.outcome.code === 'TOOL_EXECUTION_TIMEOUT') {
+        status = '超时：结果未知';
+      } else {
+        status = `${record.startedAt === null ? '未执行' : '执行失败'}：${record.outcome.code}`;
+      }
+      return `第 ${step.stepIndex} 轮 ${call.name}：${status}`;
+    }));
+    this.diagnosticText = [
+      `错误码：${result.terminalCode}`,
+      `回复编号：${result.runId}`,
+      ...(toolLines.length ? ['工具记录：', ...toolLines] : ['本次没有已返回的工具调用记录。']),
+    ].join('\n');
   }
 }
 
@@ -76,7 +97,6 @@ export class ChatAgentRunProjector {
     projection:
       | { kind: 'legacy'; persistence: AssistantTurnCommitPort }
       | { kind: 'canonical'; commit: AgentTimelineCommitPort };
-    isTimelineHidden: (toolName: string) => boolean;
     stopRuntime: () => void;
     replyRunId: string;
     finalAssistantPolicy: FinalAssistantPolicy;
@@ -112,8 +132,8 @@ export class ChatAgentRunProjector {
     this.canonicalTimeline = isCanonical
       ? new ChatAgentTimeline(
           params.replyRunId,
-          params.isTimelineHidden,
           params.timelineSink,
+          params.policy,
         )
       : null;
     this.toolTimeline = isCanonical
@@ -124,7 +144,6 @@ export class ChatAgentRunProjector {
           callbacks: params.callbacks,
           aiConfig: params.aiConfig,
           runtimeContext: params.runtimeContext,
-          isTimelineHidden: params.isTimelineHidden,
           onWaitExternal: () => {
             this.waitingForExternalAction = true;
             params.stopRuntime();
@@ -177,18 +196,17 @@ export class ChatAgentRunProjector {
         await this.commitActivityTimeline();
         return;
       }
-      if (this.waitingForExternalAction) {
-        this.canonicalTimeline.clear('cancelled');
-        return;
-      }
-      if (result.terminalCode === 'CANCELLED_BY_USER' || result.terminalCode === 'SUPERSEDED') {
+      // 通话提交后由投影层停止模型续轮；这次内部停止不能丢弃已完成的工具记录。
+      if (!this.waitingForExternalAction && (
+        result.terminalCode === 'CANCELLED_BY_USER' || result.terminalCode === 'SUPERSEDED'
+      )) {
         this.canonicalTimeline.clear(
           result.terminalCode === 'SUPERSEDED' ? 'superseded' : 'cancelled',
         );
         return;
       }
       this.assertActive();
-      if (result.terminalCode === 'COMPLETED') {
+      if (result.terminalCode === 'COMPLETED' || this.waitingForExternalAction) {
         const finalStep = requireLastStep(result);
         const commitPort = this.requireTimelineCommitPort();
         const finalTurn = this.requireModelTurn(finalStep.stepIndex);
@@ -206,9 +224,9 @@ export class ChatAgentRunProjector {
             sessionId: this.sessionId,
             response,
             items,
-            openedToolPackageIds: result.steps.flatMap((step) => step.toolCalls.flatMap(({ outcome }) => (
-              outcome.status === 'success' && outcome.metadata?.openedToolPackageId
-                ? [outcome.metadata.openedToolPackageId]
+            toolPackageChanges: result.steps.flatMap((step) => step.toolCalls.flatMap(({ outcome }) => (
+              outcome.status === 'success' && outcome.metadata?.toolPackageChange
+                ? [outcome.metadata.toolPackageChange]
                 : []
             ))),
             repository: this.repository,
@@ -232,7 +250,7 @@ export class ChatAgentRunProjector {
         return;
       }
       this.canonicalTimeline.clear('model_failure');
-      throw new ChatAgentRunFailedError(result.terminalCode);
+      throw new ChatAgentRunFailedError(result);
     }
 
     await this.toolTimeline?.closeRun(result.terminalCode);
@@ -265,7 +283,7 @@ export class ChatAgentRunProjector {
       return;
     }
     await this.streamingReply?.markFailed();
-    throw new ChatAgentRunFailedError(result.terminalCode);
+    throw new ChatAgentRunFailedError(result);
   }
 
   async failRun(result: AgentRunTerminalResult): Promise<void> {
@@ -365,8 +383,12 @@ export class ChatAgentRunProjector {
       timeline.appendDelta(event.stepIndex, 'assistant', event.text);
       return;
     }
-    if (event.type === 'tool_call_started') {
+    if (event.type === 'tool_call_proposed') {
       timeline.startToolStatus(event.stepIndex);
+      return;
+    }
+    if (event.type === 'tool_call_started') {
+      timeline.markToolStarted(event.stepIndex, event.toolCallId);
       return;
     }
     if (event.type === 'tool_call_completed') {

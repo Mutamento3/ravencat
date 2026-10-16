@@ -82,7 +82,9 @@ async function deliverAIMessage(
     ? conversationKeyOfGroup(payload.groupId)
     : conversationKeyOfDirect(payload.aiId);
   // 先推进到达，再决定通知；权限拒绝、前台抑制和消费方展示均不改变到达节奏。
-  applyAssistantMessageArrivalSnapshot(await awaitMessageArrival(conversationKey, payload.committedMessageId));
+  if (!payload.arrivalAlreadyScheduled) {
+    applyAssistantMessageArrivalSnapshot(await awaitMessageArrival(conversationKey, payload.committedMessageId));
+  }
   if (isAIMessageConversationForeground(payload)) {
     logTurnTimeline('notification_suppressed', { sessionId: payload.sessionId });
     return {
@@ -107,6 +109,7 @@ async function deliverAIMessage(
     : aiDisplayName;
 
   const posted = await sendAIMessageNotification({
+    turnRunId: payload.turnRunId,
     aiId: payload.aiId,
     aiName: aiDisplayName,
     message: payload.message,

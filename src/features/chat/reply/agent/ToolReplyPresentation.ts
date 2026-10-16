@@ -73,6 +73,11 @@ export function resolveToolDisplayName(toolName: string): string {
     download_file: '下载文件',
     get_app_usage: '读取应用使用时长',
     requestVideoCall: '视频电话',
+    send_voice_message: '发送语音',
+    search_stickers: '搜索表情包',
+    list_sticker_groups: '表情包分组',
+    list_stickers_in_group: '浏览表情包分组',
+    select_sticker: '发送表情包',
     lookAtUser: '查看用户状态',
     blockAIAssistant: '拉黑 AI',
     unblockAIAssistant: '解除拉黑',
@@ -96,6 +101,7 @@ export function resolveToolDisplayName(toolName: string): string {
     mcp_list_tools: 'MCP 工具清单',
     mcp_call_tool: 'MCP 工具',
     open_tool_package: '拆开工具包',
+    close_tool_package: '收起工具包',
   };
 
   return displayNameByTool[toolName] || toolName;
@@ -104,9 +110,10 @@ export function resolveToolDisplayName(toolName: string): string {
 export function resolveToolCallDisplayName(
   toolCall: ModelToolCall,
 ): string {
-  if (toolCall.name === 'open_tool_package') {
+  if (toolCall.name === 'open_tool_package' || toolCall.name === 'close_tool_package') {
     const id = displayArgument(parseMetaToolInput(toolCall.arguments)?.package_id);
-    return id ? `拆开工具包（${id}）` : '拆开工具包';
+    const label = resolveToolDisplayName(toolCall.name);
+    return id ? `${label}（${id}）` : label;
   }
   if (toolCall.name === 'phone_package_list_tools' || toolCall.name === 'phone_package_call_tool') {
     return resolvePhonePackageToolCallDisplayName(toolCall);

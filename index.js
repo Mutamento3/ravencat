@@ -12,6 +12,7 @@ import {
   configureCompanionHeadlessRuntime,
   runCallNotificationActionHeadlessTask,
   runConversationTurnHeadlessTask,
+  runHostRelationshipReplyHeadlessTask,
   runCallExecutionHeadlessTask,
   runTogetherListeningNotificationActionHeadlessTask,
 } from '@host';
@@ -20,6 +21,7 @@ configureCompanionHeadlessRuntime();
 AppRegistry.registerHeadlessTask('RavenCatCompanionWakeTask', () => runCompanionWakeHeadlessTask);
 AppRegistry.registerHeadlessTask('RavenCatFloatingMessageTask', () => runFloatingMessageHeadlessTask);
 AppRegistry.registerHeadlessTask('ConversationTurnExecutionTask', () => runConversationTurnHeadlessTask);
+AppRegistry.registerHeadlessTask('HostRelationshipReplyTask', () => runHostRelationshipReplyHeadlessTask);
 AppRegistry.registerHeadlessTask('RavenCatCallExecutionTask', () => runCallExecutionHeadlessTask);
 AppRegistry.registerHeadlessTask(
   'KimiPhoneCallNotificationActionTask',

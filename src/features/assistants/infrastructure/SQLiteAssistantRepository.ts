@@ -21,8 +21,10 @@ import type {
   AIAvatarMediaAssetReference,
   AIAvatarMediaAssetMigrationCandidate,
   CommitAIAvatarMediaAssetReferenceInput,
+  ReplaceAIAvatarMediaAssetReferenceInput,
   IAIAssistantRepository,
   AssistantNicknameContext,
+  AssistantSettingsUpdateResult,
 } from '../domain/AssistantRepository';
 import {
   createHostAIAppointmentCooldown,
@@ -202,6 +204,15 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       console.error('[AIAssistantRepository] Failed to get all:', error);
       throw error;
     }
+  }
+
+  /** 身份遍历不读取模型配置，也不触发头像 backing 的解析。 */
+  async listIds(): Promise<string[]> {
+    const database = databaseCoordinator.openTaskExecutor({
+      name: 'assistants.listIds', feature: 'assistants', priority: 'runtime',
+    });
+    const rows = await database.getAllAsync<{ id: string }>('SELECT id FROM ai_assistants ORDER BY created_at ASC');
+    return rows.map((row) => row.id);
   }
 
   async listSummaries(): Promise<AIAssistantSummary[]> {
@@ -418,13 +429,12 @@ export class AIAssistantRepository implements IAIAssistantRepository {
     return this.mapRowToAIProfile(row);
   }
 
-  /**
-   * 更新AI助手设置（对话设置界面用）
-   */
-  async updateSettings(
+  /** 设置提交返回昵称变更事实，跨 Feature 的历史写入由应用事务组合。 */
+  async updateSettingsInTransaction(
+    transaction: DatabaseTransactionExecutor,
     assistantId: string,
-    settings: AIAssistantSettingsUpdate
-  ): Promise<boolean> {
+    settings: AIAssistantSettingsUpdate,
+  ): Promise<AssistantSettingsUpdateResult> {
     const now = new Date().toISOString();
     const fields: string[] = [];
     const values: (string | number | null)[] = [];
@@ -472,56 +482,31 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       }
     }
 
-    const database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'assistants.updateSettings', feature: 'assistants', priority: 'runtime' });
-    return database.withExclusiveTransactionAsync(async (transaction) => {
-      if (settings.nickname !== undefined) {
-        const previous = await transaction.getFirstAsync<{ nickname: string | null }>(
-          'SELECT nickname FROM ai_assistants WHERE id = ?', [assistantId],
-        );
-        if (!previous) return false;
-        if (previous.nickname !== settings.nickname) {
-          // 当前值与修改事件一起提交；旧请求的确认只能消费它实际收到的事件 ID。
-          fields.push('nickname = ?');
-          values.push(settings.nickname);
-          await transaction.runAsync(
-            `INSERT INTO assistant_nickname_changes
-              (assistant_id, previous_nickname, nickname, created_at) VALUES (?, ?, ?, ?)`,
-            [assistantId, previous.nickname, settings.nickname, now],
-          );
-        }
-      }
-      fields.push('updated_at = ?');
-      values.push(now, assistantId);
-      const result = await transaction.runAsync(
-        `UPDATE ai_assistants SET ${fields.join(', ')} WHERE id = ?`, values,
+    let nicknameChange: AssistantSettingsUpdateResult['nicknameChange'] = null;
+    if (settings.nickname !== undefined) {
+      const previous = await transaction.getFirstAsync<{ nickname: string | null }>(
+        'SELECT nickname FROM ai_assistants WHERE id = ?', [assistantId],
       );
-      return result.changes > 0;
-    });
+      if (!previous) return { updated: false, nicknameChange: null };
+      if (previous.nickname !== settings.nickname) {
+        fields.push('nickname = ?');
+        values.push(settings.nickname);
+        nicknameChange = { changeId: `${now}:${Math.random().toString(36).slice(2)}`,
+          assistantId, previousNickname: previous.nickname, nickname: settings.nickname, occurredAt: now };
+      }
+    }
+    fields.push('updated_at = ?');
+    values.push(now, assistantId);
+    const result = await transaction.runAsync(
+      `UPDATE ai_assistants SET ${fields.join(', ')} WHERE id = ?`, values,
+    );
+    return { updated: result.changes > 0, nicknameChange };
   }
 
   async getNicknameContext(assistantId: string): Promise<AssistantNicknameContext | null> {
     const database = databaseCoordinator.openTaskExecutor({ name: 'assistants.nicknameContext', feature: 'assistants', priority: 'runtime' });
-    return database.withExclusiveTransactionAsync(async (transaction) => {
-      const assistant = await transaction.getFirstAsync<{ nickname: string | null }>(
-        'SELECT nickname FROM ai_assistants WHERE id = ?', [assistantId],
-      );
-      if (!assistant) return null;
-      const rows = await transaction.getAllAsync<{
-        id: number; previous_nickname: string | null; nickname: string | null; acknowledged: number;
-      }>('SELECT id, previous_nickname, nickname, acknowledged FROM assistant_nickname_changes WHERE assistant_id = ? ORDER BY id', [assistantId]);
-      return {
-        nickname: assistant.nickname,
-        changes: rows.map((row) => ({ id: row.id, previousNickname: row.previous_nickname,
-          nickname: row.nickname, acknowledged: row.acknowledged === 1 })),
-      };
-    });
-  }
-
-  async acknowledgeNicknameChanges(assistantId: string, throughChangeId: number): Promise<void> {
-    const database = databaseCoordinator.openTaskExecutor({ name: 'assistants.acknowledgeNickname', feature: 'assistants', priority: 'runtime' });
-    await database.runAsync(
-      'UPDATE assistant_nickname_changes SET acknowledged = 1 WHERE assistant_id = ? AND id <= ? AND acknowledged = 0',
-      [assistantId, throughChangeId],
+    return database.getFirstAsync<{ nickname: string | null }>(
+      'SELECT nickname FROM ai_assistants WHERE id = ?', [assistantId],
     );
   }
 
@@ -698,15 +683,18 @@ export class AIAssistantRepository implements IAIAssistantRepository {
     if (!changed) throw new Error(`AI 头像 MediaAsset CAS 未影响一行：${input.ownerId}`);
   }
 
-  async replaceAvatarMediaAssetReference(input: CommitAIAvatarMediaAssetReferenceInput, guard: (transaction: DatabaseTransactionExecutor) => Promise<void>): Promise<boolean> {
-    const database = databaseCoordinator.openTaskExecutor({ name: 'assistants.changeOwnAvatar', feature: 'assistants', priority: 'runtime' });
-    return database.withExclusiveTransactionAsync(async transaction => {
-      await guard(transaction);
-      return this.tryCommitAvatarMediaAssetReferenceInTransaction(transaction, input);
-    });
+  async canManageApplicationSettingsInTransaction(transaction: DatabaseTransactionExecutor, actorId: string, targetId: string | null): Promise<boolean> {
+    const actor = await transaction.getFirstAsync<{ is_host_ai: number }>('SELECT is_host_ai FROM ai_assistants WHERE id = ?', [actorId]);
+    return actor !== null && (actorId === targetId || actor.is_host_ai === 1);
   }
 
-  private async tryCommitAvatarMediaAssetReferenceInTransaction(transaction: DatabaseTransactionExecutor, input: CommitAIAvatarMediaAssetReferenceInput): Promise<boolean> {
+  async changeNameInTransaction(transaction: DatabaseTransactionExecutor, assistantId: string, expectedName: string, name: string): Promise<boolean> {
+    const result = await transaction.runAsync('UPDATE ai_assistants SET name = ?, updated_at = ? WHERE id = ? AND name = ?',
+      [name, new Date().toISOString(), assistantId, expectedName]);
+    return result.changes === 1;
+  }
+
+  async tryCommitAvatarMediaAssetReferenceInTransaction(transaction: DatabaseTransactionExecutor, input: ReplaceAIAvatarMediaAssetReferenceInput): Promise<boolean> {
     const result = await transaction.runAsync(
       `UPDATE ai_assistants
        SET avatar = NULL,

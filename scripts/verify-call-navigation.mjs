@@ -40,23 +40,34 @@ let hostActions;
 let chatProps;
 let resolveActiveQuery;
 let deferActiveQuery = false;
-const stack = ['/conversations', pathname];
+const originalChatHref = `${pathname}?sessionId=session-1`;
+const stack = ['/conversations', originalChatHref];
 const navigationQueue = [];
+const nativeLeaves = [];
 const router = {
   push(pathname) { navigationQueue.push(() => stack.push(pathname)); },
   back() { navigationQueue.push(() => stack.pop()); },
+  dismissTo(href) {
+    navigationQueue.push(() => {
+      const index = stack.lastIndexOf(href);
+      if (index < 0) stack[stack.length - 1] = href;
+      else stack.splice(index + 1);
+    });
+  },
   canGoBack: () => stack.length > 1,
 };
+const navigationContainerRef = { dispatch: noop };
 const hostModule = load('src/host/KimiPhoneHost.tsx', {
+  '../../modules/kimiphone-notifications': { async leaveCallScreen(callId, finished) { nativeLeaves.push({ callId, finished }); } },
   'react-native': { View: 'view', StyleSheet: { create: (value) => value }, AppState: { currentState: 'active', addEventListener: () => ({ remove: noop }) } },
-  'expo-router': { useRouter: () => router, usePathname: () => pathname },
+  'expo-router': { useRouter: () => router, usePathname: () => pathname, useUnstableGlobalHref: () => stack.at(-1), useNavigationContainerRef: () => navigationContainerRef },
   'react-native-safe-area-context': { SafeAreaProvider: passThrough },
   'expo-splash-screen': { preventAutoHideAsync: done, hideAsync: done },
   '@shared/theme': { AppBackground: passThrough, ThemeProvider: passThrough, WallpaperProvider: passThrough },
   '@shared/ui': { AppDialogHost: passThrough },
   '@features/profile': {},
   '@platform/persistence': { initDatabase: done },
-  '@features/assistants': { aiAssistantRepository: { getAll: async () => [] } },
+  '@features/assistants': { aiAssistantRepository: { listIds: async () => [] } },
   '@platform/device': { initializeNotifications: done, consumePendingNotificationResponses: async () => [], addNotificationResponseListener: () => ({ remove: noop }), getMessageArrivalSnapshot: async () => arrival },
   '@features/calls': {
     CallRuntimeProvider: passThrough,
@@ -101,12 +112,17 @@ const hostTree = () => React.createElement(hostModule.default, null, React.creat
 async function flushNavigation() {
   await act(async () => {
     navigationQueue.splice(0).forEach((navigate) => navigate());
-    pathname = stack.at(-1);
+    pathname = stack.at(-1).split('?')[0];
     renderer.update(hostTree());
   });
 }
 try {
   await act(async () => { renderer = create(hostTree()); });
+  await act(async () => { chatProps.onCallCreated(call); });
+  await flushNavigation();
+  await act(async () => { hostActions.closeCallScreen(call.id); });
+  await flushNavigation();
+  assert.equal(pathname, '/chat/ai-1', '聊天发起的通话结束后保留原聊天页');
   await act(async () => { chatProps.onCallCreated(call); });
   await flushNavigation();
   await act(async () => { hostActions.minimizeCallScreen(call.id); });
@@ -125,9 +141,89 @@ try {
     hostActions.closeCallScreen(call.id);
   });
   await flushNavigation();
-  assert.equal(pathname, '/conversations', '离开聊天后恢复小窗并挂断，应回到原会话列表');
+  assert.equal(pathname, '/chat/ai-1', '小窗恢复不得覆盖首次发起通话的聊天来源');
   assert.equal(renderer.root.findAllByType('call-screen').length, 0, '挂断不得留下已失去媒体会话的旧通话页');
-  console.log('通话宿主导航检查通过：小窗恢复与迟到查询竞态、单一通话页、挂断返回会话列表。');
+  assert.deepEqual(nativeLeaves.map(leave => leave.finished), [true, false, true], '关闭或收起在退出路由前交给原生处理来源');
+  deferActiveQuery = false;
+  call = { ...call, id: 'call-2', state: 'active' };
+  await act(async () => { chatProps.onCallCreated(call); });
+  await flushNavigation();
+  // Activity 销毁后 Headless/JS 进程仍活着；深链重建只留下通话路由，没有聊天栈。
+  await act(async () => { renderer.unmount(); });
+  stack.splice(0, stack.length, `/calls/${call.id}`);
+  pathname = stack.at(-1);
+  await act(async () => { renderer = create(hostTree()); });
+  await act(async () => { hostActions.activateCallScreen(call.id); });
+  await act(async () => {
+    call = { ...call, state: 'ended', endReason: 'aiEnded' };
+    hostActions.closeCallScreen(call.id);
+  });
+  await flushNavigation();
+  assert.equal(stack.at(-1), originalChatHref, 'Activity 重建后 AI 挂断仍恢复首次发起的聊天及会话参数');
+  console.log('通话宿主导航检查通过：首次聊天来源、小窗恢复竞态、Activity 重建后 AI 挂断、会话参数保留。');
+} finally {
+  if (renderer) await act(async () => { renderer.unmount(); });
+  delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+}
+
+// 运行真实通话页面和挂断按钮，复现“终态先到、清理稍后完成”的异步顺序。
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+const rn = { View: 'view', Text: 'text', TouchableOpacity: 'button', ActivityIndicator: 'loading',
+  BackHandler: { addEventListener: () => ({ remove: noop }) } };
+const theme = { useTheme: () => ({ colors: { feedback: { error: 'red' }, icon: { inverse: 'white' } } }), useThemedStyles: () => ({}) };
+const activeScreen = load('src/features/calls/presentation/CallActiveScreen.tsx', {
+  'react-native': rn,
+  '@shared/ui': {}, '@shared/theme': theme,
+  'react-native-safe-area-context': { SafeAreaView: passThrough, useSafeAreaInsets: () => ({ top: 0 }) },
+  'expo-status-bar': { StatusBar: () => null },
+  'lucide-react-native': new Proxy({}, { get: (_, name) => String(name) }),
+  './styles': {},
+  './components/CallAvatarHeader': { default: () => null, __esModule: true },
+  './components/CallBackgroundLayer': { default: passThrough, __esModule: true },
+  './components/CallTranscriptOverlay': { default: () => null, __esModule: true },
+  './components/CallControls': { default: () => null, __esModule: true },
+  './components/CallTextInputModal': { default: () => null, __esModule: true },
+  '../application/runtime/CallRuntimeDependencies': {},
+});
+let runtime;
+const screen = load('src/features/calls/presentation/CallScreen.tsx', {
+  'react-native': rn, '@shared/ui': {},
+  './CallRuntimeProvider': { useCallRuntime: () => runtime },
+  './CallActiveScreen': activeScreen,
+}).default;
+let closeCount = 0;
+let finishHangUp;
+const page = () => React.createElement(screen, { callId: 'call', onClose: () => { closeCount++; }, onMinimize: noop });
+try {
+  runtime = { call: { id: 'call', state: 'active' }, availableAudioRoutes: [], elapsedSeconds: 0,
+    async hangUp() {
+      runtime = { ...runtime, call: { ...runtime.call, state: 'ended' } };
+      renderer.update(page());
+      await new Promise(resolve => { finishHangUp = resolve; });
+      return true;
+    } };
+  await act(async () => { renderer = create(page()); });
+  let hangingUp;
+  await act(async () => { hangingUp = renderer.root.findAllByType('button').at(-1).props.onPress(); });
+  assert.equal(closeCount, 1, '终态立即退出，不等待挂断清理完成');
+  assert.equal(renderer.toJSON(), null, '终态不绘制任何结束页或返回聊天中间态');
+  await act(async () => {
+    runtime = { ...runtime, shouldExit: true };
+    renderer.update(page());
+    finishHangUp();
+    await hangingUp;
+  });
+  assert.equal(closeCount, 1, '清理信号和挂断回执晚到不得再返回一层');
+  await act(async () => { renderer.unmount(); });
+  for (const state of ['ended', 'rejected', 'missed', 'failed']) {
+    closeCount = 0;
+    runtime = { call: { id: 'call', state } };
+    await act(async () => { renderer = create(page()); });
+    assert.equal(closeCount, 1, `${state} 终态进入立即退出`);
+    assert.equal(renderer.toJSON(), null);
+    await act(async () => { renderer.unmount(); });
+  }
+  console.log('通话页面退出检查通过：终态立即退出、清理继续、晚到信号不重复返回、所有终态无结束页。');
 } finally {
   if (renderer) await act(async () => { renderer.unmount(); });
   delete globalThis.IS_REACT_ACT_ENVIRONMENT;

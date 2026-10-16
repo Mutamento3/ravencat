@@ -189,7 +189,6 @@ export interface ToolDefinition {
 
 export interface ChatOptions {
   includeSystemPrompt?: boolean;
-  enforceReasoningContent?: boolean;
   allowReasoningLengthRetry?: boolean;
   allowImageContentFallback?: boolean;
   responseFormat?: 'json_object';
@@ -204,7 +203,6 @@ export interface ChatWithToolsOptions {
   allowImageContentFallback?: boolean;
   includeSystemPrompt?: boolean;
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
-  enforceReasoningContent?: boolean;
   allowReasoningLengthRetry?: boolean;
   signal?: AbortSignal;
 }

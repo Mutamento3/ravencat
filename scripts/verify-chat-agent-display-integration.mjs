@@ -1,0 +1,721 @@
+/** 用真实 Runtime、事件队列、Projector、SQLite T1/T3 验证展示，不调用真实模型或用户业务数据。 */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
+import ts from 'typescript';
+import { SCHEMAS, INDEXES } from './helpers/sqlite-bootstrap-fixture.mjs';
+import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-dependencies.mjs';
+import { installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+
+const root = path.resolve(import.meta.dirname, '..');
+const directory = process.argv[2] === '--read' ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'ravencat-agent-display-'));
+const filename = directory ? path.join(directory, 'history.sqlite') : process.argv[3];
+let db = new DatabaseSync(filename);
+let writer = Promise.resolve();
+let writes = 0;
+const executor = {
+  execAsync: async sql => db.exec(sql),
+  getFirstAsync: async (sql, params = []) => db.prepare(sql).get(...params) ?? null,
+  getAllAsync: async (sql, params = []) => db.prepare(sql).all(...params),
+  runAsync: async (sql, params = []) => {
+    const result = db.prepare(sql).run(...params);
+    return { changes: Number(result.changes), lastInsertRowId: Number(result.lastInsertRowid) };
+  },
+};
+const coordinator = {
+  read: (_meta, operation) => writer.then(() => operation(executor)),
+  transaction(_meta, operation) {
+    writes++;
+    const next = writer.then(async () => {
+      db.exec('BEGIN IMMEDIATE');
+      try { const result = await operation(executor); db.exec('COMMIT'); return result; }
+      catch (error) { db.exec('ROLLBACK'); throw error; }
+    });
+    writer = next.catch(() => {});
+    return next;
+  },
+  openTaskExecutor: () => ({ ...executor, withExclusiveTransactionAsync: operation => coordinator.transaction({}, operation) }),
+};
+const cache = new Map();
+const overrides = new Map();
+const mocks = {
+  '@platform/persistence': { databaseCoordinator: coordinator },
+  '@features/media': { releaseMediaAssetCandidates: async () => {} },
+  '@features/stickers': { isStickerSendIntent: () => false },
+  '@shared/diagnostics/TurnTimelineLog': { logTurnTimeline() {} },
+  ...agentToolSchemaDependencies,
+};
+function load(relative) {
+  let file = path.resolve(root, relative);
+  if (!path.extname(file)) file = fs.existsSync(file + '.ts') ? file + '.ts' : path.join(file, 'index.ts');
+  if (overrides.has(file)) return overrides.get(file);
+  if (cache.has(file)) return cache.get(file).exports;
+  const module = { exports: {} };
+  cache.set(file, module);
+  const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  new Function('require', 'module', 'exports', code)(id => {
+    if (Object.hasOwn(mocks, id)) return mocks[id];
+    if (id === '@shared/aiTools') return load('src/shared/aiTools/AgentToolInputSchema.ts');
+    if (id.startsWith('@shared/')) return load('src/shared/' + id.slice(8));
+    assert.ok(id.startsWith('.'), `缺少边界依赖 ${id}`);
+    return load(path.resolve(path.dirname(file), id));
+  }, module, module.exports);
+  return module.exports;
+}
+const override = (file, value) => overrides.set(path.resolve(root, file), value);
+override('src/features/chat/reply/agent/ChatStreamingReplyProjector.ts', {});
+override('src/features/chat/reply/agent/ChatAgentToolTimelineProjector.ts', {});
+override('src/features/chat/reply/agent/SendVoiceMessageTool.ts', { isVoiceMessageSendIntent: () => false });
+override('src/features/chat/reply/application/AssistantMessageDelivery.ts', {
+  deliverAssistantMessage() { throw new Error('不得执行 Legacy 分段入库'); },
+});
+mocks['@features/chat/messages/domain'] = load('src/features/chat/messages/domain/chatMessageMetadata.ts');
+override('src/features/chat/messages/domain/index.ts', mocks['@features/chat/messages/domain']);
+
+const { messageRepository: messages } = load('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts');
+const { conversationTurnRepository: turns } = load('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts');
+const { chatTurnPresentationRepository: displays } = load('src/features/chat/reply/infrastructure/SQLiteChatTurnPresentationRepository.ts');
+const presentation = load('src/features/chat/reply/application/ChatTurnPresentationRuntime.ts');
+if (!directory) {
+  presentation.configureChatTurnPresentation(displays);
+  await presentation.recoverTurnPresentationDisplays();
+  const orphan = await turns.takeOverOrphan('orphan-tools', 'user_reply');
+  console.log(JSON.stringify({ history: await displays.listHistory('s'), visible: (await messages.getMessages('s', { limit: 100 })).messages,
+    orphan, orphanStatus: db.prepare("SELECT status, terminal_reason FROM conversation_turn_runs WHERE session_id = 'orphan-tools'").get(),
+    earlyHistory: await displays.listHistory('early-text'),
+    completeVisible: (await messages.getMessages('complete-loop', { limit: 100 })).messages,
+    crashVisible: (await messages.getMessages('crash-display', { limit: 100 })).messages,
+    timeoutVisible: (await messages.getMessages('timeout-display', { limit: 100 })).messages }));
+  db.close();
+  process.exit(0);
+}
+const store = load('src/features/chat/messages/application/AgentTransientTimeline.ts');
+const foreground = load('src/features/chat/reply/delivery/ChatForegroundContext.ts');
+const { ChatAgentRunProjector } = load('src/features/chat/reply/agent/ChatAgentRunProjector.ts');
+const { AgentRuntime } = load('src/platform/agentRuntime/AgentRuntime.ts');
+const { AgentToolRegistry } = load('src/platform/agentRuntime/AgentToolRegistry.ts');
+const { AgentRunEventQueue } = load('src/platform/agentRuntime/AgentRunEventQueue.ts');
+const runtime = load('src/features/chat/messages/application/ChatMessageRuntime.ts');
+const { commitCanonicalUserMessage } = load('src/features/chat/messages/application/CommitCanonicalUserMessage.ts');
+const defer = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const stamp = '2026-10-15T10:00:00.000Z';
+const ai = { id: 'ai', agentId: 'agent', name: 'AI' };
+const reasoningFor = step => `CoT${step}${'x'.repeat(96)}`;
+const user = text => ({ sessionId: 's', text, senderType: 'user', isMe: true, createdAt: stamp, time: '18:00' });
+const usageOf = message => [message.tokensUsed, message.promptTokens, message.completionTokens,
+  JSON.parse(message.metadataJson).cachedTokens];
+const usageFor = step => ({ totalTokens: 120 + step, promptTokens: 100, completionTokens: 20 + step,
+  cachedTokens: step === 1 ? 80 : step === 2 ? 0 : undefined });
+
+// 增量消费者只在批次边界物化变动条目，既不重算旧分段，也不漏掉同批工具的部分结果。
+const { ChatAgentTimeline } = load('src/features/chat/reply/agent/ChatAgentTimeline.ts');
+let readChanges;
+const deltaTimeline = new ChatAgentTimeline('incremental', { onDirty: read => { readChanges = read; } }, { bubbleDeliveryMode: 'multi-bubble' });
+deltaTimeline.startStep(1);
+for (let i = 0; i < 200; i++) deltaTimeline.appendDelta(1, 'reasoning', 'x');
+assert.equal(readChanges().length, 1);
+assert.deepEqual(readChanges(), [], '没有变化时不能重复发布旧版本');
+deltaTimeline.appendDelta(1, 'assistant', 'first\n\nsecond');
+assert.equal(readChanges()[0].pendingDelivery, true);
+deltaTimeline.reconcileModelTurn(1, { assistantText: 'first\n\nsecond', reasoningText: 'x'.repeat(200),
+  toolCalls: [{ id: 'a', name: 'one', arguments: '{}' }, { id: 'b', name: 'two', arguments: '{}' }], usage: {}, messageId: 'm' });
+const finalized = readChanges();
+assert.deepEqual(finalized.filter(item => item.kind === 'assistant').map(item => item.text), ['first', 'second']);
+deltaTimeline.startToolStatus(1);
+readChanges();
+deltaTimeline.markToolStarted(1, 'a');
+deltaTimeline.completeToolCall(1, 'a', { status: 'success', modelContent: 'actual-result-a' });
+const partial = readChanges();
+assert.deepEqual(partial.map(item => item.kind), ['tool'], '工具更新不能重新投递之前的正文与思维链');
+assert.equal(partial[0].toolExecutions[0].modelContent, 'actual-result-a');
+assert.equal(partial[0].toolExecutions[1].status, 'proposed');
+assert.equal(deltaTimeline.snapshots().length, 4, '完整快照消费者保留原契约');
+
+for (const bubbleDeliveryMode of ['single-bubble', 'multi-bubble']) for (const cachedTokens of [80, 0, undefined]) {
+  const usageRun = `usage-${bubbleDeliveryMode}-${cachedTokens}`;
+  const timeline = new ChatAgentTimeline(usageRun, {}, { bubbleDeliveryMode });
+  timeline.startStep(1);
+  timeline.appendDelta(1, 'assistant', 'first\n\nsecond');
+  assert.equal(timeline.snapshots()[0].tokensUsed, undefined, '真实统计到达前不能估算用量');
+  timeline.reconcileModelTurn(1, { assistantText: 'first\n\nsecond', reasoningText: '', toolCalls: [],
+    usage: { totalTokens: 120, promptTokens: 100, completionTokens: 20, cachedTokens }, messageId: usageRun });
+  store.applyAgentTransientTimelineSnapshots({ sessionId: usageRun, snapshots: timeline.snapshots() });
+  const projected = store.snapshotAgentTransientTimelineWithReplacements(usageRun);
+  assert.deepEqual(projected.map(usageOf), bubbleDeliveryMode === 'single-bubble'
+    ? [[120, 100, 20, cachedTokens]] : [[0, 0, 0, undefined], [120, 100, 20, cachedTokens]]);
+  store.clearAgentTransientTimelineRun(usageRun, usageRun);
+}
+
+try {
+  db.exec(`PRAGMA foreign_keys = ON;
+    CREATE TABLE chat_conversations(id TEXT PRIMARY KEY, kind TEXT);
+    CREATE TABLE ai_assistants(id TEXT PRIMARY KEY); INSERT INTO ai_assistants VALUES ('ai');
+    CREATE TABLE sessions(id TEXT PRIMARY KEY, last_message TEXT, last_time TEXT, updated_at TEXT,
+      visible_after_message_id INTEGER, visible_after_at TEXT);
+    INSERT INTO chat_conversations VALUES ('s', 'direct'); INSERT INTO sessions(id) VALUES ('s');
+    CREATE TABLE media_assets(id TEXT PRIMARY KEY);
+    CREATE TABLE business_effects(id INTEGER PRIMARY KEY, value INTEGER); INSERT INTO business_effects VALUES (1, 0);`);
+  for (const key of ['messages', 'conversationTurnRuns', 'conversationTurnState', 'chatToolPackageExposure', 'chatRegenerationRequests', 'chatTimelineRunAnchors', 'chatTurnPresentations']) {
+    if (SCHEMAS[key]) db.exec(SCHEMAS[key]);
+  }
+  // canonical 排序锚点与生产建库保持同源。
+  installChatTimelineSchema(db);
+  db.exec(INDEXES.idxTurnRunsSingleActive);
+  db.exec(INDEXES.idxMessagesTurnItem);
+  presentation.configureChatTurnPresentation(displays);
+  const pendingPaces = [];
+  const releasedBatches = [];
+  const closed = new Map();
+  const activeDisplays = new Set();
+  let holdArrival = true;
+  presentation.configureTurnDisplayPacing(async runId => {
+    if (!activeDisplays.has(runId) || closed.has(runId)) return false;
+    if (!holdArrival) return true;
+    const gate = defer(); pendingPaces.push({ runId, gate });
+    return gate.promise;
+  }, async (ids, open) => {
+    for (const id of ids) {
+      const count = (closed.get(id) ?? 0) + (open ? -1 : 1);
+      if (count > 0) closed.set(id, count); else closed.delete(id);
+      for (const pending of pendingPaces) if (pending.runId === id && !open) pending.gate.resolve(false);
+    }
+  }, async ids => { releasedBatches.push([...ids]); }, async (runId, active) => {
+    if (active) { assert.equal(activeDisplays.has(runId), false); activeDisplays.add(runId); }
+    else { activeDisplays.delete(runId); closed.delete(runId); }
+  });
+  runtime.configureChatMessageRuntime({ messages, turns,
+    turnPresentation: { freeze: presentation.freezeTurnDisplays, interrupt: presentation.interruptSessionTurnDisplays } });
+  // 启动回执独立于执行 revision；旧请求的迟到拒绝不得覆盖新请求或新输入。
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run('host-status', 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run('host-status');
+  const statusInput = text => commitCanonicalUserMessage({ message: { ...user(text), sessionId: 'host-status' } });
+  await statusInput('等待宿主');
+  assert.equal((await displays.getExecutionStatus('host-status')).phase, 'waiting_host');
+  const revisionBefore = db.prepare('SELECT revision FROM conversation_turn_state WHERE session_id = ?').get('host-status').revision;
+  const firstStart = await turns.beginExecutionHostRequests(['host-status']);
+  const secondStart = await turns.beginExecutionHostRequests(['host-status']);
+  await turns.finishExecutionHostRequests(secondStart, true);
+  await turns.finishExecutionHostRequests(firstStart, false);
+  assert.equal((await displays.getExecutionStatus('host-status')).phase, 'host_started');
+  assert.equal(db.prepare('SELECT revision FROM conversation_turn_state WHERE session_id = ?').get('host-status').revision, revisionBefore);
+  await statusInput('新的输入');
+  assert.equal((await displays.getExecutionStatus('host-status')).phase, 'waiting_host');
+  const rejectedStart = await turns.beginExecutionHostRequests(['host-status']);
+  await turns.finishExecutionHostRequests(rejectedStart, false);
+  assert.equal((await displays.getExecutionStatus('host-status')).reason, 'execution_host_start_rejected');
+  const statusRun = await turns.claimIfIdle('host-status', 'user_reply');
+  await displays.open(statusRun);
+  await displays.checkpoint(statusRun.runId, [], { phase: 'request_failed', at: stamp });
+  await turns.revoke(statusRun, 'failed', 'network_request_failed');
+  assert.deepEqual(await displays.getExecutionStatus('host-status'), {
+    phase: 'request_failed', at: db.prepare('SELECT terminal_at FROM conversation_turn_runs WHERE run_id = ?').get(statusRun.runId).terminal_at,
+    reason: 'network_request_failed',
+  });
+  foreground.setChatForegroundContext({ appActive: true, chatRouteActive: true, isChatVisible: true, aiId: 'ai', sessionId: 's', groupId: null });
+
+  const runtimeWrites = writes;
+  await commitCanonicalUserMessage({ message: user('开始多轮工具任务') });
+  const run = await turns.claimIfIdle('s', 'user_reply');
+  const display = new presentation.ChatTurnPresentation(run, ai.agentId, ai.id);
+  await display.start();
+  assert.equal((await displays.getExecutionStatus('s')).phase, 'preparing');
+  const phases = [];
+  let commits = 0;
+  const controller = new AbortController();
+  const projector = new ChatAgentRunProjector({ sessionId: 's', repository: messages, aiConfig: ai,
+    callbacks: {}, runtimeContext: { replyRunId: run.runId, abortSignal: controller.signal },
+    policy: { bubbleDeliveryMode: 'multi-bubble', modelTransport: 'stream', enableTools: true },
+    projection: { kind: 'canonical', commit: { async commitAgentTimeline(params) {
+      commits++; return turns.commitTurn(run, params.items, { assistantId: 'ai', changes: [] });
+    } } }, stopRuntime: () => controller.abort(), replyRunId: run.runId,
+    finalAssistantPolicy: 'commit_as_reply', timelineSink: display.sink });
+  const registry = new AgentToolRegistry();
+  registry.register({ descriptor: { name: 'modify_data', description: '更新测试业务值', inputSchema: { type: 'object' } },
+    async execute() { db.exec('UPDATE business_effects SET value = value + 1'); return { status: 'success', modelContent: '业务已修改' }; } });
+  const turnsByStep = new Map();
+  let step = 0;
+  const thirdRequest = defer();
+  const never = defer();
+  const agent = new AgentRuntime({ registry, modelGateway: { async runTurn(_request, emit) {
+    step++;
+    if (step === 3) { thirdRequest.resolve(); await never.promise; }
+    const reasoningText = reasoningFor(step);
+    // 一百个真实增量不应导致一百个数据库事务。
+    for (const text of reasoningText) await emit({ type: 'reasoning_delta', text });
+    await emit({ type: 'assistant_text_delta', text: `Message${step}` });
+    const toolCalls = [{ id: `tool-${step}`, name: 'modify_data', arguments: '{}', index: 0 }];
+    const turn = { assistantText: `Message${step}`, reasoningText, toolCalls, finishReason: 'tool_calls',
+      historyItems: [{ role: 'assistant', content: `Message${step}`, reasoningText, toolCalls }],
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 }, messageId: `model-${step}` };
+    turnsByStep.set(step, turn);
+    return turn;
+  } } });
+  const eventTypes = [];
+  const queue = new AgentRunEventQueue(async event => {
+    display.observeRunEvent(event);
+    eventTypes.push(event.type);
+    if (event.type === 'model_turn_completed') await projector.projectModelTurn(event.stepIndex, turnsByStep.get(event.stepIndex));
+    else await projector.handleEvent(event);
+    if (event.type === 'tool_call_started') await display.recordToolStart();
+    else if (event.type === 'step_completed') await display.flush();
+    if (event.type === 'model_turn_started' || event.type === 'reasoning_delta' || event.type === 'tool_call_started' || event.type === 'tool_call_completed') {
+      // 事件正常异步合并；定向采样阶段边界，不能为了观察而给 Runtime 加 UI 等待。
+      if (event.type !== 'reasoning_delta' || !phases.includes('receiving_model')) {
+        await display.flush();
+        phases.push((await displays.getExecutionStatus('s')).phase);
+      }
+    }
+  });
+  const running = agent.run({ runId: run.runId, task: { id: 'task', type: 'chat_reply', source: 'chat', goal: '更新两次', assistantId: 'ai', sessionId: 's',
+    allowedToolNames: ['modify_data'], modelTransport: 'stream', maxSteps: 10, maxToolCalls: 30, maxToolCallsPerStep: 3, createdAt: stamp },
+    initialHistory: [], signal: controller.signal, eventSink: queue.enqueue.bind(queue) });
+  await Promise.race([thirdRequest.promise, running.then(result => { throw new Error(`Runtime 提前结束：${JSON.stringify(result)}`); })]);
+  await display.flush();
+  assert.ok(phases.includes('waiting_model'));
+  assert.ok(phases.includes('receiving_model'));
+  assert.ok(phases.includes('executing_tool'));
+  assert.ok(phases.includes('processing_result'));
+  const live = store.snapshotAgentTransientTimelineWithReplacements('s');
+  assert.ok(live.some(message => message.text === reasoningFor(2)), '首条正文等待时，第二轮思维链仍须可见');
+  assert.ok(live.filter(message => message.senderType === 'system').length >= 2, '两轮工具状态应及时发布');
+  assert.equal(live.some(message => message.text.includes('待交付') || message.text === '正在生成回复'), false, '不能用占位气泡冒充模型输出');
+  assert.equal(db.prepare('SELECT value FROM business_effects').get().value, 2);
+  assert.equal(commits, 0, '等待第三轮模型时不得提前 canonical 提交');
+  db.exec("CREATE TRIGGER fail_interruption BEFORE INSERT ON messages WHEN NEW.text = '回滚发送' BEGIN SELECT RAISE(ABORT, 'send rollback'); END;");
+  await assert.rejects(commitCanonicalUserMessage({ message: user('回滚发送') }), /send rollback/);
+  db.exec('DROP TRIGGER fail_interruption');
+  assert.equal(closed.has(run.runId), false, 'T1 回滚必须恢复原批次放行资格');
+  await display.flush();
+  const shownTool = live.find(message => message.senderType === 'system');
+  assert.ok(shownTool);
+  await Promise.all([
+    commitCanonicalUserMessage({ message: user('打断旧任务') }),
+    commitCanonicalUserMessage({ message: user('快速连发第二条') }),
+  ]);
+  controller.abort('SUPERSEDED');
+  const terminal = await running;
+  await queue.drain();
+  await projector.completeRun(terminal);
+  await display.finish();
+  assert.equal(terminal.terminalCode, 'SUPERSEDED');
+  assert.equal(commits, 0);
+  assert.ok(eventTypes.filter(type => type === 'tool_call_started').length === 2);
+  const interrupted = await displays.listHistory('s');
+  const publishedPrefix = [reasoningFor(1), shownTool.text, reasoningFor(2), shownTool.text];
+  assert.deepEqual(interrupted[0].items.map(item => item.snapshot.text), publishedPrefix, '折叠卡片不需要屏幕回执才能保留已交付过程');
+  assert.equal(interrupted[0].items[1].snapshot.status, 'completed', '中断不能把已完成工具改写成失败');
+  const continuation = await displays.listInterruptedContext('s', run.inputHighWatermark);
+  assert.deepEqual(continuation[0].items.flatMap(item => item.toolExecutions ?? []).map(call => [call.toolCallId, call.status, call.modelContent]),
+    [['tool-1', 'success', '业务已修改'], ['tool-2', 'success', '业务已修改']]);
+  mocks['@features/chat'] = {
+    getChatInterruptedTurnContext: presentation.getChatInterruptedTurnContext,
+    getChatSummaryContext: async (_sessionId, protectedIds = []) => ({ settings: { generationEnabled: false, fixedMessageId: null }, contextSegments: [],
+      timeline: (await messages.listUserMessagesInRange('s', 0, Number.MAX_SAFE_INTEGER)).filter(message => !protectedIds.includes(message.id)).map(message => ({
+        source: 'chat', speaker: 'user', kind: 'dialogue', messageId: message.id,
+        timestamp: message.createdAt, content: message.text, logicalIdentity: null,
+      })) }),
+  };
+  const { promptHistoryBuilder } = load('src/host/prompt/PromptHistoryBuilder.ts');
+  const pendingUsers = await messages.listUserMessagesInRange('s', 0, Number.MAX_SAFE_INTEGER);
+  const resumedHistory = await promptHistoryBuilder.loadPrivateSummaryContext({ sessionId: 's', aiConfig: ai,
+    runtimeContext: { batchedUserMessageIds: [pendingUsers.at(-1).id] } });
+  const toolHistory = resumedHistory.messages.filter(message => message.logicalMessageId === `interrupted:${run.runId}`);
+  assert.equal(toolHistory.length, 1, '后续模型必须读到旧执行的真实工具结果');
+  assert.ok(toolHistory[0].content.includes('tool-2') && toolHistory[0].content.includes('业务已修改'));
+  assert.equal(resumedHistory.messages[1], toolHistory[0], '执行记录属于原输入之后，不能错放到后续用户消息之后');
+  assert.equal(db.prepare('SELECT value FROM business_effects').get().value, 2, '读取历史不重放工具');
+  override('src/features/chat/reply/application/BuildChatBatchAIInput.ts', {
+    buildChatUserMessageModelInput: async message => ({ displayText: message.text, modelInput: message.text }),
+  });
+  const { buildChatTurnAIInput } = load('src/features/chat/reply/application/BuildChatTurnAIInput.ts');
+  const continuedInput = await buildChatTurnAIInput({ repository: messages, sessionId: 's', replyCursorAtClaim: 0,
+    inputHighWatermark: pendingUsers.at(-1).id, assistantId: 'ai' });
+  assert.deepEqual(continuedInput.turnInputMessages.map(message => message.role), ['user', 'assistant', 'user', 'user']);
+  assert.equal(continuedInput.turnInputMessages[0].content, '开始多轮工具任务');
+  assert.ok(continuedInput.turnInputMessages[1].content.includes('tool-2'));
+  assert.equal(continuedInput.turnInputMessages[2].content, '打断旧任务');
+  const { applyRuntimeModelInput } = load('src/features/chat/reply/application/ChatReplyUtils.ts');
+  const actualModelInput = applyRuntimeModelInput([{ role: 'system', content: '冻结上下文' }, { role: 'user', content: continuedInput.displayText }],
+    undefined, continuedInput.turnInputMessages);
+  assert.deepEqual(actualModelInput.slice(1), continuedInput.turnInputMessages, '真实模型输入适配不能把旧任务重复追加到执行结果之后');
+  const protectedHistory = await promptHistoryBuilder.loadPrivateSummaryContext({ sessionId: 's', aiConfig: ai,
+    runtimeContext: { batchedUserMessageIds: pendingUsers.map(message => message.id) } });
+  assert.equal(protectedHistory.messages.some(message => message.logicalMessageId === `interrupted:${run.runId}`), false, '本轮固定输入内的执行记录不能重复注入普通历史');
+  const closedLive = store.snapshotAgentTransientTimelineWithReplacements('s');
+  assert.deepEqual(closedLive.filter(message => message.senderType === 'reasoning').map(message => message.text), [reasoningFor(1), reasoningFor(2)]);
+  assert.equal(closedLive.some(message => message.text.includes('已中断')), false, '停止执行不能用中断气泡替换真实过程');
+  await assert.rejects(display.recordToolStart(), /cancelled/, '关闭后不得开始旧 run 的下一项工具');
+  assert.equal((await messages.getMessages('s', { limit: 100 })).messages.filter(message => !message.isMe).length, 0);
+
+  // 新 run 正式 T3 后仍在分段：输入立即放出 B，不更改执行终态或回复游标。
+  holdArrival = false;
+  const next = await turns.claimIfIdle('s', 'user_reply');
+  const nextDisplay = new presentation.ChatTurnPresentation(next, ai.agentId, ai.id);
+  await nextDisplay.start();
+  const values = ['A', 'B'].map((text, index) => ({ message: { ...user(text), isMe: false, senderType: 'assistant',
+    clientMessageId: `agent-timeline:${next.runId}:${index + 1}:0`,
+    tokensUsed: index === 0 ? 120 : 0, promptTokens: index === 0 ? 100 : 0, completionTokens: index === 0 ? 20 : 0,
+    metadataJson: JSON.stringify({ timelineSequence: index + 1, stepIndex: 1, cachedTokens: index === 0 ? 80 : undefined }) } }));
+  const arrival = load('src/features/chat/reply/delivery/AssistantMessageArrival.ts');
+  let arrivalRevision = 0;
+  arrival.configureAssistantMessageArrivalRuntime({ begin: async batch => ({ revision: ++arrivalRevision,
+    pendingMessageIds: batch.messageIds, pendingSessionIds: ['s'] }),
+    finish: async () => ({ revision: ++arrivalRevision, pendingMessageIds: [], pendingSessionIds: [] }) });
+  load('src/features/chat/reply/delivery/AIMessageEvents.ts').configureAIMessageDeliveryHandler(async () => ({ status: 'suppressed' }));
+  const { createSingleTransactionTurnCommit } = load('src/features/chat/reply/application/SingleTransactionTurnCommit.ts');
+  const commit = createSingleTransactionTurnCommit(next, ai.id, nextDisplay);
+  const delivered = [];
+  let finalReplies = 0;
+  let completions = 0;
+  let cursor;
+  const committed = await commit.commitAgentTimeline({ sessionId: 's', response: { text: 'A\n\nB' }, aiConfig: ai,
+    runtimeContext: { replyRunId: next.runId }, items: values,
+    callbacks: { async onReplySegment(payload) {
+      assert.equal((await displays.getExecutionStatus('s')).phase, 'delivering');
+      const firstPublished = store.snapshotAgentTransientTimelineWithReplacements('s').find(message => message.text === 'A');
+      assert.deepEqual(usageOf(firstPublished), [120, 100, 20, 80], 'T3 分段首次交付即携带统计，不等 canonical 历史读回');
+      delivered.push(payload.text);
+      cursor = db.prepare('SELECT reply_cursor FROM conversation_turn_state WHERE session_id = ?').get('s').reply_cursor;
+      await commitCanonicalUserMessage({ message: user('打断分段交付') });
+    }, onFinalReply: () => { finalReplies++; }, onReplyCommitted: () => { completions++; } } });
+  assert.equal(committed.outcome, 'committed');
+  await nextDisplay.finish();
+  assert.deepEqual(delivered, ['A']);
+  assert.equal(finalReplies, 0, '展示被打断时不得通过完整回复回调泄漏 B');
+  assert.equal(completions, 1, '受控宿主等待仍必须正常结束');
+  assert.equal(await displays.publishMessage(committed.messages[1].id), null);
+  assert.equal(db.prepare('SELECT reply_cursor FROM conversation_turn_state WHERE session_id = ?').get('s').reply_cursor, cursor);
+  assert.equal(db.prepare('SELECT status FROM conversation_turn_runs WHERE run_id = ?').get(next.runId).status, 'committed');
+  assert.deepEqual((await messages.getMessages('s', { limit: 100 })).messages.filter(message => !message.isMe).map(message => message.text), ['A', 'B']);
+  assert.equal(db.prepare('SELECT state FROM chat_turn_presentations WHERE run_id = ?').get(next.runId).state, 'completed');
+  assert.ok(releasedBatches.some(ids => ids.includes(committed.messages[0].id) && ids.includes(committed.messages[1].id)), '新输入须批量清除原生 pending 过滤，不能让剩余分段继续被隐藏');
+  assert.ok(writes - runtimeWrites < 60, `两百个增量及发送回滚的合并写入次数过多：${writes - runtimeWrites}`);
+  // 真实提交的媒体仅在 T3 后取得展示元数据，确认前不能进入历史读取。
+  const mediaRun = await turns.claimIfIdle('s', 'user_reply');
+  const mediaDisplay = new presentation.ChatTurnPresentation(mediaRun, ai.agentId, ai.id);
+  await mediaDisplay.start();
+  const media = await turns.commitTurn(mediaRun, [{ message: { ...user(''), senderType: 'assistant', isMe: false,
+    clientMessageId: `agent-timeline:${mediaRun.runId}:1:0`,
+    metadataJson: JSON.stringify({ kind: 'sticker', sticker: { id: 'cat' }, timelineSequence: 1, stepIndex: 1 }) } }], { assistantId: 'ai', changes: [] });
+  assert.equal(await messages.getMessageById(media.messages[0].id), null);
+  assert.equal(await mediaDisplay.publishSegment(media.messages[0]), true);
+  const projectedMedia = store.snapshotAgentTransientTimelineWithReplacements('s').find(message => message.clientMessageId === media.messages[0].clientMessageId);
+  assert.equal(JSON.parse(projectedMedia.metadataJson).sticker.id, 'cat');
+  await mediaDisplay.finish();
+  assert.ok(await messages.getMessageById(media.messages[0].id));
+  assert.equal(await displays.getExecutionStatus('s'), null, '完成展示后不应保留运行状态');
+  // 完整多轮 Loop：页面从未展开过程，也没有任何绘制回执，交付必须自行到达终态。
+  const completeSession = 'complete-loop';
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(completeSession, 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run(completeSession);
+  await commitCanonicalUserMessage({ message: { ...user('按顺序做完两项操作'), sessionId: completeSession } });
+  const completeRun = await turns.claimIfIdle(completeSession, 'user_reply');
+  const completeDisplay = new presentation.ChatTurnPresentation(completeRun, ai.agentId, ai.id);
+  await completeDisplay.start();
+  foreground.setChatForegroundContext({ appActive: true, chatRouteActive: true, isChatVisible: true, aiId: 'ai', sessionId: completeSession, groupId: null });
+  const completeTurns = new Map();
+  const firstExposure = new Map();
+  const firstPreludePresented = defer();
+  const stopWatchingUsage = store.subscribeAgentTransientTimeline(completeSession, () => {
+    for (const message of store.snapshotAgentTransientTimelineWithReplacements(completeSession)) {
+      if (message.senderType !== 'assistant' || firstExposure.has(message.clientMessageId)) continue;
+      firstExposure.set(message.clientMessageId, { text: message.text, usage: usageOf(message) });
+      if (message.text === '前言1') firstPreludePresented.resolve();
+    }
+  });
+  const completionCommit = createSingleTransactionTurnCommit(completeRun, ai.id, completeDisplay);
+  const completionProjector = new ChatAgentRunProjector({ sessionId: completeSession, repository: messages, aiConfig: ai,
+    callbacks: {}, runtimeContext: { replyRunId: completeRun.runId },
+    policy: { bubbleDeliveryMode: 'multi-bubble', modelTransport: 'stream', enableTools: true },
+    projection: { kind: 'canonical', commit: completionCommit }, stopRuntime() {}, replyRunId: completeRun.runId,
+    finalAssistantPolicy: 'commit_as_reply', timelineSink: completeDisplay.sink });
+  let completedEffects = 0;
+  const firstToolStarted = defer();
+  const finishFirstTool = defer();
+  const completeRegistry = new AgentToolRegistry();
+  completeRegistry.register({ descriptor: { name: 'finish_test_step', description: '记录测试操作', inputSchema: { type: 'object' } },
+    async execute() {
+      completedEffects++;
+      if (completedEffects === 1) { firstToolStarted.resolve(); await finishFirstTool.promise; }
+      return { status: 'success', data: {}, modelContent: `已完成第${completedEffects}项` };
+    } });
+  let completeStep = 0;
+  const completeAgent = new AgentRuntime({ registry: completeRegistry, modelGateway: { async runTurn(_request, emit) {
+    const stepIndex = ++completeStep;
+    await emit({ type: 'reasoning_delta', text: `完整测试思考${stepIndex}` });
+    const assistantText = stepIndex < 3 ? `前言${stepIndex}` : '最终第一段\n\n最终第二段';
+    await emit({ type: 'assistant_text_delta', text: assistantText });
+    const toolCalls = stepIndex < 3 ? [{ id: `done-${stepIndex}`, name: 'finish_test_step', arguments: '{}', index: 0 }] : [];
+    const turn = { assistantText, reasoningText: `完整测试思考${stepIndex}`, toolCalls,
+      finishReason: toolCalls.length ? 'tool_calls' : 'stop', historyItems: [{ role: 'assistant', content: assistantText, toolCalls }],
+      usage: usageFor(stepIndex), messageId: `done-model-${stepIndex}` };
+    completeTurns.set(stepIndex, turn); return turn;
+  } } });
+  const completeQueue = new AgentRunEventQueue(async event => {
+    completeDisplay.observeRunEvent(event);
+    if (event.type === 'model_turn_completed') await completionProjector.projectModelTurn(event.stepIndex, completeTurns.get(event.stepIndex));
+    else await completionProjector.handleEvent(event);
+    if (event.type === 'tool_call_started') await completeDisplay.recordToolStart();
+  });
+  const completing = completeAgent.run({ runId: completeRun.runId,
+    task: { id: 'complete-task', type: 'chat_reply', source: 'chat', goal: '完成两项操作', assistantId: 'ai', sessionId: completeSession,
+      allowedToolNames: ['finish_test_step'], modelTransport: 'stream', maxSteps: 5, maxToolCalls: 5, maxToolCallsPerStep: 1, createdAt: stamp },
+    initialHistory: [], eventSink: completeQueue.enqueue.bind(completeQueue) });
+  await firstToolStarted.promise;
+  await firstPreludePresented.promise;
+  assert.deepEqual([...firstExposure.values()], [{ text: '前言1', usage: [121, 100, 21, 80] }],
+    '工具仍执行时，已经展示的前言必须自带本次模型统计');
+  assert.equal(db.prepare('SELECT status FROM conversation_turn_runs WHERE run_id = ?').get(completeRun.runId).status, 'active');
+  finishFirstTool.resolve();
+  const completeResult = await completing;
+  await completeQueue.drain();
+  await completionProjector.completeRun(completeResult);
+  await completeDisplay.finish();
+  stopWatchingUsage();
+  assert.deepEqual([...firstExposure.values()], [
+    { text: '前言1', usage: [121, 100, 21, 80] }, { text: '前言2', usage: [122, 100, 22, 0] },
+    { text: '最终第一段', usage: [0, 0, 0, undefined] }, { text: '最终第二段', usage: [123, 100, 23, undefined] },
+  ], '前言与最终分段的首次展示已具有完整统计，零命中与未提供不能混淆');
+  assert.equal(completeResult.terminalCode, 'COMPLETED');
+  assert.equal(completedEffects, 2);
+  assert.equal(await displays.getExecutionStatus(completeSession), null, '折叠过程不得让完成回复永久停在交付中');
+  assert.equal(db.prepare('SELECT state FROM chat_turn_presentations WHERE run_id = ?').get(completeRun.runId).state, 'completed');
+  const completeMessages = (await messages.getMessages(completeSession, { limit: 100 })).messages;
+  assert.equal(completeMessages.filter(message => message.senderType === 'reasoning').length, 3);
+  assert.equal(completeMessages.filter(message => message.senderType === 'system').length, 2);
+  assert.deepEqual(completeMessages.filter(message => message.senderType === 'assistant').map(message => message.text), ['前言1', '前言2', '最终第一段', '最终第二段']);
+  assert.deepEqual(completeMessages.filter(message => message.senderType === 'assistant').map(usageOf),
+    [...firstExposure.values()].map(item => item.usage), 'T3 后历史接管不得突然补出或改写用量');
+  assert.equal(store.snapshotAgentTransientTimelineWithReplacements(completeSession).some(message => message.text.includes('待交付') || message.text.includes('已中断')), false);
+  await commitCanonicalUserMessage({ message: { ...user('接着说下一件事'), sessionId: completeSession } });
+  assert.equal(db.prepare('SELECT state FROM chat_turn_presentations WHERE run_id = ?').get(completeRun.runId).state, 'completed', '新消息不能把已完成行动步骤改成中断');
+  assert.deepEqual((await messages.getMessages(completeSession, { limit: 100 })).messages.filter(message => !message.isMe).map(message => message.text),
+    completeMessages.filter(message => !message.isMe).map(message => message.text));
+  assert.equal((await displays.getExecutionStatus(completeSession)).phase, 'waiting_host');
+  // T3 前已经进入时间线的正文也必须保留；无需绘制测量或正式成功提交。
+  const earlySession = 'early-text';
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(earlySession, 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run(earlySession);
+  await commitCanonicalUserMessage({ message: { ...user('先回我一句再操作'), sessionId: earlySession } });
+  const earlyRun = await turns.claimIfIdle(earlySession, 'user_reply');
+  const earlyDisplay = new presentation.ChatTurnPresentation(earlyRun, ai.agentId, ai.id);
+  await earlyDisplay.start();
+  const exposed = defer();
+  const stopExposure = store.subscribeAgentTransientTimeline(earlySession, () => {
+    if (store.snapshotAgentTransientTimelineWithReplacements(earlySession).some(message => message.text === '知道了，接着处理。')) exposed.resolve();
+  });
+  earlyDisplay.sink.onDirty(() => [{ runId: earlyRun.runId, sequence: 1, stepIndex: 1, kind: 'assistant', status: 'sent',
+    tokensUsed: 120, promptTokens: 100, completionTokens: 20, cachedTokens: 80,
+    text: '知道了，接着处理。', clientMessageId: `agent-timeline:${earlyRun.runId}:1:0`, createdAt: stamp, time: '18:00' }]);
+  await earlyDisplay.flush();
+  await exposed.promise;
+  stopExposure();
+  earlyDisplay.sink.onDirty(() => [{ runId: earlyRun.runId, sequence: 2, stepIndex: 1, kind: 'tool', status: 'running',
+    text: '正在调用：换头像', toolExecutionStarted: true, toolNames: ['change_avatar'], toolDisplayNames: ['换头像'],
+    toolExecutions: [{ toolCallId: 'avatar-unknown', name: 'change_avatar', arguments: '{}', status: 'running' }],
+    clientMessageId: `agent-timeline:${earlyRun.runId}:2:0`, createdAt: stamp, time: '18:00' }]);
+  await earlyDisplay.flush();
+  await commitCanonicalUserMessage({ message: { ...user('1'), sessionId: earlySession } });
+  await earlyDisplay.finish();
+  assert.deepEqual((await displays.listHistory(earlySession))[0].items.map(item => item.snapshot.text), ['知道了，接着处理。', '正在调用：换头像']);
+  const unknownTool = store.snapshotAgentTransientTimelineWithReplacements(earlySession).find(message => message.senderType === 'system');
+  assert.equal(JSON.parse(unknownTool.metadataJson).status, 'running', '中断不能把未知结果改成成功或失败');
+  assert.equal(db.prepare('SELECT status FROM conversation_turn_runs WHERE run_id = ?').get(earlyRun.runId).status, 'superseded');
+  assert.equal((await messages.getMessages(earlySession, { limit: 100 })).messages.some(message => !message.isMe), false, '独立前言不能伪装成 T3 成功回复');
+  // 模拟进程突然死亡：未确认尾部保持隐藏；已开始工具的孤儿不自动重放。
+  for (const sessionId of ['orphan-tools', 'crash-display']) {
+    db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(sessionId, 'direct');
+    db.prepare('INSERT INTO sessions(id) VALUES (?)').run(sessionId);
+    await commitCanonicalUserMessage({ message: { ...user('崩溃前输入'), sessionId } });
+    const run = await turns.claimIfIdle(sessionId, 'user_reply');
+    await displays.open(run);
+    if (sessionId === 'orphan-tools') {
+      await displays.checkpoint(run.runId, [{ version: 1, snapshot: { runId: run.runId, sequence: 1, stepIndex: 1,
+        kind: 'tool', status: 'running', text: '正在调用：修改数据', toolExecutionStarted: true,
+        clientMessageId: `agent-timeline:${run.runId}:1:0`, createdAt: stamp, time: '18:00' } }]);
+    } else {
+      const result = await turns.commitTurn(run, ['已交付', '未交付尾部'].map((text, index) => ({ message: {
+        ...user(text), sessionId, isMe: false, senderType: 'assistant', clientMessageId: `agent-timeline:${run.runId}:${index + 1}:0`,
+      } })), { assistantId: 'ai', changes: [] });
+      await displays.publishMessage(result.messages[0].id);
+    }
+  }
+  for (const sessionId of ['expired-commit', 'timeout-display']) {
+    db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(sessionId, 'direct');
+    db.prepare('INSERT INTO sessions(id) VALUES (?)').run(sessionId);
+    await commitCanonicalUserMessage({ message: { ...user('超时测试输入'), sessionId } });
+    const run = await turns.claimIfIdle(sessionId, 'user_reply');
+    if (sessionId === 'expired-commit') {
+      let discarded = false;
+      const expired = createSingleTransactionTurnCommit(run, ai.id);
+      await assert.rejects(expired.commitAgentTimeline({ sessionId, response: { text: '迟到回复' }, aiConfig: ai,
+        runtimeContext: { executionDeadlineAt: performance.now() - 1 }, items: [{
+          message: { ...user('迟到回复'), sessionId, isMe: false, senderType: 'assistant' },
+          discardAfterRollback: async () => { discarded = true; },
+        }] }), /execution_host_timeout/);
+      assert.equal(discarded, true, '截止时间拒绝 T3 时仍必须释放 prepared backing');
+      assert.equal(db.prepare('SELECT reply_cursor FROM conversation_turn_state WHERE session_id = ?').get(sessionId).reply_cursor, 0);
+      const hostStopped = new AbortController();
+      hostStopped.abort('execution_host_destroyed');
+      await assert.rejects(turns.commitTurn(run, [{ message: { ...user('宿主停止后的迟到回复'), sessionId, isMe: false, senderType: 'assistant' } }],
+        { assistantId: 'ai', changes: [] }, { deadlineAt: performance.now() + 60_000, signal: hostStopped.signal }), /execution_host_stopped/);
+      assert.equal(db.prepare('SELECT reply_cursor FROM conversation_turn_state WHERE session_id = ?').get(sessionId).reply_cursor, 0);
+      await turns.revoke(run, 'failed', 'execution_host_timeout');
+      assert.equal(db.prepare('SELECT status FROM conversation_turn_runs WHERE run_id = ?').get(run.runId).status, 'failed');
+    } else {
+      const abort = new AbortController();
+      const display = new presentation.ChatTurnPresentation(run, ai.agentId, ai.id, { signal: abort.signal });
+      // 模拟前台正在查看这个会话。
+      foreground.setChatForegroundContext({ appActive: true, chatRouteActive: true, isChatVisible: true, aiId: 'ai', sessionId, groupId: null });
+      await display.start();
+      const commit = createSingleTransactionTurnCommit(run, ai.id, display);
+      await commit.commitAgentTimeline({ sessionId, response: { text: '已显示\n\n未显示' }, aiConfig: ai,
+        runtimeContext: { replyRunId: run.runId }, items: ['已显示', '未显示'].map((text, index) => ({ message: {
+          ...user(text), sessionId, isMe: false, senderType: 'assistant',
+          clientMessageId: `agent-timeline:${run.runId}:${index + 1}:0`,
+        } })), callbacks: { onReplySegment() {
+          abort.abort('execution_host_timeout');
+        } } });
+      await display.finish();
+      assert.equal((await displays.getExecutionStatus(sessionId)).reason, 'display_interrupted');
+      assert.equal(db.prepare('SELECT status FROM conversation_turn_runs WHERE run_id = ?').get(run.runId).status, 'committed');
+      assert.equal(db.prepare('SELECT state FROM chat_turn_presentations WHERE run_id = ?').get(run.runId).state, 'interrupted');
+    }
+  }
+  // 真实 Coordinator + SQLite：不合作的旧 Promise 不得阻止 T4，迟到提交仍被 fence 拒绝。
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run('host-race', 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run('host-race');
+  await commitCanonicalUserMessage({ message: { ...user('宿主取消测试'), sessionId: 'host-race' } });
+  const events = load('src/features/chat/messages/events/ChatEvents.ts');
+  mocks['@features/chat/composition'] = { ...events, conversationTurnRepository: turns,
+    interruptChatRunPresentation: presentation.interruptChatRunPresentation,
+    isChatReplyRunCancellationError: load('src/features/chat/reply/application/ChatReplyAbort.ts').isChatReplyRunCancellationError };
+  mocks['@features/assistants'] = {};
+  mocks['@platform/device'] = {};
+  const { createConversationTurnCoordinator } = load('src/host/runtime/ConversationTurnCoordinator.ts');
+  const prepared = defer();
+  const uncooperative = defer();
+  let oldRun, oldDisplay;
+  const nativeAbort = new AbortController();
+  foreground.setChatForegroundContext({ appActive: true, chatRouteActive: true, isChatVisible: true, aiId: 'ai', sessionId: 'host-race', groupId: null });
+  const owner = createConversationTurnCoordinator({ turns, resolveAIConfig: async () => ai, async executeTurn(params) {
+    oldRun = params.run;
+    oldDisplay = new presentation.ChatTurnPresentation(params.run, ai.agentId, ai.id, { signal: params.signal });
+    await oldDisplay.start();
+    oldDisplay.sink.onDirty(() => [{ runId: oldRun.runId, sequence: 1, stepIndex: 1, kind: 'reasoning',
+      status: 'streaming', text: '实际已展示前缀', clientMessageId: `agent-timeline:${oldRun.runId}:1:0`, createdAt: stamp, time: '18:00' }]);
+    await oldDisplay.flush();
+    prepared.resolve();
+    return uncooperative.promise;
+  } });
+  const stopped = owner.executeTurnFromHost('host-race', { signal: nativeAbort.signal, executionDeadlineAt: performance.now() + 60_000 });
+  await prepared.promise;
+  nativeAbort.abort('execution_host_timeout');
+  await stopped;
+  assert.equal(owner.hasActiveHandle('host-race'), false);
+  assert.equal(db.prepare('SELECT status FROM conversation_turn_runs WHERE run_id = ?').get(oldRun.runId).status, 'failed');
+  assert.deepEqual((await displays.listHistory('host-race'))[0].items.map(item => item.snapshot.text), ['实际已展示前缀']);
+  assert.equal((await turns.commitTurn(oldRun, [{ message: { ...user('迟到输出'), sessionId: 'host-race', isMe: false, senderType: 'assistant' } }], { assistantId: 'ai', changes: [] })).outcome, 'fence_failed');
+  uncooperative.resolve('fence_failed');
+  await oldDisplay.finish();
+  assert.equal(activeDisplays.size, 0, '所有完成、中断与失败批次均须释放原生展示资格');
+  // SQLite 真正拒绝快照时仍要释放进程内展示资格，不能让失败对象成为永久活 run。
+  const cleanupSession = 'cleanup-failure';
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(cleanupSession, 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run(cleanupSession);
+  await commitCanonicalUserMessage({ message: { ...user('保存失败时释放展示资源'), sessionId: cleanupSession } });
+  const cleanupRun = await turns.claimIfIdle(cleanupSession, 'user_reply');
+  const cleanupDisplay = new presentation.ChatTurnPresentation(cleanupRun, ai.agentId, ai.id);
+  await cleanupDisplay.start();
+  cleanupDisplay.sink.onDirty(() => [{ runId: cleanupRun.runId, sequence: 1, stepIndex: 1, kind: 'reasoning',
+    status: 'streaming', text: '尚未保存', clientMessageId: 'cleanup-snapshot', createdAt: stamp, time: '18:00' }]);
+  db.exec(`CREATE TRIGGER reject_checkpoint BEFORE INSERT ON chat_turn_display_items
+    BEGIN SELECT RAISE(ABORT, 'checkpoint-rejected'); END;`);
+  await assert.rejects(cleanupDisplay.finish(), /checkpoint-rejected/);
+  db.exec('DROP TRIGGER reject_checkpoint');
+  assert.equal(activeDisplays.size, 0, 'SQLite 失败不能泄漏原生发布资格');
+  await turns.revoke(cleanupRun, 'failed', 'checkpoint-rejected');
+  // 页面窗口按挂载引用计数释放，卸载前的异步读取不能污染重进后的列表。
+  const historyRequests = [];
+  presentation.configureChatTurnPresentation({ listHistory(sessionId, window) {
+    const gate = defer(); historyRequests.push({ sessionId, window, gate }); return gate.promise;
+  } });
+  const firstOwner = presentation.retainTurnDisplayHistory('window-lifetime');
+  const secondOwner = presentation.retainTurnDisplayHistory('window-lifetime');
+  const oldRead = presentation.reloadTurnDisplayHistory('window-lifetime', [{ id: 301, turnRunId: 'old-window' }]);
+  firstOwner();
+  const sharedRead = presentation.reloadTurnDisplayHistory('window-lifetime');
+  assert.equal(historyRequests[1].window.fromMessageId, 301, '另一个挂载列表仍拥有分页窗口');
+  secondOwner();
+  const newOwner = presentation.retainTurnDisplayHistory('window-lifetime');
+  const newRead = presentation.reloadTurnDisplayHistory('window-lifetime');
+  assert.equal(historyRequests[2].window.fromMessageId, Number.MAX_SAFE_INTEGER, '重进会话不能继承已卸载的窗口');
+  historyRequests[2].gate.resolve([]);
+  await newRead;
+  const staleHistory = [{ runId: 'old-window', kind: 'user_reply', state: 'interrupted', items: [{ version: 1, snapshot: {
+    runId: 'old-window', sequence: 1, kind: 'reasoning', status: 'sent', text: '迟到的页面结果',
+    clientMessageId: 'old-window:1', createdAt: stamp, time: '18:00' } }] }];
+  historyRequests[0].gate.resolve(staleHistory);
+  historyRequests[1].gate.resolve(staleHistory);
+  await Promise.all([oldRead, sharedRead]);
+  assert.deepEqual(store.snapshotAgentTransientTimelineWithReplacements('window-lifetime'), []);
+  newOwner();
+  // 没有页面的历史恢复也只临时保留读取状态。
+  const backgroundRead = presentation.reloadTurnDisplayHistory('window-lifetime', [{ id: 999 }]);
+  historyRequests[3].gate.resolve([]); await backgroundRead;
+  const afterBackgroundRead = presentation.reloadTurnDisplayHistory('window-lifetime');
+  assert.equal(historyRequests[4].window.fromMessageId, Number.MAX_SAFE_INTEGER);
+  historyRequests[4].gate.resolve([]); await afterBackgroundRead;
+  presentation.configureChatTurnPresentation(displays);
+  // 刷新已加载多页不能裁成最新 20 条；数据库在同一快照内识别真实身份并排除乐观 ID。
+  const windowSession = 'reload-window';
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(windowSession, 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run(windowSession);
+  const insertWindowMessage = db.prepare(`INSERT INTO messages(session_id, text, is_me, sender_type, created_at)
+    VALUES (?, ?, 1, 'user', ?)`);
+  const windowIds = Array.from({ length: 65 }, (_, index) =>
+    Number(insertWindowMessage.run(windowSession, `窗口消息 ${index}`, stamp).lastInsertRowid));
+  const loadedIds = windowIds.slice(-50);
+  const appendedId = Number(insertWindowMessage.run(windowSession, '新消息', stamp).lastInsertRowid);
+  const readWindow = () => messages.getReloadWindowMessages(windowSession, [...loadedIds, Date.now()]);
+  assert.deepEqual((await readWindow()).map(message => message.id), [...loadedIds, appendedId]);
+  db.prepare('DELETE FROM messages WHERE id = ?').run(loadedIds[0]);
+  db.prepare('DELETE FROM messages WHERE id = ?').run(loadedIds[10]);
+  assert.deepEqual((await readWindow()).map(message => message.id),
+    [...loadedIds.filter(id => id !== loadedIds[0] && id !== loadedIds[10]), appendedId],
+    '重读移除真正删除的消息，同时保留其余已加载历史');
+  const initialWindow = await messages.getMessages(windowSession, { cursor: null, limit: 20 });
+  assert.deepEqual((await messages.getReloadWindowMessages(windowSession, [Date.now()])).map(message => message.id),
+    initialWindow.messages.map(message => message.id), '只有乐观消息时读取真实首屏，不清空发送中的列表');
+  db.prepare('UPDATE sessions SET visible_after_message_id = ? WHERE id = ?').run(appendedId, windowSession);
+  assert.deepEqual(await readWindow(), [], '清空会话仍按持久可见边界清除窗口');
+  await writer;
+  db.close();
+  const child = spawnSync(process.execPath, ['--no-warnings', import.meta.filename, '--read', filename], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  const restored = JSON.parse(child.stdout);
+  assert.deepEqual(restored.history[0].items.map(item => item.snapshot.text), publishedPrefix);
+  assert.deepEqual(restored.visible.filter(message => !message.isMe).map(message => message.text), ['A', 'B', '']);
+  assert.deepEqual(restored.crashVisible.filter(message => !message.isMe).map(message => message.text), ['已交付']);
+  assert.equal(restored.orphan, null);
+  assert.equal(restored.orphanStatus.status, 'failed');
+  assert.equal(restored.orphanStatus.terminal_reason, 'orphan_after_tool_start');
+  assert.deepEqual(restored.timeoutVisible.filter(message => !message.isMe).map(message => message.text), ['已显示']);
+  assert.deepEqual(restored.earlyHistory[0].items.map(item => item.snapshot.text), ['知道了，接着处理。', '正在调用：换头像']);
+  assert.equal(restored.earlyHistory[0].items[0].snapshot.tokensUsed, 120, '中断后独立进程仍保留已交付统计');
+  assert.equal(restored.earlyHistory[0].items[0].snapshot.cachedTokens, 80);
+  assert.deepEqual(restored.completeVisible.filter(message => message.senderType === 'assistant').map(usageOf),
+    [...firstExposure.values()].map(item => item.usage), '正常完成后重启保持相同统计');
+  assert.equal(restored.completeVisible.filter(message => message.senderType === 'reasoning').length, 3);
+  assert.equal(restored.completeVisible.filter(message => message.senderType === 'system').length, 2);
+  console.log('真实 Agent 多轮工具、稳定过程、输入与结果顺序、折叠卡片完成、T3 后批量交付、中断及独立进程恢复通过。');
+} finally {
+  try { db.close(); } catch {}
+  assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
+  fs.rmSync(directory, { recursive: true });
+}

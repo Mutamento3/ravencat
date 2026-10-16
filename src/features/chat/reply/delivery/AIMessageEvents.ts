@@ -34,6 +34,8 @@ export interface AIMessageObserverPayload {
 }
 
 export interface AIMessageReceivedPayload {
+  arrivalAlreadyScheduled?: boolean;
+  turnRunId?: string;
   aiId: string;
   agentId?: string | null;
   aiName: string;

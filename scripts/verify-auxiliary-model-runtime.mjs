@@ -188,7 +188,9 @@ function initialModelRuntime(db) {
     for(const [key,value] of Object.entries(limits)) assert.equal(profile[key],value);
     assert.equal(profile.name,id,'快捷应用不复制角色资料');
   }
-  await runtime.assistants.updateSettings('before',{groupContextSecondaryLimit:99});
+  await runtime.persistence.databaseCoordinator.openTaskExecutor().withExclusiveTransactionAsync(
+    tx => runtime.assistants.updateSettingsInTransaction(tx, 'before', { groupContextSecondaryLimit: 99 }),
+  );
   assert.equal((await runtime.assistants.getById('after')).groupContextSecondaryLimit,100,'应用后独立编辑');
   const beforeMissing=db.prepare("SELECT * FROM ai_assistants WHERE id='before'").get();
   await assert.rejects(runtime.assistants.applyContextLimits(['before','missing'],{...limits,privateContextPrimaryLimit:77}),/已删除/);
@@ -381,6 +383,10 @@ function initialModelRuntime(db) {
   const translation = loadCommonJS('src/features/integrations/application/TranslationModels.ts');
   const { translationSettingsRepository } = loadCommonJS('src/features/integrations/infrastructure/SQLiteTranslationSettingsRepository.ts', { '@platform/persistence': persistence });
   const host = loadCommonJS('src/host/composition/configureAIRuntime.ts', {
+    '@shared/aiTools': {},
+    '../runtime/HostModelRunPreparation': {},
+    './agent': {},
+    '@platform/device': {},
     '@features/assistants': { ...assets, ...events, aiAssistantRepository: {}, configureAssistantRuntime() {} },
     '@features/speech/composition': { ...speechResolver, ...speech, speechSettingsRepository },
     '@features/assistants/composition': { ...assistantVoice, assistantVoiceSettingsRepository },

@@ -9,6 +9,11 @@ const ts = fromRepo('typescript');
 const React = fromRepo('react');
 const { create, act } = fromRepo('react-test-renderer');
 global.IS_REACT_ACT_ENVIRONMENT = true;
+const frames = new Map();
+let frameId = 0;
+global.requestAnimationFrame = callback => { frames.set(++frameId, callback); return frameId; };
+global.cancelAnimationFrame = id => frames.delete(id);
+const paint = () => { const batch = [...frames.values()]; frames.clear(); batch.forEach(callback => callback()); };
 function load(file, mocks = {}) {
   const output = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React, esModuleInterop: true },
@@ -42,6 +47,7 @@ const themeApi = {
 const native = {
   View: 'View', Text: 'Text', TouchableOpacity: 'TouchableOpacity',
   StyleSheet: { create: (value) => value, hairlineWidth: 1 },
+  Dimensions: { get: () => ({ height: 600 }) },
 };
 let finishFocusRelease;
 const textSelection = { releaseTextSelectionFocus: () => finishFocusRelease ? new Promise((resolve) => {

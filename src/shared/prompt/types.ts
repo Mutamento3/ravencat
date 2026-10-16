@@ -11,20 +11,15 @@ export type MemoryParticipationMode = 'off' | 'read_only' | 'read_write';
 export type BubbleDeliveryMode = 'multi-bubble' | 'single-bubble';
 export type PromptSystemSegment = 'stable-prefix' | 'conversation-summary' | 'history-context' | 'dynamic-suffix' | 'output-requirement';
 
-/** 已授权工具的固定用途目录与当前展开状态，由 Host 分别生成。 */
+/** Host 冻结的已授权工具用途目录；实际暴露能力由本轮 schema 表达。 */
 export interface PromptToolInstructions {
   catalog: string;
-  state: string;
 }
 
-/** 编译器保留固定目录和本轮状态各自的位置；网关不自行决定 Prompt 顺序。 */
+/** 编译器保留固定目录的位置；网关只插入目录，不重写已编译的本轮上下文。 */
 export interface PromptToolInstructionsSlot {
   before: string;
   after: string;
-  contextBefore: string;
-  contextAfter: string;
-  /** Chat 的本轮 system 消息下标；自主任务为 null，状态接在完整 system 的历史之后。 */
-  contextMessageIndex: number | null;
 }
 
 export interface PromptMcpServiceSummary {
@@ -41,12 +36,15 @@ export type PromptBlockKey =
   | 'protocol_space'
   | 'tool_context_explanation'
   | 'agent_registry_summary'
-  | 'moment_audience_candidates'
   | 'moments_social_inbox'
   | 'assistant_nickname'
+  | 'interaction_environment'
+  | 'application_trigger'
+  | 'host_cooldown'
   | 'group_chat_context'
   | 'tools_description'
-  | 'ledger_context_summary'
+  | 'mcp_services'
+  | 'ledger_reply_rules'
   | 'moments_context_summary'
   | 'user_identity_summary'
   | 'recent_moments_summary'
@@ -59,8 +57,6 @@ export type PromptBlockKey =
   | 'current_input';
 
 export interface PromptPackBlock {
-  /** 本轮实际注入的备注修改快照；只供成功回复后的确认，不进入模型文本。 */
-  assistantNicknameNoticeRevision?: number;
   key: PromptBlockKey;
   /** 迁移期工厂草稿可以省略，最终 Pack 由编译器保证存在。 */
   instanceId?: string;
@@ -158,6 +154,8 @@ export interface PromptPackGroupChatContext {
 }
 
 export interface PromptPackRuntimeContext {
+  /** 应用触发没有新的用户发言；携带资料进入本轮 system，不伪造 user 输入。 */
+  inputSource?: 'application';
   /** Host 在一次 Prompt 组装开始时解析的当前对话者显示名，供多个 block 共享。 */
   userDisplayName?: string;
   triggerSource?: string;
@@ -204,7 +202,6 @@ export interface AssembleStandalonePromptPackParams {
 }
 
 export interface PromptPack {
-  assistantNicknameNoticeRevision?: number;
   scenario: PromptPackScenario;
   blocks: PromptPackBlock[];
   /** 前置系统内容：固定规则与用途说明在前，聊天摘要在后；本轮上下文位于 modelMessages 的历史之后。 */
@@ -214,7 +211,8 @@ export interface PromptPack {
   dynamicSystemPrompt: string;
   outputRequirement: string;
   recentMessages: PromptPackMessage[];
-  currentInput: PromptPackTextMessage;
+  /** 应用触发没有真实用户输入时为 null；触发资料在本轮 system 中。 */
+  currentInput: PromptPackTextMessage | null;
   modelMessages: PromptPackRequestMessage[];
   estimatedTokenCount: number;
   truncationLog?: string[];

@@ -65,12 +65,12 @@ open_app 只接受 exact Android package，经过当前 Host Authority、输入�
 
 `launch_dispatched` 只代表请求交给 Android，不证明目标已经成为前台。需要解析和确认时，由模型独立组合 search_installed_apps、open_app、get_foreground_app，不把 URL、songId 等深度参数塞进万能 open_app。
 
-## 7. 按需拆包与三轮状态
+## 7. 按需拆包与主动开关
 
 Host 在一次 run 开始冻结授权，通过固定目录提供包 ID、用途与本次可用工具名；具体 description/参数只在当前请求的 function schema 提供。目录与历史之后的 open/closed 状态分离，展开不改稳定前缀，详见[默认 Prompt 组装](../prompt/default-prompt-assembly.md)。
 
 ```text
-未展开目录 + open_tool_package
+固定用途目录 + open_tool_package / close_tool_package
 → 展开包
 → 下一次模型请求提供原始 child function schema
 → 模型直接调用原始工具
@@ -79,9 +79,9 @@ Host 在一次 run 开始冻结授权，通过固定目录提供包 ID、用途�
 
 拆包当轮可继续使用多个包，但同一批不能先拆包再猜参数调用 child，必须等下一请求的 schema。重复展开不续期；旧 phone_package_list_tools/call_tool 已退出生产。MCP 的两个 meta-tool 仍属于自身远端受控调用契约。
 
-普通单聊的 `chat_tool_package_exposure` 属于 Chat，以会话/AI/包为键；新展开状态与正式 T3 回复同事务提交，保留后续三轮“用户输入+正式回复”，第三轮提交后收起。工具、推理和分段不额外计轮，失败/取消/supersede/fence/回滚不消耗有效期。通话、旁路和自主任务只在当前 run 展开，不推进普通对话轮数。
+普通单聊的 `chat_tool_package_exposure` 属于 Chat，以会话/AI/包为键；开关与正式 T3 回复同事务提交，行存在即持续展开，不按轮数到期。不再需要时由 AI 调用 `close_tool_package`，之后可重新打开。多次开关按实际执行顺序保存，失败/取消/supersede/fence/回滚不改变持久状态。通话、旁路和自主任务的开关只在当前 run 生效。
 
-展开与本轮已授权工具相交，不能复活关闭工具。用户特批星标是按 AI 固定的直接暴露偏好：只有本轮已授权工具才直接带 schema，不受三轮拆包期影响，星标不授予调用权限。
+展开与本轮已授权工具相交，不能复活关闭权限的工具。用户特批星标是按 AI 固定的直接暴露偏好：只有本轮已授权工具才直接带 schema，不受包收起操作影响，星标不授予调用权限。
 
 ## 8. 展示、网易云与验证
 

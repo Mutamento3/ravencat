@@ -60,6 +60,12 @@ export interface AgentToolExecutionContext {
   abortSignal: AbortSignal;
 }
 
+/** Host 工具包的暴露变更；按工具实际执行顺序交给回复提交 owner。 */
+export interface ToolPackageExposureChange {
+  packageId: string;
+  action: 'open' | 'close';
+}
+
 export interface AgentToolExecutionMetadata {
   /**
    * 工具结果已经产生将由业务 owner 在 run 完成时提交的用户可见输出。
@@ -71,8 +77,8 @@ export interface AgentToolExecutionMetadata {
    * Runtime 在整批成功且最后一个工具选择 finish 时进入正常完成流程。
    */
   completionIntent?: 'finish' | 'continue';
-  /** Host 拆包成功的事实；Chat 在正式回复事务中持久化其三轮有效期。 */
-  openedToolPackageId?: string;
+  /** Chat 随正式回复原子保存；不代表工具授权变化。 */
+  toolPackageChange?: ToolPackageExposureChange;
   [key: string]: unknown;
 }
 

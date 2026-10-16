@@ -11,6 +11,9 @@ export {
   clearCurrentUserLegacyCachedMomentsCover,
   updateCurrentUserProfile,
   subscribeUserProfileUpdated,
+  getCurrentUserMomentsCoverImageSelection,
+  changeCurrentUserAvatarFromMediaAsset,
+  changeCurrentUserMomentsCoverFromMediaAsset,
 } from './composition';
 export { SQLiteUserProfileRepository, userProfileRepository } from './infrastructure/SQLiteUserProfileRepository';
 export {
@@ -26,3 +29,5 @@ export type { UpdateUserProfileInput, UserProfile } from './domain/UserProfile';
 export type { IUserProfileRepository } from './domain/UserProfileRepository';
 
 export { clearLegacyCachedWallpapers, loadWallpaperState, setGlobalWallpaper, setConversationWallpaper, removeConversationWallpaperInTransaction } from './application/WallpaperSettings';
+export { getWallpaperImageSelection, changeWallpaperFromMediaAsset } from './application/WallpaperSettings';
+export { subscribeWallpaperChanged } from './application/WallpaperChanged';

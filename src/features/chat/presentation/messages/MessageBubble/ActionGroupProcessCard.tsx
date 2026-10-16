@@ -232,7 +232,7 @@ function ActionGroupProcessCard({
           <Text style={actionStyles.defaultLabel}>{title}</Text>
         </TouchableOpacity>
         {isExpanded ? (
-          <View style={actionStyles.defaultBody}>
+          <View style={actionStyles.defaultBody} onLayout={handleBodyLayout}>
             {childrenContent}
           </View>
         ) : null}

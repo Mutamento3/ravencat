@@ -46,17 +46,18 @@ export async function sendVoiceMessage(
   throwIfAbortSignalAborted(context.abortSignal);
 
   let transcript = text;
+  let synthesisText = text;
   if (modelSnapshot) {
     const metadata = readSpeechMetadata(modelSnapshot.metadataJson);
     try {
-      transcript = prepareSpeechText(text, metadata.provider, modelSnapshot.model).transcript;
+      ({ transcript, synthesisText } = prepareSpeechText(text, metadata.provider, modelSnapshot.model));
     } catch (error) {
       return toolFailure('VOICE_TEXT_INVALID', `语音消息尚未发送：${(error as Error).message}`);
     }
   }
 
   const synthesized = await synthesizeTextToSpeech({
-    text,
+    text: synthesisText,
     assistantId: context.task.assistantId,
     consumer: 'chatVoiceMessage',
     signal: context.abortSignal,
@@ -109,7 +110,6 @@ export const SendVoiceMessageTool = {
   name: sendVoiceMessageDefinition.name,
   definition: sendVoiceMessageDefinition,
   execute: sendVoiceMessage,
-  presentation: 'hidden' as const,
 };
 
 /** 每个 run 固定模型与工具能力；用户随后切换配置只影响下次 run。 */

@@ -76,16 +76,14 @@ export interface ChatReplyRuntimeDependencies {
   };
   tools: {
     createContext: (params: Omit<ToolContextParams, 'repositories'>) => ToolContext;
-    buildDescription: (config: AIToolsConfig) => string;
+    buildDescription: (allowedToolNames: readonly string[]) => string;
     getRuntimeAllowedNames: (config: AIToolsConfig) => string[];
     resolveAllowedNames: (assistantId: string) => Promise<string[]>;
     /** MCP policy 一次返回当前可用工具名单与服务摘要，供同一轮 Prompt/task 共用。 */
     resolveMcpExposure: (assistantId: string) => Promise<McpExposureBundle>;
     resolveRuntimeContext: (assistantId: string) => Promise<{ companionScheduleRevision?: number }>;
-    isTimelineHidden: (toolName: string) => boolean;
   };
   prompt: {
-    acknowledgeNicknameNotice: (assistantId: string, throughChangeId: number) => Promise<void>;
     assembleChat: (params: AssemblePromptPackParams) => Promise<PromptPack>;
     assembleLedger: (params: AssemblePromptPackParams) => Promise<PromptPack>;
     assembleStandalone: (params: AssembleStandalonePromptPackParams) => Promise<PromptPack>;

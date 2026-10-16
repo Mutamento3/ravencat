@@ -54,13 +54,5 @@ export function projectArrivedAssistantMessages(
   pendingMessageIds: readonly number[],
 ): ChatMessage[] {
   const pending = new Set(pendingMessageIds);
-  const blockedRuns = new Set<string>();
-  return messages.filter((message) => {
-    if (pending.has(message.id)) {
-      if (message.turnRunId) blockedRuns.add(message.turnRunId);
-      return false;
-    }
-    // 后续工具/推理不能越过同一 run 尚未到达的正文；用户消息和其他 run 不受影响。
-    return !message.turnRunId || !blockedRuns.has(message.turnRunId);
-  });
+  return messages.filter(message => !pending.has(message.id));
 }

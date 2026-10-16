@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { StackActions, StackRouter } from '@react-navigation/routers';
+import { CommonActions, StackActions, StackRouter } from '@react-navigation/routers';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -454,6 +454,10 @@ const { HostAuthorityCoordinator } = await importStandaloneTypeScript(
 const assistantManagement = loadTypeScriptModuleWithMocks(
   'src/features/assistants/AIAssistantManagement.ts',
   {
+    '@platform/persistence': {},
+    '@shared/runtime/abortSignal': { throwIfAbortSignalAborted: () => {} },
+    '@shared/errors/SettingChangeConflictError': {},
+    './domain/ApplicationSettingsAccess': {},
     '@platform/device': {},
     '@features/media': {
       createMediaAssetWithReference: async () => {
@@ -486,11 +490,16 @@ const assistantManagement = loadTypeScriptModuleWithMocks(
     './application/HostAuthorityCoordinator': { HostAuthorityCoordinator },
   },
 );
+const relationshipChanges = [];
+assistantManagement.configureAssistantRuntime({
+  onHostRelationshipChanged: async (...args) => relationshipChanges.push(args),
+});
 assert.equal(
   await assistantManagement.appointHostAIAssistant(appointedHostSummary.id),
   true,
   '任命主理 AI 不应等待伴随队列或原生调度运行时',
 );
+assert.equal(relationshipChanges[0][1], 'appointed', '任命后必须提交聊天身份事件');
 assert.match(
   hostSource,
   /const restoreActiveCallScreen[\s\S]*!rootNavigationReady[\s\S]*getActiveCall\(\)/,
@@ -573,7 +582,6 @@ assert.equal(
 );
 
 const hostToolsSource = read('src/host/composition/agent/createAgentToolRegistry.ts');
-assert.match(hostToolsSource, /isToolTimelineHidden/);
 assert.doesNotMatch(hostToolsSource, /set_next_companion_wake|SetNextCompanionWakeTool/);
 assert.equal(
   fs.existsSync(path.join(repoRoot, 'src/features/companion/aiTools/SetNextCompanionWakeTool.ts')),
@@ -680,7 +688,6 @@ assert.match(appEntrySource, /configureCompanionHeadlessRuntime\(\)/);
 const callRuntimeSource = read(
   'src/features/calls/application/runtime/ProcessCallAIReply.ts'
 );
-assert.match(callRuntimeSource, /resolveImageModelInput/);
 assert.doesNotMatch(callRuntimeSource, /runCallSnapshotOcr|resolveOCRModel/);
 
 const floatingMessageExecutorSource = read(
@@ -893,7 +900,9 @@ assert.match(nativeNotificationSource, /"sessionId" to payload\.optionalString\(
 
 // ---- 通知投递与导航目标（原 floating-layer-phase0）----
 // 通知点击只产生一个可寻址聊天页；同一通知的重复响应由稳定 key 去重。
-const externalNavigation = await importStandaloneTypeScript('src/host/navigation/externalNavigation.ts');
+const externalNavigation = loadTypeScriptModuleWithMocks('src/host/navigation/externalNavigation.ts', {
+  '@react-navigation/native': { CommonActions },
+});
 
 // 通知打开埋在管理页下的会话时，只弹出上层路由，保留会话 key 与前缀顺序。
 // Android 原生 Screen 的重新排序会导致视图归属损坏，最终页面可见但无法交互。
@@ -912,19 +921,20 @@ function dispatchMessageNavigation(action) {
   assert.ok(messageStackState);
 }
 const messageRouter = {
-  dismissTo(href) {
-    const url = new URL(href, 'https://ravencat.test');
-    const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-    const group = segments[1] === 'groups';
-    dispatchMessageNavigation(StackActions.popTo(
-      group ? 'chat/groups/[groupId]' : 'chat/[aiId]/index',
-      group ? { groupId: segments[2] } : { aiId: segments[1], ...Object.fromEntries(url.searchParams) },
-    ));
-  },
+  dispatch: dispatchMessageNavigation,
 };
-dispatchMessageNavigation(StackActions.push('chat/[aiId]/index', { aiId: 'ai / 1' }));
-const directPrefixKeys = messageStackState.routes.map(({ key }) => key);
 const directTarget = { type: 'ai-message', aiId: 'ai / 1', sessionId: 'session ? 1' };
+const listKey = messageStackState.routes[0].key;
+for (const target of [directTarget, { type: 'group-message', groupId: 'group / 1' }]) {
+  externalNavigation.openMessageConversation(messageRouter, target);
+  assert.equal(messageStackState.routes.length, 2, '从列表点击通知，应保留列表并打开聊天');
+  assert.equal(messageStackState.routes[0].key, listKey, '通知不得替换会话列表');
+  dispatchMessageNavigation(CommonActions.goBack());
+  assert.equal(messageStackState.routes.length, 1, '系统返回应关闭通知打开的聊天');
+  assert.equal(messageStackState.routes[0].key, listKey, '系统返回应回到原列表');
+}
+externalNavigation.openMessageConversation(messageRouter, directTarget);
+const directPrefixKeys = messageStackState.routes.map(({ key }) => key);
 for (let visit = 0; visit < 3; visit++) {
   dispatchMessageNavigation(StackActions.push('menu'));
   dispatchMessageNavigation(StackActions.push('summary'));
@@ -947,10 +957,13 @@ externalNavigation.openMessageConversation(messageRouter, { type: 'group-message
 assert.deepEqual(messageStackState.routes.map(({ key }) => key), groupPrefixKeys,
   '群通知同样应退回原群聊，保留更早会话');
 externalNavigation.openMessageConversation(messageRouter, { ...directTarget, aiId: 'ai-2', sessionId: 'session-2' });
-assert.deepEqual(messageStackState.routes.slice(0, -1).map(({ key }) => key), directPrefixKeys,
-  '目标不在栈中时，替换当前页并保留前缀');
+assert.deepEqual(messageStackState.routes.slice(0, -1).map(({ key }) => key), groupPrefixKeys,
+  '目标不在栈中时，应压入新会话并保留当前页与前缀');
 assert.equal(messageStackState.routes.at(-1).params.aiId, 'ai-2');
 assert.equal(messageStackState.routes.at(-1).params.sessionId, 'session-2');
+dispatchMessageNavigation(CommonActions.goBack());
+assert.deepEqual(messageStackState.routes.map(({ key }) => key), groupPrefixKeys,
+  '新会话返回后应恢复通知点击前的页面');
 const messageTarget = externalNavigation.createMessageNavigationTarget({
   type: 'ai-message',
   aiId: 'ai / 1',
@@ -963,10 +976,6 @@ assert.deepEqual(messageTarget, {
   sessionId: 'session ? 1',
   notificationId: 'notification-1',
 });
-assert.equal(
-  externalNavigation.getMessageNavigationHref(messageTarget),
-  '/chat/ai%20%2F%201?sessionId=session%20%3F%201',
-);
 assert.equal(
   externalNavigation.getExternalNavigationKey(messageTarget),
   externalNavigation.getExternalNavigationKey({ ...messageTarget }),

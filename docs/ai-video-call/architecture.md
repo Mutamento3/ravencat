@@ -69,18 +69,20 @@ Repository 是终态真值；原生宿主存活时页面重建不得把通话当
 
 ### 5.5 回合相位与打断规则
 
-每通电话的回复相位由 Calls runtime 持有：`idle → generating → speaking → idle`。Presentation 消费相位，不用局部“发送中”布尔反推。
+每通电话的回复相位由 Calls runtime 持有：`idle`、`generating`、`using_tool`、`speaking`。Presentation 消费相位，不用局部“发送中”布尔反推。工具与 TTS 重叠时优先显示工具执行；工具结束后，有排队语音则显示说话，否则显示思考，整个回合结束回到 idle。
 
 - ASR 稳态文本与文字提交走同一用户输入入口。
 - idle：开启新回合。
-- generating：取消在途回合，runId fence 与 AbortController 阻止晚到提交；已提交用户事件保留。
+- generating / using_tool：取消在途回合，runId fence 与 AbortController 阻止后续执行与晚到回复提交；已提交用户事件及工具业务事实保留。
 - speaking：先通过 TTS version、合成取消、停播与 ttsInterrupted 事实打断，再开启新回合。
 - 一个回合包括模型回复和全部句子播放；正常结束不早于最后一句，打断是正常退出路径。
 - 打断后整队未播放句子作废，不续播；文字不需要语音回声确认。
 
 ## 6. 模型、语音与字幕
 
-ProcessCallAIReply 使用当前角色主模型与 resolved Chat Pack；流式文本分句进入 TTS，完整回复提交一次 aiSpeechText，逐句正式事件即时驱动歌词流。Calls 当前多模态续答仍在自身 runtime，不宣称已接入通用 AgentRunLoop。
+ProcessCallAIReply 使用当前角色主模型与 resolved Chat Pack，通过 Host 复用唯一 AgentRunLoop、工具包与 MCP 装配。Host 根据持久授权、主理身份及通话场景提供同一份 Prompt 工具说明与 task allowlist；通话不暴露再次来电、普通消息发送及依赖 Chat 媒体 intent 的工具。预算为 10 个工具回合、每回合最多 3 次、总计 30 次，工具错误作为 observation 继续交给模型。
+
+每次模型回合的正文流式分句进入 TTS，回合结束补齐未流出的尾部并结束当前语音段；思考和工具 observation 不朗读。全部回合正文仍由 Calls 一次提交 aiSpeechText，逐句正式播放事件即时驱动歌词流。Calls 继续拥有通话取消、语音队列与事实提交，Runtime 不提交消息或控制 Android 生命周期。
 
 每轮固定角色 TTS 模型及 Speech 厂商文本契约。合成输入保留当前模型支持的表达/停顿标记，事件和字幕使用无标记转写；跨 delta 标记不被分句切断，播放队列不再次解析句子。模型配置变化只影响下一轮。
 
@@ -100,7 +102,7 @@ Calls 执行独立于 Overlay FGS 和 Companion 服务。CameraX 与窗口由 se
 
 ## 8. 快照、背景与权限
 
-本轮 `lookAtUser` 才截取相机图片，按当前角色视觉模型选择走原图或识别转述；没有独立 Vision 模型类别或通话 OCR 配置。快照成功/失败/取消/通话终态及时清理，冷启动处理上一进程残留；临时快照从默认备份排除。窗口/页面不能成为截帧 provider 的第二个 owner。
+本轮 `lookAtUser` 才截取相机图片，按当前角色视觉模型选择走原图或识别转述；没有独立 Vision 模型类别或通话 OCR 配置。工具直接消费本次快照，将文字与 modelImages 交给统一 Agent history；同批 tool 结果完整配对后再追加附图，不创建用户消息。读取为模型输入后立即清理本次文件，失败/取消同样清理，OCR 事实保留。通话终态及冷启动继续清理残留；临时快照从默认备份排除。窗口/页面不能成为截帧 provider 的第二个 owner。
 
 Calls 背景是 SQLite 持有的稳定 MediaAsset 选择，角色绑定、旧全局迁移和 revision/CAS 由 Calls 管理。AI 头像供小窗与通知共享，不与全屏背景混用。模型选择见[辅助模型契约](../architecture/auxiliary-model-selection.md)，文件边界见[媒体契约](../ravencat-media-asset-refactor-plan.md)。
 

@@ -100,6 +100,8 @@ const userCommands = load('src/features/moments/application/UserMomentCommands.t
 const summaryModule = load('src/features/moments/application/SocialInboxSummary.ts');
 const detailTool = load('src/features/moments/aiTools/GetMomentDetailTool.ts');
 const inboxTool = load('src/features/moments/aiTools/ReadSocialInboxTool.ts');
+const searchTool = load('src/features/moments/aiTools/SearchMomentsTool.ts');
+const replyTool = load('src/features/moments/aiTools/AIReplyMomentCommentTool.ts');
 assert.equal(inboxTool.definition.name, 'readSocialInbox');
 assert.equal(Object.hasOwn(inboxTool.definition.parameters.properties, 'agentId'), false);
 
@@ -346,5 +348,45 @@ await repository.deleteComment(target.id);
 assert.equal((await unread('agent-b')).some((x) => x.sourceCommentId === sourceReply.id), false);
 await repository.deleteMoment(deleteSourceMoment.id);
 assert.equal(db.prepare('SELECT COUNT(*) AS c FROM moment_social_inbox_deliveries WHERE source_moment_id = ?').get(deleteSourceMoment.id).c, 0);
+
+// 看过但未回复：跨 run 丢失临时上下文后，仍能从评论内容重新定位并回复。
+for (const momentId of new Set((await unread('agent-a')).map((item) => item.sourceMomentId))) {
+  assert.equal((await detailTool.execute({ momentId }, contextA)).success, true);
+}
+const laterMoment = await createModule.createAgentMoment(repository, directory, {
+  agentId: 'agent-a', nameSnapshot: 'A', content: '周末的一条时刻',
+});
+const laterTarget = await userCommands.commentMomentAsUser(repository, laterMoment.id, '下次一起去看银杏吧');
+const beforeReading = await inboxTool.execute({}, contextA);
+assert.ok(beforeReading.message.includes(`momentId: ${laterMoment.id}`));
+const firstReading = await detailTool.execute({ momentId: laterMoment.id }, contextA);
+assert.equal(firstReading.success, true);
+assert.match(firstReading.message, /已读不等于已回复/u, '模型可见详情必须区分已读和已回复');
+assert.equal((await repository.listComments(laterMoment.id)).length, 1, '读取不自动回复');
+
+const laterContext = { ...contextA, sharedState: {} };
+const emptyInbox = await inboxTool.execute({}, laterContext);
+assert.equal(emptyInbox.data.totalUnreadCount, 0);
+assert.match(emptyInbox.message, /searchMoments/u, '空 Inbox 必须把历史查找入口交给模型');
+assert.match(emptyInbox.message, /已读不等于已回复/u);
+const byComment = await searchTool.execute({ commentKeyword: '银杏' }, laterContext);
+assert.equal(byComment.success, true);
+assert.equal(byComment.data.length, 1);
+assert.ok(byComment.message.includes(`momentId: ${laterMoment.id}`));
+const reread = await detailTool.execute({ momentId: laterMoment.id }, laterContext);
+assert.equal(reread.success, true, '同一 ID 读取已读时刻不依赖上一轮状态');
+assert.ok(reread.message.includes(`commentId: ${laterTarget.id}`), '跨 run 重读仍返回真实回复目标');
+const invalidReply = await replyTool.execute({ commentId: 'missing-comment', content: '一起去' }, laterContext);
+assert.equal(invalidReply.success, false);
+assert.match(invalidReply.error, /getMomentDetail/u, '失效评论 ID 必须给出重新读取的纠正入口');
+assert.match(invalidReply.error, /commentKeyword/u);
+assert.equal((await repository.listComments(laterMoment.id)).length, 1, '无效目标不产生回复');
+const laterReply = await replyTool.execute({ commentId: laterTarget.id, content: '好，我们一起去' }, laterContext);
+assert.equal(laterReply.success, true);
+const committedReply = await repository.getComment(laterReply.data.commentIds[0]);
+assert.equal(committedReply.momentId, laterMoment.id);
+assert.equal(committedReply.parentCommentId, laterTarget.id);
+assert.equal(committedReply.content, '好，我们一起去');
+assert.equal((await unread('agent-a')).length, 0, '回复不重新制造已消费事件');
 
 console.log('Moments M3 Social Inbox / cutoff 验证通过。');

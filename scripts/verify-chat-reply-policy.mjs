@@ -96,7 +96,7 @@ assert.deepEqual(resolve({ enableTools: true, enableStreamingReply: true }), {
   bubbleDeliveryMode: 'multi-bubble',
 });
 
-// 当前回合包含图片时，工具能力必须在 policy boundary 被禁用；transport 仍独立保留。
+// 图片输入与工具授权是正交维度，图片不能关闭已经授权的工具。
 assert.deepEqual(resolve({
   enableTools: true,
   enableStreamingReply: true,
@@ -108,9 +108,15 @@ assert.deepEqual(resolve({
   },
 }), {
   modelTransport: 'stream',
-  enableTools: false,
+  enableTools: true,
   bubbleDeliveryMode: 'multi-bubble',
 });
+assert.equal(resolve({ enableTools: true, runtime: {
+  turnInputMessages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }] }],
+} }).enableTools, true, '逐条多模态输入同样保留工具能力');
+assert.equal(resolve({ enableTools: false, runtime: {
+  batchModelInput: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }],
+} }).enableTools, false, '图片不能授予已关闭的工具权限');
 
 // bubbleDeliveryMode 只由 policy 解析，运行时下游无需再从 aiConfig 推导。
 assert.equal(
@@ -150,7 +156,7 @@ const flowRuntimeModules = new Map([
   }],
   ['../application/ChatReplyRuntimeDependencies', {
     getChatReplyRuntimeDependencies: () => ({
-      tools: { isTimelineHidden: () => false },
+      tools: {},
       agent: {
         run: async ({ task }) => {
           capturedTasks.push(task);
@@ -187,7 +193,7 @@ const { runChatAgentReplyFlow } = loadTypeScriptModule(
 );
 
 const disabledToolsPolicy = resolve({
-  enableTools: true,
+  enableTools: false,
   enableStreamingReply: false,
   runtime: {
     batchModelInput: [{
@@ -230,4 +236,4 @@ assert.deepEqual(
   'policy 允许工具时，Agent task 应原样消费上游已解析的 effective tool names',
 );
 
-console.log('Chat ReplyPolicy Phase C 行为验证通过：四组合、图片禁用、泡泡策略与 Agent task 工具封锁均符合契约。');
+console.log('Chat ReplyPolicy 行为验证通过：传输与工具正交、图片保留授权、泡泡策略与 Agent task 权限边界。');

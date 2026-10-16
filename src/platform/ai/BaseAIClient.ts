@@ -53,8 +53,7 @@ export class BaseAIClient {
 
   private buildRequestMessages(
     messages: ChatMessage[],
-    includeSystemPrompt: boolean,
-    enforceReasoningContent: boolean
+    includeSystemPrompt: boolean
   ): ChatMessage[] {
     const requestMessages: ChatMessage[] = [];
     if (includeSystemPrompt && this.config.systemPrompt) {
@@ -63,11 +62,7 @@ export class BaseAIClient {
         content: this.config.systemPrompt,
       });
     }
-    requestMessages.push(
-      ...sanitizeRequestMessages(
-        ensureReasoningContent(messages || [], enforceReasoningContent)
-      )
-    );
+    requestMessages.push(...sanitizeRequestMessages(messages));
     return requestMessages;
   }
 
@@ -84,6 +79,7 @@ export class BaseAIClient {
     responseFormat?: ChatOptions['responseFormat'];
     stream?: boolean;
   }): Record<string, unknown> {
+    const providerHostname = new URL(this.baseURL).hostname;
     const requestBody: Record<string, unknown> = {
       model: this.config.model,
       messages,
@@ -108,13 +104,20 @@ export class BaseAIClient {
     if (this.config.disableThinking !== undefined
       && (this.config.disableThinking || supportsThinkingToggle(this.config.model))) {
       const enabled = !this.config.disableThinking;
-      if (new URL(this.baseURL).hostname === 'openrouter.ai') {
+      if (providerHostname === 'openrouter.ai') {
         requestBody.reasoning = { enabled };
       } else if (this.config.model.toLowerCase().includes('qwen') || this.baseURL.includes('dashscope')) {
         requestBody.enable_thinking = enabled;
       } else {
         requestBody.thinking = { type: enabled ? 'enabled' : 'disabled' };
       }
+    }
+
+    // DeepSeek 默认启用思考；带工具的首次请求也要求历史 assistant 提供该字段。
+    // 这里只补纯对话历史的空记录；真实工具轮的思考必须由调用链原样回传。
+    if (providerHostname === 'api.deepseek.com' && tools && tools.length > 0
+      && this.config.disableThinking !== true) {
+      requestBody.messages = withDeepSeekHistoryReasoning(messages);
     }
 
     if (this.config.temperature !== null && this.config.temperature !== undefined) {
@@ -511,7 +514,6 @@ export class BaseAIClient {
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<ChatResponse> {
     const {
       includeSystemPrompt = true,
-      enforceReasoningContent = false,
       allowReasoningLengthRetry = true,
       allowImageContentFallback = true,
       responseFormat,
@@ -521,8 +523,7 @@ export class BaseAIClient {
     try {
       const requestMessages = this.buildRequestMessages(
         messages,
-        includeSystemPrompt,
-        enforceReasoningContent
+        includeSystemPrompt
       );
       const requestBody = this.buildRequestBody({
         messages: requestMessages,
@@ -548,7 +549,6 @@ export class BaseAIClient {
 
         return this.runWithTemporaryMaxTokens(nextMaxTokens, () => this.chat(messages, {
           includeSystemPrompt,
-          enforceReasoningContent,
           allowReasoningLengthRetry: false,
           allowImageContentFallback,
           responseFormat,
@@ -570,17 +570,6 @@ export class BaseAIClient {
       }
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      if (!enforceReasoningContent && shouldRetryWithReasoning(errorMessage)) {
-        return this.chat(messages, {
-          includeSystemPrompt,
-          enforceReasoningContent: true,
-          allowReasoningLengthRetry,
-          allowImageContentFallback,
-          responseFormat,
-          signal,
-        });
-      }
-
       return this.createErrorResponse(errorMessage, error instanceof AIHttpError ? error.status : null);
     }
   }
@@ -591,7 +580,6 @@ export class BaseAIClient {
   async chatStream(messages: ChatMessage[], options: ChatStreamOptions = {}): Promise<ChatResponse> {
     const {
       includeSystemPrompt = true,
-      enforceReasoningContent = false,
       allowImageContentFallback = true,
       signal,
       onDelta,
@@ -600,8 +588,7 @@ export class BaseAIClient {
     try {
       const requestMessages = this.buildRequestMessages(
         messages,
-        includeSystemPrompt,
-        enforceReasoningContent
+        includeSystemPrompt
       );
       const requestBody = this.buildRequestBody({
         messages: requestMessages,
@@ -615,16 +602,6 @@ export class BaseAIClient {
       }
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      if (!enforceReasoningContent && shouldRetryWithReasoning(errorMessage)) {
-        return this.chatStream(messages, {
-          includeSystemPrompt,
-          enforceReasoningContent: true,
-          allowImageContentFallback,
-          signal,
-          onDelta,
-        });
-      }
-
       return this.createErrorResponse(errorMessage);
     }
   }
@@ -640,24 +617,15 @@ export class BaseAIClient {
     const {
       toolChoice = 'auto',
       includeSystemPrompt = true,
-      enforceReasoningContent = false,
       allowImageContentFallback = true,
       signal,
       onDelta,
     } = options;
 
-    let receivedModelDelta = false;
     try {
-      const forwardDelta = async (delta: ChatStreamDelta): Promise<void> => {
-        if (delta.type !== 'done') {
-          receivedModelDelta = true;
-        }
-        await onDelta?.(delta);
-      };
       const requestMessages = this.buildRequestMessages(
         messages,
-        includeSystemPrompt,
-        enforceReasoningContent
+        includeSystemPrompt
       );
       const requestBody = this.buildRequestBody({
         messages: requestMessages,
@@ -669,7 +637,7 @@ export class BaseAIClient {
       const response = await this.sendStreamingRequest(requestBody, {
         signal,
         allowImageContentFallback,
-        onDelta: forwardDelta,
+        onDelta,
       });
       return response;
     } catch (error) {
@@ -678,17 +646,6 @@ export class BaseAIClient {
       }
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      if (!receivedModelDelta && !enforceReasoningContent && shouldRetryWithReasoning(errorMessage)) {
-        return this.chatStreamWithTools(messages, tools, {
-          toolChoice,
-          includeSystemPrompt,
-          enforceReasoningContent: true,
-          allowImageContentFallback,
-          signal,
-          onDelta,
-        });
-      }
-
       return this.createErrorResponse(errorMessage);
     }
   }
@@ -709,14 +666,13 @@ export class BaseAIClient {
     const {
       toolChoice = 'auto',
       includeSystemPrompt = true,
-      enforceReasoningContent = false,
       allowReasoningLengthRetry = true,
       allowImageContentFallback = true,
       signal,
     } = options;
 
     try {
-      const requestMessages = this.buildRequestMessages(messages, includeSystemPrompt, enforceReasoningContent);
+      const requestMessages = this.buildRequestMessages(messages, includeSystemPrompt);
       const requestBody = this.buildRequestBody({
         messages: requestMessages,
         tools,
@@ -744,7 +700,6 @@ export class BaseAIClient {
         return this.runWithTemporaryMaxTokens(nextMaxTokens, () => this.chatWithTools(messages, tools, {
           toolChoice,
           includeSystemPrompt,
-          enforceReasoningContent,
           allowReasoningLengthRetry: false,
           allowImageContentFallback,
           signal,
@@ -789,17 +744,6 @@ export class BaseAIClient {
         requestURL: `${this.baseURL}/chat/completions`,
         model: this.config.model,
       });
-
-      if (!enforceReasoningContent && shouldRetryWithReasoning(errorMessage)) {
-        return this.chatWithTools(messages, tools, {
-          toolChoice,
-          includeSystemPrompt,
-          enforceReasoningContent: true,
-          allowReasoningLengthRetry,
-          allowImageContentFallback,
-          signal,
-        });
-      }
 
       return this.createErrorResponse(errorMessage);
     }
@@ -1234,9 +1178,7 @@ function createOpenAICompatibleSSEParser(
     }
     const delta = choice?.delta || {};
     const message = choice?.message;
-    const deltaReasoningText = normalizeStreamDeltaText(
-      extractTextFromNode(delta.reasoning_content ?? delta.reasoning)
-    );
+    const deltaReasoningText = extractTextFromNode(delta.reasoning_content ?? delta.reasoning);
     const deltaContentText = normalizeStreamDeltaText(extractTextFromNode(delta.content));
 
     if (delta.tool_calls || message?.tool_calls || choice?.finish_reason === 'tool_calls') {
@@ -1412,9 +1354,7 @@ async function readOpenAICompatibleSSE(
     }
     const delta = choice?.delta || {};
     const message = choice?.message;
-    const deltaReasoningText = normalizeStreamDeltaText(
-      extractTextFromNode(delta.reasoning_content ?? delta.reasoning)
-    );
+    const deltaReasoningText = extractTextFromNode(delta.reasoning_content ?? delta.reasoning);
     const deltaContentText = normalizeStreamDeltaText(extractTextFromNode(delta.content));
 
     if (delta.tool_calls || message?.tool_calls || choice?.finish_reason === 'tool_calls') {
@@ -1589,8 +1529,8 @@ interface TextExtractionResult {
  */
 function extractAssistantTextResult(message: { content?: string | null; reasoning_content?: string; reasoning?: unknown }): TextExtractionResult {
   const contentText = normalizeExtractedText(extractTextFromNode(message?.content));
-  // complete 与 SSE 接受同一 Provider 推理字段，群聊不能因传输形式不同丢失思考。
-  const reasoningText = normalizeExtractedText(extractTextFromNode(message.reasoning_content ?? message.reasoning));
+  // 思考属于工具续轮的协议载荷；不得按展示正文裁空白、换行或其他字符。
+  const reasoningText = extractTextFromNode(message.reasoning_content ?? message.reasoning);
 
   if (contentText) {
     return {
@@ -1730,26 +1670,21 @@ function getExpandedMaxTokens(currentMaxTokens: number | null | undefined): numb
 }
 
 /**
- * 为 assistant 消息补充 reasoning_content 字段（兼容部分模型）
- * @param messages - 消息列表
- * @param enforceReasoningContent - 是否强制添加 reasoning_content
- * @returns 处理后的消息列表
+ * DeepSeek 纯历史正文的兼容：空串只表示没有保存协议思考，不等于恢复思考。
+ * 真实工具轮及已有思考保持原样；缺失工具轮思考由服务端明确拒绝。
  */
-function ensureReasoningContent(messages: ChatMessage[], enforceReasoningContent = false): ChatMessage[] {
-  if (!enforceReasoningContent) {
-    return messages || [];
-  }
-  return (messages || []).map((message): ChatMessage => {
-    if (message?.role !== 'assistant') {
+function withDeepSeekHistoryReasoning(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message): ChatMessage => {
+    if (message.role !== 'assistant' || (message.tool_calls?.length ?? 0) > 0) {
       return message;
     }
     const reasoningContent = message.reasoning_content;
-    if (typeof reasoningContent === 'string' && reasoningContent.length > 0) {
+    if (reasoningContent !== undefined) {
       return message;
     }
     return {
       ...message,
-      reasoning_content: ' ',
+      reasoning_content: '',
     };
   });
 }
@@ -1873,16 +1808,6 @@ function isContentPartEmpty(part: ContentPart): boolean {
   }
 
   return false;
-}
-
-/**
- * 判断是否需要 retry reasoning_content
- * @param message - 错误消息
- * @returns 是否需要重试
- */
-function shouldRetryWithReasoning(message: string): boolean {
-  const normalized = (message || '').toLowerCase();
-  return normalized.includes('reasoning_content') && normalized.includes('missing');
 }
 
 function shouldRetryWithoutImageParts(message: string): boolean {

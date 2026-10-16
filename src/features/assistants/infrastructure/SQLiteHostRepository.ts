@@ -84,6 +84,8 @@ export class AIHostRepository implements IAIHostRepository {
            is_host_ai = 1,
            host_cooldown_start = NULL,
            host_cooldown_end = NULL,
+           host_revoke_cooldown_start = NULL,
+           host_revoke_cooldown_end = NULL,
            updated_at = ?
          WHERE id = ?`,
         [now, aiId]
@@ -130,46 +132,47 @@ export class AIHostRepository implements IAIHostRepository {
 
   /** 检查撤销后禁止重新任命的全局七天冷静期。 */
   async checkHostCooldown(): Promise<HostCooldownStatus> {
-    try {
-      const database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'assistants.checkHostCooldown', feature: 'assistants', priority: 'runtime' });
-      const row = await database.getFirstAsync<{
-        appointment_cooldown_end: string | null;
-      }>(
-        `SELECT appointment_cooldown_end FROM host_ai_relationship_state
-         WHERE id = ? LIMIT 1`,
-        [HOST_AI_RELATIONSHIP_STATE_ID]
-      );
-      if (!row?.appointment_cooldown_end) {
-        return { isInCooldown: false, remainingDays: 0 };
-      }
-      const now = new Date();
-      const endTime = new Date(row.appointment_cooldown_end);
-      if (now < endTime) {
-        const remainingMs = endTime.getTime() - now.getTime();
-        const remainingDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
-        return { isInCooldown: true, remainingDays };
-      }
-      return { isInCooldown: false, remainingDays: 0 };
-    } catch (error) {
-      console.error('[AIHostRepository] Failed to check appointment cooldown:', error);
-      return { isInCooldown: false, remainingDays: 0 };
+    const database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'assistants.checkHostCooldown', feature: 'assistants', priority: 'runtime' });
+    const row = await database.getFirstAsync<{
+      appointment_cooldown_end: string | null;
+      last_revoked_ai_id: string | null;
+    }>(
+      `SELECT appointment_cooldown_end, last_revoked_ai_id FROM host_ai_relationship_state
+       WHERE id = ? LIMIT 1`,
+      [HOST_AI_RELATIONSHIP_STATE_ID]
+    );
+    if (!row?.appointment_cooldown_end) {
+      return { isInCooldown: false, remainingDays: 0, revokedAIId: null, endAt: null };
     }
+    const now = new Date();
+    const endTime = new Date(row.appointment_cooldown_end);
+    if (now < endTime) {
+      const remainingMs = endTime.getTime() - now.getTime();
+      const remainingDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
+      return { isInCooldown: true, remainingDays, revokedAIId: row.last_revoked_ai_id, endAt: row.appointment_cooldown_end };
+    }
+    return { isInCooldown: false, remainingDays: 0, revokedAIId: null, endAt: null };
   }
 
-  /** 仅供开发构建解除测试阻塞；正式构建必须保留七天关系保护。 */
-  async clearAppointmentCooldownForDevelopment(): Promise<void> {
-    if (!__DEV__) {
-      throw new Error('正式构建不允许清除主理 AI 冷静期');
-    }
-    const database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'assistants.clearAppointmentCooldownForDevelopment', feature: 'assistants', priority: 'runtime' });
-    await database.runAsync(
-      `UPDATE host_ai_relationship_state
-       SET appointment_cooldown_start = NULL,
-           appointment_cooldown_end = NULL,
-           updated_at = ?
-       WHERE id = ?`,
-      [new Date().toISOString(), HOST_AI_RELATIONSHIP_STATE_ID]
-    );
+  /** 身份和有效期在提交事务内裁决；其他 AI 或过期调用不能解除这段关系冷静期。 */
+  async releaseAppointmentCooldown(actorAIId: string): Promise<boolean> {
+    return databaseCoordinator.transaction({ name: 'assistants.releaseAppointmentCooldown', feature: 'assistants', priority: 'runtime' }, async (tx) => {
+      const now = new Date().toISOString();
+      const result = await tx.runAsync(
+        `UPDATE host_ai_relationship_state
+         SET appointment_cooldown_start = NULL, appointment_cooldown_end = NULL, updated_at = ?
+         WHERE id = ? AND last_revoked_ai_id = ? AND appointment_cooldown_end > ?
+           AND EXISTS (SELECT 1 FROM ai_assistants WHERE id = ? AND is_host_ai = 0)`,
+        [now, HOST_AI_RELATIONSHIP_STATE_ID, actorAIId, now, actorAIId],
+      );
+      if (result.changes !== 1) return false;
+      await tx.runAsync(
+        `UPDATE ai_assistants SET host_revoke_cooldown_start = NULL,
+         host_revoke_cooldown_end = NULL, updated_at = ? WHERE id = ?`,
+        [now, actorAIId],
+      );
+      return true;
+    });
   }
 
   // ==================== 拉黑管理 ====================

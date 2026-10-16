@@ -17,6 +17,7 @@ import type {
 import type { AIReplyPolicy } from './ReplyPolicy';
 import { segmentAssistantReplyText } from './AssistantReplySegmentation';
 import { deliverCommittedAssistantSegment } from './CommittedAssistantSegmentDelivery';
+import type { ToolPackageExposureChange } from '@shared/aiTools';
 
 export interface NormalizedAssistantResponse {
   text: string;
@@ -26,8 +27,8 @@ export interface NormalizedAssistantResponse {
 export interface PersistCompletedAssistantReplyParams {
   sessionId: string;
   response: AIResponse;
-  /** 本次成功运行中新拆开的包，由正式回复提交 owner 接管。 */
-  openedToolPackageIds?: readonly string[];
+  /** 本次运行的开关操作按执行顺序交给正式回复提交 owner。 */
+  toolPackageChanges?: readonly ToolPackageExposureChange[];
   repository: IMessageRepository;
   callbacks?: ProcessAIReplyCallbacks;
   aiConfig?: AIReplyConfig;

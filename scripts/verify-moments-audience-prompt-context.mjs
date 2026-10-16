@@ -1,320 +1,235 @@
-/** 验证 aiCreateMoment exposure 与稳定 audience candidate runtime block 同步。 */
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
+/** 验证群聊工具目录与发布工具的可见范围资料随实际 schema 暴露。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import { fileURLToPath } from 'node:url';
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function transpile(relativePath) {
-  const absolutePath = path.join(ROOT, relativePath);
-  const compiled = ts.transpileModule(fs.readFileSync(absolutePath, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: absolutePath,
-    reportDiagnostics: true,
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+function load(relative, mocks = {}) {
+  const output = ts.transpileModule(fs.readFileSync(path.join(root, relative), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }, fileName: relative,
   });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-  return compiled.outputText;
-}
-
-function evaluate(relativePath, requireMock) {
   const module = { exports: {} };
-  new Function('exports', 'require', 'module', transpile(relativePath))(
-    module.exports,
-    requireMock,
-    module,
-  );
+  new Function('require', 'module', 'exports', output.outputText)((name) => {
+    assert.ok(Object.hasOwn(mocks, name), relative + ' 未声明依赖 ' + name);
+    return mocks[name];
+  }, module, module.exports);
   return module.exports;
 }
-
-const registrySummary = {
-  entries: [
-    {
-      name: '普通 AI',
-      agentId: 'agent-ordinary',
-      collaborationState: 'self',
-    },
-    {
-      name: '候选 AI',
-      agentId: 'agent-candidate',
-      collaborationState: 'available',
-    },
-    {
-      name: '已拉黑 AI',
-      agentId: 'agent-blocked',
-      collaborationState: 'blocked',
-    },
-  ],
-};
-let socialInboxSummary = {
-  entries: [{ eventType: 'moment_published', momentId: 'moment-1', commentId: null, actorNames: ['候选 AI'], eventCount: 1 }],
-  totalUnreadCount: 1,
-  remainingUnreadCount: 0,
-};
-
-const factoryModule = evaluate(
-  'src/host/prompt/PromptPackBlockFactory.ts',
-  (specifier) => {
-    if (specifier === '@shared') return { DEFAULT_SELF_NAME: '用户' };
-    if (specifier === '@features/memory') {
-      return { recallPassiveMemory: async () => [] };
-    }
-    if (specifier === '@features/assistants') {
-      return { agentRegistryService: { getSummary: async () => registrySummary } };
-    }
-    if (specifier === '@features/moments') {
-      return {
-        loadMomentActorDirectory: async () => ({ resolve: (value) => value }),
-        loadSocialInboxSummary: async () => socialInboxSummary,
-        formatSocialInboxSummary: (summary) => summary.entries.length ? '【候选 AI 发了一条新时刻（momentId: moment-1）】' : '',
-      };
-    }
-    if (specifier === '@shared/prompt') return {};
-    if (specifier === './PromptBuiltInContent') {
-      return {
-        DEFAULT_CORE_SYSTEM_PROMPTS: {},
-        GROUP_MEMBER_REPLY_CONFIDENTIALITY_RULES: {},
-        VISUAL_GROUNDING_REQUIREMENTS: {},
-        resolveBuiltInPromptContent: ({ content }) => content,
-      };
-    }
-    throw new Error(`PromptPackBlockFactory 未声明依赖：${specifier}`);
-  },
-);
-const realFactory = factoryModule.promptPackBlockFactory;
-const actualCandidateBlock = await realFactory.createMomentAudienceCandidatesBlock({
-  id: 'ordinary-ai',
-  agentId: 'agent-ordinary',
-  name: '普通 AI',
+let assistants = [
+  { name: '普通 AI', agentId: 'agent-ordinary', isHostAI: false },
+  { name: '候选 AI', agentId: 'agent-candidate', isBlocked: false },
+  { name: '已拉黑 AI', agentId: 'agent-blocked', isBlocked: true, blockReason: '内部资料' },
+];
+let candidateReads = 0;
+const momentTools = load('src/features/moments/aiTools/AICreateMomentTool.ts', {
+  '@features/assistants': { listAIAssistants: async () => { candidateReads++; return assistants; }, getAssistantDisplayName: (assistant) => assistant.name },
+  '@shared/runtime/abortSignal': {}, '../application/CreateMoment': {}, '../domain/MomentErrors': {},
 });
-
-assert.equal(actualCandidateBlock.required, true);
-assert.equal(actualCandidateBlock.truncatable, false);
-assert.match(actualCandidateBlock.content, /"displayName":"候选 AI"/u);
-assert.match(actualCandidateBlock.content, /"agentId":"agent-candidate"/u);
-assert.match(actualCandidateBlock.content, /"state":"available"/u);
-assert.match(actualCandidateBlock.content, /"state":"blocked"/u, 'blocked 状态只作为候选状态呈现');
-// 候选身份字段必须结构化暴露，且不得泄漏内部管理字段；正文措辞不设断言。
-assert.doesNotMatch(actualCandidateBlock.content, /blockReason|isHostAI|isLedgerAI/u);
-
-const actualInboxBlock = await realFactory.createMomentSocialInboxBlock(
-  { id: 'ordinary-ai', agentId: 'agent-ordinary', name: '普通 AI' },
-  { repositories: { moment: {} } },
-);
-assert.equal(actualInboxBlock.required, false);
-assert.equal(actualInboxBlock.truncatable, false);
-// 正文措辞由枫渡决定，测试不对它设任何断言；这里只保留结构与暴露规则。
-// 唯一保留的是「不得空块」——防止误删导致静默注入一个空提示词块。
-assert.ok(actualInboxBlock.content.trim().length > 0, 'Inbox 块必须有正文，不得是空块');
-socialInboxSummary = { entries: [], totalUnreadCount: 0, remainingUnreadCount: 0 };
-assert.equal((await realFactory.createMomentSocialInboxBlock(
-  { id: 'ordinary-ai', agentId: 'agent-ordinary', name: '普通 AI' },
-  { repositories: { moment: {} } },
-)).status, 'omitted', '空 Inbox 必须 omitted');
-
-function block(key, content = key) {
-  return {
-    key,
-    title: key,
-    content,
-    required: false,
-    status: 'ready',
-    scenario: 'shared',
-    placement: 'system',
-  };
+const configuredMoment = await momentTools.createMomentToolForRun();
+const candidateDescription = (tool) => tool.definition.parameters.properties.audience.properties.agentIds.description;
+for (const { name, agentId } of assistants) {
+  assert.ok(candidateDescription(configuredMoment).includes(name));
+  assert.ok(candidateDescription(configuredMoment).includes(agentId));
 }
-
-const factoryStub = {
-  resolveUserIdentity: async () => ({ displayName: '用户', source: 'test' }),
-  createFoundationBlock: () => block('foundation_default_core'),
-  createPersonaBlock: () => block('persona'),
-  createProtocolPromptBlock: async () => block('protocol_space'),
-  createToolContextBlock: () => block('tool_context_explanation'),
-  createAgentRegistrySummaryBlock: async () => block('agent_registry_summary', 'AI 身份池摘要'),
-  createMomentAudienceCandidatesBlock: async () => actualCandidateBlock,
-  createMomentSocialInboxBlock: async () => block('moments_social_inbox'),
-  createToolsDescriptionBlock: () => block('tools_description'),
-  createUserIdentityBlock: () => block('user_identity_summary'),
-  createAutonomousRecentChatContextBlock: () => block('recent_chat_window'),
-  createAutonomousExecutionTimeBlock: () => block('time_awareness'),
-  createRecentChatWindowBlock: () => block('recent_chat_window'),
-  createVisualGroundingRulesBlock: () => block('visual_grounding_rules'),
-  createScenarioContextBlock: () => null,
-  createTimeAwarenessBlock: () => block('time_awareness'),
-  createGroupMemberReplyConfidentialityBlock: () => block('group_chat_context'),
-  createRecentMomentsBlock: async () => block('recent_moments_summary'),
-};
-
-let capturedPreset = null;
-const compilerStub = {
-  compile: (input) => {
-    capturedPreset = input.preset;
-    return { ...input, systemPrompt: '', modelMessages: [] };
+assert.doesNotMatch(candidateDescription(configuredMoment), /blockReason|isHostAI|isBlocked|内部资料/u);
+assert.equal(candidateReads, 1);
+assert.equal(configuredMoment.execute, momentTools.AICreateMomentTool.execute, '冻结参数资料不复制发布业务');
+const frozenDescription = candidateDescription(configuredMoment);
+assistants = [{ ...assistants[1], name: '改名后的 AI' }];
+assert.equal(candidateDescription(configuredMoment), frozenDescription);
+assert.notEqual(candidateDescription(await momentTools.createMomentToolForRun()), frozenDescription, '新 run 使用新身份快照');
+// 单聊与群聊复用当前 AI 的只读未读摘要，不聚合其他成员的收件箱。
+const unreadInbox = { entries: [{ momentId: 'moment-for-ordinary' }], totalUnreadCount: 1 };
+const emptyInbox = { entries: [], totalUnreadCount: 0 };
+const inboxes = new Map([
+  ['agent-ordinary', unreadInbox],
+  ['agent-other', { entries: [{ momentId: 'moment-for-other' }], totalUnreadCount: 1 }],
+]);
+const inboxReads = [];
+const { promptPackBlockFactory: realFactory } = load('src/host/prompt/PromptPackBlockFactory.ts', {
+  '@shared': { DEFAULT_SELF_NAME: '用户' }, '@features/memory': {}, '@features/assistants': {}, '@shared/prompt': {},
+  '@features/moments': {
+    loadSocialInboxSummary: async (_repository, agentId) => {
+      inboxReads.push(agentId);
+      assert.ok(inboxes.has(agentId));
+      return inboxes.get(agentId);
+    },
+    formatSocialInboxSummary: (summary) => summary.entries.map((entry) => entry.momentId).join('\n'),
   },
-};
-const defaultPreset = (scenarioId) => ({
-  id: `system.${scenarioId}`,
-  version: 1,
-  name: scenarioId,
-  scenarioId,
-  items: [],
+  './PromptBuiltInContent': {},
 });
-const providerKey = {
-  'context.protocol_space': 'protocol_space',
-  'context.tool_explanation': 'tool_context_explanation',
-  'context.agent_registry': 'agent_registry_summary',
-  'context.moments_social_inbox': 'moments_social_inbox',
-  'context.tools_description': 'tools_description',
-  'context.passive_memory': 'passive_memory',
-  'context.group_chat': 'group_chat_context',
+const inboxParams = [{ id: 'ordinary-ai', agentId: 'agent-ordinary', name: '普通 AI' }, { repositories: { moment: {} } }];
+const inboxBlock = await realFactory.createMomentSocialInboxBlock(...inboxParams);
+assert.equal(inboxBlock.required, false);
+assert.equal(inboxBlock.truncatable, false);
+assert.ok(inboxBlock.content.trim());
+assert.ok(inboxBlock.content.includes('moment-for-ordinary'));
+assert.doesNotMatch(inboxBlock.content, /getMomentDetail|调用|需要主动处理/, '未授权时保留社交事实，不催促执行或介绍工具');
+const detailTool = load('src/features/moments/aiTools/GetMomentDetailTool.ts', {
+  '../domain/MomentErrors': {}, './MomentReading': {},
+});
+assert.match(detailTool.definition.description, /Social Inbox/, '主动读取指引随详情工具 schema 暴露');
+inboxes.set('agent-ordinary', emptyInbox);
+assert.equal((await realFactory.createMomentSocialInboxBlock(...inboxParams)).status, 'omitted');
+inboxes.set('agent-ordinary', unreadInbox);
+const estimator = load('src/shared/prompt/estimateTextTokens.ts');
+const budget = load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': estimator });
+const metadata = load('src/host/prompt/compiler/promptBlockMetadata.ts');
+const { promptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW }, '../tokenBudget': budget, './promptBlockMetadata': metadata });
+const presets = load('src/host/prompt/compiler/systemPromptPresets.ts');
+const block = (key, content = key) => ({ key, title: key, content, required: false, status: 'ready', placement: 'system' });
+const providerKeys = {
+  'context.protocol_space': 'protocol_space', 'context.tool_explanation': 'tool_context_explanation',
+  'context.agent_registry': 'agent_registry_summary', 'context.moments_social_inbox': 'moments_social_inbox',
+  'context.tools_description': 'tools_description', 'context.passive_memory': 'passive_memory',
+  'context.mcp_services': 'mcp_services',
+  'context.group_chat': 'group_chat_context', 'context.assistant_nickname': 'assistant_nickname',
+  'context.host_cooldown': 'host_cooldown',
 };
-
-const assemblerModule = evaluate(
-  'src/host/prompt/PromptPackAssembler.ts',
-  (specifier) => {
-    if (specifier === '@shared/prompt') return {};
-    if (specifier === './PromptPackBlockFactory') return { promptPackBlockFactory: factoryStub };
-    if (specifier === './PromptHistoryBuilder') {
-      return { promptHistoryBuilder: { loadPrivateSummaryContext: async () => ({ messages: [], summaryContent: "" }), loadRecentMessages: async () => [] } };
-    }
-    if (specifier === './compiler/PromptPackCompiler') return { promptPackCompiler: compilerStub };
-    if (specifier === './compiler/systemPromptPresets') return { getSystemPromptPreset: defaultPreset };
-    if (specifier === './providers') {
-      return {
-        renderHostPromptProviderBlock: async (definitionId) => (
-          definitionId === 'context.moment_audience_candidates'
-            ? actualCandidateBlock
-            : block(providerKey[definitionId] ?? 'persona')
-        ),
-      };
-    }
-    throw new Error(`PromptPackAssembler 未声明依赖：${specifier}`);
-  },
-);
-const assembler = new assemblerModule.PromptPackAssembler();
-
-function baseParams(overrides = {}) {
-  return {
-    sessionId: 'session-1',
-    currentInput: '用户输入',
-    aiConfig: {
-      id: 'ordinary-ai',
-      agentId: 'agent-ordinary',
-      name: '普通 AI',
-      enableTools: true,
-      isHostAI: false,
-    },
-    toolContext: { sessionId: 'session-1' },
-    toolsDescription: '本轮工具说明',
-    allowedToolNames: ['aiCreateMoment'],
-    ...overrides,
-  };
+const { promptPackAssembler: assembler } = load('src/host/prompt/PromptPackAssembler.ts', {
+  './PromptPackBlockFactory': { promptPackBlockFactory: {
+    resolveUserIdentity: async () => ({ displayName: '用户', source: 'test' }),
+    createFoundationBlock: () => block('foundation_default_core'), createPersonaBlock: () => block('persona'),
+    createUserIdentityBlock: () => block('user_identity_summary'), createTimeAwarenessBlock: () => block('time_awareness'),
+    createVisualGroundingRulesBlock: () => block('visual_grounding_rules'), createScenarioContextBlock: () => null,
+    createInteractionEnvironmentBlock: () => block('interaction_environment'),
+    createRecentChatWindowBlock: () => ({ ...block('recent_chat_window'), placement: 'history' }),
+    createRecentMomentsBlock: async () => block('recent_moments_summary'),
+    createGroupMemberReplyConfidentialityBlock: () => ({ ...block('group_chat_context', '群输出要求'),
+      definitionId: 'output.group_member_reply_confidentiality', slot: 'output_contract', protection: 'locked' }),
+  } },
+  './PromptHistoryBuilder': { promptHistoryBuilder: {
+    loadPrivateSummaryContext: async () => ({ messages: [], summaryContent: '本会话摘要' }),
+    loadGroupSummaryContext: async () => ({ messages: [], summaryContent: '群摘要' }),
+    loadBackgroundContext: async () => '跨会话背景', loadRecentMessages: async () => [],
+  } },
+  './compiler/PromptPackCompiler': { promptPackCompiler }, './compiler/systemPromptPresets': presets,
+  './compiler/promptBlockMetadata': metadata,
+  './providers': { renderHostPromptProviderBlock: async (id, { params }) => (
+    id === 'context.moments_social_inbox' ? realFactory.createMomentSocialInboxBlock(params.aiConfig, params.toolContext)
+      : block(providerKeys[id], id === 'context.tools_description' ? params.toolsDescription
+        : id === 'context.mcp_services' ? JSON.stringify(params.mcpServices) : providerKeys[id])
+  ) },
+});
+const params = {
+  sessionId: 'session-1', currentInput: '用户输入', toolsDescription: '工具规则', allowedToolNames: ['aiCreateMoment'],
+  aiConfig: { id: 'ordinary-ai', agentId: 'agent-ordinary', name: '普通 AI', enableTools: true },
+  toolContext: { repositories: { moment: {} } },
+};
+const groupContext = { groupChat: { groupId: 'group-1', groupName: '群聊', currentAIId: 'ordinary-ai',
+  currentAgentId: 'agent-ordinary', currentAIName: '普通 AI', members: [], recentWindowLimit: 10 } };
+const packs = [
+  await assembler.assembleChatPromptPack(params),
+  await assembler.assembleChatPromptPack({ ...params, aiConfig: { ...params.aiConfig, isHostAI: true } }),
+  await assembler.assembleChatPromptPack({ ...params, runtimeContext: groupContext }),
+  await assembler.assembleChatPromptPack({ ...params, runtimeContext: groupContext,
+    preset: { ...presets.getSystemPromptPreset('chat.group_member_reply'), items: presets.getSystemPromptPreset('chat.group_member_reply').items
+      .filter((item) => !['context.tools_description', 'context.tool_explanation', 'context.moments_social_inbox'].includes(item.definitionId)) } }),
+];
+for (const pack of packs) {
+  assert.ok(pack.toolInstructionsSlot, '默认及旧群聊预设都必须保留工具目录插槽');
+  assert.ok(pack.systemPrompt.includes('工具规则'));
+  assert.ok(pack.dynamicSystemPrompt.includes('tool_context_explanation'));
+  assert.ok(!pack.systemPrompt.includes('agent-candidate'), '候选身份不重复注入聊天 system');
+  assert.ok(!pack.dynamicSystemPrompt.includes('agent-candidate'));
+  assert.ok(pack.dynamicSystemPrompt.includes('moment-for-ordinary'), '默认及旧群聊预设均注入当前 AI 的社交盒子');
+  assert.ok(!pack.dynamicSystemPrompt.includes('moment-for-other'), '不聚合其他群成员的社交盒子');
+  assert.ok(!pack.systemPrompt.includes('moment-for-ordinary'), '未读事件不进入稳定前缀');
 }
-
-const ordinaryPack = await assembler.assembleChatPromptPack(baseParams());
-assert.ok(
-  ordinaryPack.blocks.some((candidate) => candidate.key === 'moments_social_inbox'),
-  '普通非主理 AI 私聊同样必须获得 Social Inbox',
-);
-assert.ok(
-  ordinaryPack.blocks.some((candidate) => candidate.key === 'moment_audience_candidates'),
-  '普通非主理 AI 暴露 aiCreateMoment 时必须获得 audience candidate',
-);
-assert.ok(
-  ordinaryPack.blocks.some((candidate) => candidate.key === 'agent_registry_summary'),
-  '身份池摘要不依赖主理身份，普通 AI 同样获得身份锚点',
-);
-
-const hostPack = await assembler.assembleChatPromptPack(baseParams({
-  aiConfig: { ...baseParams().aiConfig, isHostAI: true },
-}));
-assert.ok(hostPack.blocks.some((candidate) => candidate.key === 'moment_audience_candidates'));
-
-const noExposurePack = await assembler.assembleChatPromptPack(baseParams({
-  allowedToolNames: [],
-  toolsDescription: '即使说明文本里写 aiCreateMoment 也不能猜 exposure',
-}));
-assert.ok(
-  !noExposurePack.blocks.some((candidate) => candidate.key === 'moment_audience_candidates'),
-  '未暴露 aiCreateMoment 时不得无条件注入 candidate',
-);
-
-const groupPack = await assembler.assembleChatPromptPack(baseParams({
-  runtimeContext: {
-    userDisplayName: '用户',
-    groupChat: {
-      groupId: 'group-1',
-      groupName: '群聊',
-      currentAIId: 'ordinary-ai',
-      currentAgentId: 'agent-ordinary',
-      currentAIName: '普通 AI',
-      members: [],
-      recentWindowLimit: 10,
-    },
-  },
-}));
-assert.ok(
-  groupPack.blocks.some((candidate) => candidate.key === 'moment_audience_candidates'),
-  '群聊 run 若真实暴露 aiCreateMoment，同样必须获得 candidate',
-);
-assert.ok(
-  !groupPack.blocks.some((candidate) => candidate.key === 'moments_social_inbox'),
-  '群聊不得注入当前 AI 的私有 Social Inbox',
-);
-
-const ledgerPack = await assembler.assembleLedgerPromptPack(baseParams());
-assert.ok(!ledgerPack.blocks.some((candidate) => candidate.key === 'moments_social_inbox'));
-const callPack = await assembler.assembleChatPromptPack(baseParams({
-  runtimeContext: { triggerSource: 'call' },
-}));
-assert.ok(!callPack.blocks.some((candidate) => candidate.key === 'moments_social_inbox'));
-
-await assembler.assembleChatPromptPack(baseParams({
-  aiConfig: {
-    ...baseParams().aiConfig,
-    disabledPromptDefinitionIds: ['context.moment_audience_candidates'],
-    promptDefinitionOverrides: { 'context.moment_audience_candidates': '用户覆盖内容' },
-  },
-  preset: {
-    ...defaultPreset('chat.private_reply'),
-    items: [{
-      definitionId: 'context.moment_audience_candidates',
-      slot: 'dynamic_context',
-      sortOrder: 999,
-      enabled: false,
-      required: false,
-      protection: 'overridable',
-    }],
-  },
-}));
-assert.deepEqual(
-  capturedPreset.items.find((item) => item.definitionId === 'context.moment_audience_candidates'),
-  {
-    definitionId: 'context.moment_audience_candidates',
-    slot: 'capabilities',
-    sortOrder: 85,
-    enabled: true,
-    required: true,
-    protection: 'locked',
-  },
-  '用户 preset disable/override 不得移除 Tool 所需 candidate',
-);
-assert.deepEqual(
-  capturedPreset.items.find((item) => item.definitionId === 'context.moments_social_inbox'),
-  {
-    definitionId: 'context.moments_social_inbox',
-    slot: 'dynamic_context',
-    sortOrder: 125,
-    enabled: true,
-    required: false,
-    protection: 'locked',
-  },
-  '私聊 Social Inbox 必须以 locked optional runtime item 覆盖用户 preset disable/override',
-);
-
-
-console.log('Moments audience candidate / Social Inbox Prompt exposure 验证通过。');
+assert.ok(packs[0].blocks.some((item) => item.key === 'moments_social_inbox'));
+assert.ok(packs[0].blocks.some((item) => item.key === 'agent_registry_summary'), '共享身份池仍提供身份背景');
+assert.equal(packs[2].blocks.filter((item) => item.key === 'moments_social_inbox').length, 1, '群聊社交盒子只注入一次');
+assert.ok(packs[2].dynamicSystemPrompt.indexOf('moment-for-ordinary') < packs[2].dynamicSystemPrompt.indexOf('interaction_environment'),
+  '社交盒子沿用提示词中心的顺序，位于本轮环境之前');
+const otherGroupPack = await assembler.assembleChatPromptPack({ ...params,
+  aiConfig: { ...params.aiConfig, id: 'other-ai', agentId: 'agent-other' },
+  runtimeContext: { groupChat: { ...groupContext.groupChat, currentAIId: 'other-ai' } },
+});
+assert.equal(inboxReads.at(-1), 'agent-other', '按执行 AI 的身份读取，不使用群成员列表或旧 runtime agent 标识');
+assert.ok(otherGroupPack.dynamicSystemPrompt.includes('moment-for-other'));
+assert.ok(!otherGroupPack.dynamicSystemPrompt.includes('moment-for-ordinary'));
+inboxes.set('agent-ordinary', emptyInbox);
+const emptyGroupPack = await assembler.assembleChatPromptPack({ ...params, runtimeContext: groupContext });
+assert.equal(emptyGroupPack.blocks.find((item) => item.key === 'moments_social_inbox').status, 'omitted');
+assert.ok(!emptyGroupPack.dynamicSystemPrompt.includes('Social Inbox'), '无未读时不注入待办提示');
+inboxes.set('agent-ordinary', unreadInbox);
+const zeroToolsGroupPack = await assembler.assembleChatPromptPack({ ...params, runtimeContext: groupContext,
+  toolsDescription: '', allowedToolNames: [], aiConfig: { ...params.aiConfig, enableTools: false },
+});
+assert.ok(zeroToolsGroupPack.dynamicSystemPrompt.includes('moment-for-ordinary'), '社交事实不依赖工具开关');
+for (const runtimeContext of [undefined, groupContext]) {
+  const allowedToolNames = ['getMomentDetail'];
+  const enabledPack = await assembler.assembleChatPromptPack({ ...params, runtimeContext, allowedToolNames });
+  const disabledPack = await assembler.assembleChatPromptPack({ ...params, runtimeContext,
+    toolsDescription: '', allowedToolNames: [], aiConfig: { ...params.aiConfig, enableTools: false } });
+  assert.equal(enabledPack.blocks.find((item) => item.key === 'moments_social_inbox').content,
+    disabledPack.blocks.find((item) => item.key === 'moments_social_inbox').content, '社交事实不依赖工具权限');
+  assert.doesNotMatch(disabledPack.dynamicSystemPrompt, /getMomentDetail|调用|需要主动处理/);
+  assert.equal(disabledPack.toolInstructionsSlot, undefined, '关闭后没有工具目录插槽');
+  const enabledContextBlocks = enabledPack.blocks.filter((item) => !['tools_description', 'tool_context_explanation'].includes(item.key));
+  assert.deepEqual(disabledPack.blocks.map((item) => [item.definitionId, item.placement, item.systemSegment]),
+    enabledContextBlocks.map((item) => [item.definitionId, item.placement, item.systemSegment]),
+    '工具开关只控制工具内容，不改变其他区块的顺序和消息边界');
+  assert.deepEqual(disabledPack.recentMessages, enabledPack.recentMessages, '历史上下文保持原样');
+}
+assert.equal((await assembler.assembleChatPromptPack({ ...params, toolsDescription: '', allowedToolNames: [] })).toolInstructionsSlot, undefined);
+const services = [{ name: '日历', description: '管理日程' }];
+for (const runtimeContext of [undefined, groupContext]) {
+  const mcpOnly = await assembler.assembleChatPromptPack({ ...params, runtimeContext, toolsDescription: '',
+    allowedToolNames: ['mcp_only'], mcpServices: services });
+  assert.ok(mcpOnly.systemPrompt.includes('日历'), '仅有 MCP 的单聊和群聊也提供服务简介');
+  assert.equal(mcpOnly.toolInstructionsSlot, undefined, '没有内置工具时不虚构包目录');
+  const mixed = await assembler.assembleChatPromptPack({ ...params, runtimeContext, mcpServices: services });
+  assert.ok(mixed.toolInstructionsSlot.before.includes('工具规则'));
+  assert.ok(!mixed.toolInstructionsSlot.before.includes('日历'));
+  assert.ok(mixed.toolInstructionsSlot.after.includes('日历'), 'MCP 简介位于目录插槽之后');
+}
+const { AgentToolRegistry } = load('src/platform/agentRuntime/AgentToolRegistry.ts');
+const { LegacyAgentToolAdapter } = load('src/host/composition/agent/LegacyAgentToolAdapter.ts');
+const { registerToolPackagesForHostRun } = load('src/host/composition/agent/ToolPackageExposure.ts');
+const requests = [];
+const { BaseAIClientAgentModelGateway } = load('src/platform/agentRuntime/BaseAIClientAgentModelGateway.ts', {
+  '@platform/ai': { AgentModelGateway: class { async complete(request) {
+    requests.push(request); return { assistantText: '完成', reasoningText: '', toolCalls: [], historyItems: [], finishReason: 'stop' };
+  } } }, '@shared/diagnostics/TurnTimelineLog': { logTurnTimeline() {} },
+});
+for (const pack of packs) {
+  for (const exposureMode of ['closed', 'open', 'direct']) {
+    const registry = new AgentToolRegistry();
+    const tool = new LegacyAgentToolAdapter(configuredMoment, { owner: 'moments', risk: 'reversible_write', idempotency: 'none' }, () => ({}));
+    registry.register(tool);
+    const exposure = registerToolPackagesForHostRun({ registry, bindings: [{ packageId: 'moments', tool }],
+      allowedToolNames: ['aiCreateMoment'], openPackageIds: exposureMode === 'open' ? ['moments'] : [],
+      directToolNames: exposureMode === 'direct' ? ['aiCreateMoment'] : [] });
+    const gateway = new BaseAIClientAgentModelGateway({ client: {}, initialMessages: pack.modelMessages,
+      toolInstructionsSlot: pack.toolInstructionsSlot, diagnosticContext: {} });
+    const request = (history = []) => ({ transport: 'complete', history,
+      tools: registry.listAllowed([...exposure.visibleToolNames(), ...exposure.metaToolNames]), toolInstructions: exposure.instructions() });
+    await gateway.runTurn(request());
+    const first = requests.at(-1);
+    const visible = first.tools.find((item) => item.function.name === 'aiCreateMoment');
+    assert.equal(Boolean(visible), exposureMode !== 'closed');
+    assert.ok(!first.messages.some((message) => String(message.content).includes('agent-candidate')));
+    assert.equal(first.messages.filter((message) => String(message.content).includes('moment-for-ordinary')).length, 1,
+      '群聊与单聊的真实请求均只保留一份当前 AI 社交盒子');
+    if (visible) assert.equal(visible.function.parameters.properties.audience.properties.agentIds.description, frozenDescription);
+    if (exposureMode === 'direct') assert.ok(first.messages[0].content.includes('【用户特批工具】'));
+    else assert.ok(first.messages[0].content.includes('【本次运行的工具包用途目录】'));
+    if (exposureMode === 'closed') {
+      const opened = await registry.get('open_tool_package').execute({ package_id: 'moments' });
+      await gateway.runTurn(request([
+        { role: 'assistant', content: '我想发一条时刻', toolCalls: [{ id: 'open', name: 'open_tool_package', arguments: '{"package_id":"moments"}' }] },
+        { role: 'tool', toolCallId: 'open', name: 'open_tool_package', content: opened.modelContent },
+      ]));
+      const next = requests.at(-1);
+      assert.deepEqual(next.messages.slice(0, first.messages.length), first.messages, '拆包只追加真实历史，群聊同样保留完整消息前缀');
+      assert.equal(next.messages.at(-2).content, '我想发一条时刻', '工具前的自然表达正常保留');
+      assert.equal(next.tools.find((item) => item.function.name === 'aiCreateMoment').function.parameters
+        .properties.audience.properties.agentIds.description, frozenDescription);
+    }
+  }
+}
+console.log('工具提示词链路通过：单聊与群聊社交盒子隔离、空未读省略、默认与旧群聊预设、候选 schema 及续轮完整消息前缀。');

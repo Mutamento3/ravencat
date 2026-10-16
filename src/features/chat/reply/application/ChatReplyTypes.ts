@@ -50,6 +50,7 @@ export interface AIReplyConfig {
 }
 
 export interface AIReplyRuntimeContext {
+  inputSource?: 'application';
   /** 已在调用方参与者目录中固定的当前用户显示名；群聊 Prompt 不应再次读取当前资料。 */
   userDisplayName?: string;
   correlationId?: string;
@@ -76,6 +77,8 @@ export interface AIReplyRuntimeContext {
   memoryParticipation?: MemoryParticipationMode;
   supportsMultipleBubbles?: boolean;
   batchModelInput?: ChatContextMessage['content'];
+  /** 非聊天输入触发时保留历史末条用户发言，另接本轮输入。 */
+  forceAppendUserText?: boolean;
   /**
    * 本轮输入的逐条消息序列（真实 role 与顺序，Phase 5A 游标区间组装）。
    * 存在时替换 prompt pack 末尾的触发用户消息。
@@ -88,6 +91,8 @@ export interface AIReplyRuntimeContext {
    * 普通聊天保持 paced，避免无意间改变既有的分段发送体验。
    */
   deliveryTiming?: 'paced' | 'immediate';
+  /** 同一 canonical 片段已由运行展示的原生时钟安排到达，T3 后不得重播。 */
+  arrivalAlreadyScheduled?: boolean;
   groupChat?: {
     groupId: string;
     groupName: string;
@@ -111,6 +116,8 @@ export interface AIReplyRuntimeContext {
   };
   replyRunId?: string;
   abortSignal?: AbortSignal;
+  /** 当前 JS 进程单调时钟的截止点，不是可持久化的日历时间。 */
+  executionDeadlineAt?: number;
   promptBlocks?: PromptPackBlock[];
   allowedToolNames?: string[];
   /** 与本轮 policy 固定的 MCP 工具名单配套的服务摘要；仅供 Prompt 选择服务。 */

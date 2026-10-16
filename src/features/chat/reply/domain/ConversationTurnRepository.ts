@@ -19,9 +19,12 @@ import type {
   ConversationTurnTerminalStatus,
   ConversationTurnUnrepliedSession,
   ChatRegenerationState,
+  ConversationHostStartAttempt,
 } from './ConversationTurn';
 
 export interface IConversationTurnRepository {
+  beginExecutionHostRequests(sessionIds: readonly string[]): Promise<ConversationHostStartAttempt[]>;
+  finishExecutionHostRequests(attempts: readonly ConversationHostStartAttempt[], accepted: boolean): Promise<void>;
   isRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, runId: string): Promise<boolean>;
   getRegenerationState(sessionId: string): Promise<ChatRegenerationState>;
   /** 只持久化用户意图；实际 claim 和执行仍由 Android 宿主完成。 */
@@ -78,6 +81,7 @@ export interface IConversationTurnRepository {
     run: ConversationTurnRun,
     items: ConversationTurnCommitItem[],
     toolPackages: ConversationToolPackageCommit,
+    execution?: { deadlineAt: number; signal?: AbortSignal },
   ): Promise<ConversationTurnCommitResult>;
 
   /** 当前会话与 AI 尚未过期的包；权限仍由 Host policy 冻结。 */

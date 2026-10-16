@@ -103,10 +103,6 @@ export async function runHostAutonomousAgent(
         staticallyAllowedToolNames,
         runPreparation,
       );
-      const resolvedToolConfig: AIToolsConfig = {
-        ...toolConfig,
-        allowedToolNames,
-      };
       const sharedState = { replyRunId: input.runId };
       const createToolContext = (abortSignal?: AbortSignal) => dependencies.tools.createContext({
         aiConfig,
@@ -123,12 +119,9 @@ export async function runHostAutonomousAgent(
         aiConfig,
         toolContext: createToolContext(),
         sessionId: session.id,
-        // 系统唤醒是本轮输入；前面的人设、摘要与真实对话沿用普通单聊，保持共同前缀。
-        currentInput: [
-          '【系统自动唤醒】这是一条应用产生的唤醒输入，不是用户新发言。',
-          ...input.additionalPromptBlocks.map((block) => block.content),
-        ].join('\n\n'),
+        currentInput: '',
         runtimeContext: {
+          inputSource: 'application',
           forceAppendUserText: true,
           triggerSource: input.triggerSource,
           triggerReason: input.triggerReason,
@@ -138,10 +131,11 @@ export async function runHostAutonomousAgent(
           memoryParticipation: 'read_only',
           replyRunId: input.runId,
         },
-        toolsDescription: dependencies.tools.buildDescription(resolvedToolConfig),
+        toolsDescription: dependencies.tools.buildDescription(allowedToolNames),
         allowedToolNames,
         mcpServices: mcpExposure.services,
         additionalBlocks: [
+          ...input.additionalPromptBlocks,
           ...runPreparation.additionalPromptBlocks,
         ],
       });

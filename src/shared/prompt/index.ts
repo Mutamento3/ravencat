@@ -25,6 +25,8 @@ export type {
   PromptToolInstructions,
 } from './types';
 export { estimateTextTokens, clipTextToTokenBudget } from './estimateTextTokens';
+export { CHAT_PROMPT_READING_FLOW } from './readingFlow';
+export type { ChatPromptReadingStep } from './readingFlow';
 export {
   DEFAULT_PRIVATE_CONTEXT_PRIMARY_LIMIT,
   DEFAULT_PRIVATE_CONTEXT_SECONDARY_LIMIT,

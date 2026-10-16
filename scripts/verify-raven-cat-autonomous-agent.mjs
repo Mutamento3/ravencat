@@ -76,7 +76,7 @@ const createdToolContexts = [];
 
 runtimeDependencies = {
   runPreparation: {
-    prepare: async () => {
+    prepare: async (input) => {
       preparationReads += 1;
       return {
         additionalPromptBlocks: [{ togetherListeningSnapshot: 'Song A' }],
@@ -85,7 +85,7 @@ runtimeDependencies = {
           'respond_to_listening_invitation',
           'leave_listening_together',
         ],
-        dynamicAllowedToolNames: ['invite_listening_together'],
+        dynamicAllowedToolNames: input.persistentAllowedToolNames.length > 0 ? ['invite_listening_together'] : [],
       };
     },
   },
@@ -124,7 +124,7 @@ runtimeDependencies = {
     },
     resolveAllowedNames: async () => ['normal_host_tool', 'create_ai_schedule'],
     getRuntimeAllowedNames: (config) => [...config.allowedToolNames],
-    buildDescription: (config) => `tools:${config.allowedToolNames.join(',')}`,
+    buildDescription: (names) => names.length > 0 ? `tools:${names.join(',')}` : '',
     createContext: (params) => {
       createdToolContexts.push(params);
       return { ...params, sessionId: params.sessionId };
@@ -190,8 +190,9 @@ assert.equal(preparationReads, 1, '一次 autonomous run 只能准备一份 Toge
 assert.equal(capturedRunRequest.request.beforeComplete, undefined);
 assert.deepEqual(gatewayParams.initialMessages, [{ role: 'user', content: capturedPromptParams.currentInput }]);
 assert.equal(capturedPromptParams.sessionId, 'real-session');
-assert.ok(capturedPromptParams.currentInput.includes(wakeBlock.content));
-assert.deepEqual(capturedPromptParams.additionalBlocks, [{ togetherListeningSnapshot: 'Song A' }]);
+assert.equal(capturedPromptParams.currentInput, '');
+assert.equal(capturedPromptParams.runtimeContext.inputSource, 'application');
+assert.deepEqual(capturedPromptParams.additionalBlocks, [wakeBlock, { togetherListeningSnapshot: 'Song A' }]);
 
 activeSession = null;
 transcriptVersion = 2;
@@ -222,6 +223,22 @@ assert.equal(capturedPromptParams.sessionId, 'real-session');
 // 公共 bootstrap，不复制整条 autonomous run 链。
 // ---------------------------------------------------------------------------
 const promptBlocks = loadModule('src/features/companion/application/CompanionPromptBlocks.ts', {});
+assert.doesNotMatch(promptBlocks.COMPANION_AI_SCHEDULE_TRIGGER_RULES, /update_ai_schedule|调用.*工具|Registry/,
+  '日程触发输入只声明事实与输出语义，不介绍工具');
+assistant.enableTools = false;
+await runHostAutonomousAgent({
+  runId: 'run-without-tools', ownerAIId: 'host-ai', triggeredAt,
+  correlationId: 'wake-no-tools', scenarioId: 'raven_cat.ai_schedule_trigger',
+  triggerSource: 'raven_cat_ai_schedule', triggerReason: 'ai_schedule',
+  relatedEntityType: 'raven_cat_ai_schedule', relatedEntityId: 'wake-no-tools',
+  taskGoal: 'goal', taskSource: 'raven_cat_ai_schedule',
+  additionalPromptBlocks: [{ content: promptBlocks.COMPANION_AI_SCHEDULE_TRIGGER_RULES }],
+});
+assert.deepEqual(capturedRunRequest.request.task.allowedToolNames, []);
+assert.equal(capturedPromptParams.toolsDescription, '');
+assert.deepEqual(capturedPromptParams.mcpServices, []);
+assert.doesNotMatch(capturedPromptParams.currentInput, /update_ai_schedule|调用.*工具|Registry/);
+assistant.enableTools = true;
 let capturedScheduleInput;
 const scheduleWrapper = loadModule('src/features/companion/application/RunAIScheduleAutonomousAgent.ts', {
   './CompanionPromptBlocks': promptBlocks,

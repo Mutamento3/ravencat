@@ -29,11 +29,14 @@ Host 在业务查询前通过 `ensureHostDatabaseReady()` 完成恢复事务门�
   其余走 Native NotificationManager 聚合通知，`userNotificationHandled` 尊重
   RavenCat overlay preview 消费者；Chat 页面 / KimiPhoneHost / RavenCat / 通知模块
   不得各自维护一套「回复来了怎么办」的判定。
-- canonical 回复仍在 T3 一次提交全部分段。commit 后、UI 刷新前登记本批消息 ID，
-  原生 `MessageArrivalProgress` 按会话维持约 1 秒到达间隔；通知权限、前台抑制和
-  消费方展示不改变到达节奏。该进度仅是当前进程的展示投影，不拥有业务提交、
-  pending reply 或执行恢复。批次结束、交付异常或所属 runtime 销毁时移除投影；
-  冷启动直接读取已提交事实，不重放到达动画。
+- canonical 回复仍在 T3 一次提交全部分段。运行片段在独立展示表中保存快照，
+  不作为正式 assistant 消息、回复游标或工具重放依据。正文使用同一原生约 1 秒
+  到达时钟，后续 reasoning/tool 不等待正文；T3 绑定稳定片段身份，不重播已到达片段。
+  持久交付、UI 绘制和 T3 是不同事实，界面展示前必须先保存交付版本；折叠过程卡片
+  不得阻止存档或让完成状态挂起。新用户输入在原 T1 内一次放行已经通过 T3 的剩余
+  分段；仍在执行的 run 只保留已交付过程。超时及 runtime 销毁不得通过清空内存
+  pending 开放消息，冷启动由持久交付事实恢复；不渲染交付占位或中断替代气泡。
+  具体边界见 [Chat 展示与中断历史](./chat-turn-presentation-invariant.md)。
 - Tab、会话红点与实时列表预览查询排除尚未到达的消息 ID，非流式多气泡聊天页
   消费同一进度，不再单独计时。SQL 仍按真实 `is_read` 计数，进入会话批量已读后，
   后续分段到达不得重新制造未读。展示查询不得回写 session/group 持久预览。
@@ -42,6 +45,8 @@ Host 在业务查询前通过 `ensureHostDatabaseReady()` 完成恢复事务门�
 
 ConversationTurn 的固定输入区间、事务状态转换与提交 fence 见
 [`conversation-turn-coordination-invariant.md`](./conversation-turn-coordination-invariant.md)。
+
+用户任命／撤销主理 AI 的即时回应由 `HostRelationshipReplyTask` 使用同一原生 Headless 服务持有执行期，等待 Chat 的 `requestProactiveChatReply` 到达终态。关系事实先提交，操作通知仅作为本轮模型输入，不伪造 canonical 用户消息，不推进 `user_reply` 游标，不在设置页执行模型。实际 assistant 消息继续经过本文件的统一交付协调器。该即时沟通不建立新的持久恢复队列，也不因回复失败回滚身份变更。
 
 ### Protected Chat Background Execution Contract
 

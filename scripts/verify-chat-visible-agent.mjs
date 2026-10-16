@@ -94,7 +94,7 @@ const terminal = {
   toolCallCount: 1,
 };
 const runtimeDependencies = {
-  tools: { isTimelineHidden: () => false },
+  tools: {},
   agent: {
     run: async (request) => {
       await request.eventSink({ type: 'model_turn_started', runId: request.runId, stepIndex: 1 });

@@ -10,11 +10,11 @@
 
 import type { IMessageRepository } from '../../messages/domain/MessageRepository';
 import type { ConversationTurnRun } from '../domain/ConversationTurn';
-import { emitChatTypingStatusChanged } from '../../messages/events/ChatEvents';
 import { getChatMessageRuntimeDependencies } from '../../messages/application/ChatMessageRuntime';
 import { buildChatTurnAIInput } from './BuildChatTurnAIInput';
 import { processAIReply } from './ProcessAIReply';
 import { createSingleTransactionTurnCommit } from './SingleTransactionTurnCommit';
+import { ChatTurnPresentation } from './ChatTurnPresentationRuntime';
 import type {
   AIReplyConfig,
   AIReplyRuntimeContext,
@@ -29,6 +29,7 @@ export interface ExecuteUserReplyTurnParams {
   callbacks?: ProcessAIReplyCallbacks;
   correlationId?: string;
   deliveryTiming?: AIReplyRuntimeContext['deliveryTiming'];
+  executionDeadlineAt?: number;
 }
 
 /**
@@ -46,9 +47,16 @@ export async function executeUserReplyTurn(
   const { run, aiConfig } = params;
   const repository = params.repository ?? getChatMessageRuntimeDependencies().messages;
   const correlationId = params.correlationId || run.runId;
-  const persistence = createSingleTransactionTurnCommit(run, aiConfig.id);
+  const presentation = new ChatTurnPresentation(run, aiConfig.agentId, aiConfig.id, {
+    signal: params.signal, executionDeadlineAt: params.executionDeadlineAt,
+  });
+  const persistence = createSingleTransactionTurnCommit(run, aiConfig.id, presentation);
+  await presentation.start();
+  persistence.timelineSink = presentation.sink;
+  persistence.recordToolExecutionStarted = () => presentation.recordToolStart();
+  persistence.observeRunEvent = event => presentation.observeRunEvent(event);
+  let replyFailure: string | undefined;
 
-  emitChatTypingStatusChanged(run.sessionId, true, correlationId);
   try {
     const input = await buildChatTurnAIInput({
       repository,
@@ -57,6 +65,7 @@ export async function executeUserReplyTurn(
       inputHighWatermark: run.inputHighWatermark,
       assistantId: aiConfig.id,
       agentId: aiConfig.agentId,
+      isRegeneration: run.kind === 'regenerate',
     });
 
     const lastUserMessage = input.userMessages[input.userMessages.length - 1];
@@ -73,6 +82,10 @@ export async function executeUserReplyTurn(
       repository,
       {
         ...params.callbacks,
+        onReplyFailed: payload => {
+          replyFailure = payload.error;
+          params.callbacks?.onReplyFailed?.(payload);
+        },
       },
       {
         correlationId,
@@ -89,6 +102,7 @@ export async function executeUserReplyTurn(
         turnInputMessages: input.turnInputMessages,
         replyRunId: run.runId,
         abortSignal: params.signal,
+        executionDeadlineAt: params.executionDeadlineAt,
         deliveryTiming: params.deliveryTiming,
       },
       persistence,
@@ -98,9 +112,11 @@ export async function executeUserReplyTurn(
     if (outcome === 'committed' || outcome === 'fence_failed') {
       return outcome;
     }
+    // 错误气泡是展示结果；T4 仍须保留真实失败原因，不能统一记作空回复。
+    if (replyFailure) throw new Error(replyFailure);
     // empty_items 或无提交（错误气泡/拉黑等分支）：run 仍 active，交给 Host revoke。
     return 'empty_reply';
   } finally {
-    emitChatTypingStatusChanged(run.sessionId, false, correlationId);
+    await presentation.finish();
   }
 }

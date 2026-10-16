@@ -4,6 +4,7 @@ import {
   type DatabaseTransactionExecutor,
 } from '@platform/persistence';
 import { resolveMediaAssetReferenceUri } from '@features/media';
+import { SettingChangeConflictError } from '@shared/errors/SettingChangeConflictError';
 import {
   createDefaultUserProfile,
   createUserProfile,
@@ -186,7 +187,7 @@ export class SQLiteUserProfileRepository {
     const result = await transaction.runAsync(
       'UPDATE user_profile SET moments_cover = NULL, moments_cover_media_asset_id = ?, moments_cover_revision = moments_cover_revision + 1, updated_at = ? WHERE id = ? AND moments_cover_revision = ?',
       [assetId, new Date().toISOString(), SELF_USER_PROFILE_ID, expectedRevision]);
-    if (result.changes !== 1) throw new Error('时刻封面已被其他操作更改，请重试本次选择');
+    if (result.changes !== 1) throw new SettingChangeConflictError('时刻封面已被其他操作更改，本次选择未保存。');
   }
 
   async getAvatarMediaAssetReference(
@@ -267,9 +268,6 @@ export class SQLiteUserProfileRepository {
     transaction: DatabaseTransactionExecutor,
     input: CommitUserAvatarMediaAssetReferenceInput,
   ): Promise<void> {
-    if (!input.mediaAssetId.trim()) {
-      throw new Error('用户头像 MediaAsset 引用不能为空');
-    }
     const result = await transaction.runAsync(
       `UPDATE user_profile
        SET avatar = NULL,
@@ -292,9 +290,7 @@ export class SQLiteUserProfileRepository {
       ],
     );
     if (result.changes !== 1) {
-      throw new Error(
-        `用户头像 MediaAsset CAS 必须恰好影响一行，实际影响 ${result.changes} 行：${input.ownerId}`,
-      );
+      throw new SettingChangeConflictError('用户头像已被其他操作修改，本次选择未保存。');
     }
   }
 }

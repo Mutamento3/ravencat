@@ -58,6 +58,7 @@ const GROUP_CONTEXT_ITEMS: PromptPresetItemDefinition[] = [
 const TOOL_CONTEXT_ITEMS: PromptPresetItemDefinition[] = [
   item('context.tool_explanation', 'capabilities', 70, 'locked'),
   item('context.tools_description', 'capabilities', 100, 'locked'),
+  item('context.mcp_services', 'capabilities', 110, 'locked'),
 ];
 
 const PRIVATE_MEMORY_ITEMS: PromptPresetItemDefinition[] = [
@@ -114,8 +115,8 @@ const SPECIALIZED_PRESET_ITEMS: Partial<Record<PromptPackScenario, PromptPresetI
     ...SHARED_CONTEXT_ITEMS,
     ...TOOL_CONTEXT_ITEMS,
     TOGETHER_LISTENING_RUNTIME_ITEM,
-    item('scenario.raven_cat_ai_schedule', 'scenario', 110, 'locked', true),
-    item('context.raven_cat_ai_schedule', 'scenario', 115, 'locked', true),
+    item('scenario.raven_cat_ai_schedule', 'output_contract', 210, 'locked', true),
+    item('context.raven_cat_ai_schedule', 'dynamic_context', 136, 'locked', true),
   ],
 };
 
@@ -141,7 +142,9 @@ const PROMPT_PACK_ITEMS: Partial<Record<PromptPackScenario, PromptPresetItemDefi
   'chat.group_member_reply': [
     ...CORE_ITEMS,
     ...GROUP_CONTEXT_ITEMS,
-    item('context.group_chat', 'scenario', 90, 'locked'),
+    ...TOOL_CONTEXT_ITEMS,
+    item('context.moments_social_inbox', 'dynamic_context', 125, 'locked'),
+    item('context.group_chat', 'persona', 38, 'locked'),
     item('output.group_member_reply_confidentiality', 'output_contract', 95, 'locked', true),
     item('context.recent_moments', 'dynamic_context', 140),
     ...HISTORY_AND_INPUT_ITEMS,
@@ -150,7 +153,7 @@ const PROMPT_PACK_ITEMS: Partial<Record<PromptPackScenario, PromptPresetItemDefi
     ...CORE_ITEMS,
     ...SHARED_CONTEXT_ITEMS,
     ...TOOL_CONTEXT_ITEMS,
-    item('scenario.ledger_reply', 'scenario', 110, 'locked'),
+    item('scenario.ledger_reply', 'output_contract', 210, 'locked'),
 
     ...HISTORY_AND_INPUT_ITEMS,
   ],

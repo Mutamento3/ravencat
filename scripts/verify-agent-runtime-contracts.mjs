@@ -273,7 +273,16 @@ const builtInTools = [
   { module: '@features/webTools', symbol: 'DownloadFileTool', name: 'download_file', owner: 'webTools', ...REVERSIBLE_ACTION },
   { module: '@features/media', symbol: 'DownloadImageTool', name: 'download_image', owner: 'media', ...REVERSIBLE_ACTION },
   { module: '@features/media', symbol: 'ViewImageTool', name: 'view_image', owner: 'media', ...PRIVATE_READ },
-  { module: '@features/assistants', symbol: 'createChangeOwnAvatarTool', name: 'change_own_avatar', owner: 'media', ...REVERSIBLE_ACTION },
+  ...[
+    ['get_user_avatar', 'profile', false, false], ['get_ai_avatar', 'assistants', false, false],
+    ['get_chat_background', 'profile', false, false], ['get_call_background', 'calls', false, false],
+    ['get_global_background', 'profile', true, false], ['get_moments_cover', 'profile', false, false],
+    ['set_ai_avatar', 'assistants', false, true], ['set_chat_background', 'profile', false, true],
+    ['set_call_background', 'calls', false, true], ['set_user_avatar', 'profile', true, true],
+    ['set_moments_cover', 'profile', true, true], ['set_global_background', 'profile', true, true],
+    ['set_ai_name', 'assistants', false, true],
+  ].map(([name, owner, hostOnly, mutating]) => ({ module: './ApplicationSettingsTools', symbol: name, name, owner, hostOnly, mutating,
+    ...(mutating ? REVERSIBLE_ACTION : PRIVATE_READ) })),
   { module: '@features/stickers', symbol: 'AddOwnStickerTool', name: 'add_own_sticker', owner: 'stickers', ...REVERSIBLE_ACTION },
   { module: '@features/stickers', symbol: 'MaintainOwnStickerTool', name: 'maintain_own_sticker', owner: 'stickers', ...REVERSIBLE_ACTION },
   { module: '@features/protocol', symbol: 'GetProtocolsTool', name: 'getProtocols', owner: 'protocol', ...SAFE_READ },
@@ -304,6 +313,7 @@ const builtInTools = [
   { module: '@features/memory', symbol: 'ForgetMemoryTool', name: 'forget_memory', owner: 'memory', ...REVERSIBLE_WRITE },
   { module: '@features/assistants', symbol: 'BlockAIAssistantTool', name: 'blockAIAssistant', owner: 'assistants', ...SENSITIVE_ACTION },
   { module: '@features/assistants', symbol: 'UnblockAIAssistantTool', name: 'unblockAIAssistant', owner: 'assistants', ...SENSITIVE_ACTION },
+  { module: '@features/assistants', symbol: 'ReleaseHostCooldownTool', name: 'release_host_cooldown', owner: 'assistants', ...SENSITIVE_ACTION },
   { module: '@features/deviceControl', symbol: 'SoftLockAppTool', name: 'soft_lock_app', owner: 'deviceControl', ...SENSITIVE_ACTION },
   { module: '@features/deviceControl', symbol: 'ReleaseSoftLockTool', name: 'release_soft_lock', owner: 'deviceControl', ...SENSITIVE_ACTION },
   { module: '@features/deviceControl', symbol: 'SearchInstalledAppsTool', name: 'search_installed_apps', owner: 'deviceControl', ...PRIVATE_READ },
@@ -368,6 +378,7 @@ for (const tool of builtInTools) {
     || tool.module === '@features/media'
     || tool.module === '@features/stickers'
     || tool.module === '@features/memory'
+    || tool.module === './ApplicationSettingsTools'
     || tool.symbol === 'SendVoiceMessageTool'
     || tool.symbol === 'SearchChatSummariesTool'
   )
@@ -375,14 +386,21 @@ for (const tool of builtInTools) {
     : createLegacyTool(tool.name);
 }
 featureMocks['@features/memory'].releaseMemoryRecallRun = () => {};
-featureMocks['@features/assistants'].createChangeOwnAvatarTool = () => createAgentNativeBuiltInTool('change_own_avatar');
-featureMocks['./assertImageToolRunCurrent'] = { assertImageToolRunCurrent: () => {} };
+let momentPreparationCount = 0;
+const momentSnapshotTool = {
+  ...featureMocks['@features/moments'].AICreateMomentTool,
+  definition: { ...featureMocks['@features/moments'].AICreateMomentTool.definition,
+    parameters: { type: 'object', properties: { audience: { type: 'object', description: '本次候选 agent-candidate' } } } },
+};
+featureMocks['@features/moments/composition'] = { createMomentToolForRun: async () => { momentPreparationCount++; return momentSnapshotTool; } };
+featureMocks['./ApplicationSettingsTools'] = { applicationSettingsTools: builtInTools.filter(tool => tool.module === './ApplicationSettingsTools')
+  .map(entry => ({ tool: createAgentNativeBuiltInTool(entry.name), owner: entry.owner, hostOnly: entry.hostOnly, mutating: entry.mutating })) };
 const defaultToolPermissions = {};
 featureMocks['@features/prompting'] = { readPromptDefaults: async () => ({ toolPermissions: defaultToolPermissions }) };
 assert.ok(featureMocks['@features/stickers'].SearchStickersTool, 'Sticker 搜索工具 mock 必须存在');
 assert.ok(featureMocks['@features/stickers'].SelectStickerTool, 'Sticker 选择工具 mock 必须存在');
 
-const { createAgentToolRegistry } = loadTypeScriptModule(
+const { createAgentToolRegistry, prepareAgentToolRegistry, getToolPackageRuntimeBindings } = loadTypeScriptModule(
   'src/host/composition/agent/createAgentToolRegistry.ts',
   {
     '@platform/agentRuntime': { AgentToolRegistry },
@@ -396,6 +414,14 @@ const { createAgentToolRegistry } = loadTypeScriptModule(
     '@features/phoneTools/neteaseComposition': { productionNetEaseChildTools: [] },
   }
 );
+const preparedMomentRegistry = await prepareAgentToolRegistry(() => legacyContext, {
+  assistantId: 'assistant-1', allowedToolNames: ['aiCreateMoment'],
+});
+assert.deepEqual(preparedMomentRegistry.get('aiCreateMoment').descriptor.inputSchema, momentSnapshotTool.definition.parameters,
+  '生产 Registry 必须使用本次运行的时刻候选参数快照');
+assert.equal(momentPreparationCount, 1);
+await prepareAgentToolRegistry(() => legacyContext, { assistantId: 'assistant-1', allowedToolNames: [] });
+assert.equal(momentPreparationCount, 1, '未授权发布工具时不读取候选名单');
 let productionLegacyContextCalls = 0;
 const productionRegistry = createAgentToolRegistry({
   createLegacyContext: () => {
@@ -464,6 +490,46 @@ const availableNames = (config) => getAuthorizedToolDefinitionsForAI({
 }).map((definition) => definition.function.name);
 
 const regularChatNames = availableNames({ triggerSource: 'chat' });
+const callNames = availableNames({ triggerSource: 'call', memoryParticipation: 'read_write' });
+for (const name of ['lookAtUser', 'web_search', 'recall_memory', 'searchProtocols']) {
+  assert.ok(callNames.includes(name), `通话保留已授权的业务工具：${name}`);
+}
+assert.ok(!callNames.includes('requestVideoCall'), '通话中不能再次发起通话');
+assert.ok(!availableNames({ triggerSource: 'call', isHostAI: true }).includes('send_message'), '通话正文已经朗读，不重复投递普通聊天消息');
+assert.deepEqual(availableNames({ triggerSource: 'call', allowedToolNames: [] }), [], '通话沿用原有授权边界');
+const settingsNames = builtInTools.filter(entry => entry.module === './ApplicationSettingsTools').map(entry => entry.name);
+for (const name of settingsNames) {
+  const entry = builtInTools.find(entry => entry.name === name);
+  assert.equal(regularChatNames.includes(name), !entry.hostOnly, `设置工具遵守当前主理身份：${name}`);
+}
+for (const triggerSource of ['call', 'ledger', 'internal_feature', 'raven_cat_wake']) {
+  assert.ok(availableNames({ triggerSource }).includes('set_ai_name'), '设置独立提交，不依赖 Chat 消息 intent');
+  assert.ok(!availableNames({ triggerSource }).includes('set_user_avatar'), '其他宿主同样遵守主理边界');
+}
+const settingsRegistry = createAgentToolRegistry({ createLegacyContext: () => legacyContext });
+const settingsBindings = getToolPackageRuntimeBindings(settingsRegistry).filter(binding => binding.packageId === 'applicationSettings');
+assert.deepEqual(settingsBindings.map(binding => binding.tool.descriptor.name).sort(), [...settingsNames].sort(), '不同 owner 的设置工具归入同一产品工具包');
+const { registerToolPackagesForHostRun } = loadTypeScriptModule('src/host/composition/agent/ToolPackageExposure.ts', {});
+const cooldownRegistry = createAgentToolRegistry({ createLegacyContext: () => legacyContext });
+const cooldownExposure = registerToolPackagesForHostRun({ registry: cooldownRegistry,
+  allowedToolNames: ['release_host_cooldown'], bindings: getToolPackageRuntimeBindings(cooldownRegistry),
+  openPackageIds: [], directToolNames: [],
+});
+assert.equal(cooldownExposure.visibleToolNames().length, 0, '冷静期工具沿用正常拆包');
+assert.match(cooldownExposure.instructions().catalog, /release_host_cooldown/);
+await cooldownRegistry.get('open_tool_package').execute({ package_id: 'assistants' }, executionContext);
+assert.deepEqual(cooldownExposure.visibleToolNames(), ['release_host_cooldown'], '展开 AI 管理不能恢复其他主理工具');
+assert.ok(!availableNames({ triggerSource: 'chat', isHostAI: true }).includes('release_host_cooldown'), '正常主理任期不暴露解除工具');
+assert.ok(!regularChatNames.includes('release_host_cooldown'), '普通 AI 不暴露解除工具');
+const settingsExposure = registerToolPackagesForHostRun({ registry: settingsRegistry,
+  allowedToolNames: regularChatNames.filter(name => settingsNames.includes(name)), bindings: settingsBindings,
+  openPackageIds: [], directToolNames: ['set_ai_name'],
+});
+assert.ok(settingsExposure.visibleToolNames().includes('set_ai_name'), '设置工具支持既有星标特批');
+assert.ok(!settingsExposure.visibleToolNames().includes('set_user_avatar'), '拆包与特批不能扩大普通 AI 权限');
+await settingsRegistry.get('open_tool_package').execute({ package_id: 'applicationSettings' }, executionContext);
+assert.ok(settingsExposure.visibleToolNames().includes('set_chat_background'));
+assert.ok(!settingsExposure.visibleToolNames().includes('set_user_avatar'));
 assert.ok(!regularChatNames.includes('get_current_location'), '普通 AI 不得获得定位工具');
 assert.ok(availableNames({ triggerSource: 'chat', isHostAI: true }).includes('get_current_location'), '已授权主理 AI 必须获得定位 schema');
 assert.ok(!availableNames({ triggerSource: 'chat', isHostAI: true, allowedToolNames: [] }).includes('get_current_location'), '主理身份不能绕过定位调用授权');
@@ -474,7 +540,7 @@ const autonomousNames = availableNames({ triggerSource: 'raven_cat_wake', capabi
 assert.ok(autonomousNames.includes('send_voice_message'), '自主执行已接入同事务媒体存档，必须使用正常授权的语音工具');
 assert.ok(autonomousNames.includes('select_sticker'), '自主执行必须使用正常授权的贴纸工具');
 const groupNames=availableNames({triggerSource:'group_chat',memoryParticipation:'read_write'});
-for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_summaries','download_image','view_image','change_own_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
+for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_summaries','download_image','view_image','set_ai_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
   assert.ok(groupNames.includes(name),`群聊应提供已授权工具：${name}`);
 }
 assert.ok(!groupNames.includes('requestVideoCall'),'群聊不能发起视频通话');

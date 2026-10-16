@@ -44,11 +44,16 @@ const chatReplyAbortModuleUrl = transpileToModuleUrl(
 const chatStub = `import { isChatReplyRunCancellationError } from '${chatReplyAbortModuleUrl}';
 const conversationTurnRepository = null;
 const executeUserReplyTurn = null;
-const sessionRepository = null;`;
+const sessionRepository = null;
+const emitChatMessagesReloadRequested = () => {};
+const emitChatTurnExecutionChanged = () => {};
+const interruptChatRunPresentation = async () => {};
+const emitChatRegenerationChanged = () => {};
+const emitChatTypingStatusChanged = () => {};`;
 
 const coordinatorSource = read('src/host/runtime/ConversationTurnCoordinator.ts');
 const chatCompositionImportPattern =
-  /import\s*\{[\s\S]*?\}\s*from\s*['"]@features\/chat\/composition['"];/;
+  /import\s*\{[^;]*?\}\s*from\s*['"]@features\/chat\/composition['"];/;
 const stubbedCoordinatorSource = coordinatorSource
   .replace(chatCompositionImportPattern, chatStub)
   .replace(chatCompositionImportPattern, '')
@@ -431,6 +436,24 @@ for (const phase of ['claim', 'configuration']) {
   await Promise.all([execution, closing]);
   assert.equal(fakes.executions.size, 0, 'claim/配置读取期间取消不能再进入模型执行');
   assert.equal(fakes.calls.revoke.at(-1).status, 'cancelled');
+}
+
+{
+  const fakes = createFakes();
+  const controller = new AbortController();
+  const coordinator = createConversationTurnCoordinator({ turns: fakes.turns, executeTurn: fakes.executeTurn, resolveAIConfig: async () => aiConfig });
+  const running = coordinator.executeTurnFromHost('host-timeout', { signal: controller.signal, executionDeadlineAt: Date.now() + 60_000 });
+  await flush();
+  const execution = fakes.executions.get(fakes.calls.claimIfIdle[0].runId);
+  controller.abort('execution_host_timeout');
+  assert.equal(execution.signal.aborted, true);
+  // 模型／工具即使暂时不响应 abort，宿主也须先完成 T4，不能一直挂 active owner。
+  await running;
+  assert.equal(fakes.calls.revoke.at(-1).status, 'failed');
+  assert.equal(fakes.calls.revoke.at(-1).reason, 'execution_host_timeout');
+  assert.equal(coordinator.hasActiveHandle('host-timeout'), false);
+  execution.gate.reject(new (await import(chatReplyAbortModuleUrl)).ChatReplyRunCancelledError());
+  await flush();
 }
 
 console.log('ConversationTurnCoordinator 第三片：Host 内存协议 / supersede / recovery / reset drain 行为验证通过。');

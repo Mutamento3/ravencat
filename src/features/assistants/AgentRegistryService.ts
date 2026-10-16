@@ -38,10 +38,12 @@ export class AgentRegistryService {
   ): Promise<AgentRegistrySummary> {
     await aiHostRepository.cleanupExpiredBlocks();
 
-    const assistants = await aiAssistantRepository.getAll();
+    const [assistants, cooldown] = await Promise.all([
+      aiAssistantRepository.getAll(), aiHostRepository.checkHostCooldown(),
+    ]);
     const currentAgentId = options.currentAgentId || null;
     const entries = assistants.map((assistant) =>
-      this.#toRegistryEntry(assistant, currentAgentId)
+      this.#toRegistryEntry(assistant, currentAgentId, cooldown.isInCooldown && cooldown.revokedAIId === assistant.id)
     );
 
     const hostEntry = entries.find((entry) => entry.isHostAI) || null;
@@ -63,13 +65,15 @@ export class AgentRegistryService {
         blockedCount,
         hostEntry,
         entries,
+        isInHostCooldown: cooldown.isInCooldown,
       }),
     };
   }
 
   #toRegistryEntry(
     assistant: AIProfile,
-    currentAgentId: string | null
+    currentAgentId: string | null,
+    isInHostCooldown: boolean,
   ): AgentRegistryEntry {
     const isSelf = !!currentAgentId && assistant.agentId === currentAgentId;
     const isBlocked = assistant.isBlocked === true;
@@ -82,6 +86,7 @@ export class AgentRegistryService {
     const roleTags = [
       isSelf ? '你自己' : null,
       assistant.isHostAI ? '主理AI' : null,
+      isInHostCooldown ? '已被移除主理ai身份，当前处于冷静期' : null,
       assistant.isLedgerAI ? '记账AI' : null,
       collaborationState === 'blocked'
         ? `已拉黑${assistant.blockedUntil ? `至 ${this.#formatTime(assistant.blockedUntil)}` : ''}`
@@ -110,6 +115,7 @@ export class AgentRegistryService {
     blockedCount: number;
     hostEntry: AgentRegistryEntry | null;
     entries: AgentRegistryEntry[];
+    isInHostCooldown: boolean;
   }): string {
     const { totalCount, availableCount, blockedCount, hostEntry, entries } = params;
 
@@ -124,6 +130,7 @@ export class AgentRegistryService {
       '【AI 身份池摘要】',
       `- 当前系统内共有 ${totalCount} 个 AI；当前可用/可协作 ${availableCount} 个；已拉黑 ${blockedCount} 个。`,
       `- 当前主理AI：${hostEntry ? `${hostEntry.name}（${hostEntry.agentId}）` : '暂无'}`,
+      ...(params.isInHostCooldown ? ['- 当前主理任命处于冷静期，期间不能任命或恢复任何主理 AI。'] : []),
     ];
 
     const entryLines = entries.map((entry, index) => {
@@ -137,9 +144,8 @@ export class AgentRegistryService {
     });
 
     const footerLines = [
-      '- 这份摘要用于告诉你系统里还有哪些 AI、谁是主理AI、谁当前不可协作。',
-      '- 如果某个 AI 已被拉黑，就不要把它当作当前可协作对象或可继续参与的对象。',
-      '- AI 基础身份信息应直接依赖这份摘要，而不是再额外调用助手列表工具。',
+      '- 这份摘要用于告诉你系统里还有哪些 AI、谁是主理AI、谁当前可协作。',
+      '- 已被拉黑的 AI 无法继续交流或协作。',
     ];
 
     return [...headerLines, ...entryLines, ...footerLines].join('\n');

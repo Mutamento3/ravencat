@@ -19,7 +19,8 @@ import {
   resolveCanonicalConversation,
   upsertCallTimelineEntry,
 } from '@features/chat';
-import { resolveChatImageModelInput } from '@features/chat/composition';
+import { recordAssistantNicknameChangeInTransaction, resolveChatImageModelInput } from '@features/chat/composition';
+import { startHostRelationshipReplyExecution } from '@platform/device';
 import {
   callAudioPlayback,
   callBackgroundRepository,
@@ -36,6 +37,16 @@ import {
   assembleResolvedChatPromptPack,
   assembleResolvedStandalonePromptPack,
 } from '@host/prompt';
+
+import { applyHostModelRunToolExposure } from '@shared/aiTools';
+import { prepareHostModelRun } from '../runtime/HostModelRunPreparation';
+import {
+  buildToolsDescription,
+  getRuntimeAllowedToolNamesForAI,
+  resolveAllowedToolNames,
+  resolveMcpExposure,
+  runHostAgent,
+} from './agent';
 
 let configured = false;
 
@@ -78,6 +89,29 @@ export function configureAIRuntime(): void {
   });
   configureCallBackgroundRuntime(callBackgroundRepository);
   configureCallRuntimeDependencies({
+    agent: {
+      run: runHostAgent,
+      prepareTools: async (aiConfig) => {
+        if (aiConfig.enableTools !== true) {
+          return { allowedToolNames: [], toolsDescription: '', mcpServices: [], additionalPromptBlocks: [] };
+        }
+        const persistentAllowedToolNames = await resolveAllowedToolNames(aiConfig.id);
+        const preparation = await prepareHostModelRun({
+          scenario: 'call.live_reply', currentAiId: aiConfig.id,
+          isHostAI: aiConfig.isHostAI === true, persistentAllowedToolNames,
+        });
+        const names = getRuntimeAllowedToolNamesForAI({
+          ...aiConfig, triggerSource: 'call', memoryParticipation: 'read_write',
+          allowedToolNames: persistentAllowedToolNames,
+        });
+        const mcp = await resolveMcpExposure(aiConfig.id);
+        const allowedToolNames = [...applyHostModelRunToolExposure(names, preparation), ...mcp.allowedToolNames];
+        return {
+          allowedToolNames, toolsDescription: buildToolsDescription(allowedToolNames),
+          mcpServices: mcp.services, additionalPromptBlocks: preparation.additionalPromptBlocks,
+        };
+      },
+    },
     chat: {
       upsertCallTimelineEntry,
       appendExternalAssistantMessage,
@@ -136,7 +170,18 @@ export function configureAIRuntime(): void {
     onCallTerminated: handleUserEndedCallFollowUp,
   });
   configureAssistantRuntime({
+    recordNicknameChangeInTransaction: recordAssistantNicknameChangeInTransaction,
     resolveCanonicalConversation: (aiId) => resolveCanonicalConversation({ aiId }),
+    onHostRelationshipChanged: async (aiId, change, occurredAt) => {
+      // 回复属于提交后沟通，启动失败不能把已经生效的任命／撤销报告成失败。
+      try {
+        if (!await startHostRelationshipReplyExecution(aiId, change, occurredAt)) {
+          console.warn('[HostRelationship] 身份变更已生效，原生回复任务未启动', { aiId, change });
+        }
+      } catch (error) {
+        console.warn('[HostRelationship] 身份变更已生效，回复唤醒失败', error);
+      }
+    },
     onHostRelationshipRemoved: async (aiId, reason) => {
       // 跨 Feature fan-out：主理关系移除后，同步收口 Companion 与 AI Schedule 的 future 状态。
       await Promise.all([

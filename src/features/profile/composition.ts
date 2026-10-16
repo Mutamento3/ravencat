@@ -6,6 +6,7 @@ import type {
 import { SELF_USER_PROFILE_ID } from './domain/UserProfile';
 import {
   createMediaAssetWithReference,
+  commitCroppedImageSelection,
   MEDIA_ASSET_STORAGE_BACKEND,
   releaseMediaAssetCandidates,
 } from '@features/media';
@@ -122,6 +123,39 @@ export async function updateCurrentUserMomentsCover(
 
   emitUserProfileUpdated(updatedProfile);
   return updatedProfile;
+}
+
+export async function getCurrentUserMomentsCoverImageSelection() {
+  await ensureCurrentUserMomentsCover();
+  return userProfileRepository.getMomentsCoverSelection();
+}
+
+/** Profile 持有用户头像引用，AI 与手动编辑共享同一 CAS 与更新事实。 */
+export async function changeCurrentUserAvatarFromMediaAsset(mediaAssetId: string | null, signal: AbortSignal,
+  guard: (transaction: DatabaseTransactionExecutor) => Promise<void>) {
+  await userProfileRepository.ensureDefault();
+  const expected = (await userProfileRepository.getAvatarMediaAssetReference(SELF_USER_PROFILE_ID))!;
+  const result = await commitCroppedImageSelection({ mediaAssetId, aspect: [1, 1], signal }, async (tx, assetId) => {
+    await guard(tx);
+    await userProfileRepository.commitAvatarMediaAssetReferenceInTransaction(tx, { ownerId: SELF_USER_PROFILE_ID,
+      expectedAvatar: expected.avatar, expectedAvatarMediaAssetId: expected.avatarMediaAssetId, mediaAssetId: assetId });
+  });
+  await releaseMediaAssetCandidates([expected.avatarMediaAssetId]);
+  emitUserProfileUpdated(await userProfileRepository.ensureDefault());
+  return result;
+}
+
+export async function changeCurrentUserMomentsCoverFromMediaAsset(mediaAssetId: string | null, signal: AbortSignal,
+  guard: (transaction: DatabaseTransactionExecutor) => Promise<void>) {
+  await userProfileRepository.ensureDefault();
+  const expected = await userProfileRepository.getMomentsCoverSelection();
+  const result = await commitCroppedImageSelection({ mediaAssetId, aspect: [16, 9], signal }, async (tx, assetId) => {
+    await guard(tx);
+    await userProfileRepository.commitMomentsCoverInTransaction(tx, expected.revision, assetId);
+  });
+  await releaseMediaAssetCandidates([expected.mediaAssetId]);
+  emitUserProfileUpdated(await userProfileRepository.ensureDefault());
+  return result;
 }
 
 /** Host-only M3b maintenance：列出当前 user_profile 的 legacy 头像候选。 */

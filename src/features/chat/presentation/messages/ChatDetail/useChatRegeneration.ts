@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ToastAndroid } from 'react-native';
 import { getChatRegenerationState, regenerateChatReply } from '../../../reply/application/RegenerateChatReply';
+import { subscribeAssistantMessageArrival } from '../../../reply/delivery/AssistantMessageArrival';
 import type { ChatRegenerationState } from '../../../reply/domain/ConversationTurn';
 import type { ChatMessage } from '../../../messages/domain/ChatMessage';
 import { setChatEventBus } from '../../../messages/events/ChatEvents';
@@ -27,8 +28,13 @@ export function useChatRegeneration(sessionId: string | undefined, refresh: () =
         const next = await getChatRegenerationState(sessionId);
         if (disposed || expectedRevision !== revision) return;
         // 替换成功后的数据库刷新先于解除隐藏，避免旧 cache 在交接空窗闪回。
-        if (stateRef.current.sourceRunId && !next.sourceRunId) await refresh();
-        if (!disposed && expectedRevision === revision) setState(next);
+        const shouldRefresh = Boolean(stateRef.current.sourceRunId && !next.sourceRunId);
+        try {
+          if (shouldRefresh) await refresh();
+        } finally {
+          // refresh 失败不能把投影卡死：隐藏状态以数据库事实为准，宁可短暂闪回旧 cache。
+          if (!disposed && expectedRevision === revision) setState(next);
+        }
       } catch (error) {
         console.error('[useChatRegeneration] 读取重写状态失败', error);
       }
@@ -41,7 +47,12 @@ export function useChatRegeneration(sessionId: string | undefined, refresh: () =
       },
     });
     void sync();
-    return () => { disposed = true; unsubscribe(); };
+    // 重写可能在宿主侧 runtime 完成：本地事件总线收不到对端事件，而原生到达端口
+    // 是每个 runtime 都能收到的跨进程信号。仅隐藏期间重读，避免逐段到达时反复刷库。
+    const unsubscribeArrival = subscribeAssistantMessageArrival(() => {
+      if (stateRef.current.sourceRunId) void sync();
+    });
+    return () => { disposed = true; unsubscribe(); unsubscribeArrival(); };
   }, [sessionId, refresh]);
 
   const regenerate = useCallback(async (message: ChatMessage, messages: ChatMessage[]) => {

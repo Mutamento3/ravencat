@@ -1,6 +1,7 @@
 /** Calls 拥有背景选择 SQL；资产与选择由调用方在同一事务提交。 */
 import { databaseCoordinator, type DatabaseTransactionExecutor } from '@platform/persistence';
 import type { CallBackgroundRepository, CallBackgroundSelection } from '../domain/CallBackgroundRepository';
+import { SettingChangeConflictError } from '@shared/errors/SettingChangeConflictError';
 
 export class SQLiteCallBackgroundRepository implements CallBackgroundRepository {
   get(assistantId: string): Promise<CallBackgroundSelection | null> {
@@ -12,7 +13,7 @@ export class SQLiteCallBackgroundRepository implements CallBackgroundRepository 
     const result = expectedRevision === null
       ? await transaction.runAsync('INSERT OR IGNORE INTO call_background_selection (id, media_asset_id, revision) VALUES (?, ?, 0)', [assistantId, mediaAssetId])
       : await transaction.runAsync('UPDATE call_background_selection SET media_asset_id = ?, revision = revision + 1 WHERE id = ? AND revision = ?', [mediaAssetId, assistantId, expectedRevision]);
-    if (result.changes !== 1) throw new Error('通话背景已被其他操作更改，请重试本次选择');
+    if (result.changes !== 1) throw new SettingChangeConflictError('通话背景已被其他操作更改，本次选择未保存。');
     return { mediaAssetId, revision: expectedRevision === null ? 0 : expectedRevision + 1 };
   }
 

@@ -78,8 +78,9 @@ const transientTimeline = loadModule(
   'src/features/chat/presentation/messages/components/useAgentTransientTimeline.ts',
   (specifier) => {
     if (specifier === 'react') {
-      return {};
+      return React;
     }
+    if (specifier === '../../../reply/delivery/AssistantMessageArrival') return arrival;
     if (specifier === '@features/chat/messages/domain/ChatTimelineOrdering') {
       return timelineOrdering;
     }
@@ -304,10 +305,36 @@ function userMessage(id = 20) {
     message({ id: 42, turnRunId: 'other-run' }),
     userMessage(43),
   ];
-  assert.deepEqual(Array.from(arrival.projectArrivedAssistantMessages(independent, [40]), (item) => item.id), [42, 43]);
+  assert.deepEqual(Array.from(arrival.projectArrivedAssistantMessages(independent, [40]), (item) => item.id), [41, 42, 43]);
 }
 
-// 行动步骤回归：隐藏正文时，不能让后续过程越过它形成假的连续分组。
+// 已确认 canonical 第二气泡与尚在运行的工具共存，连续 itemIndex 不得抢占 source sequence。
+{
+  const runId = 'mixed-segments';
+  const base = { ...message({ id: 1001, text: '第一气泡', turnRunId: runId, turnItemIndex: 2 }),
+    clientMessageId: agentIdentity.buildAgentTimelineClientMessageId(runId, 2, 0) };
+  const second = { ...base, id: 1002, text: '第二气泡', turnItemIndex: 3,
+    clientMessageId: agentIdentity.buildAgentTimelineClientMessageId(runId, 2, 1) };
+  const tool = { ...base, id: -200, senderType: 'system', text: '下一步工具', turnItemIndex: 3,
+    clientMessageId: agentIdentity.buildAgentTimelineClientMessageId(runId, 3, 0) };
+  const rendered = transientTimeline.mergeTimelineRenderMessages({ persistedMessages: [base, second], transientMessages: [tool] });
+  assert.deepEqual(Array.from(rendered, message => message.text), ['第一气泡', '第二气泡', '下一步工具']);
+  assert.equal(rendered[1], second, '展示排序不得改写持久消息的游标字段');
+  assert.equal(second.turnItemIndex, 3);
+}
+
+// 停止执行只结束活动样式，不把未知工具结果改成成功，也不抹掉原文。
+{
+  const stopped = message({ id: 1101, senderType: 'system', text: '正在调用：换头像', status: 'streaming',
+    turnRunId: 'stopped-tool', turnItemIndex: 1,
+    metadataJson: JSON.stringify({ type: 'toolStatus', source: 'chatToolFlow', status: 'running', toolNames: ['avatar'], displayNames: ['换头像'], displayText: '正在调用：换头像', interrupted: true }) });
+  const group = actionGrouping.segmentContiguousAgentActions([stopped])[0];
+  assert.equal(group.kind, 'action-group');
+  assert.equal(group.isRunning, false);
+  assert.equal(group.children[0].text, '正在调用：换头像');
+}
+
+// 行动步骤回归：后续过程及时展示并保持真实顺序。
 {
   const sessionId = 'action-order';
   const runId = 'action-order-run';
@@ -349,8 +376,8 @@ function userMessage(id = 20) {
   const beforeCommit = merge();
   assert.deepEqual(
     project(beforeCommit),
-    [user.text, ['R1', 'T1']],
-    'R1 T1 A1 R2 T2 A2 在等待正文时只能展示第一组，不能合成 R1 T1 R2 T2',
+    [user.text, ['R1', 'T1'], 'A1', ['R2', 'T2'], 'A2'],
+    '正文独立等待交付时，后续过程仍按 source sequence 进入展示流程',
   );
   assert.equal(actionGrouping.segmentContiguousAgentActions(beforeCommit)[1].key, firstGroup.key);
   assert.deepEqual(
@@ -380,7 +407,7 @@ function userMessage(id = 20) {
   });
   assert.deepEqual(
     project(merge([user, externalCard, nextUser])),
-    [user.text, ['R1', 'T1'], ['独立 run 的思考'], nextUser.text],
+    [user.text, ['R1', 'T1'], 'A1', ['R2', 'T2'], externalCard.text, 'A2', ['独立 run 的思考'], nextUser.text],
     '同 run 的后续卡片不能越过正文，但用户消息与其他 run 不受影响',
   );
   transientStore.clearAgentTransientTimelineRun(otherRunId, sessionId);
@@ -417,7 +444,7 @@ function userMessage(id = 20) {
   const afterCommit = merge();
   assert.deepEqual(
     project(arrival.projectArrivedAssistantMessages(afterCommit, [404, 407])),
-    [user.text, ['R1', 'T1'], 'A1a'],
+    [user.text, ['R1', 'T1'], 'A1a', ['R2', 'T2']],
     '未到达正文同时阻止同一 run 的后续过程越过它',
   );
   assert.deepEqual(
@@ -448,6 +475,7 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
 // 原生列表只模拟布局完成、尺寸变化和滚动命令；跟随决策使用真实组件。
 {
   let scrolls = 0;
+  const anchorTargets = [];
   let offset = 600;
   let scrollContainerMounts = 0;
   let scrollContainerUnmounts = 0;
@@ -492,7 +520,8 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     const { CompatScrollView } = useSecondaryProps(props);
     React.useImperativeHandle(ref, () => ({
       scrollToEnd: () => { scrolls++; offset = 1000; },
-    }), []);
+      scrollToIndex: ({ index }) => { anchorTargets.push(props.data[index].msg.id); },
+    }), [props.data]);
     return React.createElement('FlashList', props, React.createElement(CompatScrollView, props));
   });
   const toolStatus = loadModule(
@@ -503,8 +532,10 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     'src/features/chat/presentation/messages/components/togetherListeningCardViewModel.ts',
     () => metadata,
   );
-  const theme = loadModule('src/shared/theme/themes/moonKimi.ts').moonKimiTheme;
+  let theme = loadModule('src/shared/theme/themes/moonKimi.ts').moonKimiTheme;
   const boundaries = {
+    '../../../reply/application/ChatTurnPresentationRuntime': { reloadTurnDisplayHistory: async () => {}, retainTurnDisplayHistory: () => () => {} },
+    '../../../messages/events/ChatEvents': { setChatEventBus: () => () => {} },
     '@platform/device': selection,
     react: React,
     'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable' },
@@ -523,12 +554,19 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     './chatActionGrouping': actionGrouping,
     './chatPresentationRun': presentationRun,
     './chatStyles': { createMessageListStyles: () => ({}) },
-    './useAgentTransientTimeline': { useAgentTransientTimeline: (_session, messages) => ({ messages }) },
+    './useAgentTransientTimeline': transientTimeline,
     '@features/chat/messages/application/AgentTransientTimeline': transientStore,
     '@shared/theme': { ...themes, useTheme: () => theme },
     './chatMessageListState': state,
+    './useChatBottomFollow': loadModule(
+      'src/features/chat/presentation/messages/components/useChatBottomFollow.ts',
+      (name) => {
+        if (name === 'react') return React;
+        if (name === './chatMessageListState') return state;
+        throw new Error(`未预期的贴底运行时依赖：${name}`);
+      },
+    ),
     './chatHistoryPagination': loadModule('src/features/chat/presentation/messages/components/chatHistoryPagination.ts'),
-    './useArrivedAssistantMessages': { useArrivedAssistantMessages: (messages) => messages },
   };
   const List = loadModule(
     'src/features/chat/presentation/messages/components/ChatMessageList.tsx',
@@ -543,7 +581,8 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     act(() => pending.forEach((callback) => callback()));
   };
   let messages = [message({ id: 601, senderType: 'reasoning' }), message({ id: 602 })];
-  let props = { sessionId: 's1', messages, hasMore: false, isLoadingMore: false, onPreviewFile: () => {}, onDismissInputSurface: () => {} };
+  let dismisses = 0;
+  let props = { sessionId: 's1', messages, hasMore: false, isLoadingMore: false, onPreviewFile: () => {}, onDismissInputSurface: () => { dismisses++; } };
   let renderer;
   act(() => { renderer = create(React.createElement(List, props)); });
   const list = () => renderer.root.findByType('FlashList');
@@ -651,12 +690,140 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   });
   flushFrames();
   assert.equal(scrolls, 4, '视口跟随执行前仍应尊重用户新产生的上翻意图');
+
+  const touchSurface = () => renderer.root.findByType('View');
+  const dismissesBeforeTouch = dismisses;
+  const bottom = { nativeEvent: {
+    contentOffset: { y: 1800 }, contentSize: { height: 2400 }, layoutMeasurement: { height: 600 },
+  } };
+  act(() => list().props.onScrollEndDrag(bottom));
+  act(() => {
+    list().props.onLayout({ nativeEvent: { layout: { height: 500 } } });
+    touchSurface().props.onTouchStart();
+  });
+  flushFrames();
+  assert.equal(dismisses, dismissesBeforeTouch, '按下消息时不能收起输入面板并移动正在触摸的目标');
+  assert.equal(scrolls, 4, '已安排的自动贴底也不能打断随后开始的按压');
+  act(() => touchSurface().props.onTouchEnd());
+  flushFrames();
+  assert.equal(dismisses, dismissesBeforeTouch + 1, '抬手后收起输入面板');
+  assert.equal(scrolls, 5, '触摸结束后补上等待中的跟随');
+
+  act(() => touchSurface().props.onTouchStart());
+  for (const text of ['按压期间增长', '按压期间继续增长']) {
+    messages = [...messages.slice(0, -1), { ...messages.at(-1), text }];
+    update({ messages }); commit(2500);
+  }
+  assert.equal(scrolls, 5, '长按等待期间，连续流式更新不能取消按压');
+  act(() => touchSurface().props.onTouchEnd());
+  flushFrames();
+  assert.equal(scrolls, 6, '多次流式更新在抬手后合并为一次跟随');
+  act(() => {
+    touchSurface().props.onTouchStart();
+    touchSurface().props.onTouchEnd();
+  });
+  flushFrames();
+  assert.equal(scrolls, 6, '没有消息或视口变化时，普通点击不能制造自动贴底');
+
+  act(() => touchSurface().props.onTouchStart());
+  messages = [...messages, message({ id: 606 })];
+  update({ messages }); commit(2600);
+  const dismissesBeforeDrag = dismisses;
+  act(() => {
+    list().props.onScrollBeginDrag();
+  });
+  assert.equal(dismisses, dismissesBeforeDrag + 1, '确认原生拖动后仍应收起输入面板');
+  act(() => {
+    touchSurface().props.onTouchCancel();
+  });
+  flushFrames();
+  assert.equal(scrolls, 6, '原生滚动接管触摸时不能立即执行等待中的贴底');
+  assert.equal(dismisses, dismissesBeforeDrag + 1, '取消的触摸不再当作点击重复收起面板');
+  act(() => {
+    list().props.onScroll(away);
+    list().props.onScrollEndDrag(away);
+  });
+  flushFrames();
+  assert.equal(scrolls, 6, '长按转为上翻历史后，应放弃等待中的贴底');
+
+  act(() => list().props.onScrollEndDrag(bottom));
+  act(() => list().props.onLayout({ nativeEvent: { layout: { height: 400 } } }));
+  messages = [...messages, message({ id: 607 })];
+  update({ messages });
+  commit(2700);
+  assert.equal(scrolls, 7, '同一帧的视口变化与尾部追加合并为一次贴底');
+
   assert.equal(scrollContainerMounts, 1, '流式增长、历史分页、滚动提示与键盘变化共用同一个滚动容器');
   assert.equal(scrollContainerUnmounts, 0, '列表更新不能卸载滚动视图和已测量的消息');
+  act(() => list().props.onLayout({ nativeEvent: { layout: { height: 500 } } }));
   update({ sessionId: 's2' });
+  commit(2700);
+  assert.equal(scrolls, 7, '旧会话待执行的贴底不能滚动新会话');
   assert.equal(scrollContainerMounts, 2, '切换会话才重新建立列表滚动容器');
   assert.equal(scrollContainerUnmounts, 1, '切换会话释放旧列表');
+  layout(600);
+  act(() => list().props.onLayout({ nativeEvent: { layout: { height: 500 } } }));
+  update({ anchorMessageId: 607 });
+  flushFrames();
+  assert.equal(scrolls, 7, '定位历史消息时取消待执行的贴底');
+  assert.deepEqual(anchorTargets, [607], '锚点由原有定位入口执行');
+  update({ messages: [...messages, message({ id: 608 })] });
+  commit(2800);
+  assert.deepEqual(anchorTargets, [607], '消息追加不能重放已经消费的锚点');
+  assert.equal(scrolls, 7, '锚点定位后保持阅读位置');
+  act(() => list().props.onScrollEndDrag(bottom));
+  act(() => list().props.onLayout({ nativeEvent: { layout: { height: 400 } } }));
   act(() => renderer.unmount());
+  flushFrames();
+  assert.equal(scrolls, 7, '离开页面后不执行遗留的贴底请求');
   assert.equal(scrollContainerUnmounts, 2, '离开页面释放剩余滚动容器');
+
+  // 使用真实到达订阅、运行片段 merge 与确认 effect，覆盖 native 到达通知晚于 SQLite 读回的交接。
+  theme = { ...theme, id: 'daylight' };
+  const sessionId = 'arrival-handoff';
+  const runId = 'arrival-handoff-run';
+  const user = message({ id: 8000, sessionId, isMe: true, senderType: 'user' });
+  const canonical = message({ id: 8001, sessionId, text: '已经显示的第一段', turnRunId: runId,
+    turnItemIndex: 1, clientMessageId: agentIdentity.buildAgentTimelineClientMessageId(runId, 1),
+    createdAt: '2026-09-09T12:00:01.000Z' });
+  const later = message({ ...canonical, id: 8002, text: '尚未到达的第二段', turnItemIndex: 2,
+    clientMessageId: agentIdentity.buildAgentTimelineClientMessageId(runId, 2),
+    createdAt: '2026-09-09T12:00:02.000Z' });
+  const setPending = (ids) => act(() => arrival.applyAssistantMessageArrivalSnapshot({
+    revision: arrival.getAssistantMessageArrivalSnapshot().revision + 1,
+    pendingMessageIds: ids, pendingSessionIds: ids.length ? [sessionId] : [],
+  }));
+  setPending([canonical.id, later.id]);
+  props = { ...props, sessionId, messages: [user], anchorMessageId: null };
+  act(() => { renderer = create(React.createElement(List, props)); });
+  commit(100);
+  act(() => transientStore.applyAgentTransientTimelineSnapshots({ sessionId, snapshots: [{
+    runId, sequence: 1, stepIndex: 0, kind: 'assistant', status: 'sent', text: canonical.text,
+    clientMessageId: canonical.clientMessageId, createdAt: canonical.createdAt, time: canonical.time,
+  }] }));
+  commit(180);
+  const deliveredKey = list().props.data.at(-1).key;
+  assert.equal(list().props.data.at(-1).msg.text, canonical.text, '持久交付的运行片段立即可见');
+  for (let read = 0; read < 3; read++) {
+    update({ messages: [user, { ...canonical }, { ...later }] });
+    commit(180);
+    assert.equal(list().props.data.length, 2, 'SQLite 先读回时，已显示片段不消失，未到达尾段不泄漏');
+    assert.equal(list().props.data.at(-1).key, deliveredKey, '延迟的到达通知不能改变气泡身份');
+  }
+  setPending([later.id]);
+  commit(180);
+  assert.equal(list().props.data.at(-1).msg.id, canonical.id, '到达资格同步后由 canonical 连续接管');
+  assert.equal(list().props.data.at(-1).key, deliveredKey);
+  assert.equal(transientStore.snapshotAgentTransientTimelineWithReplacements(sessionId).length, 0,
+    '交接结束清理运行片段，不长期堆积第二份消息');
+  act(() => transientStore.reconcileAgentTransientTimelineCommit(sessionId, runId, [canonical, later]));
+  commit(180);
+  assert.equal(list().props.data.length, 2, 'committed replacement 同样不能提前展示未到达尾段');
+  setPending([]);
+  commit(260);
+  assert.deepEqual(list().props.data.map(item => item.msg.id), [user.id, canonical.id, later.id],
+    '尾段到达后各显示一次，不重放已经显示的气泡');
+  act(() => renderer.unmount());
+  flushFrames();
 }
 console.log('Chat message list state verification passed.');

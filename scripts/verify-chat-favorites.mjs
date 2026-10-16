@@ -84,6 +84,7 @@ function load(relative) {
     } }) };
     if (id.endsWith('/ChatPresentation')) return { getChatDetailAvailableAssistants: async () => [{ id: 'a', agentId: 'agent-a', name: '测试 AI' }], getChatDetailCurrentUser: async () => ({ name: '枫渡' }) };
     if (id === './MarkVoiceMessagePlayed') return { markVoiceMessagePlayed: async key => { played.push(key); } };
+    if (id.endsWith('.json')) return JSON.parse(fs.readFileSync(path.resolve(path.dirname(filename), id), 'utf8'));
     if (id.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(filename), `${id}.ts`)));
     throw new Error(`缺少外部边界 ${id}`);
   }, module, module.exports);
@@ -223,6 +224,7 @@ assert.equal((await parser.attachmentParser.parseFile({ localUri: 'file:///a.txt
 const React = require('react');
 const renderer = require('react-test-renderer');
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+globalThis.__DEV__ = false;
 const theme = load('src/shared/theme/themes/defaultLight.ts').defaultLightTheme;
 let dialog;
 const native = {

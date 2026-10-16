@@ -17,6 +17,7 @@ import {
   clearCallBackground,
   loadCallBackgroundUri,
   setCustomCallBackground,
+  subscribeCallBackgroundChanged,
 } from '@features/calls';
 import {
   PERSISTENT_IMAGE_CATEGORY,
@@ -142,13 +143,17 @@ export default function useChatSettings({
 
   useEffect(() => {
     let active = true;
+    let revision = 0;
     setCallBackgroundUri(null);
-    void loadCallBackgroundUri(aiAssistant.id)
-      .then((storedUri) => { if (active) setCallBackgroundUri(storedUri); })
-      .catch((error) => {
-        console.warn('[useChatSettings] Failed to load call background:', error);
-      });
-    return () => { active = false; };
+    const refresh = () => {
+      const current = ++revision;
+      void loadCallBackgroundUri(aiAssistant.id)
+        .then((storedUri) => { if (active && current === revision) setCallBackgroundUri(storedUri); })
+        .catch((error) => console.warn('[useChatSettings] Failed to load call background:', error));
+    };
+    const unsubscribe = subscribeCallBackgroundChanged(assistantId => { if (assistantId === aiAssistant.id) refresh(); });
+    refresh();
+    return () => { active = false; unsubscribe(); };
   }, [aiAssistant.id]);
 
   const handlePickCallBackground = useCallback(async () => {
@@ -164,12 +169,11 @@ export default function useChatSettings({
       const asset = await pickCroppedImage({ aspect: 'screen' });
       if (!asset) return;
 
-      const persistedUri = await setCustomCallBackground({
+      await setCustomCallBackground({
         assistantId: aiAssistant.id,
         sourceUri: asset.uri,
         sourceWidth: asset.width ?? null,
       });
-      setCallBackgroundUri(persistedUri);
       showAppDialog({ title: '成功', message: '通话背景已更新', tone: 'success' });
     } catch (error) {
       console.error('Failed to pick call background:', error);
@@ -187,7 +191,6 @@ export default function useChatSettings({
         onPress: async () => {
           try {
             await clearCallBackground(aiAssistant.id);
-            setCallBackgroundUri(null);
             showAppDialog({ title: '成功', message: '已恢复默认通话背景', tone: 'success' });
           } catch (error) {
             console.error('Failed to clear call background:', error);

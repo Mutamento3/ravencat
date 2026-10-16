@@ -3,13 +3,44 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createRuntimeSlot } from '@shared/runtime/RuntimeSlot';
 import { databaseCoordinator, type DatabaseTransactionExecutor } from '@platform/persistence';
 import { PERSISTENT_IMAGE_CATEGORY, copyPickedImageToAppStorage, deleteManagedPersistentImageIfExists, isAppCacheFileUri } from '@platform/device/DeviceMediaService';
-import { createMediaAssetWithReference, MEDIA_ASSET_STORAGE_BACKEND, releaseMediaAssetCandidates, resolveMediaAsset } from '@features/media';
+import { commitCroppedImageSelection, createMediaAssetWithReference, MEDIA_ASSET_STORAGE_BACKEND, releaseMediaAssetCandidates, resolveMediaAsset, type CroppedImageSelectionInput } from '@features/media';
 import type { CallBackgroundRepository } from '../domain/CallBackgroundRepository';
 
 const LEGACY_BACKGROUND_KEY = 'kimi_phone.call.background_uri';
 const backgroundRuntime = createRuntimeSlot<{ repository: CallBackgroundRepository }>('Calls background');
 export function configureCallBackgroundRuntime(repository: CallBackgroundRepository): void {
   backgroundRuntime.configure({ repository });
+}
+
+const backgroundListeners = new Set<(assistantId: string) => void>();
+export function subscribeCallBackgroundChanged(listener: (assistantId: string) => void): () => void {
+  backgroundListeners.add(listener);
+  return () => { backgroundListeners.delete(listener); };
+}
+function publishBackgroundChanged(assistantId: string): void {
+  for (const listener of backgroundListeners) listener(assistantId);
+}
+
+export async function getCallBackgroundImageSelection(assistantId: string) {
+  let selection = await backgroundRuntime.get().repository.get(assistantId);
+  if (!selection) {
+    await ensureCallBackgroundMigration();
+    selection = await backgroundRuntime.get().repository.get(assistantId);
+  }
+  return { mediaAssetId: selection?.mediaAssetId ?? null, legacyUri: null };
+}
+
+export async function changeCallBackgroundFromMediaAsset(assistantId: string, input: CroppedImageSelectionInput,
+  guard: (transaction: DatabaseTransactionExecutor) => Promise<void>) {
+  const repository = backgroundRuntime.get().repository;
+  const expected = await repository.get(assistantId);
+  const result = await commitCroppedImageSelection(input, async (tx, assetId) => {
+    await guard(tx);
+    await repository.commit(tx, assistantId, expected?.revision ?? null, assetId);
+  });
+  await releaseMediaAssetCandidates([expected?.mediaAssetId]);
+  publishBackgroundChanged(assistantId);
+  return result;
 }
 
 export interface SetCustomCallBackgroundInput {
@@ -96,6 +127,7 @@ export async function setCustomCallBackground(input: SetCustomCallBackgroundInpu
   const previous = await repository.get(input.assistantId);
   const prepared = await commitBackgroundImage(input, (tx, assetId) => repository.commit(tx, input.assistantId, previous?.revision ?? null, assetId));
   await releaseMediaAssetCandidates([previous?.mediaAssetId]);
+  publishBackgroundChanged(input.assistantId);
   return prepared.uri;
 }
 
@@ -105,4 +137,5 @@ export async function clearCallBackground(assistantId: string): Promise<void> {
   await databaseCoordinator.transaction({ name: 'calls.background.clear', feature: 'calls', priority: 'interactive' }, (tx) =>
     repository.commit(tx, assistantId, previous?.revision ?? null, null));
   await releaseMediaAssetCandidates([previous?.mediaAssetId]);
+  publishBackgroundChanged(assistantId);
 }

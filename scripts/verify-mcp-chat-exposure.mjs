@@ -70,8 +70,8 @@ assert.equal(
 );
 assert.equal(
   resolvePolicy({ enableTools: true }, { groupChat: { groupId: 'group-1' } }).enableTools,
-  false,
-  '群聊必须关闭 MCP 工具策略',
+  true,
+  '群聊使用已授权工具，不另行关闭 MCP 工具策略',
 );
 assert.equal(
   resolvePolicy(
@@ -83,8 +83,8 @@ assert.equal(
       }],
     },
   ).enableTools,
-  false,
-  '图片上下文必须关闭 MCP 工具策略',
+  true,
+  '图片上下文保留已授权的 MCP 工具策略',
 );
 assert.equal(
   resolvePolicy({ enableTools: true }).enableTools,
@@ -328,6 +328,23 @@ let mcpResolveCalls;
 let capturedProcessFlow;
 let processFlowError = null;
 let capturedPersistedErrorMessage = null;
+const savedErrorMessages = [];
+const chatReplyErrors = loadTypeScriptModule('src/features/chat/reply/application/ChatReplyErrors.ts', {
+  '../../messages/application/MessagePersistence': {
+    persistChatMessage: async ({ message }) => {
+      const saved = { ...message, id: savedErrorMessages.length + 1 };
+      savedErrorMessages.push(JSON.parse(JSON.stringify(saved)));
+      return saved;
+    },
+  },
+  './ChatReplyUtils': { formatMessageTime: () => '12:00' },
+});
+class ChatAgentRunFailedError extends Error {
+  constructor(diagnosticText) {
+    super('Chat Agent run failed');
+    this.diagnosticText = diagnosticText;
+  }
+}
 let processPreparationCalls = 0;
 let processPreparation = {
   additionalPromptBlocks: [],
@@ -352,9 +369,10 @@ const { processAIReply } = loadTypeScriptModule(
     },
     './ChatReplyErrors': {
       notifyReplyFailed() {},
-      saveErrorMessage: async (_sessionId, errorMessage) => {
+      saveErrorMessage: async (...args) => {
+        const [, errorMessage] = args;
         capturedPersistedErrorMessage = errorMessage;
-        return { id: 1 };
+        return chatReplyErrors.saveErrorMessage(...args);
       },
     },
     './ChatReplyRuntime': {
@@ -391,6 +409,7 @@ const { processAIReply } = loadTypeScriptModule(
     '../agent/ChatAgentModelGateway': {
       ChatAgentModelRequestError: class ChatAgentModelRequestError extends Error {},
     },
+    '../agent/ChatAgentRunProjector': { ChatAgentRunFailedError },
   },
 );
 
@@ -525,15 +544,19 @@ const groupProcess = await runProcessExposureCase({
   enableTools: true,
   runtimeContext: { groupChat: { groupId: 'group-1' } },
 });
-assert.equal(groupProcess.policy.enableTools, false);
+assert.equal(groupProcess.policy.enableTools, true);
 assert.deepEqual(
   groupProcess.runtimeContext.allowedToolNames,
-  [],
-  '真实 processAIReply 在群聊 policy 边界后必须交给 Agent Flow 空工具名单',
+  ['mcp_only'],
+  '真实 processAIReply 在群聊中仍消费已授权的 MCP 工具名单',
 );
 
 const imageProcess = await runProcessExposureCase({
   enableTools: true,
+  toolOverrides: {
+    resolveAllowedNames: async () => ['package_child'],
+    getRuntimeAllowedNames: (config) => config.allowedToolNames.filter((name) => name === 'package_child'),
+  },
   runtimeContext: {
     batchModelInput: [{
       type: 'image_url',
@@ -541,11 +564,11 @@ const imageProcess = await runProcessExposureCase({
     }],
   },
 });
-assert.equal(imageProcess.policy.enableTools, false);
+assert.equal(imageProcess.policy.enableTools, true);
 assert.deepEqual(
   imageProcess.runtimeContext.allowedToolNames,
-  [],
-  '真实 processAIReply 在图片 policy 边界后必须交给 Agent Flow 空工具名单',
+  ['package_child', 'mcp_only'],
+  '真实 processAIReply 的图片输入仍须向 Agent Flow 传递已授权的内置与 MCP 工具',
 );
 
 let processConsoleErrorCount = 0;
@@ -563,6 +586,18 @@ try {
     '未分类 Agent 错误必须保留通用用户可见错误消息',
   );
   assert.equal(processConsoleErrorCount, 1, '未分类 Agent 错误必须继续记录 console.error');
+  processFlowError = new ChatAgentRunFailedError('错误码：MODEL_PROTOCOL_ERROR\n回复编号：failed-run\n工具记录：getMomentDetail：未执行');
+  await runProcessExposureCase({ enableTools: true });
+  assert.match(capturedPersistedErrorMessage, /处理 AI 回复时发生错误/u);
+  assert.match(capturedPersistedErrorMessage, /MODEL_PROTOCOL_ERROR/u);
+  assert.match(capturedPersistedErrorMessage, /failed-run/u);
+  assert.match(capturedPersistedErrorMessage, /getMomentDetail.*未执行/u,
+    'Agent 失败诊断必须交给错误消息持久化，不能只存在控制台或临时工具卡片中');
+  assert.match(savedErrorMessages.at(-1).text, /MODEL_PROTOCOL_ERROR/u);
+  assert.match(savedErrorMessages.at(-1).text, /getMomentDetail.*未执行/u);
+  assert.equal(savedErrorMessages.at(-1).senderType, 'system');
+  assert.equal(JSON.parse(savedErrorMessages.at(-1).metadataJson).kind, 'error',
+    '诊断沿用系统错误消息语义，不写成 AI 回复或另建日志状态');
 } finally {
   processFlowError = null;
   console.error = originalConsoleError;
@@ -590,8 +625,7 @@ const { PromptPackBlockFactory } = loadTypeScriptModule(
     '@shared/prompt': {},
   },
 );
-const mcpPromptBlock = new PromptPackBlockFactory().createToolsDescriptionBlock(
-  '',
+const mcpPromptBlock = new PromptPackBlockFactory().createMcpServicesBlock(
   [
     { name: '无简介服务', description: '' },
     { name: '有简介服务', description: '服务简介' },

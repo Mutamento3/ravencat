@@ -40,7 +40,7 @@ export const definition = {
           agentIds: {
             type: 'array' as const,
             items: { type: 'string' as const },
-            description: 'selected 的 allow list 或 all_except 的 deny list，只能使用「时刻可见范围候选」中的稳定 agentId',
+            description: 'selected 的 allow list 或 all_except 的 deny list，使用本参数列出的时刻可见范围候选的稳定 agentId；名称仅用于识别',
           },
         },
         required: ['mode'],
@@ -99,3 +99,31 @@ export async function execute(
 }
 
 export const AICreateMomentTool = { name: definition.name, definition, execute };
+
+/** 名单随发布工具 schema 暴露；每次 run 冻结一次，拆包不改写聊天上下文。 */
+export async function createMomentToolForRun(): Promise<typeof AICreateMomentTool> {
+  const candidates = (await listAIAssistants()).map((assistant) => ({
+    displayName: assistant.name, agentId: assistant.agentId,
+  }));
+  const audience = definition.parameters.properties.audience;
+  const agentIds = audience.properties.agentIds;
+  return {
+    ...AICreateMomentTool,
+    definition: {
+      ...definition,
+      parameters: {
+        ...definition.parameters,
+        properties: {
+          ...definition.parameters.properties,
+          audience: {
+            ...audience,
+            properties: {
+              ...audience.properties,
+              agentIds: { ...agentIds, description: `${agentIds.description}\n${JSON.stringify(candidates)}` },
+            },
+          },
+        },
+      },
+    },
+  };
+}

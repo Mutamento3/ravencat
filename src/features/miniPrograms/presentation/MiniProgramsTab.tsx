@@ -11,6 +11,7 @@ type MiniProgramId =
   | 'wallet'
   | 'auxiliaryModels'
   | 'mcpTools'
+  | 'webSearch'
   | 'memory'
   | 'promptCenter'
   | 'ravenCatCompanion'
@@ -55,6 +56,13 @@ const MINI_PROGRAMS: MiniProgramConfig[] = [
     name: 'MCP 工具',
     icon: 'server-outline',
     iconColor: '#5856D6',
+    category: 'AI 工具',
+  },
+  {
+    id: 'webSearch',
+    name: '联网搜索',
+    icon: 'search-outline',
+    iconColor: '#34C759',
     category: 'AI 工具',
   },
   {

@@ -12,8 +12,9 @@ import { emitChatMessagesUpdated } from '@features/chat/composition';
 import { logTurnTimeline } from '@shared/diagnostics/TurnTimelineLog';
 import { ensureHostDatabaseReady } from '../composition/ensureHostDatabaseReady';
 import { getConversationTurnCoordinator } from './ConversationTurnCoordinator';
+import { withConversationExecutionLifetime, type ConversationExecutionLifetimeData } from './ConversationExecutionLifetime';
 
-interface ConversationTurnTaskData {
+interface ConversationTurnTaskData extends ConversationExecutionLifetimeData {
   sessionIds?: string[];
   correlationId?: string;
   deliveryTiming?: 'paced' | 'immediate';
@@ -31,31 +32,36 @@ export async function runConversationTurnHeadlessTask(
   }
   const correlationId = data.correlationId?.trim() || undefined;
 
-  await ensureHostDatabaseReady();
+  await withConversationExecutionLifetime(data, async lifetime => {
+    await ensureHostDatabaseReady();
 
-  // 后台 runtime 的 setTimeout 会被冻结：后台执行一律 immediate，跳过 paced 分段定时器。
-  const deliveryTiming = AppState.currentState === 'active'
-    ? data.deliveryTiming
-    : 'immediate';
+    // 后台 runtime 的 setTimeout 会被冻结：后台执行一律 immediate，跳过 paced 分段定时器。
+    const deliveryTiming = AppState.currentState === 'active'
+      ? data.deliveryTiming
+      : 'immediate';
 
-  // 串行执行：recovery 批量场景下模型请求并发有界（=1），claim/orphan 判定在
-  // executeTurnFromHost 内按会话独立进行，事实以持久化 fence 为准。
-  for (const sessionId of sessionIds) {
-    logTurnTimeline('execution_host_started', {
-      sessionId,
-      correlationId,
-    });
-    const result = await getConversationTurnCoordinator().executeTurnFromHost(sessionId, {
-      correlationId,
-      deliveryTiming,
-      replyCallbacks: {
-        notifyUI: emitChatMessagesUpdated,
-      },
-    });
-    console.info('[ConversationTurnExecutionTask] session completed', {
-      sessionId,
-      correlationId: correlationId ?? null,
-      result,
-    });
-  }
+    // 串行执行：recovery 批量场景下模型请求并发有界（=1），claim/orphan 判定在
+    // executeTurnFromHost 内按会话独立进行，事实以持久化 fence 为准。
+    for (const sessionId of sessionIds) {
+      if (lifetime.signal.aborted || performance.now() >= lifetime.executionDeadlineAt) break;
+      logTurnTimeline('execution_host_started', {
+        hostId: data.hostId,
+        sessionId,
+        correlationId,
+      });
+      const result = await getConversationTurnCoordinator().executeTurnFromHost(sessionId, {
+        ...lifetime,
+        correlationId,
+        deliveryTiming,
+        replyCallbacks: {
+          notifyUI: emitChatMessagesUpdated,
+        },
+      });
+      console.info('[ConversationTurnExecutionTask] session completed', {
+        sessionId,
+        correlationId: correlationId ?? null,
+        result,
+      });
+    }
+  });
 }

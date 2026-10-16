@@ -19,6 +19,7 @@ const NEW_ROOT_NAMES = new Set(['app', 'host', 'features', 'platform', 'shared']
     'moments',
     'companion',
     'phoneTools',
+    'webTools',
   ]);
 const CHAT_APPLICATION_ASSISTANT_CONCRETE_REPOSITORIES = new Set([
   'AIAssistantRepository',

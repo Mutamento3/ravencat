@@ -133,6 +133,7 @@ export function useChatDetail(
   // 实时同步：监听新消息，更新消息列表和输入状态
   useChatTimelineSync({
     sessionId,
+    messages,
     isTyping,
     setIsTyping,
     setMessages,

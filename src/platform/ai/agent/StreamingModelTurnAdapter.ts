@@ -22,7 +22,6 @@ export class StreamingModelTurnAdapter {
     const response = await this.provider.chatStreamWithTools(request.messages, request.tools, {
       toolChoice: request.toolChoice,
       includeSystemPrompt: request.includeSystemPrompt,
-      enforceReasoningContent: request.enforceReasoningContent,
       signal: request.signal,
       onDelta: async (delta) => {
         await acceptStreamDelta(collector, delta);

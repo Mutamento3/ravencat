@@ -46,6 +46,7 @@ function loadTypeScriptModuleWithMocks(relativePath, mocks) {
   }).outputText;
   const module = { exports: {} };
   const requireMock = (specifier) => {
+    if (specifier === '@shared/errors/SettingChangeConflictError') return loadTypeScriptModuleWithMocks('src/shared/errors/SettingChangeConflictError.ts', {});
     if (specifier === './MediaFileLifetime') return loadTypeScriptModuleWithMocks('src/platform/device/MediaFileLifetime.ts', {});
     if (specifier === './ChatAttachmentMime') return loadTypeScriptModuleWithMocks('src/features/chat/messages/application/ChatAttachmentMime.ts', {});
     assert.ok(Object.hasOwn(mocks, specifier), `未声明的运行时依赖：${specifier}`);

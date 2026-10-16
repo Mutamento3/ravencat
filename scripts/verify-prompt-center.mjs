@@ -1,3 +1,4 @@
+import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -229,7 +230,8 @@ const previewBlockMetadata = loadTypeScriptModule(
 );
 const { PromptPackCompiler } = loadTypeScriptModule(
   'src/host/prompt/compiler/PromptPackCompiler.ts',
-  { '../tokenBudget': previewTokenBudget, './promptBlockMetadata': previewBlockMetadata },
+  {
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW }, '../tokenBudget': previewTokenBudget, './promptBlockMetadata': previewBlockMetadata },
 );
 const previewSystemPresets = loadTypeScriptModule(
   'src/host/prompt/compiler/systemPromptPresets.ts',

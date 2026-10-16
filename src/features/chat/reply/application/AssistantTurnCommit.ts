@@ -27,6 +27,10 @@ import type {
 } from './ChatReplyTypes';
 
 export interface AssistantTurnCommitPort {
+  /** canonical 展示快照接缝；旁路提交不拥有 ConversationTurn 展示记录。 */
+  timelineSink?: import('../agent/ChatAgentTimeline').AgentTimelineTransientSink;
+  recordToolExecutionStarted?: () => Promise<void>;
+  observeRunEvent?: (event: import('@platform/agentRuntime').AgentRunEvent) => void;
   /** 只有 canonical 用户回合持有跨轮拆包状态；旁路运行只在当前 run 展开。 */
   readOpenToolPackageIds?: () => Promise<string[]>;
   persistCompletedAssistantReply(

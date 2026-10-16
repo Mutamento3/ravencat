@@ -186,17 +186,17 @@ const registration = loadTypeScriptModule(
     '@features/prompting': { readPromptDefaults: async () => ({ toolPermissions: defaultToolPermissions }) },
     '@features/webTools': featureProxy,
     '@features/media': featureProxy,
-    './assertImageToolRunCurrent': {},
+    './ApplicationSettingsTools': { applicationSettingsTools: [] },
     '@shared/aiTools': {},
     '@features/assistants': new Proxy({
       assistantToolPermissionRepository,
       aiAssistantRepository,
-      createChangeOwnAvatarTool: () => placeholderTool('change_own_avatar'),
     }, {
       get: (target, property) => target[property] ?? placeholderTool(String(property)),
     }),
     '@features/protocol': featureProxy,
     '@features/moments': featureProxy,
+    '@features/moments/composition': {},
     '@features/wallet': featureProxy,
     '@features/calls': featureProxy,
     '@features/memory': featureProxy,
@@ -294,6 +294,8 @@ const { configurePromptingRuntime } = loadTypeScriptModule('src/host/composition
   '@features/assistants': {
     assistantToolPermissionRepository,
     aiAssistantRepository,
+    getAssistantDisplayName: (assistant) => assistant.nickname || assistant.name,
+    getHostAICooldownStatus: async () => ({ appointment: { isInCooldown: false } }),
   },
   '@features/mcpTools': {},
   '@features/chat/composition': {},
@@ -316,14 +318,21 @@ await setAssistantToolPermission('host-ai', 'netease_search_songs', true);
 assert.equal((await registration.resolveAllowedToolNames('host-ai')).includes('netease_search_songs'), true);
 toolPermissionOverrides = [];
 
-const prompt = registration.buildToolsDescription(hostConfig);
-assert.match(prompt, /open_tool_package/u);
+const prompt = registration.buildToolsDescription(registration.getRuntimeAllowedToolNamesForAI(hostConfig));
+assert.match(prompt, /function schema/u);
+assert.equal(registration.buildToolsDescription([]), '', '空授权不产生工具说明');
+assert.doesNotMatch(registration.buildToolsDescription(['mcp_test']), /open_tool_package|create_ai_schedule|send_voice_message/,
+  'MCP-only 复用基础规则，不虚构内置工具和拆包入口');
+assert.match(registration.buildToolsDescription(['release_host_cooldown']), /function schema/,
+  '动态工具复用同一说明入口，不再被静态权限策略二次过滤');
+assert.doesNotMatch(registration.buildToolsDescription(['create_ai_schedule']), /update_ai_schedule/,
+  '创建权限不带出修改工具名称');
 const packageExposure = loadTypeScriptModule('src/host/composition/agent/ToolPackageExposure.ts', {});
 const runExposure = packageExposure.registerToolPackagesForHostRun({
   registry, allowedToolNames: expectedNames, bindings, openPackageIds: [],
 });
 assert.deepEqual(runExposure.packageToolNames, expectedNames);
-assert.deepEqual(runExposure.metaToolNames, ['open_tool_package']);
+assert.deepEqual(runExposure.metaToolNames, ['open_tool_package', 'close_tool_package']);
 assert.deepEqual(runExposure.visibleToolNames(), []);
 assert.match(runExposure.instructions().catalog, /网易云音乐/u);
 assert.doesNotMatch(runExposure.instructions().catalog, /"properties"|"required"/u);
@@ -337,7 +346,7 @@ const context = {
   toolCallId: 'call-1', abortSignal: new AbortController().signal, getAIId: () => 'host-ai',
 };
 const opened = await registry.get('open_tool_package').execute({ package_id: 'neteaseMusic' }, context);
-assert.equal(opened.metadata.openedToolPackageId, 'neteaseMusic');
+assert.deepEqual(opened.metadata.toolPackageChange, { packageId: 'neteaseMusic', action: 'open' });
 assert.deepEqual(runExposure.visibleToolNames(), expectedNames);
 const callTool = { async execute(input, executionContext) {
   const prepared = executor.prepare({ id: executionContext.toolCallId, name: input.tool_name,

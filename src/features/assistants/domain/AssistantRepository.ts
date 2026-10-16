@@ -16,6 +16,10 @@ export interface CommitAIAvatarMediaAssetReferenceInput {
   mediaAssetId: string;
 }
 
+export type ReplaceAIAvatarMediaAssetReferenceInput = Omit<CommitAIAvatarMediaAssetReferenceInput, 'mediaAssetId'> & {
+  mediaAssetId: string | null;
+};
+
 export interface AIAvatarMediaAssetReference {
   avatar: string | null;
   avatarMediaAssetId: string | null;
@@ -66,8 +70,8 @@ export interface AIAssistantDeletionResult {
 export interface IAIAssistantRepository {
   applyContextLimits(assistantIds: readonly string[], settings: AssistantContextLimits): Promise<void>;
   getNicknameContext(assistantId: string): Promise<AssistantNicknameContext | null>;
-  acknowledgeNicknameChanges(assistantId: string, throughChangeId: number): Promise<void>;
   getAll(): Promise<AIProfile[]>;
+  listIds(): Promise<string[]>;
   listSummaries(): Promise<AIAssistantSummary[]>;
   getById(assistantId: string): Promise<AIProfile | null>;
   getLedgerAI(): Promise<AIProfile | null>;
@@ -76,7 +80,7 @@ export interface IAIAssistantRepository {
   setLedgerAI(aiId: string | null): Promise<boolean>;
   insert(aiAssistant: AIProfile): Promise<AIProfile>;
   updateModelSettings(assistantId: string, settings: AIModelSettingsUpdate): Promise<AIProfile>;
-  updateSettings(assistantId: string, settings: AIAssistantSettingsUpdate): Promise<boolean>;
+  updateSettingsInTransaction(transaction: DatabaseTransactionExecutor, assistantId: string, settings: AIAssistantSettingsUpdate): Promise<AssistantSettingsUpdateResult>;
   /**
    * 删除 AI 并在同一事务内返回本次删除带走的 media asset 引用候选。
    */
@@ -90,21 +94,25 @@ export interface IAIAssistantRepository {
     transaction: DatabaseTransactionExecutor,
     input: CommitAIAvatarMediaAssetReferenceInput,
   ): Promise<void>;
-  replaceAvatarMediaAssetReference(
-    input: CommitAIAvatarMediaAssetReferenceInput,
-    guard: (transaction: DatabaseTransactionExecutor) => Promise<void>,
-  ): Promise<boolean>;
+  tryCommitAvatarMediaAssetReferenceInTransaction(transaction: DatabaseTransactionExecutor, input: ReplaceAIAvatarMediaAssetReferenceInput): Promise<boolean>;
+  canManageApplicationSettingsInTransaction(transaction: DatabaseTransactionExecutor, actorId: string, targetId: string | null): Promise<boolean>;
+  changeNameInTransaction(transaction: DatabaseTransactionExecutor, assistantId: string, expectedName: string, name: string): Promise<boolean>;
 }
 export type AssistantContextLimits = Pick<AIProfile,
   'privateContextPrimaryLimit' | 'privateContextSecondaryLimit' | 'groupContextPrimaryLimit' | 'groupContextSecondaryLimit'>;
 
-/** 备注历史仅供当前角色的上下文查询，不进入公共身份目录。 */
+/** 昵称变更是用户操作事实，由 Host 交给 Chat 在同一事务记录。 */
+export interface AssistantNicknameChange {
+  changeId: string;
+  assistantId: string;
+  previousNickname: string | null;
+  nickname: string | null;
+  occurredAt: string;
+}
+export interface AssistantSettingsUpdateResult {
+  updated: boolean;
+  nicknameChange: AssistantNicknameChange | null;
+}
 export interface AssistantNicknameContext {
   nickname: string | null;
-  changes: {
-    id: number;
-    previousNickname: string | null;
-    nickname: string | null;
-    acknowledged: boolean;
-  }[];
 }

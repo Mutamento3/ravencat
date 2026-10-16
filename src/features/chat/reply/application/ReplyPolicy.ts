@@ -33,8 +33,7 @@ export function canUseToolsInRuntimeContext(
 ): boolean {
   return Boolean(
     aiConfig.enableTools &&
-    (runtimeContext.allowedToolNames?.length || 0) > 0 &&
-    !checkRuntimeContextContainsImage(runtimeContext)
+    (runtimeContext.allowedToolNames?.length || 0) > 0
   );
 }
 
@@ -53,24 +52,4 @@ export function shouldUseStreamingReply(
     triggerSource === 'chat' &&
     !runtimeContext.groupChat
   );
-}
-
-function checkRuntimeContextContainsImage(runtimeContext: AIReplyRuntimeContext): boolean {
-  if (checkMessageContentContainsImage(runtimeContext.batchModelInput)) {
-    return true;
-  }
-  return runtimeContext.turnInputMessages?.some((message) => (
-    checkMessageContentContainsImage(message.content)
-  )) ?? false;
-}
-
-function checkMessageContentContainsImage(
-  content: AIReplyRuntimeContext['batchModelInput'] | undefined
-): boolean {
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some((part) => (
-    part.type === 'image_url' && Boolean(part.image_url.url)
-  ));
 }

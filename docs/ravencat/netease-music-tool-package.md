@@ -78,7 +78,7 @@ exact-package MediaSession
 
 MediaSession ownership 属于 Device Control / Phone Tools；Together Listening 只消费这些公共事实与动作，不复制 observer、transport control 或 session arbitration。
 
-## 6. 按需拆包与三轮暴露
+## 6. 按需拆包与主动开关
 
 网易云八个工具仍注册在唯一 Agent Tool Registry。未展开时，模型只收到 `neteaseMusic`
 的用途、已授权工具简介与统一 `open_tool_package` schema；拆包后，从下一次模型请求开始
@@ -91,10 +91,10 @@ MediaSession ownership 属于 Device Control / Phone Tools；Together Listening 
 → netease_search_songs / netease_play_song 等原始工具
 ```
 
-普通单聊里，拆包当轮立即可用，成功正式回复的 T3 提交后再保留后续三轮用户与 AI 对话。
-多包分别计时；失败、取消和消息分段不扣轮，第三轮提交后自动收起，之后可以再次拆封。
+普通单聊里，拆包当轮立即可用，成功正式回复的 T3 提交后持续保持展开。
+AI 预计不再需要时调用 `close_tool_package` 收起，之后可以再次拆封；失败、取消和事务回滚不改变持久开关。
 Chat 持有会话与 AI 隔离的持久状态，Host 只冻结本次授权并组合动态可见集合。
-其他运行只在当前 run 展开，不计入普通用户对话的三轮。
+其他运行的开关只在当前 run 生效，不改写普通用户对话的持久状态。
 
 产品 Catalog、包成员关系、查看简介与展开状态都不能增加授权。模型只能调用本次请求
 实际暴露的工具，参数由 Agent Runtime 的唯一输入边界校验；没有已授权 child 时不出现该包。

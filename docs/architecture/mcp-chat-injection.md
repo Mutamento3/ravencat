@@ -11,7 +11,7 @@ MCP 接入聊天后，模型每轮只在工具请求中看到固定的两个 met
 - mcp_list_tools：从本轮冻结的授权工具定义中按需读取服务摘要、工具目录或单个工具的参数 schema，不联网。
 - mcp_call_tool：按服务显示名和远端工具名执行一个已经通过权限与 schema 校验的远端工具。
 
-获授权 AI 的非群聊 Prompt 会常驻一份轻量服务摘要。摘要只包含该 AI 可用服务的显示名和用户填写的简介，不包含远端工具列表或完整 JSON Schema。模型需要真正使用某个服务时，先调用 mcp_list_tools，再调用 mcp_call_tool。这样每轮模型请求的 tools schema 不随 MCP 工具数量增长。
+获授权 AI 的聊天 Prompt 会常驻一份轻量服务摘要，单聊与群成员回复使用同一工具说明组装路径。摘要只包含该 AI 可用服务的显示名和用户填写的简介，不包含远端工具列表或完整 JSON Schema。模型需要真正使用某个服务时，先调用 mcp_list_tools，再调用 mcp_call_tool。这样每轮模型请求的 tools schema 不随 MCP 工具数量增长。
 
 MCP 仍然走既有 AgentRuntime、AgentToolRegistry、AgentRunLoop、工具 observation、取消和 run 生命周期；没有复制第二套聊天循环或消息提交流程。
 
@@ -92,7 +92,7 @@ ProcessAIReply
 
 McpExposureBundle 是 policy 边界的一次性暴露结果，保证服务摘要和本轮候选工具来自同一个解析结果。run 启动时的再次冻结是执行权威，用于防止 Prompt 组装和真正执行之间配置、快照或授权发生变化；它不会把新的 MCP 能力反向添加到已经裁决的 task。
 
-policy 已关闭工具时，ProcessAIReply 不读取 MCP 暴露面；run 也不读取 MCP source。群聊和图片上下文按既有 policy 关闭 MCP，群聊 Prompt 不注入 MCP 服务摘要。
+AI 工具总开关关闭时，ProcessAIReply 不读取 MCP 暴露面；run 也不读取 MCP source。群聊与图片输入不会额外取消已授权的工具，最终执行仍使用本次 task allowlist 与最新授权的交集。
 
 ## 4. Prompt 服务摘要
 

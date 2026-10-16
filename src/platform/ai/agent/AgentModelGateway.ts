@@ -18,7 +18,6 @@ export interface AgentModelRequest {
   tools: ToolDefinition[];
   toolChoice?: ChatWithToolsOptions['toolChoice'];
   includeSystemPrompt?: boolean;
-  enforceReasoningContent?: boolean;
   signal?: AbortSignal;
 }
 

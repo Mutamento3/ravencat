@@ -40,14 +40,14 @@ const mocks = {
   './chatSummaryStyles': {},
   './chatSettingsStyles': {createStyles:()=>({})},
   '../../summary/application/ChatSummary': {
-    getChatSummaryContext: async () => fixedSnapshot,
+    getChatInterruptedTurnContext: async () => [], getChatSummaryContext: async () => fixedSnapshot,
     setFixedChatContextStart: async (...args) => { fixedWrites.push(args); },
   },
   '../../summary/application/ChatSummaryRuntime': {subscribeChatSummaryChanged:listener=>{fixedSummaryListener=listener;return()=>{};}},
   '../../messages/events/ChatEvents': {setChatEventBus:bus=>{fixedMessageBus=bus;return()=>{};}},
   '../application/ChatSummaryRuntime': { subscribeChatSummaryChanged: listener => {summaryPageListener=listener;return()=>{};} },
   '../application/ChatSummary': {
-    getChatSummaryContext: async () => ({ settings, segments, tasks: summaryTasks }),
+    getChatInterruptedTurnContext: async () => [], getChatSummaryContext: async () => ({ settings, segments, tasks: summaryTasks }),
     updateChatSummarySettings: async (conversationId, patch) => { writes.push(['settings',conversationId,patch]); },
     retryChatSummaryTask: async (...args) => { writes.push(['retry',...args]); await new Promise(resolve=>{finishRetry=resolve;}); },
     editChatSummary: async (...args) => { writes.push(['edit', ...args]); },

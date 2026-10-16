@@ -1,4 +1,4 @@
-/** 昵称持久化、修改提醒、旧确认隔离和模型名称隐私的行为验证。 */
+/** 昵称当前值与操作历史的原子性、窗口、摘要和名称隐私行为验证。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,8 +38,8 @@ const database = {
   },
 };
 const { AIAssistantRepository } = load('src/features/assistants/infrastructure/SQLiteAssistantRepository.ts', {
-  '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => database } },
-  '@features/profile': {}, '@features/media': {},
+  '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => database, transaction: (_, task) => database.withExclusiveTransactionAsync(task) } },
+  '@features/profile': {}, '@features/media': { resolveMediaAssetReferenceUri: () => null },
   './SQLiteAuxiliaryModelDefaults': {}, './SQLiteAuxiliaryModelRepository': {},
   '../domain/AIProfile': { createAIProfile: (data) => data },
 });
@@ -51,57 +51,97 @@ for (const id of ['self', 'other']) {
   db.prepare('INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(id, `actor-${id}`, `原名-${id}`, 'test', '2026-10-13', '2026-10-13');
 }
-assert.equal((await nickname.getAssistantNicknamePromptContext('self', '枫渡', true)).content, '');
-assert.equal(nickname.getAssistantDisplayName({ name: '原名', nickname: null }), '原名');
-assert.equal(await repository.updateSettings('deleted', { nickname: '不存在' }), false);
-await repository.updateSettings('other', { nickname: '别人的私密备注' });
-await repository.updateSettings('self', { nickname: 'daddy' });
-await repository.updateSettings('self', { nickname: 'daddy' });
-assert.equal((await repository.getNicknameContext('self')).changes.length, 1, '相同值不产生重复事件');
-const first = await nickname.getAssistantNicknamePromptContext('self', '枫渡', true);
-await repository.updateSettings('self', { name: '修改后的公开名称' });
+
+const coordinator = { openTaskExecutor: () => database, transaction: (_, task) => database.withExclusiveTransactionAsync(task) };
+const persistence = { '@platform/persistence': { databaseCoordinator: coordinator } };
+const { SessionRepository } = load('src/features/chat/conversation/infrastructure/SQLiteSessionRepository.ts', persistence);
+const { MessageRepository } = load('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts', persistence);
+const sessions = new SessionRepository(), messages = new MessageRepository();
+let notifications = 0;
+const { recordAssistantNicknameChangeInTransaction } = load('src/features/chat/messages/application/RecordAssistantNicknameChange.ts', {
+  '../../conversation/application/ChatConversationRuntime': { getChatConversationRuntimeDependencies: () => ({ sessions }) },
+  './ChatMessageRuntime': { getChatMessageRuntimeDependencies: () => ({ messages }) },
+  '../events/ChatEvents': { emitChatMessagesUpdated: () => { notifications += 1; } },
+});
+const management = load('src/features/assistants/AIAssistantManagement.ts', {
+  ...persistence, '@features/media': {}, '@platform/device/DeviceMediaService': {},
+  '@shared/errors/SettingChangeConflictError': { SettingChangeConflictError: Error },
+  '@shared/runtime/abortSignal': {}, './domain/ApplicationSettingsAccess': {}, './domain/HostRepository': {},
+  './application/HostAuthorityCoordinator': { HostAuthorityCoordinator: class {} },
+  './infrastructure/SQLiteAssistantRepository': { aiAssistantRepository: repository },
+  './infrastructure/SQLiteHostRepository': { aiHostRepository: {} },
+});
+management.configureAssistantRuntime({ recordNicknameChangeInTransaction: recordAssistantNicknameChangeInTransaction });
+const update = (id, patch) => management.updateAIAssistantSettings(id, patch);
+const session = await sessions.resolveCanonicalConversation('self');
+const otherSession = await sessions.resolveCanonicalConversation('other');
+const say = async (text, isMe = true) => messages.commitMessage({ message: { sessionId: session.id, text, isMe,
+  senderType: isMe ? 'user' : 'assistant', status: 'sent', deliveryStatus: 'delivered', createdAt: new Date().toISOString(), time: '12:00' }, previewText: text });
+assert.equal((await nickname.getAssistantNicknamePromptContext('self')).content, '');
+assert.equal(await update('deleted', { nickname: '不存在' }), false);
+await update('other', { nickname: '别人的私密备注' });
+await say('我要改你的昵称');
+await say('你不能这样对我', false);
+await update('self', { nickname: 'daddy' });
+const event = db.prepare("SELECT * FROM messages WHERE session_id=? AND sender_type='system'").get(session.id);
+assert.match(event.text, /从未设置昵称修改为"daddy"/);
+const eventSnapshot = { ...event };
+await update('self', { nickname: 'daddy' });
+assert.equal(db.prepare("SELECT COUNT(*) n FROM messages WHERE session_id=? AND sender_type='system'").get(session.id).n, 1);
+await say('换回去！', false);
+const current = await nickname.getAssistantNicknamePromptContext('self');
+assert.match(current.content, /当前昵称备注是"daddy"/);
+assert.doesNotMatch(current.content, /别人的私密备注|修改为|变化历史/);
+assert.equal(notifications, 2, '两个 AI 的真实改名分别只通知一次');
+assert.equal(db.prepare('SELECT COUNT(*) n FROM messages WHERE session_id=?').get(otherSession.id).n, 1);
+
+const { SQLiteChatSummaryRepository } = load('src/features/chat/summary/infrastructure/SQLiteChatSummaryRepository.ts', {
+  ...persistence, '@shared/prompt': { estimateTextTokens: text => text.length },
+});
+const summary = new SQLiteChatSummaryRepository(async () => []);
+const snapshot = await summary.readContext(session.id, []);
+assert.deepEqual(snapshot.timeline.map(item => item.kind), ['dialogue', 'dialogue', 'app_event', 'dialogue']);
+assert.match(snapshot.timeline[2].content, /assistant_nickname_changed/);
+assert.equal(snapshot.timeline[2].speaker, 'application');
+const { PromptHistoryBuilder } = load('src/host/prompt/PromptHistoryBuilder.ts', {
+  '@features/chat': { getChatSummaryContext: (id, ids = []) => summary.readContext(id, ids),
+    getChatInterruptedTurnContext: async () => [], ...load('src/features/chat/messages/domain/chatMessageMetadata.ts') },
+});
+// 摘要消费应用事件，但事件不计入对话条数。
+await executor.runAsync('INSERT INTO conversation_turn_state(session_id,reply_cursor,revision,updated_at) VALUES (?,?,0,?)',
+  [session.id, 999999, new Date().toISOString()]);
+const claim = await summary.claim(session.id, 3, 'nickname-summary', '2090-01-01', '2091-01-01', 'Asia/Shanghai');
+assert.ok(claim.messages.some(item => item.kind === 'app_event' && item.content.includes('assistant_nickname_changed')));
+assert.equal(claim.messages.filter(item => item.kind === 'dialogue').length, 3);
+await summary.releaseClaim(claim);
+await summary.updateSettings(session.id, { generationEnabled: false });
+const historyParams = { sessionId: session.id, aiConfig: { id: 'self' }, currentInput: '',
+  runtimeContext: { forceAppendUserText: true, recentWindowLimit: 3 } };
+const history = await new PromptHistoryBuilder().loadPrivateSummaryContext(historyParams);
+assert.equal(history.messages[2].role, 'user', '用户操作按来源标识后作为历史资料，不使用指令权限');
+assert.match(history.messages[2].content, /assistant_nickname_changed/);
+await say('再聊一句');
+assert.deepEqual({ ...db.prepare('SELECT * FROM messages WHERE id=?').get(event.id) }, eventSnapshot,
+  '后续聊天不能改写操作事件或消费历史资格');
+assert.ok((await new PromptHistoryBuilder().loadPrivateSummaryContext(historyParams)).messages.some(item => item.content.includes('assistant_nickname_changed')));
+historyParams.runtimeContext.recentWindowLimit = 1;
+assert.ok(!(await new PromptHistoryBuilder().loadPrivateSummaryContext(historyParams)).messages.some(item => item.content.includes('assistant_nickname_changed')),
+  '操作事件跟随对话窗口移出，不永久占据提示词');
+await update('self', { name: '新的公开名称' });
 assert.equal((await repository.getNicknameContext('self')).nickname, 'daddy');
-assert.equal(nickname.getAssistantDisplayName({ name: '修改后的公开名称', nickname: 'daddy' }), 'daddy');
-assert.equal((await repository.getNicknameContext('self')).changes.length, 1, '公开名称修改不修改用户昵称历史');
-await repository.updateSettings('self', { name: '原名-self' });
-assert.match(first.content, /当前昵称备注是"daddy"/);
-assert.match(first.content, /系统提醒：用户修改了你的昵称备注/);
-assert.doesNotMatch(first.content, /别人的私密备注/);
-assert.equal(first.noticeRevision, (await nickname.getAssistantNicknamePromptContext('self', '枫渡', true)).noticeRevision,
-  '组装和失败请求不消费提醒');
-const group = await nickname.getAssistantNicknamePromptContext('self', '枫渡', false);
-assert.match(group.content, /daddy/);
-assert.equal(group.noticeRevision, undefined, '其他场景仅携带自身事实，不抢走单聊提醒');
-
-await repository.updateSettings('self', { nickname: '老公' });
-await nickname.acknowledgeAssistantNicknameNotice('self', first.noticeRevision);
-const changed = await nickname.getAssistantNicknamePromptContext('self', '枫渡', true);
-assert.match(changed.content, /从"daddy"修改为"老公"/);
-assert.doesNotMatch(changed.content, /从未设置昵称修改为"daddy"/);
-assert.match(changed.content, /"daddy" → "老公"/);
-await nickname.acknowledgeAssistantNicknameNotice('self', changed.noticeRevision);
-const confirmed = await nickname.getAssistantNicknamePromptContext('self', '枫渡', true);
-assert.match(confirmed.content, /当前昵称备注是"老公"/);
-assert.match(confirmed.content, /"daddy" → "老公"/);
-assert.doesNotMatch(confirmed.content, /用户修改了你的昵称备注/);
-assert.equal(confirmed.noticeRevision, undefined);
-assert.equal((await repository.getNicknameContext('other')).changes[0].acknowledged, false, '确认按 AI 隔离');
-
-await Promise.all([
-  repository.updateSettings('self', { nickname: '宝宝' }),
-  repository.updateSettings('self', { nickname: '亲爱的' }),
-]);
-const concurrent = await repository.getNicknameContext('self');
-assert.deepEqual(concurrent.changes.slice(-2).map(({ previousNickname, nickname: current }) => [previousNickname, current]),
-  [['老公', '宝宝'], ['宝宝', '亲爱的']], '并发修改的历史必须来自事务内真实前值');
-db.exec(`CREATE TRIGGER reject_nickname BEFORE UPDATE OF nickname ON ai_assistants
-  WHEN NEW.nickname = '保存失败' BEGIN SELECT RAISE(ABORT, '模拟写入失败'); END;`);
-await assert.rejects(repository.updateSettings('self', { nickname: '保存失败' }));
-assert.deepEqual(await repository.getNicknameContext('self'), concurrent, '写入失败时当前值和事件同时回滚');
-await repository.updateSettings('self', { nickname: null });
-assert.equal((await repository.getNicknameContext('self')).nickname, null);
-assert.match((await nickname.getAssistantNicknamePromptContext('self', '枫渡', true)).content, /修改为未设置昵称/);
-assert.equal(db.prepare('SELECT name FROM ai_assistants WHERE id = ?').get('self').name, '原名-self');
+await Promise.all([update('self', { nickname: '宝宝' }), update('self', { nickname: '亲爱的' })]);
+const changes = db.prepare("SELECT metadata_json FROM messages WHERE session_id=? AND sender_type='system' ORDER BY id").all(session.id).map(row => JSON.parse(row.metadata_json));
+assert.deepEqual(changes.slice(-2).map(item => [item.previousNickname, item.nickname]), [['daddy', '宝宝'], ['宝宝', '亲爱的']]);
+const beforeFailure = { value: await repository.getNicknameContext('self'), count: changes.length, notifications };
+db.exec(`CREATE TRIGGER reject_nickname_history BEFORE INSERT ON messages
+  WHEN json_extract(NEW.metadata_json,'$.nickname')='保存失败' BEGIN SELECT RAISE(ABORT,'模拟历史写入失败'); END;`);
+await assert.rejects(update('self', { nickname: '保存失败' }), /模拟历史写入失败/);
+assert.deepEqual(await repository.getNicknameContext('self'), beforeFailure.value, '历史失败回滚昵称当前值');
+assert.equal(db.prepare("SELECT COUNT(*) n FROM messages WHERE session_id=? AND sender_type='system'").get(session.id).n, beforeFailure.count);
+assert.equal(notifications, beforeFailure.notifications, '回滚不发布历史变更');
+await update('self', { nickname: null });
+assert.equal((await nickname.getAssistantNicknamePromptContext('self')).content, '');
+assert.match(db.prepare("SELECT text FROM messages WHERE session_id=? ORDER BY id DESC LIMIT 1").get(session.id).text, /修改为未设置昵称/);
 
 const { parseChatSettingsDraft } = load('src/features/chat/presentation/conversation/chatSettingsDraft.ts', {
   '@shared/ui/draftValidation': {},
@@ -136,88 +176,39 @@ const { loadMomentActorDirectory } = load('src/features/moments/application/Mome
 assert.equal((await loadMomentActorDirectory()).actors[1].displayName, '公开名');
 assert.equal((await loadMomentActorDirectory(undefined, 'user')).actors[1].displayName, '私密昵称');
 
-const blockMetadata = load('src/host/prompt/compiler/promptBlockMetadata.ts');
-const { PromptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
-  './promptBlockMetadata': blockMetadata,
-  '../tokenBudget': { estimateTokens: () => 1,
-    applyTokenBudget: (blocks, recentMessages) => ({ blocks, recentMessages, estimatedTokenCount: 1, truncationLog: [] }) },
-});
-const compileNickname = (context) => new PromptPackCompiler().compile({
-  scenario: 'chat.private_reply', recentMessages: [{ role: 'assistant', content: '上一轮回复' }],
-  currentInput: { role: 'user', content: '现在聊天' },
-  blocks: [{ key: 'foundation_default_core', title: '规则', content: '不变的规则', required: false, status: 'ready', placement: 'system' },
-    { key: 'assistant_nickname', title: '昵称', content: context.content, required: false, status: 'ready', placement: 'system',
-      assistantNicknameNoticeRevision: context.noticeRevision }],
-  preset: { id: 'nickname-test', scenarioId: 'chat.private_reply', items: [
-    { definitionId: 'foundation.default_core', slot: 'foundation', sortOrder: 1, enabled: true, required: false, protection: 'locked' },
-    { definitionId: 'context.assistant_nickname', slot: 'dynamic_context', sortOrder: 190, enabled: true, required: false, protection: 'locked' },
-  ] },
-});
-const firstPack = compileNickname(first), changedPack = compileNickname(changed);
-assert.equal(firstPack.stableSystemPrompt, changedPack.stableSystemPrompt, '昵称编辑不修改稳定前缀');
-assert.equal(changedPack.modelMessages.at(-2).role, 'system');
-assert.match(changedPack.modelMessages.at(-2).content, /用户修改了你的昵称备注/);
-assert.equal(changedPack.modelMessages.at(-1).content, '现在聊天');
-assert.equal(changedPack.assistantNicknameNoticeRevision, changed.noticeRevision);
 
-// 执行真实回复编排，模型/提交使用可控端口；确认必须依赖最终回复而非请求组装。
-let mode = 'success', attempts = 0, errorMessages = 0, finalCallbacks = 0, acknowledgements = [];
-let currentPromptContext;
-const runtime = {
-  assistantDirectory: { getBlockState: async () => ({ isBlocked: false }) },
-  runPreparation: { prepare: async () => ({ additionalPromptBlocks: [] }) },
-  prompt: { acknowledgeNicknameNotice: async (assistantId, revision) => {
-    acknowledgements.push([assistantId, revision]);
-    if (mode === 'ack-failed') throw new Error('模拟确认失败');
-    await nickname.acknowledgeAssistantNicknameNotice(assistantId, revision);
-  } },
-};
-class ModelRequestError extends Error {}
-const { processAIReply } = load('src/features/chat/reply/application/ProcessAIReply.ts', {
-  '@platform/ai': { createAIClient: () => ({}), getErrorDisplayInfo: () => ({ userFriendlyMessage: '请求失败' }) },
-  '@shared/aiTools': { applyHostModelRunToolExposure: (names) => names },
-  './ChatReplyRuntimeDependencies': { getChatReplyRuntimeDependencies: () => runtime },
-  './ChatReplyErrors': { notifyReplyFailed: () => {}, saveErrorMessage: async () => { errorMessages += 1; return {}; } },
-  './ChatReplyRuntime': { createRuntimeToolContext: () => ({}), buildRuntimeAIToolsConfig: () => ({}),
-    assemblePromptPackForRuntimeContext: async () => {
-      currentPromptContext = await nickname.getAssistantNicknamePromptContext('self', '枫渡', true);
-      return compileNickname(currentPromptContext);
-    } },
-  './ChatReplyUtils': { applyRuntimeModelInput: (messages) => messages },
-  './ChatReplyAbort': { assertChatReplyNotAborted: () => {}, isChatReplyRunCancellationError: () => false,
-    shouldSuppressReplyErrorPersistenceAsync: async () => false },
-  './ReplyPolicy': { resolveAIReplyPolicy: () => ({ enableTools: false, modelTransport: 'stream' }) },
-  './MemoryParticipationPolicy': { resolveMemoryParticipationMode: () => 'off' },
-  '../agent/ChatAgentModelGateway': { ChatAgentModelRequestError: ModelRequestError },
-  '../agent/ChatAgentReplyFlow': { runChatAgentReplyFlow: async ({ callbacks, requestMessages }) => {
-    attempts += 1;
-    assert.equal(requestMessages.at(-2).role, 'system');
-    if (mode === 'model-failed') throw new ModelRequestError('模拟模型失败');
-    if (mode === 'fence-failed') return { completed: true };
-    if (mode === 'fallback' && attempts === 1) return { completed: false };
-    callbacks.onFinalReply?.({});
-    return { completed: true };
-  } },
-});
-const runReply = () => processAIReply('session', '你好', { id: 'self', agentId: 'actor-self', name: '公开名', enableTools: false },
-  1, {}, { onFinalReply: () => { finalCallbacks += 1; } }, {}, {});
-const originalWarn = console.warn;
-console.warn = () => {};
-try {
-  mode = 'model-failed'; await runReply();
-  assert.equal(acknowledgements.length, 0); assert.equal(errorMessages, 1);
-  assert.ok(currentPromptContext.noticeRevision);
-  mode = 'fence-failed'; await runReply();
-  assert.equal(acknowledgements.length, 0, '提交失去资格且没有最终回复时不确认');
-  mode = 'ack-failed'; await runReply();
-  assert.equal(errorMessages, 1, '确认失败不生成第二条错误消息');
-  assert.ok((await nickname.getAssistantNicknamePromptContext('self', '枫渡', true)).noticeRevision);
-  mode = 'fallback'; attempts = 0; await runReply();
-  assert.equal(attempts, 2);
-  assert.equal(finalCallbacks, 2, '原有最终回复回调仍被调用');
-  assert.equal((await nickname.getAssistantNicknamePromptContext('self', '枫渡', true)).noticeRevision, undefined);
-} finally { console.warn = originalWarn; }
-db.exec("DELETE FROM ai_assistants WHERE id = 'self'");
-assert.equal(db.prepare("SELECT COUNT(*) AS count FROM assistant_nickname_changes WHERE assistant_id = 'self'").get().count, 0);
+// 旧库按原时刻交接已确认与未确认的事件，不复活用户清除过的范围。
+const legacy = new DatabaseSync(':memory:');
+legacy.exec('PRAGMA foreign_keys=ON');
+const legacyExecutor = createSqliteExecutor(legacy);
+await bootstrapSqlite(legacyExecutor);
+legacy.exec(`INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated_at) VALUES ('legacy','legacy-agent','AI','test','2026-01-01','2026-01-01');
+ INSERT INTO chat_conversations(id,kind) VALUES ('legacy-chat','direct');
+ INSERT INTO sessions(id,ai_assistant_id,name,created_at,updated_at,visible_after_at)
+ VALUES ('legacy-chat','legacy','单聊','2026-01-01','2026-01-01','2026-02-01');
+ CREATE TABLE assistant_nickname_changes(id INTEGER PRIMARY KEY AUTOINCREMENT,
+ assistant_id TEXT NOT NULL REFERENCES ai_assistants(id) ON DELETE CASCADE,previous_nickname TEXT,
+ nickname TEXT,acknowledged INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
+ INSERT INTO assistant_nickname_changes VALUES (1,'legacy',NULL,'旧昵称',0,'2026-01-10');
+ INSERT INTO assistant_nickname_changes VALUES (2,'legacy','旧昵称','daddy',1,'2026-03-10');
+ INSERT INTO assistant_nickname_changes VALUES (3,'legacy','daddy',NULL,0,'2026-03-11');
+ PRAGMA user_version=134;`);
+await assert.rejects(bootstrapSqlite({ ...legacyExecutor, execAsync: async sql => {
+  if (sql.includes('PRAGMA user_version =')) throw new Error('迁移提交失败');
+  return legacyExecutor.execAsync(sql);
+} }), /迁移提交失败/);
+assert.equal(legacy.prepare('SELECT COUNT(*) n FROM assistant_nickname_changes').get().n, 3);
+assert.equal(legacy.prepare('SELECT COUNT(*) n FROM messages').get().n, 0);
+assert.equal(legacy.prepare('PRAGMA user_version').get().user_version, 134);
+await bootstrapSqlite(legacyExecutor);
+const migrated = legacy.prepare('SELECT * FROM messages ORDER BY created_at,id').all();
+assert.deepEqual(migrated.map(row => row.created_at), ['2026-03-10', '2026-03-11']);
+assert.match(migrated[0].text, /从"旧昵称"修改为"daddy"/);
+assert.match(migrated[1].text, /修改为未设置昵称/);
+assert.equal(legacy.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='assistant_nickname_changes'").get().n, 0);
+await bootstrapSqlite(legacyExecutor);
+assert.equal(legacy.prepare('SELECT COUNT(*) n FROM messages').get().n, 2);
+legacy.close();
+
 db.close();
-console.log('昵称：持久化与清空、修改历史、确认隔离、并发与回滚、输入校验及群聊/朋友圈名称隐私验证通过。');
+console.log('昵称：原位历史、窗口与摘要、并发前值、原子回滚、清空及身份隐私验证通过。');

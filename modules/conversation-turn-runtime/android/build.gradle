@@ -15,9 +15,15 @@ android {
   lintOptions {
     abortOnError false
   }
+  testOptions {
+    unitTests.includeAndroidResources = true
+  }
 }
 
 dependencies {
   compileOnly "com.facebook.react:react-android"
   implementation "androidx.core:core-ktx:1.13.1"
+  testImplementation "junit:junit:4.13.2"
+  testImplementation "com.facebook.react:react-android"
+  testImplementation "org.robolectric:robolectric:4.14.1"
 }
