@@ -11,10 +11,13 @@ internal class LiquidGlassSceneCapture(
   source: LiquidGlassBackdropView
 ) : ViewTreeObserver.OnPreDrawListener {
   val renderNode = RenderNode("KimiPhoneLiquidGlassScene")
+  var revision = 0L
+    private set
+  private var capturedSourceRevision = Long.MIN_VALUE
 
   private val sourceReference = WeakReference(source)
   private val effects = mutableListOf<WeakReference<LiquidGlassEffectView>>()
-  private var observedTree: ViewTreeObserver? = null
+  private val observedTrees = mutableSetOf<ViewTreeObserver>()
 
   val source: LiquidGlassBackdropView?
     get() = sourceReference.get()
@@ -39,6 +42,8 @@ internal class LiquidGlassSceneCapture(
     }
     if (effects.isEmpty()) {
       stopListening()
+    } else {
+      ensureListening()
     }
   }
 
@@ -48,7 +53,13 @@ internal class LiquidGlassSceneCapture(
       return
     }
 
-    record(currentSource)
+    val sourceRevision = currentSource.contentRevision
+    if (!renderNode.hasDisplayList() || capturedSourceRevision != sourceRevision) {
+      record(currentSource)
+      capturedSourceRevision = sourceRevision
+      revision++
+    }
+    // 滚动会移动玻璃而不改变背景，效果层仍需检查自己的采样位置。
     notifyEffects()
   }
 
@@ -65,24 +76,31 @@ internal class LiquidGlassSceneCapture(
 
   private fun ensureListening() {
     val currentSource = source ?: return
-    val nextTree = currentSource.viewTreeObserver
-    if (observedTree === nextTree && nextTree.isAlive) {
-      return
+    // Modal 属于独立窗口。主页面静止时，弹窗仍需在自己的 preDraw 更新采样位置，
+    // 否则滑入期间会一直使用挂载时的屏外坐标，先透明、等主窗口重绘后才出现材质。
+    val nextTrees = mutableSetOf(currentSource.viewTreeObserver)
+    for (reference in effects) {
+      val effect = reference.get() ?: continue
+      if (effect.isAttachedToWindow) nextTrees.add(effect.viewTreeObserver)
     }
+    nextTrees.removeAll { !it.isAlive }
 
-    stopListening()
-    if (nextTree.isAlive) {
-      nextTree.addOnPreDrawListener(this)
-      observedTree = nextTree
+    // 同一窗口的全部表面共用一个监听；关闭弹窗时只移除其窗口，不增加空闲刷新。
+    for (tree in observedTrees) {
+      if (tree !in nextTrees && tree.isAlive) tree.removeOnPreDrawListener(this)
     }
+    for (tree in nextTrees) {
+      if (tree !in observedTrees) tree.addOnPreDrawListener(this)
+    }
+    observedTrees.clear()
+    observedTrees.addAll(nextTrees)
   }
 
   private fun stopListening() {
-    val tree = observedTree
-    if (tree != null && tree.isAlive) {
-      tree.removeOnPreDrawListener(this)
+    for (tree in observedTrees) {
+      if (tree.isAlive) tree.removeOnPreDrawListener(this)
     }
-    observedTree = null
+    observedTrees.clear()
   }
 
   private fun record(currentSource: LiquidGlassBackdropView) {

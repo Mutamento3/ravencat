@@ -448,9 +448,12 @@ function initialModelRuntime(db) {
     assert.equal((await speechResolver.resolveTextToSpeechModel({ assistantId: 'explicit', consumer })).modelConfigId, voice.id);
     assert.equal(await speechResolver.resolveTextToSpeechModel({ assistantId: 'inherited', consumer }), null);
   }
+  await speech.selectSpeechRecognitionModel(null);
+  assert.equal(await speechResolver.resolveSpeechToTextModel({ consumer: 'call' }), null, '空选择不解析任何模型');
+  await speech.selectSpeechRecognitionModel(stt.id);
   await commands.updateAuxiliaryModelConfig({ id: stt.id, settings: { metadataJson: '{}' } });
   assert.equal((await speech.getSpeechRecognitionModelSettings()).status, 'unavailable');
-  assert.equal(await speechResolver.resolveSpeechToTextModel({ consumer: 'call' }), null);
+  await assert.rejects(speechResolver.resolveSpeechToTextModel({ consumer: 'call' }), /STT 模型配置不可用/);
   await commands.updateAuxiliaryModelConfig({ id: stt.id, settings: { metadataJson: stt.metadataJson } });
   await create('tts', 'another-voice');
   assert.equal(await assistantVoice.getAssistantVoiceModelId('inherited'), null);

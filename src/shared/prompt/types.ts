@@ -126,6 +126,8 @@ export interface PromptPackAIConfig {
   allowMultipleBubbles?: boolean;
   promptDefinitionOverrides?: Record<string, string>;
   disabledPromptDefinitionIds?: string[];
+  /** 本次组装冻结的全局身份池排除名单；不影响模型调用权限。 */
+  agentRegistryExcludedAssistantIds?: readonly string[];
   isHostAI?: boolean;
   isBlocked?: boolean;
   privateContextPrimaryLimit?: number;

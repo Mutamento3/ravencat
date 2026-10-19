@@ -22,13 +22,12 @@ export function useAutoSaveDraft<D extends object, P>({
     const subscription = AppState.addEventListener('change', (next) => {
       if (next !== 'active' && editor.getSnapshot().dirty) void editor.flush();
     });
-    return () => { subscription.remove(); editor.cancelTimer(); };
+    return () => { subscription.remove(); };
   }, [editor, enabled]);
   const change = useCallback((patch: Partial<D>, immediate = false) => {
     editor.change(patch, enabled && immediate);
-    if (!enabled) editor.cancelTimer();
   }, [editor, enabled]);
-  return { ...state, change, flush: editor.flush, restore: editor.restore, validateAll: editor.validateAll, getSnapshot: editor.getSnapshot };
+  return { ...state, change, commit: editor.commit, flush: editor.flush, restore: editor.restore, validateAll: editor.validateAll, getSnapshot: editor.getSnapshot };
 }
 
 export function useAutoSaveNavigation(

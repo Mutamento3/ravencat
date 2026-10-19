@@ -7,12 +7,16 @@ import android.content.Context
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.MotionEvent
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.TextView
 import com.facebook.react.bridge.BridgeReactContext
+import com.facebook.react.bridge.NativeModule
 import com.facebook.react.internal.featureflags.ReactNativeFeatureFlags
 import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.views.scroll.ReactScrollViewHelper
+import com.facebook.react.views.scroll.ScrollEventType
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,10 +25,62 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/** 验证只读选择的焦点生命周期，编辑输入与正常滚动不参与隔离。 */
+/** 验证只读选区焦点与滚动事件生命周期，保留编辑输入和正常滚动语义。 */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class TextSelectionFocusTest {
+  @Test fun `touch interruption ends momentum before the next idle press`() {
+    val accessorType = Class.forName("com.facebook.react.internal.featureflags.ReactNativeFeatureFlagsLocalAccessor")
+    val setAccessor = ReactNativeFeatureFlags.javaClass.declaredMethods.single { it.name.startsWith("setAccessorProvider") }
+    setAccessor.invoke(ReactNativeFeatureFlags, { accessorType.getDeclaredConstructor().newInstance() })
+    val controller = Robolectric.buildActivity(Activity::class.java).setup().visible()
+    val activity = controller.get()
+    // JVM 没有 Catalyst/原生动画模块，滚动及其结束检测仍执行真实 RN 实现。
+    val bridge = object : BridgeReactContext(activity.application) {
+      override fun <T : NativeModule> getNativeModule(nativeModuleInterface: Class<T>): T? = null
+    }
+    val context = ThemedReactContext(bridge, activity, "selection-test", 1)
+    val scroll = SelectionScrollView(context)
+    val content = FrameLayout(activity)
+    scroll.addView(content)
+    activity.setContentView(scroll)
+    scroll.layout(0, 0, 480, 600)
+    content.layout(0, 0, 480, 5000)
+    scroll.setSendMomentumEvents(true)
+    val events = mutableListOf<ScrollEventType>()
+    val listener = object : ReactScrollViewHelper.ScrollListener {
+      override fun onScroll(scrollView: ViewGroup?, scrollEventType: ScrollEventType?, xVelocity: Float, yVelocity: Float) {
+        if (scrollView === scroll && scrollEventType != null) events.add(scrollEventType)
+      }
+      override fun onLayout(scrollView: ViewGroup?) = Unit
+    }
+    ReactScrollViewHelper.addScrollListener(listener)
+    try {
+      scroll.fling(1000)
+      assertEquals(ScrollEventType.MOMENTUM_BEGIN, events.last())
+      val down = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 100f, 100f, 0)
+      scroll.onTouchEvent(down)
+      down.recycle()
+      assertEquals(ScrollEventType.MOMENTUM_END, events.last())
+      shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+      assertEquals(1, events.count { it == ScrollEventType.MOMENTUM_END })
+      val up = MotionEvent.obtain(0, 1000, MotionEvent.ACTION_UP, 100f, 100f, 0)
+      scroll.onTouchEvent(up)
+      up.recycle()
+      scroll.fling(1000)
+      shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+      assertEquals(ScrollEventType.MOMENTUM_END, events.last())
+      assertEquals(2, events.count { it == ScrollEventType.MOMENTUM_END })
+      val idleDown = MotionEvent.obtain(2000, 2000, MotionEvent.ACTION_DOWN, 100f, 100f, 0)
+      scroll.onTouchEvent(idleDown)
+      idleDown.recycle()
+      assertEquals(2, events.count { it == ScrollEventType.MOMENTUM_END })
+    } finally {
+      ReactScrollViewHelper.removeScrollListener(listener)
+      controller.pause().stop().destroy()
+    }
+  }
+
   private class SelectableText(context: Context) : TextView(context) {
     var touchMode = true
     override fun isInTouchMode() = touchMode

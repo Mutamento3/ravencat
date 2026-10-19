@@ -44,6 +44,9 @@ import {
 import { aiAssistantRepository } from '@features/assistants';
 import { startConversationTurnExecutionHost } from '@platform/device';
 import { logTurnTimeline } from '@shared/diagnostics/TurnTimelineLog';
+import { loadStoredThemeId } from '@shared/theme/themeStorage';
+import { getThemeById } from '@shared/theme/themeRegistry';
+import { getChatInteractionProfile } from '@shared/theme/themeVariants';
 
 /** 启动来源：发送流程 / 崩溃恢复 / 显式重试。 */
 export type ConversationTurnLaunchOrigin = 'send_flow' | 'recovery' | 'explicit_retry';
@@ -490,7 +493,7 @@ export function createConversationTurnCoordinator(
   };
 }
 
-/** recovery / execution host 路径按会话解析助手配置（发送流程的配置在通知负载里，不走这里）。 */
+/** 宿主独立装配配置；普通页面委派后，不能依赖页面内的主题参数覆盖。 */
 async function resolveSessionAIConfig(sessionId: string): Promise<AIConfig | null> {
   const session = await sessionRepository.getSession(sessionId);
   if (!session) {
@@ -500,6 +503,7 @@ async function resolveSessionAIConfig(sessionId: string): Promise<AIConfig | nul
   if (!assistant) {
     return null;
   }
+  const interactionProfile = getChatInteractionProfile(getThemeById(await loadStoredThemeId()));
   return {
     id: assistant.id,
     agentId: assistant.agentId,
@@ -518,7 +522,9 @@ async function resolveSessionAIConfig(sessionId: string): Promise<AIConfig | nul
     groupContextPrimaryLimit: assistant.groupContextPrimaryLimit,
     groupContextSecondaryLimit: assistant.groupContextSecondaryLimit,
     enableTools: assistant.enableTools,
-    allowMultipleBubbles: assistant.allowMultipleBubbles,
+    allowMultipleBubbles: interactionProfile.enableAssistantMessageSegmentation
+      ? assistant.allowMultipleBubbles : false,
+    enableStreamingReply: interactionProfile.preferStreamingReply,
     isHostAI: assistant.isHostAI,
     isBlocked: assistant.isBlocked,
   };

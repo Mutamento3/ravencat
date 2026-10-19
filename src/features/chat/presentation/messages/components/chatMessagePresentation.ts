@@ -1,8 +1,15 @@
-/** 定义消息分段、思维链重复项的展示合并与去重规则。 */
+/** 定义不支持多气泡的主题如何合并普通文字分段。 */
 
 import type { ChatMessage } from '@features/chat/messages/domain/ChatMessage';
 import { parseMessageMetadata } from '@features/chat/messages/domain';
 import type { ChatInteractionProfile } from '@shared/theme';
+
+/** logicalMessageId 归属模型轮次；语音、表情等独立输出不属于文字分段。 */
+function isAssistantTextMessage(message: ChatMessage): boolean {
+  const metadata = parseMessageMetadata(message);
+  return !message.isMe && message.senderType === 'assistant'
+    && !metadata?.type && (!metadata?.kind || metadata.kind === 'reply');
+}
 
 export function shouldCollapseAssistantSegment(
   message: ChatMessage,
@@ -10,8 +17,7 @@ export function shouldCollapseAssistantSegment(
 ): boolean {
   return Boolean(
     !interactionProfile.enableAssistantMessageSegmentation &&
-    !message.isMe &&
-    message.senderType === 'assistant' &&
+    isAssistantTextMessage(message) &&
     message.logicalMessageId
   );
 }
@@ -65,64 +71,6 @@ export function collapseAssistantSegmentsForPresentation(
   return collapsedMessages;
 }
 
-export function hidePersistedReasoningDuplicatesForPresentation(
-  messages: ChatMessage[]
-): ChatMessage[] {
-  const reasoningTextByLogicalMessageId = new Map<string, string>();
-  const assistantGroups = new Map<string, ChatMessage[]>();
-
-  for (const message of messages) {
-    const logicalMessageId = String(message.logicalMessageId || '').trim();
-    if (!logicalMessageId) {
-      continue;
-    }
-
-    if (message.senderType === 'reasoning') {
-      reasoningTextByLogicalMessageId.set(
-        logicalMessageId,
-        normalizeComparisonText(message.text)
-      );
-      continue;
-    }
-
-    if (!message.isMe && message.senderType === 'assistant') {
-      const group = assistantGroups.get(logicalMessageId);
-      if (group) {
-        group.push(message);
-      } else {
-        assistantGroups.set(logicalMessageId, [message]);
-      }
-    }
-  }
-
-  const duplicateAssistantMessageIds = new Set<number>();
-  for (const [logicalMessageId, assistantMessages] of assistantGroups) {
-    const reasoningText = reasoningTextByLogicalMessageId.get(logicalMessageId);
-    if (!reasoningText) {
-      continue;
-    }
-
-    const assistantText = assistantMessages
-      .slice()
-      .sort(compareMessageSegments)
-      .map((message) => normalizeComparisonText(message.text))
-      .filter(Boolean)
-      .join('\n\n');
-
-    if (assistantText === reasoningText) {
-      for (const message of assistantMessages) {
-        duplicateAssistantMessageIds.add(message.id);
-      }
-    }
-  }
-
-  if (duplicateAssistantMessageIds.size === 0) {
-    return messages;
-  }
-
-  return messages.filter((message) => !duplicateAssistantMessageIds.has(message.id));
-}
-
 /**
  * 非流式多气泡主题（daylight / night / Liquid 等 default profile）下，assistant
  * 最终正文的展示权归 canonical committed segments + paced reveal：
@@ -156,10 +104,6 @@ function compareMessageSegments(left: ChatMessage, right: ChatMessage): number {
   }
 
   return left.id - right.id;
-}
-
-function normalizeComparisonText(text: string): string {
-  return String(text || '').replace(/\r\n/g, '\n').trim();
 }
 
 function resolveAggregateStatus(segments: ChatMessage[]): ChatMessage['status'] {

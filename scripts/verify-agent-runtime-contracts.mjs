@@ -268,6 +268,9 @@ const SENSITIVE_ACTION = {
 };
 
 const builtInTools = [
+  { module: '@features/webTools', symbol: 'KimiWebSearchTool', name: 'kimi_web_search', owner: 'webTools', ...SAFE_READ },
+  { module: '@features/webTools', symbol: 'KimiWebFetchTool', name: 'kimi_web_fetch', owner: 'webTools', ...SAFE_READ },
+  { module: '@features/webTools', symbol: 'KimiMewTool', name: 'kimi_mew', owner: 'webTools', risk: 'safe_read', idempotency: 'not_idempotent' },
   { module: '@features/webTools', symbol: 'WebSearchTool', name: 'web_search', owner: 'webTools', ...SAFE_READ },
   { module: '@features/webTools', symbol: 'WebFetchTool', name: 'web_fetch', owner: 'webTools', ...SAFE_READ },
   { module: '@features/webTools', symbol: 'DownloadFileTool', name: 'download_file', owner: 'webTools', ...REVERSIBLE_ACTION },
@@ -275,6 +278,7 @@ const builtInTools = [
   { module: '@features/media', symbol: 'ViewImageTool', name: 'view_image', owner: 'media', ...PRIVATE_READ },
   ...[
     ['get_user_avatar', 'profile', false, false], ['get_ai_avatar', 'assistants', false, false],
+    ['get_group_avatar', 'chat', false, false],
     ['get_chat_background', 'profile', false, false], ['get_call_background', 'calls', false, false],
     ['get_global_background', 'profile', true, false], ['get_moments_cover', 'profile', false, false],
     ['set_ai_avatar', 'assistants', false, true], ['set_chat_background', 'profile', false, true],
@@ -330,6 +334,8 @@ const builtInTools = [
   { module: '@features/companion', symbol: 'CancelAIScheduleTool', name: 'cancel_ai_schedule', owner: 'companion', ...SENSITIVE_ACTION },
   { module: '@features/chat', symbol: 'SendMessageTool', name: 'send_message', owner: 'chat', ...EXTERNAL_SIDE_EFFECT },
   { module: '@features/chat', symbol: 'SearchChatSummariesTool', name: 'search_chat_summaries', owner: 'chat', ...PRIVATE_READ },
+  { module: '@features/chat', symbol: 'GetSecondarySummaryTool', name: 'get_secondary_summary', owner: 'chat', ...PRIVATE_READ },
+  { module: '@features/chat', symbol: 'EditSecondarySummaryTool', name: 'edit_secondary_summary', owner: 'chat', ...REVERSIBLE_WRITE },
   { module: '@features/chat', symbol: 'SendVoiceMessageTool', name: 'send_voice_message', owner: 'chat', ...EXTERNAL_SIDE_EFFECT },
   { module: '@features/stickers', symbol: 'SearchStickersTool', name: 'search_stickers', owner: 'stickers', ...SAFE_READ },
   { module: '@features/stickers', symbol: 'ListStickerGroupsTool', name: 'list_sticker_groups', owner: 'stickers', ...SAFE_READ },
@@ -371,6 +377,7 @@ function createAgentNativeBuiltInTool(name) {
 const featureMocks = Object.fromEntries(
   [...new Set(builtInTools.map((tool) => tool.module))].map((module) => [module, {}])
 );
+featureMocks['@platform/ai'] = loadTypeScriptModule('src/platform/ai/moonshotEndpoint.ts', {});
 for (const tool of builtInTools) {
   featureMocks[tool.module][tool.symbol] = (
     tool.module === '@features/companion'
@@ -381,6 +388,8 @@ for (const tool of builtInTools) {
     || tool.module === './ApplicationSettingsTools'
     || tool.symbol === 'SendVoiceMessageTool'
     || tool.symbol === 'SearchChatSummariesTool'
+    || tool.symbol === 'GetSecondarySummaryTool'
+    || tool.symbol === 'EditSecondarySummaryTool'
   )
     ? createAgentNativeBuiltInTool(tool.name)
     : createLegacyTool(tool.name);
@@ -430,6 +439,9 @@ const productionRegistry = createAgentToolRegistry({
   },
 });
 const productionDescriptors = productionRegistry.list();
+for (const name of ['search_chat_summaries', 'get_secondary_summary', 'edit_secondary_summary']) {
+  assert.equal(getToolPackageRuntimeBindings(productionRegistry).find(binding => binding.tool.descriptor.name === name).packageId, 'memory');
+}
 assert.deepEqual(
   productionDescriptors.map((descriptor) => descriptor.name).sort(),
   builtInTools.map((tool) => tool.name).sort(),
@@ -540,7 +552,7 @@ const autonomousNames = availableNames({ triggerSource: 'raven_cat_wake', capabi
 assert.ok(autonomousNames.includes('send_voice_message'), '自主执行已接入同事务媒体存档，必须使用正常授权的语音工具');
 assert.ok(autonomousNames.includes('select_sticker'), '自主执行必须使用正常授权的贴纸工具');
 const groupNames=availableNames({triggerSource:'group_chat',memoryParticipation:'read_write'});
-for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_summaries','download_image','view_image','set_ai_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
+for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_summaries','get_secondary_summary','edit_secondary_summary','download_image','view_image','set_ai_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
   assert.ok(groupNames.includes(name),`群聊应提供已授权工具：${name}`);
 }
 assert.ok(!groupNames.includes('requestVideoCall'),'群聊不能发起视频通话');
@@ -758,7 +770,7 @@ assert.deepEqual(
     .map(({ name, owner }) => ({
     name,
     owner,
-    defaultEnabled: true,
+    defaultEnabled: !['kimi_web_search', 'kimi_web_fetch', 'kimi_mew'].includes(name),
     callOnly: name === 'lookAtUser',
     memoryParticipation: ['remember_memory', 'recall_memory', 'update_memory', 'forget_memory'].includes(name)
       ? 'read_write'

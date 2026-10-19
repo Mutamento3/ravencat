@@ -19,4 +19,6 @@ export interface LiquidGlassBackdropProps extends ViewProps {
 export interface LiquidGlassEffectProps extends Omit<ViewProps, 'children'> {
   material?: Partial<LiquidGlassMaterial>;
   sceneId: string;
+  /** 融合轮廓（dp）：栏顶、球心 x/y、球半径 x/y、融合半径；缺省为圆角矩形。 */
+  fluidShape?: number[];
 }

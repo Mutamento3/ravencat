@@ -80,7 +80,12 @@ export function configureAIRuntime(): void {
     const modelConfigId = capabilityKind === 'stt'
       ? await getSpeechRecognitionModelId()
       : assistantId ? await getAssistantVoiceModelId(assistantId) : null;
-    return resolveAuxiliaryModel({ capabilityKind, modelConfigId });
+    const model = await resolveAuxiliaryModel({ capabilityKind, modelConfigId });
+    // 失效引用与尚未选择分开报告，具体错误由 Speech 启动链路展示。
+    if (capabilityKind === 'stt' && modelConfigId !== null && !model) {
+      throw new Error('所选 STT 模型配置不可用，请检查配置或重新选择 STT 模型');
+    }
+    return model;
   });
   subscribeAuxiliaryModelsChanged(() => {
     notifySpeechRecognitionModelsChanged();

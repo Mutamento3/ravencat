@@ -103,6 +103,7 @@ export {
   createGroupChat,
   deleteGroupChat,
   getGroupChat,
+  getGroupAvatarForAssistant,
   listGroupChats,
   updateGroupChatAdminConfig,
   updateGroupChatPinned,
@@ -309,6 +310,7 @@ export { subscribeChatSummaryChanged } from './summary/application/ChatSummaryRu
 export type { ChatSummarySegment, ChatSummarySnapshot, ChatSummarySettings, ChatSummarySettingsPatch, ChatSummarySearchInput, ChatSummarySearchPage } from './summary/domain/ChatSummaryRepository';
 export type { ChatSummaryTask, ChatSummaryCallDiagnostics } from './summary/domain/ChatSummaryRepository';
 export { SearchChatSummariesTool } from './summary/aiTools/SearchChatSummariesTool';
+export { GetSecondarySummaryTool, EditSecondarySummaryTool } from './summary/aiTools/SecondarySummaryTools';
 export { isChatReplyRunCurrentInTransaction } from './reply/application/ChatRunMutationFence';
 export { isGroupSpeechTaskRunCurrentInTransaction } from './group/application/GroupSpeechTermination';
 

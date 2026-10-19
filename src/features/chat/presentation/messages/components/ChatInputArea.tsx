@@ -4,11 +4,12 @@ import { AppTextInput, showAppDialog } from '@shared/ui';
 import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { View, Text, TextInput, TouchableOpacity, type LayoutChangeEvent, Keyboard } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BrainCircuit } from 'lucide-react-native';
+import { BrainCircuit, Keyboard as KeyboardIcon } from 'lucide-react-native';
 import ChatEmojiPanel from './ChatEmojiPanel';
 import ChatToolPanel from './ChatToolPanel';
 import ChatAttachmentComposerTray from './ChatAttachmentComposerTray';
 import { ChatVoiceReviewPanel } from './ChatVoiceReviewPanel';
+import { ChatVoiceRecordingFeedback } from './ChatVoiceRecordingFeedback';
 import type {
   AttachmentDraftItem,
   StickerMessageSnapshot,
@@ -38,6 +39,7 @@ interface ChatInputAreaProps {
   onChangeText: (text: string) => void;
   onSend: () => void;
   voiceRecordingState?: ChatVoiceRecordingState;
+  voiceRecordingProgress?: { durationMs: number; level: number };
   /** 语音录制 / STT 的即时失败文案；由输入区直接可见，不走历史消息 error 通道。 */
   voiceRecordingError?: string | null;
   onDismissVoiceRecordingError?: () => void;
@@ -83,6 +85,7 @@ export default function ChatInputArea({
   onChangeText,
   onSend,
   voiceRecordingState = 'idle',
+  voiceRecordingProgress = { durationMs: 0, level: 0 },
   voiceRecordingError = null,
   onDismissVoiceRecordingError,
   voiceReviewDraft = null,
@@ -123,6 +126,7 @@ export default function ChatInputArea({
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const voiceButtonSizeRef = useRef({ width: 0, height: 0 });
   const shouldCancelVoiceRef = useRef(false);
+  const [isCancellingVoice, setIsCancellingVoice] = useState(false);
   const voiceStartPromiseRef = useRef<Promise<boolean> | null>(null);
   const hasText = value.trim().length > 0;
   const hasAttachment = Boolean(attachmentDraft);
@@ -132,6 +136,15 @@ export default function ChatInputArea({
 
   const isEmojiPanelVisible = activeSurface === 'stickers';
   const isToolPanelVisible = activeSurface === 'tools';
+  // starting 属于“已按下、还没出音频”的窗口（STT 建连 + 权限 + native 初始化），
+  // 必须有即时反馈，否则长按到波形出现之间是完全空白的。
+  const isVoiceFeedbackVisible =
+    isVoiceMode
+    && (
+      voiceRecordingState === 'starting'
+      || voiceRecordingState === 'recording'
+      || voiceRecordingState === 'processing'
+    );
   const shouldShowMoonKimiQuickActions =
     isMoonKimi &&
     !disabled &&
@@ -196,6 +209,7 @@ export default function ChatInputArea({
       return;
     }
     shouldCancelVoiceRef.current = false;
+    setIsCancellingVoice(false);
     voiceStartPromiseRef.current = onVoiceRecordingStart();
   }, [onVoiceRecordingStart, voiceRecordingState]);
 
@@ -218,9 +232,10 @@ export default function ChatInputArea({
     const started = voiceStartPromiseRef.current;
     voiceStartPromiseRef.current = null;
     if (!started) return;
+    const shouldCancel = shouldCancelVoiceRef.current;
     void started.then(async (didStart) => {
       if (!didStart) return;
-      if (shouldCancelVoiceRef.current) await onVoiceRecordingCancel?.();
+      if (shouldCancel) await onVoiceRecordingCancel?.();
       else await onVoiceRecordingFinish?.();
     });
   }, [onVoiceRecordingCancel, onVoiceRecordingFinish]);
@@ -299,6 +314,14 @@ export default function ChatInputArea({
 
   return (
     <View style={styles.container} onLayout={onLayout}>
+      {isVoiceFeedbackVisible && (
+        <ChatVoiceRecordingFeedback
+          level={voiceRecordingProgress.level}
+          isPreparing={voiceRecordingState === 'starting'}
+          isCancelling={isCancellingVoice && voiceRecordingState !== 'processing'}
+          isProcessing={voiceRecordingState === 'processing'}
+        />
+      )}
       {replyTo ? (
         <View style={styles.replyPreviewContainer}>
           <View style={styles.replyPreviewTextContainer}>
@@ -347,7 +370,7 @@ export default function ChatInputArea({
           variant="inputBar"
         >
           <TouchableOpacity style={styles.voiceButton} onPress={leaveVoiceMode}>
-            <Ionicons name="keypad-outline" size={25} color={theme.colors.icon.primary} />
+            <KeyboardIcon size={24} color={theme.colors.icon.primary} />
           </TouchableOpacity>
           <View
             style={[styles.input, { alignItems: 'center', justifyContent: 'center' }]}
@@ -362,16 +385,19 @@ export default function ChatInputArea({
             onResponderMove={(event) => {
               const { locationX, locationY } = event.nativeEvent;
               const { width, height } = voiceButtonSizeRef.current;
-              shouldCancelVoiceRef.current = locationX < 0 || locationY < 0 || locationX > width || locationY > height;
+              const nextCancelling = locationX < 0 || locationY < 0 || locationX > width || locationY > height;
+              shouldCancelVoiceRef.current = nextCancelling;
+              // move 事件频率很高，只在越界状态真正翻转时更新，避免整条输入区反复重渲染。
+              setIsCancellingVoice((previous) => (previous === nextCancelling ? previous : nextCancelling));
             }}
           >
-            <Text style={{ color: theme.colors.text.primary }}>
+            <Text style={{ color: theme.colors.text.primary, textAlign: 'center' }}>
               {voiceRecordingState === 'processing'
                 ? '识别中…'
                 : voiceRecordingState === 'starting'
                   ? '正在准备录音…'
                   : voiceRecordingState === 'recording'
-                    ? '松开发送，滑出取消'
+                    ? isCancellingVoice ? '松开取消，移回继续' : '松开发送，滑出取消'
                     : '按住说话'}
             </Text>
           </View>

@@ -1,4 +1,4 @@
-/** 真实 React 生命周期验证：图片暂存态、解码失败、刷新复用与旧请求隔离。 */
+/** 真实 React 生命周期验证：图片暂存态、刷新复用、封面更新与旧请求隔离。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -105,4 +105,94 @@ assert.equal(state.initialLoading, false);
 assert.deepEqual(state.moments, firstPage, '刷新等待期间保留已有内容');
 await act(async () => { pageRequest.resolve(firstPage); await loading; });
 await act(async () => { renderer.unmount(); });
-console.log('Moments 图片加载状态 / 刷新复用 / 首屏暂存态验证通过。');
+
+// 保活页面刷新动态或导航回调时，已显示的封面不能退回默认图或重新读取。
+const profileListeners = new Set();
+const initialCoverRead = deferred();
+let profileReads = 0;
+const coverController = load('src/features/moments/presentation/useMomentsCover.ts', {
+  react: React,
+  '@shared/ui': {},
+  'react-native': {},
+  'expo-image-picker': {},
+  '@platform/device/DeviceMediaService': {},
+  '../../../../assets/ravenphone_bg.png': 'default-cover',
+  '@features/profile': {
+    DEFAULT_USER_PROFILE: { name: '用户', avatar: null, momentsCover: null, momentsCoverMediaAssetId: null },
+    getCurrentUserProfile: () => { profileReads++; return initialCoverRead.promise; },
+    subscribeUserProfileUpdated: listener => {
+      profileListeners.add(listener);
+      return () => { profileListeners.delete(listener); };
+    },
+  },
+});
+const theme = {
+  colors: {
+    background: { app: '#fff', screen: '#fff' }, surface: { default: '#fff' },
+    text: { secondary: '#666', tertiary: '#999' }, brand: { primary: '#123', onPrimary: '#fff' },
+    icon: { primary: '#123' },
+  },
+  effects: { glass: { enabled: false } }, spacing: { sm: 4, lg: 16, xl: 24 },
+  radius: { sm: 4 }, shadow: { md: {} },
+};
+const nativeUI = {
+  ActivityIndicator: 'Spinner', ImageBackground: 'CoverImage', Text: 'Text',
+  TouchableOpacity: 'Button', View: 'View', StyleSheet: { create: styles => styles },
+};
+const Header = load('src/features/moments/presentation/MomentsHeader.tsx', {
+  react: React, 'react-native': nativeUI,
+  '@expo/vector-icons': { Ionicons: 'Icon' }, '@shared/ui': { UserAvatar: 'Avatar' },
+  '@shared/ui/NavigationHeader': 'NavigationHeader',
+  '@shared/theme': { useTheme: () => theme },
+  './MomentsCoverPreviewModal': 'CoverPreview',
+  './useMomentsCover': coverController,
+}).default;
+// 复用 FlatList 的公开契约：元素直接渲染，组件类型通过 React 创建实例。
+function FlatList({ ListHeaderComponent }) {
+  return React.isValidElement(ListHeaderComponent)
+    ? ListHeaderComponent
+    : React.createElement(ListHeaderComponent);
+}
+const noop = () => {};
+let timelineReloads = 0;
+const timeline = {
+  moments: [{ id: 'moment-1' }], initialLoading: false, refreshing: false,
+  loadingMore: false, hasMoreMoments: false, currentUserId: 'self',
+  loadMoments: noop, loadMoreMoments: noop, reloadLoadedMoments: () => { timelineReloads++; },
+};
+const Tab = load('src/features/moments/presentation/MomentsTab.tsx', {
+  react: React, 'react-native': { ...nativeUI, FlatList },
+  '@shared/ui': {}, 'react-native-safe-area-context': { SafeAreaView: 'SafeArea' },
+  '@shared/theme': { useTheme: () => theme }, './useMoments': () => timeline,
+  './MomentItem': 'MomentItem', './MomentsHeader': Header,
+  './momentActionFeedback': {},
+}).default;
+const renderTab = revision => React.createElement(Tab, {
+  refreshRevision: revision, onPublishPress: () => {}, onSettingsPress: () => {},
+});
+await act(async () => { renderer = create(renderTab(0)); });
+assert.equal(renderer.root.findByType('CoverImage').props.source, 'default-cover');
+await act(async () => {
+  initialCoverRead.resolve({ name: '用户', avatar: null, momentsCover: 'file:///cover.jpg', momentsCoverMediaAssetId: 'cover' });
+});
+const loadedCoverSource = renderer.root.findByType('CoverImage').props.source;
+assert.deepEqual(loadedCoverSource, { uri: 'file:///cover.jpg' });
+await act(async () => { renderer.update(renderTab(1)); });
+await act(async () => { renderer.update(renderTab(2)); });
+assert.equal(timelineReloads, 2, '切回页面仍刷新动态');
+assert.equal(profileReads, 1, '切回页面不能重新读取封面资料');
+assert.deepEqual(renderer.root.findByType('CoverImage').props.source, loadedCoverSource, '切回页面保留已显示的图片来源');
+await act(async () => { renderer.update(renderTab(2)); });
+assert.equal(profileReads, 1, '导航回调变化不能重挂载封面');
+await act(async () => {
+  for (const listener of profileListeners) listener({ name: '新名称', avatar: null, momentsCover: 'file:///new-cover.jpg', momentsCoverMediaAssetId: 'new-cover' });
+});
+assert.deepEqual(renderer.root.findByType('CoverImage').props.source, { uri: 'file:///new-cover.jpg' }, '已提交的新封面即时显示');
+assert.equal(renderer.root.findByType('Avatar').props.name, '新名称');
+await act(async () => {
+  for (const listener of profileListeners) listener({ name: '新名称', avatar: null, momentsCover: null, momentsCoverMediaAssetId: null });
+});
+assert.equal(renderer.root.findByType('CoverImage').props.source, 'default-cover', '恢复默认封面即时同步');
+await act(async () => { renderer.unmount(); });
+assert.equal(profileListeners.size, 0, '封面卸载后解除资料订阅');
+console.log('Moments 图片加载状态 / 首屏暂存态 / 保活封面复用与更新验证通过。');

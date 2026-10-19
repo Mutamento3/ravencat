@@ -8,10 +8,13 @@
  */
 
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import React from 'react';
+import { act, create } from 'react-test-renderer';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -26,6 +29,7 @@ function loadTypeScriptModule(relativePath, mocks = {}) {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
       target: ts.ScriptTarget.ES2022,
+      jsx: ts.JsxEmit.React,
     },
     fileName: absolutePath,
     reportDiagnostics: true,
@@ -1355,6 +1359,163 @@ await scenario('真实 platform 录音入口按当前权限结果决定是否启
   const session = await fixture.module.voiceRecordingPort.start(params);
   assert.equal(fixture.nativeStarts, 1, '授权变化后允许启动录音，不缓存旧的拒绝结果');
   await session.cancel();
+});
+
+await scenario('录音反馈来自实际 PCM：静音继续计时，音量随输入变化且隔离其他 session', async () => {
+  const fixture = loadNativeVoiceModule();
+  const progress = [];
+  const chunks = [];
+  const session = await fixture.module.voiceRecordingPort.start({
+    onAudioChunk: (chunk) => chunks.push(chunk),
+    onError: () => undefined,
+    onProgress: (value) => progress.push(value),
+  });
+  const emit = (sample, sessionId = session.sessionId) => {
+    const pcm = Buffer.alloc(6400);
+    for (let offset = 0; offset < pcm.length; offset += 2) pcm.writeInt16LE(sample, offset);
+    fixture.listeners.get('onRecordingChunk')({ sessionId, base64: pcm.toString('base64') });
+  };
+  emit(0);
+  emit(128);
+  emit(-16384);
+  emit(32767);
+  emit(0);
+  emit(32767, 'other-recording');
+  assert.deepEqual(progress.map((value) => value.durationMs), [200, 400, 600, 800, 1000]);
+  assert.equal(progress[0].level, 0);
+  assert.ok(progress[1].level > 0 && progress[1].level < progress[2].level);
+  assert.ok(progress[2].level < progress[3].level && progress[3].level <= 1);
+  assert.equal(progress[4].level, 0, '恢复静音后声波必须收回');
+  assert.equal(chunks.length, 5, '计量必须复用交给转写的同一份音频，不改变 chunk 交付');
+  await session.cancel();
+  assert.equal(fixture.listeners.size, 0);
+});
+
+await scenario('application 透传同一录音的反馈，保留原有转写 consumer', async () => {
+  const device = createDeviceMock();
+  const start = device.voiceRecordingPort.start;
+  let capture;
+  device.voiceRecordingPort.start = async (params) => {
+    capture = params;
+    return start(params);
+  };
+  const { module, speechMock } = loadUserVoiceModule({ device });
+  const progress = [];
+  const session = await module.startUserVoiceMessageRecording({ ...baseParams, onProgress: (value) => progress.push(value) });
+  const value = { durationMs: 200, level: 0.5 };
+  capture.onProgress(value);
+  capture.onAudioChunk(new ArrayBuffer(6400));
+  assert.deepEqual(progress, [value]);
+  assert.equal(speechMock.__calls.accept, 1);
+  await session.cancel();
+});
+
+await scenario('取消后的录音反馈失去所有权，新录音从零开始', async () => {
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  const voiceModule = createControllableVoiceModule();
+  const start = voiceModule.startUserVoiceMessageRecording;
+  const starts = [];
+  voiceModule.startUserVoiceMessageRecording = (params) => { starts.push(params); return start(params); };
+  const module = loadUseChatSendFlow({ react: React, ...createSendFlowDeps({ voiceModule }) });
+  let hook;
+  function Harness({ sessionId }) {
+    hook = module.useChatSendFlow(buildSendFlowParams({ sessionId }));
+    return null;
+  }
+  let renderer;
+  await act(async () => { renderer = create(React.createElement(Harness, { sessionId: 's1' })); });
+  let starting;
+  await act(async () => { starting = hook.startVoiceRecording(); });
+  await act(async () => { voiceModule.__deferreds[0].resolve(voiceModule.__makeRecording()); await starting; });
+  await act(async () => { starts[0].onProgress({ durationMs: 800, level: 0.6 }); });
+  assert.deepEqual(hook.voiceRecordingProgress, { durationMs: 800, level: 0.6 });
+  await act(async () => { await hook.cancelVoiceRecording(); });
+  await act(async () => { starting = hook.startVoiceRecording(); });
+  assert.deepEqual(hook.voiceRecordingProgress, { durationMs: 0, level: 0 });
+  await act(async () => { starts[0].onProgress({ durationMs: 1000, level: 1 }); });
+  assert.deepEqual(hook.voiceRecordingProgress, { durationMs: 0, level: 0 });
+  await act(async () => { voiceModule.__deferreds[1].resolve(voiceModule.__makeRecording()); await starting; });
+  await act(async () => { starts[1].onProgress({ durationMs: 200, level: 0.4 }); });
+  assert.equal(hook.voiceRecordingProgress.durationMs, 200);
+  await act(async () => { renderer.update(React.createElement(Harness, { sessionId: 's2' })); });
+  await act(async () => { starts[1].onProgress({ durationMs: 400, level: 1 }); });
+  assert.equal(hook.voiceRecordingState, 'idle');
+  assert.equal(hook.voiceRecordingProgress.durationMs, 200, '旧会话不得再更新反馈');
+  await act(async () => { renderer.unmount(); });
+});
+
+await scenario('长按录音显示反馈，滑出提示取消，移回后松开进入识别与校对', async () => {
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  const theme = { colors: { text: { primary: '#111' }, icon: { primary: '#111' } } };
+  const { default: ChatInputArea } = loadTypeScriptModule('src/features/chat/presentation/messages/components/ChatInputArea.tsx', {
+    react: { ...React, default: React },
+    'react-native': { View: 'View', Text: 'Text', TouchableOpacity: 'TouchableOpacity', Keyboard: { dismiss() {} } },
+    '@shared/ui': { AppTextInput: 'AppTextInput', showAppDialog() {} },
+    '@expo/vector-icons': { Ionicons: 'Ionicons' },
+    'lucide-react-native': { BrainCircuit: 'BrainCircuit', Keyboard: 'Keyboard' },
+    './ChatEmojiPanel': { default: 'ChatEmojiPanel' },
+    './ChatToolPanel': { default: 'ChatToolPanel' },
+    './ChatAttachmentComposerTray': { default: 'ChatAttachmentComposerTray' },
+    './ChatVoiceReviewPanel': { ChatVoiceReviewPanel: 'ChatVoiceReviewPanel' },
+    './ChatVoiceRecordingFeedback': { ChatVoiceRecordingFeedback: 'RecordingFeedback' },
+    './chatInputStyles': { createInputAreaStyles: () => ({}) },
+    '@shared/theme': { useTheme: () => theme, isMoonKimiTheme: () => false, ThemedSurface: 'ThemedSurface' },
+    './MoonKimiComposer': { MoonKimiComposer: 'MoonKimiComposer' },
+    './chatToolPanelCapability': { resolveTogetherListeningToolPanelHandler: () => undefined },
+    './chatInputLimits': { CHAT_INPUT_MAX_LENGTH: 10000 },
+  });
+  let finishes = 0;
+  let cancels = 0;
+  const props = {
+    value: '', onChangeText() {}, onSend() {}, activeSurface: 'none', onActiveSurfaceChange() {}, surfaceHeight: 200,
+    voiceRecordingState: 'idle', voiceRecordingProgress: { durationMs: 2400, level: 0.6 },
+    onVoiceRecordingStart: async () => true,
+    onVoiceRecordingFinish: async () => { finishes += 1; return true; },
+    onVoiceRecordingCancel: async () => { cancels += 1; },
+  };
+  let renderer;
+  const render = async (patch) => {
+    Object.assign(props, patch);
+    await act(async () => { renderer.update(React.createElement(ChatInputArea, props)); });
+  };
+  const button = () => renderer.root.findAllByType('View').find((view) => view.props.onResponderGrant);
+  const feedback = () => renderer.root.findByType('RecordingFeedback').props;
+  const move = async (x) => {
+    await act(async () => { button().props.onResponderMove({ nativeEvent: { locationX: x, locationY: 20 } }); });
+  };
+  await act(async () => { renderer = create(React.createElement(ChatInputArea, props)); });
+  await act(async () => { await renderer.root.findAllByType('TouchableOpacity')[0].props.onPress(); });
+  await act(async () => {
+    button().props.onLayout({ nativeEvent: { layout: { width: 300, height: 44 } } });
+    button().props.onResponderGrant();
+  });
+  await render({ voiceRecordingState: 'starting' });
+  assert.equal(feedback().isPreparing, true, 'starting 期间必须立刻显示波形反馈，不能等到 recording');
+  assert.equal(feedback().isProcessing, false);
+  await render({ voiceRecordingState: 'recording' });
+  assert.equal(feedback().isPreparing, false);
+  assert.equal(feedback().level, 0.6);
+  await move(-1);
+  assert.equal(feedback().isCancelling, true);
+  await move(100);
+  assert.equal(feedback().isCancelling, false);
+  await act(async () => { button().props.onResponderRelease(); });
+  assert.equal(finishes, 1);
+  assert.equal(cancels, 0);
+  await render({ voiceRecordingState: 'processing' });
+  assert.equal(feedback().isProcessing, true);
+  assert.equal(feedback().isCancelling, false);
+  await render({ voiceRecordingState: 'reviewing', voiceReviewDraft: { transcript: '校对', durationMs: 2400 } });
+  assert.equal(renderer.root.findAllByType('RecordingFeedback').length, 0);
+  assert.equal(renderer.root.findAllByType('ChatVoiceReviewPanel').length, 1);
+  await render({ voiceRecordingState: 'idle', voiceReviewDraft: null });
+  await act(async () => { button().props.onResponderGrant(); });
+  await render({ voiceRecordingState: 'recording' });
+  await move(301);
+  await act(async () => { button().props.onResponderRelease(); });
+  assert.equal(cancels, 1, '滑出松开必须丢弃录音');
+  assert.equal(finishes, 1, '取消不得进入识别');
+  await act(async () => { renderer.unmount(); });
 });
 
 // ============================================================================

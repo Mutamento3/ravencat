@@ -116,7 +116,7 @@ function screen() {
         latestSave = options.save;
         if (!editor) editor = new AutoSaveDraftEditor(options.initial, options.parse, (patch) => latestSave(patch));
         else editor.rebase(options.initial);
-        return { ...editor.getSnapshot(), change: editor.change, flush: editor.flush, restore: editor.restore };
+        return { ...editor.getSnapshot(), change: editor.change, commit: editor.commit, flush: editor.flush, restore: editor.restore };
       },
       useAutoSaveNavigation: (flush, back, blocked) => {
         const leave = async (action) => { if (await flush()) action(); else blocked(); };
@@ -149,7 +149,9 @@ try {
   context.render().handleContextLimitChange('privatePrimary', '48');
   mock.timers.tick(999); await tick();
   assert.deepEqual(context.writes, []);
-  mock.timers.tick(1); await tick();
+  mock.timers.tick(10000); await tick();
+  assert.deepEqual(context.writes, [], '条数停输后仍等待失焦');
+  await context.render().commit();
   assert.deepEqual(context.writes, [{ privateContextPrimaryLimit: 48 }]);
   assert.equal(context.persisted.privateContextPrimaryLimit, 48);
   context.render().handleContextLimitChange('privateSecondary', '12');
@@ -266,19 +268,21 @@ try {
   page.render().setName(' 新名称 ');
   mock.timers.tick(999); await tick();
   assert.deepEqual(page.writes, []);
-  mock.timers.tick(1); await tick();
+  mock.timers.tick(10000); await tick();
+  assert.deepEqual(page.writes, [], '名称停输后仍等待失焦');
+  await page.render().commit();
   assert.deepEqual(page.writes, [{ name: '新名称' }]);
   assert.deepEqual(page.updates, [{ name: '新名称' }]);
 
   page.render().setSystemPrompt(' 新人设\n保持原始排版 ');
-  mock.timers.tick(1000); await tick();
+  await page.render().commit();
   assert.deepEqual(page.writes.at(-1), { systemPrompt: ' 新人设\n保持原始排版 ' });
   assert.equal(page.persisted.systemPrompt, ' 新人设\n保持原始排版 ', '提示词消费者读取助手持久化的人设');
   assert.deepEqual(page.updates.at(-1), { systemPrompt: ' 新人设\n保持原始排版 ' });
   page.render().setSystemPrompt(''); await page.render().flush();
   assert.equal(page.persisted.systemPrompt, '', '允许清除人设');
 
-  page.render().setName(''); mock.timers.tick(1000); await tick();
+  page.render().setName(''); await page.render().commit();
   assert.ok(page.render().nameError);
   page.render().setSystemPrompt('空名称不阻止人设保存');
   await page.render().flush();
@@ -320,7 +324,7 @@ try {
 
   const pending = screen(); const work = pending.delayAvatar(); await pending.chooseAvatar();
   pending.render().setName('头像保存期间的新名称');
-  mock.timers.tick(1000); await tick();
+  await pending.render().commit();
   let left = false; const leaving = pending.render().back().then(() => { left = true; });
   await tick(); assert.equal(left, false, '返回必须等待已开始的头像提交');
   work.resolve(); await leaving; assert.equal(pending.returned(), 1);

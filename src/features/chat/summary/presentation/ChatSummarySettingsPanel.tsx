@@ -46,13 +46,13 @@ export default forwardRef<ChatSummarySettingsEditor, {
     try { await onSave(patch); }
     catch (failure) { showAppDialog({ title: '操作失败', message: failure instanceof Error ? failure.message : '请稍后再试', tone: 'error' }); }
   };
-  return <ThemedSurface variant="card" style={styles.card}>
+  return <ThemedSurface variant="card" nativeGlass={false} style={styles.card}>
     <View style={styles.row}><Text style={styles.body}>注入已有摘要</Text><Toggle accessibilityLabel="注入已有摘要"
       value={settings.injectEnabled} disabled={busy} onValueChange={(injectEnabled) => { void saveSwitch({ injectEnabled }); }} /></View>
     <Text style={styles.subtitle}>控制来源会话的摘要是否进入主客上下文，不删除记录，也不影响自动生成。关闭后仍可查看和主动查询。</Text>
     {group && <><View style={styles.row}><Text style={styles.body}>群摘要触发条数</Text><AppTextInput accessibilityLabel="群摘要触发条数"
       style={styles.thresholdInput} value={thresholdEditor.draft.trigger} keyboardType="number-pad" editable={!busy}
-      onChangeText={(trigger) => thresholdEditor.change({ trigger })} onBlur={() => { void thresholdEditor.flush(); }} /></View>
+      onChangeText={(trigger) => thresholdEditor.change({ trigger })} onBlur={() => { void thresholdEditor.commit(); }} /></View>
       {thresholdEditor.errors.trigger && <Text style={styles.danger}>{thresholdEditor.errors.trigger}</Text>}
       <Text style={styles.subtitle}>全群共用，独立于各成员的主客条数和管理员调度窗口。达到门槛后按群处理进度生成。</Text></>}
     <View style={styles.row}><Text style={styles.body}>自动生成摘要</Text><Toggle accessibilityLabel="自动生成摘要"
@@ -67,18 +67,18 @@ export default forwardRef<ChatSummarySettingsEditor, {
     <Text style={styles.subtitle}>只归纳已形成的一级摘要，保留重要事件与实体。关闭二级摘要时恢复注入现存一级摘要，暂停新的归纳。</Text>
     <View style={styles.row}><Text style={styles.body}>一级摘要最大 token</Text><AppTextInput accessibilityLabel="一级摘要最大 token"
       style={[styles.thresholdInput, error && { borderColor: theme.colors.feedback.error }]} value={thresholdEditor.draft.threshold}
-      onChangeText={(threshold) => thresholdEditor.change({ threshold })} onBlur={() => { void thresholdEditor.flush(); }}
+      onChangeText={(threshold) => thresholdEditor.change({ threshold })} onBlur={() => { void thresholdEditor.commit(); }}
       editable={!busy && settings.secondaryEnabled} keyboardType="number-pad" returnKeyType="done" submitBehavior="blurAndSubmit" /></View>
     {error && <Text accessibilityRole="alert" style={styles.danger}>{error}</Text>}
     <View style={styles.row}><Text style={styles.body}>摘要最长等待（秒）</Text><AppTextInput accessibilityLabel="摘要最长等待秒数"
       style={styles.thresholdInput} keyboardType="number-pad" value={thresholdEditor.draft.timeout} editable={!busy}
-      onChangeText={(timeout) => thresholdEditor.change({ timeout })} onBlur={() => { void thresholdEditor.flush(); }} /></View>
+      onChangeText={(timeout) => thresholdEditor.change({ timeout })} onBlur={() => { void thresholdEditor.commit(); }} /></View>
     {thresholdEditor.errors.timeout && <Text accessibilityRole="alert" style={styles.danger}>{thresholdEditor.errors.timeout}</Text>}
     <View style={styles.row}><Text style={styles.body}>摘要输出 token 上限</Text><AppTextInput accessibilityLabel="摘要输出 token 上限"
       style={styles.thresholdInput} keyboardType="number-pad" value={thresholdEditor.draft.maxTokens} placeholder="跟随总结模型" editable={!busy}
-      onChangeText={(maxTokens) => thresholdEditor.change({ maxTokens })} onBlur={() => { void thresholdEditor.flush(); }} /></View>
+      onChangeText={(maxTokens) => thresholdEditor.change({ maxTokens })} onBlur={() => { void thresholdEditor.commit(); }} /></View>
     {thresholdEditor.errors.maxTokens && <Text accessibilityRole="alert" style={styles.danger}>{thresholdEditor.errors.maxTokens}</Text>}
-    <Text style={styles.meta}>请求参数仅影响本会话摘要，不改变普通聊天。输出额度留空跟随实际总结模型，与归纳阈值独立。输入停顿 1 秒自动保存，失焦立即保存。</Text>
+    <Text style={styles.meta}>请求参数仅影响本会话摘要，不改变普通聊天。输出额度留空跟随实际总结模型，与归纳阈值独立。离开输入框时自动保存。</Text>
     <AutoSaveErrors error={thresholdEditor.saveError} blocked={false}
       retry={() => { void thresholdEditor.flush(); }} restore={() => { void thresholdEditor.restore(); }} />
     <Text style={styles.meta}>待归纳一级摘要：约 {pendingTokens} token。按正文估算；新增后达到阈值，领取当时全部待归纳摘要，包含刚新增的一批。成功后才替换上下文。</Text>

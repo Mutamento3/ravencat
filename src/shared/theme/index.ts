@@ -17,6 +17,7 @@ export type {
 
 export { ThemeProvider } from './ThemeProvider';
 export { useTheme, useThemeContext } from './useTheme';
+export { GLASS_BLUR_RANGE } from './glassBlur';
 export { useThemedStyles } from './useThemedStyles';
 export { THEME_REGISTRY, DEFAULT_THEME_ID, getThemeById, isValidThemeId, AVAILABLE_THEMES } from './themeRegistry';
 export {

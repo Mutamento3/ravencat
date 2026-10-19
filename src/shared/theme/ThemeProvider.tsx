@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   ChatColorOverrides,
@@ -11,8 +11,10 @@ import { DEFAULT_THEME_ID, getThemeById, getThemeSelectionDisabledReason, AVAILA
 import {
   loadChatColorOverrides,
   loadStoredThemeId,
+  loadGlassBlurRadius,
   saveChatColorOverrides,
   saveThemeId,
+  saveGlassBlurRadius,
 } from './themeStorage';
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -46,17 +48,21 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   const [themeId, setThemeIdState] = useState<PresentationThemeId>(DEFAULT_THEME_ID);
   const [baseTheme, setBaseTheme] = useState<PresentationTheme>(getThemeById(DEFAULT_THEME_ID));
   const [chatColorOverrides, setChatColorOverridesState] = useState<ChatColorOverrides>({});
+  const [glassBlurRadius, setGlassBlurRadiusState] = useState<number>();
 
   useEffect(() => {
     let isMounted = true;
 
     const init = async () => {
-      const storedId = await loadStoredThemeId();
+      const [storedId, storedBlurRadius] = await Promise.all([
+        loadStoredThemeId(), loadGlassBlurRadius(),
+      ]);
       const storedOverrides = await loadChatColorOverrides(storedId);
       if (isMounted) {
         setThemeIdState(storedId);
         setBaseTheme(applyChatColorOverrides(getThemeById(storedId), storedOverrides));
         setChatColorOverridesState(storedOverrides);
+        setGlassBlurRadiusState(storedBlurRadius);
       }
     };
 
@@ -103,14 +109,32 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     [chatColorOverrides, themeId]
   );
 
+  const setGlassBlurRadius = useCallback(async (radius: number) => {
+    setGlassBlurRadiusState(radius);
+    await saveGlassBlurRadius(radius);
+  }, []);
+
+  // 模糊覆盖层独立于聊天颜色，切换主题或修改文字颜色不会丢失玻璃偏好。
+  const theme = useMemo<PresentationTheme>(() => {
+    if (!baseTheme.effects.glass.enabled || glassBlurRadius === undefined) return baseTheme;
+    return {
+      ...baseTheme,
+      effects: {
+        ...baseTheme.effects,
+        glass: { ...baseTheme.effects.glass, blurRadius: glassBlurRadius },
+      },
+    };
+  }, [baseTheme, glassBlurRadius]);
+
   const value: ThemeContextValue = {
-    theme: baseTheme,
+    theme,
     themeId,
     setThemeId,
     availableThemes: AVAILABLE_THEMES,
     chatColorOverrides,
     setChatColorOverride,
     resetChatColorOverride,
+    setGlassBlurRadius,
   };
 
   return (

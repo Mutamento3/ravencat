@@ -144,11 +144,13 @@ try {
   mock.timers.tick(500); await tick();
   assert.equal(writes.length, 0);
   editor.change({ value: other });
-  mock.timers.tick(1000); await tick();
-  assert.deepEqual(writes, [{ other }], '停止输入后自动保存最新完整设定');
+  mock.timers.tick(10000); await tick();
+  assert.deepEqual(writes, [], '停输不提交尚未失焦的设定');
+  await editor.commit();
+  assert.deepEqual(writes, [{ other }], '失焦保存最新完整设定');
   editor.change({ value: '立刻返回' });
   assert.equal(await editor.flush(), true);
-  assert.deepEqual(writes.at(-1), { other: '立刻返回' }, '返回等待未结束防抖的输入提交');
+  assert.deepEqual(writes.at(-1), { other: '立刻返回' }, '返回等待尚未失焦的输入提交');
 
   let release;
   const gate = new Promise((resolve) => { release = resolve; });

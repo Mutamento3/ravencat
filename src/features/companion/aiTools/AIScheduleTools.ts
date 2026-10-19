@@ -8,7 +8,7 @@ import {
   createAIScheduleWithProjection,
   updateAIScheduleWithProjection,
 } from '../application/AIScheduleProjectionOwner';
-import type { AIScheduleProjectionOutcome } from '../application/AIScheduleProjectionOwner';
+import type { AIScheduleProjectionOutcome, AIScheduleCalendarOutcome } from '../application/AIScheduleProjectionOwner';
 import type { AIScheduleApplicationErrorCode } from '../application/AIScheduleApplication';
 import {
   getAIScheduleQuery,
@@ -18,6 +18,7 @@ import type { AISchedule, AIScheduleStatus } from '../domain/AISchedule';
 import type { AIScheduleListCursor, AIScheduleListPage } from '../domain/AIScheduleRepository';
 
 type ProjectionAwareAISchedule = AISchedule & {
+  calendarStatus: AIScheduleCalendarOutcome;
   projectionStatus: AIScheduleProjectionOutcome['status'];
   projectionOperation?: Extract<
     AIScheduleProjectionOutcome,
@@ -31,13 +32,14 @@ export const CreateAIScheduleTool = {
   name: 'create_ai_schedule',
   definition: {
     name: 'create_ai_schedule',
-    description: '【主理 AI 专属】主动伴随开启时，安排一次未来自主唤醒；可以自主安排或回应用户要求，到点依据最新聊天上下文决定行动。已有同一安排应修改，不要重复创建；日程不是预写消息',
+    description: '【主理 AI 专属】主动伴随开启时安排未来自主唤醒，默认同时写入手机系统日历提醒用户。缺少日历权限会报错且不会创建任何日程；首次遇到应告知用户可在小程序的“权限与后台运行”开启系统日历权限。用户拒绝或已表达仅内部提醒偏好时，显式设 system_calendar=false，不要反复索要权限。已有同一安排应修改，不要重复创建；日程不是预写消息，到点依据最新上下文决定行动',
     parameters: {
       type: 'object',
       properties: {
         remind_at: { type: 'string', description: '带 Z 或 UTC offset 的未来绝对时间' },
         summary: { type: 'string', description: '用于列表浏览的简短事件摘要，最多 160 字符' },
         details: { type: 'string', description: '未来理解事件所需的背景，最多 4000 字符' },
+        system_calendar: { type: 'boolean', default: true, description: '默认 true：同时创建内部 AI 日程和系统日历到点提醒。用户拒绝日历授权或偏好仅内部提醒时设 false；不可因缺权限自行静默降级' },
         source_message_ids: {
           type: 'array',
           items: { type: 'string' },
@@ -107,6 +109,7 @@ export const UpdateAIScheduleTool = {
         remind_at: { type: 'string', description: '可选，新的未来绝对时间' },
         summary: { type: 'string', description: '可选，新的简短摘要' },
         details: { type: 'string', description: '可选，新的详情' },
+        system_calendar: { type: 'boolean', description: '可选，不传则保留原设置。true 同步系统日历，false 仅保留内部日程并移除关联系统事件；已有系统事件的修改或移除需要日历权限' },
       },
       required: ['schedule_id'],
       additionalProperties: false,
@@ -129,6 +132,7 @@ interface CreateArgs {
   remind_at: string;
   summary: string;
   details: string;
+  system_calendar?: boolean;
   source_message_ids?: string[];
 }
 
@@ -143,13 +147,14 @@ async function executeCreate(
     remindAt: args.remind_at,
     summary: args.summary,
     details: args.details,
+    systemCalendar: args.system_calendar ?? true,
     sourceConversationId: sourceConversationId ?? undefined,
     sourceMessageIds: args.source_message_ids,
   }));
   if (authority.status === 'not_current_host') return notCurrentHost();
   const outcome = authority.value;
   if (outcome.status === 'error') return error(outcome.code);
-  return mapProjectionAwareSuccess(outcome.schedule, outcome.projection, 'saved');
+  return mapProjectionAwareSuccess(outcome.schedule, outcome.projection, outcome.calendar, 'saved');
 }
 
 interface ListArgs {
@@ -204,6 +209,7 @@ interface UpdateArgs {
   remind_at?: string;
   summary?: string;
   details?: string;
+  system_calendar?: boolean;
 }
 
 async function executeUpdate(
@@ -216,11 +222,12 @@ async function executeUpdate(
     remindAt: args.remind_at,
     summary: args.summary,
     details: args.details,
+    systemCalendar: args.system_calendar,
   }));
   if (authority.status === 'not_current_host') return notCurrentHost();
   const outcome = authority.value;
   if (outcome.status === 'error') return error(outcome.code);
-  return mapProjectionAwareSuccess(outcome.schedule, outcome.projection, 'updated');
+  return mapProjectionAwareSuccess(outcome.schedule, outcome.projection, outcome.calendar, 'updated');
 }
 
 async function executeCancel(
@@ -234,12 +241,13 @@ async function executeCancel(
   if (authority.status === 'not_current_host') return notCurrentHost();
   const outcome = authority.value;
   if (outcome.status === 'error') return error(outcome.code);
-  return mapProjectionAwareSuccess(outcome.schedule, outcome.projection, 'cancelled');
+  return mapProjectionAwareSuccess(outcome.schedule, outcome.projection, outcome.calendar, 'cancelled');
 }
 
 function mapProjectionAwareSuccess(
   schedule: AISchedule,
   projection: AIScheduleProjectionOutcome,
+  calendar: AIScheduleCalendarOutcome,
   operation: 'saved' | 'updated' | 'cancelled',
 ): AgentToolExecutionResult<ProjectionAwareAISchedule> {
   const projectionOperation = projection.status === 'projection_failed'
@@ -247,23 +255,29 @@ function mapProjectionAwareSuccess(
     : undefined;
   const data: ProjectionAwareAISchedule = {
     ...schedule,
+    calendarStatus: calendar,
     projectionStatus: projection.status,
     ...(projectionOperation ? { projectionOperation } : {}),
   };
   const durableFact = operation === 'cancelled'
     ? `AI 日程已取消，历史记录仍保留。\nscheduleId = ${schedule.scheduleId}`
     : `AI 日程已${operation === 'saved' ? '保存' : '更新'}。\nscheduleId = ${schedule.scheduleId}\nremindAt = ${schedule.remindAt}`;
+  const calendarFact = calendar === 'internal_only' ? '本次只安排内部 AI 日程，不请求写入系统日历。'
+    : calendar === 'synced' ? (operation === 'cancelled' || !schedule.systemCalendar ? '关联系统日历事件已移除。' : '系统日历事件和到点提醒已同步。')
+    : operation === 'cancelled' || !schedule.systemCalendar
+      ? `内部操作已提交，但系统日历事件尚未移除（${calendar}），手机日历仍可能提醒用户。请明确告知用户，恢复权限或日历服务后回到应用同步，也可在系统日历手动删除。不要声称系统提醒已取消，不要重新创建日程。`
+      : `系统日历未同步（${calendar}）；内部操作已提交。请明确告知用户系统提醒尚未得到保证，不要重复创建日程。可恢复权限后等待同步或修改同一 scheduleId。`;
   if (projection.status === 'projection_failed') {
     return {
       status: 'success',
       data,
-      modelContent: `${durableFact}\n业务事实已持久化，但 native projection 暂时失败，后台会自动恢复；不要重复${operation === 'saved' ? '创建' : operation === 'updated' ? '更新' : '取消'}这条日程。`,
+      modelContent: `${durableFact}\n${calendarFact}\n业务事实已持久化，但 native projection 暂时失败，后台会自动恢复；不要重复${operation === 'saved' ? '创建' : operation === 'updated' ? '更新' : '取消'}这条日程。`,
     };
   }
   return {
     status: 'success',
     data,
-    modelContent: `${durableFact}\nnative projection = ${projection.status}`,
+    modelContent: `${durableFact}\n${calendarFact}\nnative projection = ${projection.status}`,
   };
 }
 
@@ -292,8 +306,12 @@ function notCurrentHost<T>(): AgentToolExecutionResult<T> {
   };
 }
 
-function error<T>(code: AIScheduleApplicationErrorCode): AgentToolExecutionResult<T> {
-  const messages: Record<AIScheduleApplicationErrorCode, string> = {
+type ScheduleToolErrorCode = AIScheduleApplicationErrorCode | 'calendar_permission_required' | 'calendar_unavailable';
+
+function error<T>(code: ScheduleToolErrorCode): AgentToolExecutionResult<T> {
+  const messages: Record<ScheduleToolErrorCode, string> = {
+    calendar_permission_required: '缺少系统日历读写权限，本次没有创建或修改任何日程。请告知用户可在小程序 → 权限与后台运行 → 系统日历开启。用户拒绝或偏好仅内部提醒时，创建日程显式传 system_calendar=false；尊重已有偏好，不反复索要权限。已有系统事件改期或移除也需要此权限。',
+    calendar_unavailable: '系统日历当前不可用，或没有支持到点提醒的可写日历，本次没有创建或修改任何日程。请告知用户；用户接受仅内部提醒时，创建日程显式传 system_calendar=false。',
     companion_disabled: '主动伴随当前已关闭，不能新建、修改或执行 AI 日程；已有计划暂停保留。',
     not_found: '没有找到这条 AI 日程。',
     not_owner: '这条 AI 日程不属于当前主理 AI。',

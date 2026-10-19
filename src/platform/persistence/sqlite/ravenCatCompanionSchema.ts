@@ -28,6 +28,7 @@ function buildRavenCatAISchedulesSchema(
     remind_at TEXT NOT NULL,
     summary TEXT NOT NULL CHECK (length(trim(summary)) BETWEEN 1 AND 160),
     details TEXT NOT NULL CHECK (length(trim(details)) BETWEEN 1 AND 4000),
+    system_calendar INTEGER NOT NULL DEFAULT 0 CHECK (system_calendar IN (0, 1)),
     source_conversation_id TEXT,
     source_message_ids_json TEXT,
     source_excerpt TEXT CHECK (source_excerpt IS NULL OR length(source_excerpt) BETWEEN 1 AND 2000),

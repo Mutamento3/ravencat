@@ -167,6 +167,13 @@ nextId = 1;
 db.prepare('DELETE FROM raven_cat_ai_schedules WHERE schedule_id = ?').run(paused.schedule.scheduleId);
 
 // A/B/C：future 创建、稳定 identity、canonical bounded snapshot、过去与非法来源拒绝。
+const calendarSchedule = await create({ systemCalendar: true });
+assert.equal(calendarSchedule.schedule.systemCalendar, true);
+assert.equal((await repository.getByScheduleId(calendarSchedule.schedule.scheduleId)).systemCalendar, true);
+assert.equal((await application.update({ scheduleId: calendarSchedule.schedule.scheduleId, ownerAIId: 'host-ai', systemCalendar: false })).schedule.systemCalendar, false);
+assert.equal((await repository.getByScheduleId(calendarSchedule.schedule.scheduleId)).systemCalendar, false);
+db.prepare('DELETE FROM raven_cat_ai_schedules WHERE schedule_id = ?').run(calendarSchedule.schedule.scheduleId);
+nextId = 1;
 const first = await create({
   sourceConversationId: 'session-a',
   sourceMessageIds: ['12', '11'],

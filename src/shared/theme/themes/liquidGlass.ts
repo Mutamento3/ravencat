@@ -104,14 +104,14 @@ export const liquidGlassTheme: PresentationTheme = {
   effects: {
     glass: {
       enabled: true,
-      blurRadius: 12,
+      blurRadius: 6,
       cornerRadius: 32,
       refractionHeight: 22,
       refractionOffset: 68,
       dispersion: 0.55,
-      tintColor: '#B9DCFF',
-      tintAlpha: 0.16,
-      backgroundColor: 'rgba(185, 220, 255, 0.08)',
+      tintColor: '#FFFFFF',
+      tintAlpha: 0,
+      backgroundColor: 'transparent',
       borderColor: 'rgba(255, 255, 255, 0.5)',
     },
     overlay: {

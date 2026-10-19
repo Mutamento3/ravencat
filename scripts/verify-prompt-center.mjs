@@ -93,6 +93,8 @@ assert.deepEqual(
 );
 
 let configuredPromptingDependencies;
+let editorAPIBaseURL = 'https://third-party.test/v1';
+const editorPermissionWrites = [];
 const builtInToolDescriptors = [{
   name: 'search_protocols',
   description: '读取协议',
@@ -111,15 +113,16 @@ let server = {
 const configuredPrompting = loadTypeScriptModule(
   'src/host/composition/configurePromptingRuntime.ts',
   {
+    '@platform/ai': loadTypeScriptModule('src/platform/ai/moonshotEndpoint.ts'),
     '@features/prompting/composition': {
       configurePromptingRuntimeDependencies: (dependencies) => {
         configuredPromptingDependencies = dependencies;
       },
-      sqlitePromptingRepository: {},
+      sqlitePromptingRepository: { setDirectToolExposure: async (...args) => editorPermissionWrites.push(args) },
     },
     '@features/assistants': {
-      aiAssistantRepository: {},
-      assistantToolPermissionRepository: {},
+      aiAssistantRepository: { getById: async () => ({ apiBaseUrl: editorAPIBaseURL }) },
+      assistantToolPermissionRepository: { set: async permission => editorPermissionWrites.push(permission) },
     },
     '@features/mcpTools': {
       listMcpServersWithEnabledToolCounts: async () => [server],
@@ -145,6 +148,19 @@ assert.deepEqual(
   builtInToolDescriptors,
   '提示词中心工具目录只能返回 Built-in 工具，不能返回 MCP 具体工具',
 );
+builtInToolDescriptors.push({ name: 'kimi_web_search', owner: 'webTools', moonshotOnly: true, defaultEnabled: false });
+const editorManagement = loadTypeScriptModule('src/features/prompting/application/ManageAssistantPrompts.ts', {
+  './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => configuredPromptingDependencies },
+});
+assert.match((await configuredPromptingDependencies.tools.list('ai-1')).find(tool => tool.name === 'kimi_web_search').unavailableReason, /当前接口不支持/u);
+await assert.rejects(editorManagement.setAssistantToolPermission('ai-1', 'kimi_web_search', true), /当前接口不支持/u);
+await assert.rejects(editorManagement.setAssistantDirectToolExposure('ai-1', 'kimi_web_search', true), /当前接口不支持/u);
+assert.equal(editorPermissionWrites.length, 0, '不支持的接口不能修改工具权限或星标');
+editorAPIBaseURL = 'https://api.moonshot.cn/v1';
+assert.equal((await configuredPromptingDependencies.tools.list('ai-1')).find(tool => tool.name === 'kimi_web_search').unavailableReason, undefined);
+await editorManagement.setAssistantToolPermission('ai-1', 'kimi_web_search', true);
+await editorManagement.setAssistantDirectToolExposure('ai-1', 'kimi_web_search', true);
+assert.equal(editorPermissionWrites.length, 2);
 assert.deepEqual(
   await configuredPromptingDependencies.mcpServices.list(),
   [server],

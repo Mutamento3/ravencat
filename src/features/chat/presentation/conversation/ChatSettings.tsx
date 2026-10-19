@@ -71,7 +71,7 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
     handleAvatarPress,
     handlePickCallBackground,
     handleClearCallBackground,
-    nameError, infoSaveError, avatarError, blocked, flush, back, leave, restoreInfo, restoreAvatar, retryAvatar,
+    nameError, infoSaveError, avatarError, blocked, commit, flush, back, leave, restoreInfo, restoreAvatar, retryAvatar,
   } = useChatSettings({ aiAssistant, onBack, onUpdated });
 
   return (
@@ -104,7 +104,7 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
             label="AI名称"
             value={name}
             onChangeText={setName}
-            onBlur={() => void flush()}
+            onBlur={() => void commit()}
             error={nameError}
             placeholder="给AI起个名字"
             hint="最多20个字符"
@@ -114,7 +114,7 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
             label="AI昵称"
             value={nickname}
             onChangeText={setNickname}
-            onBlur={() => void flush()}
+            onBlur={() => void commit()}
             error={nicknameError}
             placeholder="给这个AI设置专属昵称"
             hint="最多20个字符"
@@ -123,7 +123,7 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
             label="AI 人设"
             value={systemPrompt}
             onChangeText={setSystemPrompt}
-            onBlur={() => void flush()}
+            onBlur={() => void commit()}
             placeholder="写下 AI 的身份、性格、关系与表达方式"
             hint="修改自动保存，提示词中心同步显示；留空可清除人设。"
             autoGrow
@@ -134,7 +134,7 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
         <ContextWindowSection
           values={contextLimits}
           onChange={handleContextLimitChange}
-          onBlur={() => void flush()}
+          onBlur={() => void commit()}
           errors={settingsErrors}
           fixed={fixed}
         />

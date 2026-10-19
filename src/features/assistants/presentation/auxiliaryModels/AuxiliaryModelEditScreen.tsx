@@ -47,7 +47,7 @@ export default function AuxiliaryModelEditScreen({ capabilityKind, capabilityLab
   const initial = useMemo(() => getAuxiliaryModelDraft(capabilityKind, initialData), [capabilityKind, initialData]);
   const parse = useCallback((draft: AuxiliaryModelDraft, changed: (keyof AuxiliaryModelDraft)[]) => parseAuxiliaryModelDraft(capabilityKind, draft, changed), [capabilityKind]);
   const editor = useAutoSaveDraft({ initial, parse, save: onSave, enabled: isEdit });
-  const { draft, errors, flush, restore, change, validateAll } = editor;
+  const { draft, errors, commit, flush, restore, change, validateAll } = editor;
   const { name, enabled, baseUrl, apiKey, model, taskPrompt,
     usesDefaultTaskPrompt, tempInput, topPInput, maxTokens } = draft;
   const temperatureInput = readDraftNumber(tempInput, 'Temperature', 0, 2, true);
@@ -58,7 +58,7 @@ export default function AuxiliaryModelEditScreen({ capabilityKind, capabilityLab
   const { back } = useAutoSaveNavigation(flush, onBack, () => feedback.revealErrors(editor.getSnapshot().errors), isEdit);
   const [creationError, setCreationError] = useState<string | null>(null);
   const [testInputError, setTestInputError] = useState<string | null>(null);
-  const blur = () => { if (isEdit) void flush(); };
+  const blur = () => { if (isEdit) void commit(); };
   const restoreDraft = () => { void restore().then(() => feedback.setBlocked(false)); };
   const fieldProps = (key: keyof AuxiliaryModelDraft) => ({ error: errors[key], onBlur: blur });
   const inputErrorStyle = (key: keyof AuxiliaryModelDraft) => errors[key] ? { borderWidth: 1, borderColor: theme.colors.feedback.error } : undefined;

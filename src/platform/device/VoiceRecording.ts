@@ -32,10 +32,17 @@ export interface VoiceRecordingSession {
   cancel(): Promise<void>;
 }
 
+export interface VoiceRecordingProgress {
+  durationMs: number;
+  /** 实际 PCM 的音量映射到 0–1；静音为 0。 */
+  level: number;
+}
+
 export interface VoiceRecordingPort {
   start(params: {
     onAudioChunk: (chunk: ArrayBuffer) => void;
     onError: (error: VoiceRecordingError) => void;
+    onProgress?: (progress: VoiceRecordingProgress) => void;
   }): Promise<VoiceRecordingSession>;
 }
 
@@ -59,15 +66,32 @@ class NativeVoiceRecordingPort implements VoiceRecordingPort {
   async start(params: {
     onAudioChunk: (chunk: ArrayBuffer) => void;
     onError: (error: VoiceRecordingError) => void;
+    onProgress?: (progress: VoiceRecordingProgress) => void;
   }): Promise<VoiceRecordingSession> {
     if (!(await requestMicrophonePermission())) {
       throw new VoiceRecordingError('VOICE_MICROPHONE_PERMISSION_DENIED', '需要麦克风权限才能录制语音消息');
     }
 
     const sessionId = createRandomUUID();
+    let recordedBytes = 0;
     const subscriptions = [
       addVoiceAudioListener('onRecordingChunk', (event) => {
-        if (event.sessionId === sessionId) params.onAudioChunk(decodeBase64(event.base64));
+        if (event.sessionId !== sessionId) return;
+        const chunk = decodeBase64(event.base64);
+        params.onAudioChunk(chunk);
+        if (params.onProgress) {
+          recordedBytes += chunk.byteLength;
+          // 与 native 的 16 kHz、单声道、PCM16 契约一致，静音也计入实际录制时长。
+          const samples = new DataView(chunk);
+          let sumSquares = 0;
+          for (let offset = 0; offset < chunk.byteLength; offset += 2) {
+            const sample = samples.getInt16(offset, true) / 32768;
+            sumSquares += sample * sample;
+          }
+          const rms = Math.sqrt(sumSquares / (chunk.byteLength / 2));
+          const level = rms > 0 ? Math.max(0, Math.min(1, (20 * Math.log10(rms) + 60) / 60)) : 0;
+          params.onProgress({ durationMs: recordedBytes / 32, level });
+        }
       }),
       addVoiceAudioListener('onRecordingError', (event) => {
         if (event.sessionId === sessionId) {

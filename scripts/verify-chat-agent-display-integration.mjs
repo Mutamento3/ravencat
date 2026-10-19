@@ -42,6 +42,9 @@ const coordinator = {
 const cache = new Map();
 const overrides = new Map();
 const mocks = {
+  '@shared/theme/themeStorage': {},
+  '@shared/theme/themeRegistry': {},
+  '@shared/theme/themeVariants': {},
   '@platform/persistence': { databaseCoordinator: coordinator },
   '@features/media': { releaseMediaAssetCandidates: async () => {} },
   '@features/stickers': { isStickerSendIntent: () => false },
@@ -507,14 +510,25 @@ try {
   await earlyDisplay.start();
   const exposed = defer();
   const stopExposure = store.subscribeAgentTransientTimeline(earlySession, () => {
-    if (store.snapshotAgentTransientTimelineWithReplacements(earlySession).some(message => message.text === '知道了，接着处理。')) exposed.resolve();
+    if (store.snapshotAgentTransientTimelineWithReplacements(earlySession).some(message => message.text === '知道了，')) exposed.resolve();
   });
-  earlyDisplay.sink.onDirty(() => [{ runId: earlyRun.runId, sequence: 1, stepIndex: 1, kind: 'assistant', status: 'sent',
-    tokensUsed: 120, promptTokens: 100, completionTokens: 20, cachedTokens: 80,
-    text: '知道了，接着处理。', clientMessageId: `agent-timeline:${earlyRun.runId}:1:0`, createdAt: stamp, time: '18:00' }]);
+  const streamingTimeline = new ChatAgentTimeline(earlyRun.runId, earlyDisplay.sink, { bubbleDeliveryMode: 'single-bubble' });
+  streamingTimeline.startStep(1);
+  streamingTimeline.appendDelta(1, 'assistant', '知道了，');
   await earlyDisplay.flush();
   await exposed.promise;
   stopExposure();
+  const firstChunk = store.snapshotAgentTransientTimelineWithReplacements(earlySession)[0];
+  assert.equal(firstChunk.status, 'streaming', '单气泡流式正文必须在模型完成前进入展示');
+  streamingTimeline.appendDelta(1, 'assistant', '接着处理。');
+  await earlyDisplay.flush();
+  const secondChunk = store.snapshotAgentTransientTimelineWithReplacements(earlySession)[0];
+  assert.equal(secondChunk.text, '知道了，接着处理。');
+  assert.equal(secondChunk.clientMessageId, firstChunk.clientMessageId, '后续增量更新同一气泡');
+  assert.equal(secondChunk.status, 'streaming');
+  streamingTimeline.reconcileModelTurn(1, { assistantText: secondChunk.text, reasoningText: '', toolCalls: [],
+    usage: { totalTokens: 120, promptTokens: 100, completionTokens: 20, cachedTokens: 80 } });
+  await earlyDisplay.flush();
   earlyDisplay.sink.onDirty(() => [{ runId: earlyRun.runId, sequence: 2, stepIndex: 1, kind: 'tool', status: 'running',
     text: '正在调用：换头像', toolExecutionStarted: true, toolNames: ['change_avatar'], toolDisplayNames: ['换头像'],
     toolExecutions: [{ toolCallId: 'avatar-unknown', name: 'change_avatar', arguments: '{}', status: 'running' }],

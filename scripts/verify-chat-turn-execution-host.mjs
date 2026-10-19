@@ -81,6 +81,7 @@ const coordinatorSource = read('src/host/runtime/ConversationTurnCoordinator.ts'
 const chatCompositionImportPattern =
   /import\s*\{[^;]*?\}\s*from\s*['"]@features\/chat\/composition['"];/;
 const stubbedCoordinatorSource = coordinatorSource
+  .replace(/import\s*\{[^}]*\}\s*from\s*'@shared\/theme\/[^']+';/g, '')
   .replace(chatCompositionImportPattern, chatStub)
   .replace(chatCompositionImportPattern, '')
   .replace(

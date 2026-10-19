@@ -81,6 +81,7 @@ export async function runHostAutonomousAgent(
         ? await dependencies.tools.resolveAllowedNames(assistant.id)
         : [];
       const toolConfig: AIToolsConfig = {
+        apiBaseUrl: assistant.apiBaseUrl,
         isHostAI: assistant.isHostAI,
         enableTools: assistant.enableTools,
         triggerSource: input.triggerSource,

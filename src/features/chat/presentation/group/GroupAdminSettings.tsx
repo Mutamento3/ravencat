@@ -60,9 +60,9 @@ export default function GroupAdminSettings({
     handleSelectModel,
     handleTestConnection,
     readModelConfig,
-    errors, saveError, flush, back, restoreDraft, feedback, connectionError,
+    errors, saveError, commit, back, restoreDraft, feedback, connectionError,
   } = useGroupAdminSettings({ adminConfig, onUpdate, onBack });
-  const blur = () => { void flush(); };
+  const blur = () => { void commit(); };
 
   return (
     <SafeAreaView style={commonStyles.screenContainer} edges={['top', 'left', 'right']}>

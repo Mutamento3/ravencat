@@ -174,15 +174,12 @@ export default function MomentsTab({
     void loadMoreMoments();
   }, [loadMoreMoments]);
 
-  const renderHeader = useCallback(
-    () => (
-      <MomentsHeader
-        refreshRevision={refreshRevision}
-        onCameraPress={onPublishPress}
-        onSettingsPress={onSettingsPress}
-      />
-    ),
-    [onPublishPress, onSettingsPress, refreshRevision]
+  // 传入元素，避免导航回调变化被列表识别为新组件类型并重置封面状态。
+  const header = (
+    <MomentsHeader
+      onCameraPress={onPublishPress}
+      onSettingsPress={onSettingsPress}
+    />
   );
 
   const renderFooter = useCallback(() => {
@@ -231,7 +228,7 @@ export default function MomentsTab({
   if (moments.length === 0) {
     return (
       <SafeAreaView style={styles.container} edges={theme.effects.glass.enabled ? ['left', 'right'] : ['top', 'left', 'right']}>
-        {renderHeader()}
+        {header}
         {renderEmptyState()}
       </SafeAreaView>
     );
@@ -247,7 +244,7 @@ export default function MomentsTab({
         maxToRenderPerBatch={10}
         windowSize={10}
         removeClippedSubviews
-        ListHeaderComponent={renderHeader}
+        ListHeaderComponent={header}
         ListFooterComponent={renderFooter}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}

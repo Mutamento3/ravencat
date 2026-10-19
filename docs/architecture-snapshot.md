@@ -86,6 +86,7 @@
             ├── custom.tsx
             ├── index.tsx
             ├── persona.tsx
+            ├── registry.tsx
             ├── rules
                 └── [definitionId].tsx
             ├── tools
@@ -434,6 +435,12 @@
                         ├── useChatSendFlow.ts
                         └── useChatTurnExecutionStatus.ts
                     ├── components
+                        ├── bottomTabBar
+                            ├── FloatingBallTabBar.tsx
+                            ├── InkCircleTabBar.tsx
+                            ├── MeltingGlassTabBar.tsx
+                            ├── tabBarPaths.ts
+                            └── tabBarShared.tsx
                         ├── BottomTabBar.tsx
                         ├── chatActionGrouping.ts
                         ├── ChatAttachmentComposerTray.tsx
@@ -462,9 +469,11 @@
                         ├── chatToolPanelCapability.ts
                         ├── chatToolStatusPresentation.ts
                         ├── chatTypes.ts
+                        ├── ChatVoiceRecordingFeedback.tsx
                         ├── ChatVoiceReviewPanel.tsx
                         ├── ChatWallpaperSettings.tsx
                         ├── MoonKimiComposer.tsx
+                        ├── reasoningExpansionState.ts
                         ├── sessionTimelineCache.ts
                         ├── SharedChatRecordView.tsx
                         ├── StickerManagementModals.tsx
@@ -578,7 +587,8 @@
                     └── SQLiteConversationTurnRepository.ts
             ├── summary
                 ├── aiTools
-                    └── SearchChatSummariesTool.ts
+                    ├── SearchChatSummariesTool.ts
+                    └── SecondarySummaryTools.ts
                 ├── application
                     ├── ChatSummary.ts
                     ├── ChatSummaryPrompt.ts
@@ -832,6 +842,7 @@
         ├── miniPrograms
             ├── index.ts
             └── presentation
+                ├── GlassBlurSettings.tsx
                 ├── index.ts
                 ├── MiniProgramsTab.tsx
                 ├── phoneTools
@@ -1030,6 +1041,7 @@
                 ├── index.ts
                 ├── ResolveSpeechModel.ts
                 ├── SpeechProviderCatalog.ts
+                ├── SpeechRecognitionErrors.ts
                 ├── SpeechRecognitionModels.ts
                 └── SpeechText.ts
             ├── composition.ts
@@ -1179,6 +1191,7 @@
                 └── walletVisualizationColors.ts
         └── webTools
             ├── application
+                ├── KimiOfficialTools.ts
                 ├── SearchConfiguration.ts
                 ├── WebAgentTools.ts
                 └── WebToolsRuntime.ts
@@ -1329,6 +1342,8 @@
             ├── index.ts
             ├── KimiClient.ts
             ├── modelDiscovery.ts
+            ├── moonshotEndpoint.ts
+            ├── MoonshotToolsClient.ts
             ├── OpenAIClient.ts
             └── types.ts
         ├── device
@@ -1360,6 +1375,7 @@
             ├── randomUUID.ts
             ├── RealtimeSpeechAudioSource.ts
             ├── RebaseLegacyMediaReference.ts
+            ├── SystemCalendar.ts
             ├── TemporarySpeechAudioStore.ts
             ├── TextSelection.tsx
             ├── usePersistentAvatarDraft.ts
@@ -1477,6 +1493,7 @@
                 ├── GlassSurface.tsx
                 └── ThemedSurface.tsx
             ├── constants.ts
+            ├── glassBlur.ts
             ├── index.ts
             ├── legacyTokens.ts
             ├── ThemeProvider.tsx
@@ -1692,7 +1709,8 @@
                                         ├── MediaSessionTransportController.kt
                                         ├── NotificationListenerAccessReader.kt
                                         ├── SoftLockController.kt
-                                        └── SoftLockWindowOwner.kt
+                                        ├── SoftLockWindowOwner.kt
+                                        └── SystemCalendarController.kt
                                     ├── model
                                         ├── AppLaunchResult.kt
                                         ├── DeviceControlRuntimeLifecycle.kt
@@ -1728,7 +1746,8 @@
                                         ├── MediaSessionTransportControllerTest.kt
                                         ├── NotificationListenerAccessReaderTest.kt
                                         ├── SoftLockControllerTest.kt
-                                        └── SoftLockWindowOwnerTest.kt
+                                        ├── SoftLockWindowOwnerTest.kt
+                                        └── SystemCalendarControllerTest.kt
                                     ├── model
                                         └── SoftLockCommandTest.kt
                                     ├── runtime

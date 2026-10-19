@@ -39,11 +39,11 @@ function SecondarySummaryEditor({ conversationId, onBack, onEditSource, snapshot
       onPress={() => { void run(() => editCombinedSecondarySummary(conversationId, originals, content)); }}><Text style={styles.action}>{busy ? '保存中' : '保存'}</Text></Pressable>} />
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
       {readError && <Text style={styles.danger}>{readError}</Text>}
-        {originals.length > 0 ? <ThemedSurface variant="card" style={styles.card}>
+        {originals.length > 0 ? <ThemedSurface variant="card" nativeGlass={false} style={styles.card}>
           <TextInput accessibilityLabel="二级摘要正文" multiline style={styles.editor} value={content} onChangeText={setContent} editable={!busy} />
           <Text style={styles.meta}>所有归纳内容在这里一起编辑，修改不会自动更新下方的原摘要。</Text>
         </ThemedSurface> : <Text style={styles.meta}>暂无二级正文，已归纳的原摘要仍保留在下方。</Text>}
-        {sources.length > 0 && <ThemedSurface variant="card" style={styles.card}>
+        {sources.length > 0 && <ThemedSurface variant="card" nativeGlass={false} style={styles.card}>
           <Pressable accessibilityLabel="展开已归纳原摘要" accessibilityState={{ expanded: showSources }} style={[styles.textButton, styles.row]} onPress={() => setShowSources(!showSources)}>
             <Text style={styles.cardTitle}>原摘要 · {sources.length} 条</Text>{showSources ? <ChevronDown size={18} color={theme.colors.text.secondary} /> : <ChevronRight size={18} color={theme.colors.text.secondary} />}
           </Pressable>

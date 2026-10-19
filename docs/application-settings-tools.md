@@ -8,6 +8,7 @@ AI 可以自主布置自己；当前主理 AI 可以管理其他 AI 及全局图
 | --- | --- | --- |
 | `get_user_avatar` | 无 | 全部 AI |
 | `get_ai_avatar` | 无，`agent_id` 可选 | 全部 AI，可看其他 AI 的公开头像 |
+| `get_group_avatar` | `group_id`；当前群聊中可省略 | 普通 AI 可看当前启用的成员关系所在群；主理可看所有群 |
 | `get_chat_background` | 无，`agent_id` 可选 | 自己；主理可看其他 AI |
 | `get_call_background` | 无，`agent_id` 可选 | 自己；主理可看其他 AI |
 | `get_global_background` | 无 | 当前主理 AI |
@@ -21,6 +22,8 @@ AI 可以自主布置自己；当前主理 AI 可以管理其他 AI 及全局图
 | `set_ai_name` | `name`，`agent_id` 可选 | 自己；主理可改其他 AI |
 
 图片写工具的 `action=set` 必须带 `media_asset_id`，`action=reset` 不接受图片 ID。目标仅使用身份目录中的不可变 `agentId`，省略表示自己；内部 Assistant 主键、名称和调用者身份不由模型选择。
+
+群头像按 `group_id` 精确读取；仅群聊回复中省略参数时使用当前群 ID，单聊、通话和自主运行必须明确指定。当前群的「群聊身份背景」注入 `group_id`；已注入的跨会话背景中，`kind=group` 的 `conversationId` 就是该群 ID，仅用于工具定位。群成员被移除或停用后失去读取资格。群头像修改、群名称及成员管理留给独立的群聊管理工具包。
 
 设置引用独立于聊天消息提交，单聊、群聊、通话及自主运行均沿用正常授权和宿主取消契约。群聊工具仍受群发言任务资格约束；主理身份、拆包和星标都不能绕过关闭的单项工具权限。
 
@@ -37,6 +40,7 @@ AI 可以自主布置自己；当前主理 AI 可以管理其他 AI 及全局图
 - Assistants：AI 头像、公开名称与当前主理关系。
 - Profile：用户头像、朋友圈封面、全局与单聊壁纸选择。
 - Calls：按 AI 独立保存的通话背景。
+- Chat：群头像选择及当前成员关系，在同一次查询中裁决读取资格，不加载管理员凭据或成员资料；主理资格由可信 Host 提供。
 - Media：图片身份、自动裁剪后的资产准备、视觉交付和文件生命周期。
 - Host：目标解析、工具定义与分包、各 owner 的权限和回合资格装配。
 
@@ -48,4 +52,4 @@ AI 可以自主布置自己；当前主理 AI 可以管理其他 AI 及全局图
 
 ## 验证
 
-`npm run verify:application-settings` 检查真实 SQLite 权限、目标身份、引用原子性、用户编辑冲突、主理撤销、取消、恢复默认、默认图片与视觉附图，以及设置消费者的刷新行为。工具目录、拆包和授权复用 `verify-agent-runtime-contracts.mjs`。自动裁剪几何与文件行为由 `verify-image-auto-crop.mjs` 独立验证；实际 Android 图片效果与原生窗口仍需设备验收，不以本地测试代替。
+`npm run verify:application-settings` 检查真实 SQLite 权限、目标身份、引用原子性、用户编辑冲突、主理撤销、取消、恢复默认、默认图片与视觉附图，以及设置消费者的刷新行为。群头像覆盖当前群默认参数、显式跨群读取、成员移除或停用、主理撤销、同名群、默认群头像、视觉转述和取消。工具目录、拆包和授权复用 `verify-agent-runtime-contracts.mjs`。自动裁剪几何与文件行为由 `verify-image-auto-crop.mjs` 独立验证；实际 Android 图片效果与原生窗口仍需设备验收，不以本地测试代替。

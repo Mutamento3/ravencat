@@ -7,13 +7,12 @@ const root = path.resolve(import.meta.dirname, '..');
 const fromRepo = createRequire(path.join(root, 'package.json'));
 const ts = fromRepo('typescript');
 const React = fromRepo('react');
-const { create, act } = fromRepo('react-test-renderer');
+const { create: createRenderer, act } = fromRepo('react-test-renderer');
 global.IS_REACT_ACT_ENVIRONMENT = true;
 const frames = new Map();
 let frameId = 0;
 global.requestAnimationFrame = callback => { frames.set(++frameId, callback); return frameId; };
 global.cancelAnimationFrame = id => frames.delete(id);
-const paint = () => { const batch = [...frames.values()]; frames.clear(); batch.forEach(callback => callback()); };
 function load(file, mocks = {}) {
   const output = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React, esModuleInterop: true },
@@ -36,6 +35,17 @@ const { useRecyclingState } = load('node_modules/@shopify/flash-list/src/recycle
   react: React, './useLayoutState': { useLayoutState },
 });
 const flash = { useRecyclingState };
+const expansionState = load('src/features/chat/presentation/messages/components/reasoningExpansionState.ts', {
+  react: React, '@shopify/flash-list': flash,
+});
+function create(element) {
+  const expandedKeys = new Set();
+  const wrap = (child) => React.createElement(expansionState.ReasoningExpansionContext.Provider, { value: expandedKeys }, child);
+  const renderer = createRenderer(wrap(element));
+  const update = renderer.update.bind(renderer);
+  renderer.update = (child) => update(wrap(child));
+  return renderer;
+}
 let theme = load('src/shared/theme/themes/defaultLight.ts').defaultLightTheme;
 const themeApi = {
   useTheme: () => theme,
@@ -64,6 +74,7 @@ const contents = {
 };
 const defaultStub = (name) => ({ __esModule: true, default: name });
 const Bubble = load('src/features/chat/presentation/messages/MessageBubble/index.tsx', {
+  '../components/reasoningExpansionState': expansionState,
   '@platform/device': textSelection,
   react: React, 'react-native': native, '@shared/theme': themeApi, '@shopify/flash-list': flash,
   './styles': styles, './Avatar': { Avatar: 'Avatar' }, './ReplyQuote': { ReplyQuote: 'Quote' },
@@ -139,14 +150,20 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
     assert.equal(header(renderer).props.scrollable, true);
   }
   act(() => renderer.update(React.createElement(Bubble, bubbleProps(101))));
-  assert.equal(expanded(renderer), false, '回收回上一条消息时也不能继承另一条思维链的展开状态');
+  assert.equal(expanded(renderer), true, '回收回上一条消息时恢复它自己的展开意图');
   if (id === 'moon-kimi') {
-    await act(async () => header(renderer).props.onToggle());
     act(() => header(renderer).props.onBodyLayout({ nativeEvent: { layout: { height: 100 } } }));
     assert.equal(header(renderer).props.scrollable, false, '新消息尚未测量正文时不能使用旧正文尺寸');
   }
+  act(() => renderer.update(null));
+  act(() => renderer.update(React.createElement(Bubble, bubbleProps(101))));
+  assert.equal(expanded(renderer), true, '卸载后重建的列表项也应保留当前会话的展开意图');
   act(() => renderer.unmount());
-  console.log(`${id}: 思维链同消息保留状态，换消息重置状态`);
+  let fresh;
+  act(() => { fresh = create(React.createElement(Bubble, bubbleProps(101))); });
+  assert.equal(expanded(fresh), false, '重新进入会话使用新的列表状态');
+  act(() => fresh.unmount());
+  console.log(`${id}: 思维链跨回收保留各自展开状态，新会话重置`);
 }
 theme = { ...theme, id: 'default-light' };
 let independent;
@@ -161,6 +178,7 @@ act(() => independent.unmount());
 console.log('同时挂载的不同气泡状态独立，没有直接共享展开状态');
 
 const ActionGroup = load('src/features/chat/presentation/messages/MessageBubble/ActionGroupProcessCard.tsx', {
+  '../components/reasoningExpansionState': expansionState,
   '@platform/device': textSelection,
   react: React, 'react-native': native, '@expo/vector-icons': { Ionicons: 'Icon' },
   '@shopify/flash-list': { ...flash, useMappingHelper: () => ({ getMappingKey: (key) => key }) },
@@ -209,6 +227,11 @@ for (const id of ['default-light', 'paper-note', 'moon-kimi']) {
   await act(async () => { finishFocusRelease.resolve(); await collapse; });
   assert.equal(renderer.root.findAllByType('Body').length, 3, '旧选区释放完成不能折叠回收后正在阅读的新行动步骤');
   finishFocusRelease = null;
+  act(() => renderer.update(React.createElement(ActionGroup, { group: { ...group, children: [reasoning] } })));
+  assert.deepEqual(renderer.root.findAllByType('Body').map((node) => node.props.text), ['真实思考内容'], '回收回原行动步骤时恢复其展开意图');
+  act(() => renderer.update(null));
+  act(() => renderer.update(React.createElement(ActionGroup, { group: { ...group, children: [reasoning] } })));
+  assert.equal(renderer.root.findAllByType('Body').length, 1, '行动步骤重新挂载后仍保留展开');
   act(() => renderer.unmount());
 }
 

@@ -9,11 +9,6 @@ import MomentsCoverPreviewModal from './MomentsCoverPreviewModal';
 import { useMomentsCover } from './useMomentsCover';
 
 interface MomentsHeaderProps {
-  /**
-   * 保活路由的焦点刷新版本：设置页作为独立路由后本 Header 不再随开关重挂载，
-   * 封面等 Profile 变更必须靠 revision 触发重读。
-   */
-  refreshRevision?: number;
   onCameraPress?: () => void;
   onSettingsPress?: () => void;
 }
@@ -33,10 +28,10 @@ function createStyles(theme: PresentationTheme) {
   });
 }
 
-export default function MomentsHeader({ refreshRevision, onCameraPress, onSettingsPress }: MomentsHeaderProps) {
+export default function MomentsHeader({ onCameraPress, onSettingsPress }: MomentsHeaderProps) {
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const cover = useMomentsCover(refreshRevision);
+  const cover = useMomentsCover();
   const [previewVisible, setPreviewVisible] = useState(false);
   const rightButton = (
     <View style={styles.headerActions}>

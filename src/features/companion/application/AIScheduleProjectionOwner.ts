@@ -25,6 +25,10 @@ import {
   AIScheduleProjectionRepairCoordinator,
 } from './AIScheduleProjectionRepairCoordinator';
 import { getCompanionRuntimeDependencies } from './CompanionRuntimeDependencies';
+import { systemCalendar, type SystemCalendarPort } from '@platform/device/SystemCalendar';
+
+export type AIScheduleCalendarOutcome = 'internal_only' | 'synced' | 'permission_required' | 'no_writable_calendar' | 'failed';
+type CalendarPreflightError = 'calendar_permission_required' | 'calendar_unavailable';
 
 export type AIScheduleProjectionOutcome =
   | { status: 'projected' }
@@ -34,7 +38,7 @@ export type AIScheduleProjectionOutcome =
 
 export interface AIScheduleProjectionFailure {
   scheduleId: string | null;
-  operation: 'schedule' | 'cancel' | 'read';
+  operation: 'schedule' | 'cancel' | 'read' | 'calendar';
   error: unknown;
 }
 
@@ -53,6 +57,7 @@ export interface CreateAIScheduleInput {
   remindAt: string;
   summary: string;
   details: string;
+  systemCalendar?: boolean;
   sourceConversationId?: string;
   sourceMessageIds?: string[];
 }
@@ -63,18 +68,19 @@ export interface UpdateAIScheduleInput {
   remindAt?: string;
   summary?: string;
   details?: string;
+  systemCalendar?: boolean;
 }
 
 export type CreateAIScheduleWithProjectionOutcome =
-  | { status: 'created'; schedule: AISchedule; projection: AIScheduleProjectionOutcome }
-  | { status: 'error'; code: AIScheduleApplicationErrorCode; projection: null };
+  | { status: 'created'; schedule: AISchedule; projection: AIScheduleProjectionOutcome; calendar: AIScheduleCalendarOutcome }
+  | { status: 'error'; code: AIScheduleApplicationErrorCode | CalendarPreflightError; projection: null };
 
 export type UpdateAIScheduleWithProjectionOutcome =
-  | { status: 'updated'; schedule: AISchedule; projection: AIScheduleProjectionOutcome }
-  | { status: 'error'; code: AIScheduleApplicationErrorCode; projection: null };
+  | { status: 'updated'; schedule: AISchedule; projection: AIScheduleProjectionOutcome; calendar: AIScheduleCalendarOutcome }
+  | { status: 'error'; code: AIScheduleApplicationErrorCode | CalendarPreflightError; projection: null };
 
 export type CancelAIScheduleWithProjectionOutcome =
-  | { status: 'cancelled'; schedule: AISchedule; projection: AIScheduleProjectionOutcome }
+  | { status: 'cancelled'; schedule: AISchedule; projection: AIScheduleProjectionOutcome; calendar: AIScheduleCalendarOutcome }
   | { status: 'error'; code: AIScheduleApplicationErrorCode; projection: null };
 
 export type ConsumeAIScheduleWithProjectionOutcome =
@@ -82,6 +88,7 @@ export type ConsumeAIScheduleWithProjectionOutcome =
   | { status: 'error'; code: AIScheduleApplicationErrorCode; projection: null };
 
 export interface AIScheduleProjectionOwnerDependencies {
+  calendar: SystemCalendarPort;
   schedules: AIScheduleRepository;
   companionState: CompanionStateRepository;
   native: Pick<
@@ -177,21 +184,34 @@ export class AIScheduleProjectionOwner {
   private async commitAndProjectCreate(
     input: CreateAIScheduleInput,
   ): Promise<CreateAIScheduleWithProjectionOutcome> {
+    if (input.systemCalendar) {
+      const code = await this.prepareCalendarWrite();
+      if (code) return { status: 'error', code, projection: null };
+    }
     const outcome = await createAIScheduleCommand(input);
     if (outcome.status === 'error') return { status: 'error', code: outcome.code, projection: null };
     const projection = await this.projectLatestSchedule(outcome.schedule.scheduleId);
     this.reportProjectionFailure(projection);
-    return { status: 'created', schedule: outcome.schedule, projection };
+    const calendar = outcome.schedule.systemCalendar
+      ? await this.syncCalendar(outcome.schedule) : 'internal_only';
+    return { status: 'created', schedule: outcome.schedule, projection, calendar };
   }
 
   private async commitAndProjectUpdate(
     input: UpdateAIScheduleInput,
   ): Promise<UpdateAIScheduleWithProjectionOutcome> {
+    const current = await this.dependencies.schedules.getByScheduleId(input.scheduleId);
+    if (current && current.ownerAIId === input.ownerAIId && (current.systemCalendar || input.systemCalendar)) {
+      const code = await this.prepareCalendarWrite(input.systemCalendar === false);
+      if (code) return { status: 'error', code, projection: null };
+    }
     const outcome = await updateAIScheduleCommand(input);
     if (outcome.status === 'error') return { status: 'error', code: outcome.code, projection: null };
     const projection = await this.projectLatestSchedule(outcome.schedule.scheduleId);
     this.reportProjectionFailure(projection);
-    return { status: 'updated', schedule: outcome.schedule, projection };
+    const calendar = outcome.schedule.systemCalendar || current?.systemCalendar
+      ? await this.syncCalendar(outcome.schedule) : 'internal_only';
+    return { status: 'updated', schedule: outcome.schedule, projection, calendar };
   }
 
   private async commitAndProjectCancel(input: {
@@ -202,7 +222,9 @@ export class AIScheduleProjectionOwner {
     if (outcome.status === 'error') return { status: 'error', code: outcome.code, projection: null };
     const projection = await this.projectLatestSchedule(input.scheduleId);
     this.reportProjectionFailure(projection);
-    return { status: 'cancelled', schedule: outcome.schedule, projection };
+    const calendar = outcome.schedule.systemCalendar
+      ? await this.syncCalendar(outcome.schedule) : 'internal_only';
+    return { status: 'cancelled', schedule: outcome.schedule, projection, calendar };
   }
 
   private async commitAndProjectConsume(input: {
@@ -358,6 +380,7 @@ export class AIScheduleProjectionOwner {
       }
     }
 
+    await this.reconcileCalendar(scheduled, failures);
     return this.finishReconcile({
       scheduledCount: scheduled.length,
       projectedCount,
@@ -385,6 +408,7 @@ export class AIScheduleProjectionOwner {
       if (terminalized.status === 'cancelled') {
         const projection = await this.cancelProjection(schedule.scheduleId);
         this.reportProjectionFailure(projection);
+        if (terminalized.schedule.systemCalendar) await this.syncCalendar(terminalized.schedule);
       }
     }
   }
@@ -406,6 +430,62 @@ export class AIScheduleProjectionOwner {
     }
     if (!state.desiredEnabled) return this.cancelProjection(scheduleId);
     return this.projectSchedule(schedule);
+  }
+
+  /** 缺权限在业务 commit 前返回；不自动请求权限，不偷偷创建内部日程。 */
+  private async prepareCalendarWrite(removeOnly = false): Promise<CalendarPreflightError | null> {
+    try {
+      const availability = await this.dependencies.calendar.prepare();
+      if (availability === 'permission_required') return 'calendar_permission_required';
+      return availability === 'no_writable_calendar' && !removeOnly ? 'calendar_unavailable' : null;
+    } catch {
+      return 'calendar_unavailable';
+    }
+  }
+
+  private async syncCalendar(committed: AISchedule): Promise<AIScheduleCalendarOutcome> {
+    try {
+      const availability = await this.dependencies.calendar.prepare();
+      if (availability === 'permission_required') return availability;
+      const schedule = await this.dependencies.schedules.getByScheduleId(committed.scheduleId);
+      if (!schedule || !schedule.systemCalendar || schedule.status === 'cancelled') {
+        await this.dependencies.calendar.remove(committed.scheduleId);
+      } else {
+        if (availability !== 'ready') return availability;
+        await this.dependencies.calendar.upsert({
+          key: schedule.scheduleId, title: schedule.summary, description: schedule.details,
+          startAtEpochMs: Date.parse(schedule.remindAt),
+        });
+      }
+      return 'synced';
+    } catch (error) {
+      // 内外数据库不能共享事务；业务已提交时明确返回部分成功，沿用现有投影恢复。
+      console.warn('[AISchedule] 系统日历同步失败：', error);
+      this.repairCoordinator.requestRepair();
+      return 'failed';
+    }
+  }
+
+  private async reconcileCalendar(scheduled: AISchedule[], failures: AIScheduleProjectionFailure[]): Promise<void> {
+    try {
+      // 暂停主动伴随不撤销系统提醒；权限恢复后由同一生命周期恢复入口继续同步。
+      const availability = await this.dependencies.calendar.prepare();
+      if (availability === 'permission_required') return;
+      const keys = new Set(await this.dependencies.calendar.listKeys());
+      for (const schedule of scheduled) if (schedule.systemCalendar) keys.add(schedule.scheduleId);
+      for (const key of keys) {
+        const schedule = await this.dependencies.schedules.getByScheduleId(key);
+        if (!schedule || !schedule.systemCalendar || schedule.status === 'cancelled') {
+          await this.dependencies.calendar.remove(key);
+        } else if (availability === 'ready' && schedule.status === 'scheduled' && Date.parse(schedule.remindAt) > this.dependencies.now().getTime()) {
+          await this.dependencies.calendar.upsert({ key, title: schedule.summary,
+            description: schedule.details, startAtEpochMs: Date.parse(schedule.remindAt) });
+        }
+        // 到期后的系统事件保留给日历展示，不因 AI claim/consume 提前撤销系统提醒。
+      }
+    } catch (error) {
+      failures.push({ scheduleId: null, operation: 'calendar', error });
+    }
   }
 
   private async projectSchedule(schedule: AISchedule): Promise<AIScheduleProjectionOutcome> {
@@ -478,6 +558,7 @@ function matchesProjection(
 }
 
 const aiScheduleProjectionOwner = new AIScheduleProjectionOwner({
+  calendar: systemCalendar,
   get companionState() {
     return getCompanionRuntimeDependencies().repositories.companionState;
   },

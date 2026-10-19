@@ -12,6 +12,9 @@ export const createPromptCenterStyles = (theme: PresentationTheme) => StyleSheet
   description: { marginTop: 8, color: theme.colors.text.secondary, fontSize: 13, lineHeight: 21 },
   section: { paddingTop: 12, paddingBottom: 2, color: theme.colors.text.tertiary, fontSize: 12, fontWeight: '600', letterSpacing: 1 },
   row: { minHeight: 76, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 14, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.default, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light },
+  // 首页概览的列表项由原生玻璃承载底色与折射，这里只保留圆角，内层不再叠染色和边框。
+  glassRow: { borderRadius: theme.radius.lg },
+  glassRowInner: { minHeight: 76, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 14 },
   number: { width: 30, height: 30, borderRadius: 15, textAlign: 'center', textAlignVertical: 'center', overflow: 'hidden', color: theme.colors.brand.primary, backgroundColor: theme.colors.surface.raised, fontSize: 12, fontWeight: '700', lineHeight: 30 },
   copy: { flex: 1, gap: 5 },
   title: { color: theme.colors.text.primary, fontSize: 15, fontWeight: '600' },
@@ -24,6 +27,7 @@ export const createPromptCenterStyles = (theme: PresentationTheme) => StyleSheet
   starButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   body: { color: theme.colors.text.secondary, fontSize: 13, lineHeight: 21 },
   action: { color: theme.colors.brand.primary, fontSize: 14, fontWeight: '600' },
+  actionCurrent: { color: theme.colors.text.tertiary, fontSize: 14, fontWeight: '600' },
   danger: { color: theme.colors.feedback.error, fontSize: 13 },
   actions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   input: { padding: 14, borderRadius: theme.radius.md, backgroundColor: theme.colors.surface.default, color: theme.colors.text.primary, fontSize: 15 },

@@ -26,7 +26,7 @@ export default function TranslationModelEditScreen({ modelId, initialData, savin
   const theme = useTheme();
   const initial = useMemo(() => getTranslationModelDraft(initialData), [initialData]);
   const editor = useAutoSaveDraft({ initial, parse: parseTranslationModelDraft, save: onSave, enabled: !!modelId });
-  const { draft, errors, change, flush, restore, validateAll } = editor;
+  const { draft, errors, change, commit, flush, restore, validateAll } = editor;
   const feedback = useAutoSaveFeedback(errors);
   const { back } = useAutoSaveNavigation(flush, onBack, () => feedback.revealErrors(editor.getSnapshot().errors), !!modelId);
   const [advanced, setAdvanced] = useState(false);
@@ -44,7 +44,7 @@ export default function TranslationModelEditScreen({ modelId, initialData, savin
   useEffect(() => () => { requestRevision.current++; }, []);
   const provider = TRANSLATION_PROVIDERS.find((entry) => entry.provider === draft.provider)!;
   const ai = draft.provider === 'aiModel';
-  const blur = () => { if (modelId) void flush(); };
+  const blur = () => { if (modelId) void commit(); };
   const set = useCallback(<K extends keyof TranslationModelDraft>(key: K, value: TranslationModelDraft[K], immediate = false) => {
     setRequestError(null);
     change({ [key]: value } as Pick<TranslationModelDraft, K>, immediate);

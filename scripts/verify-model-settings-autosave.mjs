@@ -90,7 +90,7 @@ try {
     form.change({ disableThinking: false }, true); await form.flush();
     assert.deepEqual(writes, [{ disableThinking: true }, { disableThinking: false }]);
   }
-  // 持续输入重新计时；安静一秒后仅提交最新改动，没有周期性空写入。
+  // 停输不保存；失焦提交当时的最新草稿，没有周期性空写入。
   {
     const writes = [];
     const form = editor(async (patch) => { writes.push(patch); });
@@ -99,7 +99,9 @@ try {
     form.change({ apiKey: 'ab' });
     mock.timers.tick(999); await tick();
     assert.deepEqual(writes, []);
-    mock.timers.tick(1); await tick();
+    mock.timers.tick(10000); await tick();
+    assert.deepEqual(writes, [], '输入框仍有焦点时，停输多久都不提交');
+    await form.commit();
     assert.deepEqual(writes, [{ apiKey: 'ab' }]);
     mock.timers.tick(10000); await tick();
     assert.equal(writes.length, 1);
@@ -113,25 +115,52 @@ try {
     form.change({ apiKey: 'B', selectedModel: 'new-model' });
     pending[0].resolve(); await tick();
     assert.equal(form.getSnapshot().draft.apiKey, 'B');
-    assert.deepEqual(writes, [{ apiKey: 'A' }], '写入期间继续输入仍保留一秒防抖');
-    mock.timers.tick(999); await tick();
+    assert.deepEqual(writes, [{ apiKey: 'A' }], '写入期间继续输入仍等待失焦');
+    mock.timers.tick(10000); await tick();
     assert.equal(writes.length, 1);
-    mock.timers.tick(1); await tick();
+    const committing = form.commit(); await tick();
     assert.deepEqual(writes, [{ apiKey: 'A' }, { apiKey: 'B', model: 'new-model' }]);
-    pending[1].resolve(); await form.flush();
+    pending[1].resolve(); await committing;
     assert.equal(form.getSnapshot().draft.selectedModel, 'new-model');
     assert.equal(form.getSnapshot().dirty, false);
   }
-  // 排队中的旧输入版本被继续编辑后，不抢先保存；最新版本重新等待安静间隔。
+  // 失焦只确认当时的版本，不把保存期间的新输入一起写入。
   {
     const work = deferred(); const writes = [];
     const form = editor(async (patch) => { writes.push(patch); if (writes.length === 1) await work.promise; });
     form.change({ apiKey: 'A' }, true); await tick();
-    form.change({ apiKey: 'B' }); mock.timers.tick(1000); await tick();
+    form.change({ apiKey: 'B' }); const committing = form.commit(); await tick();
     form.change({ apiKey: 'C' }); work.resolve(); await tick();
-    assert.deepEqual(writes, [{ apiKey: 'A' }]);
+    await committing;
+    assert.deepEqual(writes, [{ apiKey: 'A' }, { apiKey: 'B' }]);
     mock.timers.tick(1000); await tick();
-    assert.deepEqual(writes, [{ apiKey: 'A' }, { apiKey: 'C' }]);
+    assert.equal(writes.length, 2);
+    await form.commit();
+    assert.deepEqual(writes, [{ apiKey: 'A' }, { apiKey: 'B' }, { apiKey: 'C' }]);
+  }
+  // 开关只提交自己的字段，不带走尚未失焦的独立文字输入。
+  {
+    const writes = []; const form = editor(async (patch) => { writes.push(patch); });
+    form.change({ apiKey: 'pending' });
+    form.change({ disableThinking: true }, true); await tick();
+    assert.deepEqual(writes, [{ disableThinking: true }]);
+    assert.equal(form.getSnapshot().dirty, true);
+    await form.commit();
+    assert.deepEqual(writes.at(-1), { apiKey: 'pending' });
+  }
+  // 多次立即修改串行确认，不把中途的新文字输入混入排队的字段。
+  {
+    const work = deferred(); const writes = [];
+    const form = editor(async (patch) => { writes.push(patch); if (writes.length === 1) await work.promise; });
+    form.change({ apiKey: 'A' }); const first = form.commit(); await tick();
+    form.change({ apiKey: 'B' });
+    form.change({ enableTools: true }, true);
+    form.change({ disableThinking: true }, true);
+    work.resolve(); await first;
+    assert.deepEqual(writes, [{ apiKey: 'A' }, { enableTools: true, disableThinking: true }]);
+    assert.equal(form.getSnapshot().draft.apiKey, 'B');
+    await form.commit();
+    assert.deepEqual(writes.at(-1), { apiKey: 'B' });
   }
   // 保存期间改回原值也必须补交，不能把旧的 saved 快照误当成数据库当前值。
   {
@@ -150,6 +179,9 @@ try {
     assert.deepEqual(writes, [{ apiKey: 'new' }]);
     assert.equal(form.getSnapshot().draft.tempInput, '3');
     assert.match(form.getSnapshot().errors.tempInput, /尚未保存/);
+    form.change({ disableThinking: true }, true); await tick();
+    assert.deepEqual(writes.at(-1), { disableThinking: true });
+    assert.match(form.getSnapshot().errors.tempInput, /尚未保存/, '独立开关保存不能清除尚未修正的字段错误');
     form.change({ tempInput: '1.3' });
     assert.equal(await form.flush(), true);
     assert.deepEqual(form.getSnapshot().errors, {});
@@ -193,6 +225,8 @@ try {
     assert.equal(form.getSnapshot().draft.apiKey, 'C');
     assert.deepEqual(writes, [{ apiKey: 'A' }]);
     mock.timers.tick(1000); await tick();
+    assert.deepEqual(writes, [{ apiKey: 'A' }], '恢复期间的新输入继续等待失焦');
+    await form.commit();
     assert.deepEqual(writes, [{ apiKey: 'A' }, { apiKey: 'C' }]);
   }
   // 返回后外部刷新只同步未编辑字段，初始化本身不写数据库。
@@ -239,6 +273,46 @@ try {
     const fresh = editor(async () => { assert.fail('创建前不应持久化'); }, auxiliary.getAuxiliaryModelDraft('embedding', null),
       (data, keys) => auxiliary.parseAuxiliaryModelDraft('embedding', data, keys));
     assert.equal(fresh.validateAll(), null); assert.ok(fresh.getSnapshot().errors.name);
+  }
+  // 语音模型的手输入口等待失焦，下拉选择仍然立即保存。
+  {
+    const react = {
+      default: { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }) },
+      useCallback: (callback) => callback, useMemo: (factory) => factory(), useRef: (value) => ({ current: value }),
+      useState: (value) => [value, () => {}], useEffect() {},
+    };
+    const writes = [];
+    const { default: SpeechPage } = load(`${directory}auxiliaryModels/SpeechModelEditScreen.tsx`, {
+      react, 'react-native': { ScrollView: 'ScrollView', Text: 'Text', TouchableOpacity: 'Button', View: 'View' },
+      'react-native-safe-area-context': { SafeAreaView: 'SafeArea' },
+      '@features/speech': { ...speechCatalog, SpeechConfigurationTest: 'SpeechTest' },
+      '@shared/ui': { KeyboardAvoidingContainer: 'KeyboardContainer', Button: 'Button', DropdownField: 'Dropdown', InputField: 'Input', ToggleField: 'Toggle' },
+      '@shared/ui/NavigationHeader': { default: 'Header' },
+      '@shared/theme': { useTheme: () => ({ colors: { background: { app: '#fff' }, feedback: { error: '#e00' }, text: { secondary: '#555' } }, spacing: { md: 12, lg: 16, xl: 24 } }) },
+      '@shared/ui/useAutoSaveDraft': {
+        useAutoSaveDraft: ({ initial: draft, parse, save }) => {
+          const form = new core.AutoSaveDraftEditor(draft, parse, save);
+          return { ...form.getSnapshot(), change: form.change, commit: form.commit, flush: form.flush };
+        },
+        useAutoSaveNavigation: () => ({}),
+      },
+      '@shared/ui/useAutoSaveFeedback': { useAutoSaveFeedback: () => ({ fieldLayout: () => () => {} }) },
+      '@shared/ui/AutoSaveErrors': { AutoSaveErrors: 'Errors' }, './speechModelDraft': speechDraft,
+    });
+    const nodes = (tree) => tree && typeof tree === 'object' ? [tree, ...(tree.children ?? []).flat(Infinity).flatMap(nodes)] : [];
+    const render = (provider, model) => nodes(SpeechPage({ kind: 'tts', modelId: 'voice',
+      initialData: { name: 'voice', enabled: true, baseUrl: 'https://example.invalid/v1', apiKey: 'key', model,
+        metadataJson: JSON.stringify({ provider, voiceId: 'voice' }) },
+      saving: false, onSave: async (patch) => { writes.push(patch); }, onCreate() {}, onBack() {},
+    }));
+    const manual = render('openaiCompatible', 'custom-model').find((node) => node.type === 'Input' && node.props.label === '模型');
+    manual.props.onChangeText('custom-model-v2'); mock.timers.tick(10000); await tick();
+    assert.deepEqual(writes, [], '手输模型名不能逐字保存');
+    manual.props.onBlur(); await tick();
+    assert.equal(writes.at(-1).model, 'custom-model-v2');
+    const dropdown = render('openai', 'tts-1').find((node) => node.type === 'Dropdown' && node.props.label === '模型');
+    dropdown.props.onChange('tts-1-hd'); await tick();
+    assert.equal(writes.at(-1).model, 'tts-1-hd');
   }
   // 页面接线行为：后台提交、系统返回拦截、成功后返回、新建不自动保存。
   {
@@ -347,7 +421,7 @@ try {
     assert.equal(AutoSaveErrors({ error: null, blocked: false, retry() {}, restore() {} }), null);
   }
 } finally { mock.timers.reset(); }
-console.log('模型自动保存：防抖、增量、迟到确认、内联校验、失败重试、恢复与页面生命周期验证通过。');
+console.log('模型自动保存：失焦确认、立即字段隔离、增量、迟到确认、内联校验、失败重试、恢复与页面生命周期验证通过。');
 
 // 网络边界验证真实请求正文：四种传输入口与连接测试使用相同关闭参数。
 const baseURLModule = load('src/platform/ai/baseUrl.ts');
@@ -356,6 +430,7 @@ const baseClientModule = load('src/platform/ai/BaseAIClient.ts', {
   './errorMapping': { getErrorDisplayInfo: (error) => ({ message: String(error) }) },
 });
 const factory = load('src/platform/ai/OpenAIClient.ts', {
+  './moonshotEndpoint': load('src/platform/ai/moonshotEndpoint.ts'),
   './BaseAIClient': baseClientModule,
   './KimiClient': { KimiClient: class extends baseClientModule.BaseAIClient {} },
   './modelDiscovery': {}, './errorMapping': {},
@@ -368,23 +443,36 @@ let persistedAssistant = {
 const hostStarts = [];
 let hostRunSequence = 0;
 let hostExecutions = 0;
+let selectedChatTheme = 'daylight';
+let hostReplyPolicy;
+const chatThemeVariants = load('src/shared/theme/themeVariants.ts');
+const chatReplyPolicy = load('src/features/chat/reply/application/ReplyPolicy.ts');
 const hostCoordinatorModule = load('src/host/runtime/ConversationTurnCoordinator.ts', {
+  '@shared/theme/themeStorage': { loadStoredThemeId: async () => selectedChatTheme },
+  '@shared/theme/themeRegistry': { getThemeById: id => ({ id }) },
+  '@shared/theme/themeVariants': chatThemeVariants,
   '@features/chat/composition': {
     conversationTurnRepository: {
       claimIfIdle: async (sessionId) => ({ runId: `settings-run-${++hostRunSequence}`, sessionId }),
       revoke: async () => { throw new Error('模型设置回归场景不应撤销回合'); },
+      beginExecutionHostRequests: async () => [],
+      finishExecutionHostRequests: async () => {},
     },
     sessionRepository: { getSession: async () => ({ aiAssistantId: persistedAssistant.id }) },
     executeUserReplyTurn: async ({ aiConfig }) => {
       hostExecutions++;
+      hostReplyPolicy = chatReplyPolicy.resolveAIReplyPolicy(aiConfig, { triggerSource: 'chat' });
       const response = await factory.createAIClient({
         baseURL: aiConfig.apiBaseUrl, apiKey: aiConfig.apiKey, model: aiConfig.model,
         disableThinking: aiConfig.disableThinking,
-      }).chat([{ role: 'user', content: '你好' }]);
+      })[hostReplyPolicy.modelTransport === 'stream' ? 'chatStream' : 'chat']([{ role: 'user', content: '你好' }]);
       assert.equal(response.success, true);
       return 'committed';
     },
     isChatReplyRunCancellationError: () => false,
+    emitChatTurnExecutionChanged() {},
+    emitChatMessagesReloadRequested() {},
+    emitChatTypingStatusChanged() {},
   },
   '@features/assistants': { aiAssistantRepository: { getById: async () => persistedAssistant } },
   '@platform/device': { startConversationTurnExecutionHost: async (sessionIds) => { hostStarts.push(sessionIds); return true; } },
@@ -491,6 +579,18 @@ try {
   }
   // 普通聊天委派后不携带页面模型配置，生产单例必须从持久角色重新读取关闭选择。
   const hostCoordinator = hostCoordinatorModule.getConversationTurnCoordinator();
+  for (const themeId of ['paper-note', 'moon-kimi', 'daylight']) {
+    selectedChatTheme = themeId;
+    persistedAssistant = { ...persistedAssistant, allowMultipleBubbles: true };
+    await hostCoordinator.onCanonicalUserMessageCommitted({
+      sessionId: 'theme-session', executionMode: 'delegate_to_android_host', aiConfig: persistedAssistant,
+    });
+    assert.equal(await hostCoordinator.executeTurnFromHost('theme-session'), 'executed');
+    const streaming = themeId !== 'daylight';
+    assert.equal(hostReplyPolicy.modelTransport, streaming ? 'stream' : 'complete', `${themeId} 宿主传输策略`);
+    assert.equal(hostReplyPolicy.bubbleDeliveryMode, streaming ? 'single-bubble' : 'multi-bubble', `${themeId} 宿主分段策略`);
+    assert.equal(Boolean(requests.at(-1).stream), streaming, '实际网络请求必须使用主题选择的传输');
+  }
   for (const disableThinking of [true, false]) {
     persistedAssistant = { ...persistedAssistant, disableThinking };
     const beforeExecution = hostExecutions;

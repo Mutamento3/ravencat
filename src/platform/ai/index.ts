@@ -11,6 +11,9 @@ export {
   getErrorDisplayInfo,
 } from './errorMapping';
 export { normalizeAIBaseURL } from './baseUrl';
+export { resolveMoonshotAPIBaseURL } from './moonshotEndpoint';
+export { MoonshotToolsClient } from './MoonshotToolsClient';
+export type { MoonshotToolResult, MoonshotSearchInput, MoonshotSearchResult, MoonshotFetchResult, MoonshotMewInput, MoonshotMewResult } from './MoonshotToolsClient';
 export { AgentModelGateway } from './agent/AgentModelGateway';
 export { CompleteModelTurnAdapter } from './agent/CompleteModelTurnAdapter';
 export { StreamingModelTurnAdapter } from './agent/StreamingModelTurnAdapter';

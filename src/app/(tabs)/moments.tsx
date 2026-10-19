@@ -1,7 +1,7 @@
 /**
  * 朋友圈 Tab。
  * 发布与时刻设置是独立 push 路由；本页保活，返回（含从其他 Tab 切回）时按
- * refreshRevision 重载当前窗口，让新发布与封面等设置变更落地。
+ * refreshRevision 重载动态窗口；封面等资料由 Profile 更新事件同步。
  */
 import { type Href, useRouter } from 'expo-router';
 import { MomentsTab } from '@features/moments';

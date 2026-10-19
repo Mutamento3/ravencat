@@ -42,10 +42,10 @@ function ProfileFieldEditor({ field, profile, onBack, onNavigationStateChange }:
     <NavigationHeader title={PROFILE_FIELD_LABELS[field]} onGoBack={onBack} />
     <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.editor}>
       <InputField value={editor.draft.value} onChangeText={(value) => editor.change({ value })}
-        onBlur={() => void flushDraft()} error={editor.errors.value} placeholder={PLACEHOLDERS[field]}
+        onBlur={() => void editor.commit()} error={editor.errors.value} placeholder={PLACEHOLDERS[field]}
         maxLength={field === 'name' ? 20 : undefined} keyboardType={field === 'age' ? 'number-pad' : 'default'}
         autoGrow={field === 'other' || field === 'identity' || field === 'signature'}
-        hint="停止输入后自动保存，返回时会完成保存。" />
+        hint="离开输入框时自动保存，返回时会完成保存。" />
       <AutoSaveErrors error={editor.saveError} blocked={blocked && !!editor.errors.value}
         retry={() => void flush()} restore={() => { void editor.restore().then(() => setBlocked(false)); }} />
     </ScrollView>

@@ -25,11 +25,17 @@ function load(file, dependencies = {}) {
 
 const flatten = (value) => Object.assign({}, ...[value].flat(Infinity).filter(Boolean));
 const native = {
-  View: 'View', Text: 'Text', TouchableOpacity: 'TouchableOpacity',
+  View: 'View', Text: 'Text', TouchableOpacity: 'TouchableOpacity', Pressable: 'Pressable',
   Dimensions: { get: () => ({ width: 400, height: 800 }) },
   StyleSheet: { create: (value) => value, flatten, hairlineWidth: 1, absoluteFillObject: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } },
 };
 const variants = load('src/shared/theme/themeVariants.ts');
+const metadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts', {
+  './SharedChatRecord': {}, './ChatSticker': load('src/features/chat/messages/domain/ChatSticker.ts'),
+});
+const presentation = load('src/features/chat/presentation/messages/components/chatMessagePresentation.ts', {
+  '@features/chat/messages/domain': metadata,
+});
 const themes = ['defaultLight', 'defaultDark', 'liquidGlass', 'moonKimi', 'paperNote'].map((name) =>
   load(`src/shared/theme/themes/${name}.ts`)[`${name}Theme`]);
 let theme = themes.at(-1);
@@ -40,6 +46,9 @@ const themeApi = {
   ThemedSurface: 'Surface', GlassSurface: 'GlassSurface',
 };
 const bubbleDir = 'src/features/chat/presentation/messages/MessageBubble/';
+const expansion = load('src/features/chat/presentation/messages/components/reasoningExpansionState.ts', {
+  react: React, '@shopify/flash-list': { useRecyclingState: React.useState },
+});
 const base = { react: React, 'react-native': native, '@shared/theme': themeApi };
 const styles = load(`${bubbleDir}styles.ts`, {
   ...base,
@@ -60,6 +69,7 @@ const contents = load(`${bubbleDir}MessageBubbleContent.tsx`, {
   'react-native-markdown-renderer': { __esModule: true, default: 'Markdown', MarkdownIt: () => ({}), hasParents: () => false },
 });
 const Bubble = load(`${bubbleDir}index.tsx`, {
+  '../components/reasoningExpansionState': expansion,
   '@platform/device': { releaseTextSelectionFocus: async () => {} },
   ...base, './styles': styles, './PaperNoteMessageFrame': frame, './ReplyQuote': quote,
   './MessageBubbleContent': contents, './Avatar': { Avatar: 'Avatar' },
@@ -79,10 +89,42 @@ function render(Component, props) {
   return renderer;
 }
 const themedElement = (Component, props) => React.createElement(
-  themeContext.Provider, { value: theme }, React.createElement(Component, props));
+  expansion.ReasoningExpansionContext.Provider, { value: new Set() },
+  React.createElement(themeContext.Provider, { value: theme }, React.createElement(Component, props)));
 const text = (renderer, content) => renderer.root.findAllByType('Text').find((node) =>
   [node.props.children].flat().join('') === content);
 const viewStyle = (node) => flatten(node.parent.props.style);
+
+// 同一步的文字、语音与表情共用逻辑编号；隐藏思考和合并文字都不能吞掉媒体。
+for (theme of themes) {
+  const profile = variants.getChatInteractionProfile(theme);
+  const message = (id, text, extra = {}) => ({
+    id, text, senderType: 'assistant', isMe: false, logicalMessageId: 'step-1',
+    segmentIndex: 0, segmentTotal: 1, status: 'sent', ...extra,
+  });
+  const voice = message(3, '思考正文', { metadataJson: JSON.stringify({ kind: 'voice', voice: {
+    schemaVersion: 1, mediaAssetId: 'voice-1', mimeType: 'audio/mpeg', durationMs: 2000,
+    transcriptSource: 'assistant_source_text',
+  } }) });
+  const sticker = message(4, '', { metadataJson: JSON.stringify({ kind: 'sticker', sticker: {
+    stickerId: 's1', mediaAssetId: 'sticker-1', name: '开心', description: null, tags: [],
+    emotion: null, mimeType: 'image/png', width: null, height: null, isAnimated: false,
+  } }) });
+  const reasoning = message(0, '思考正文', { senderType: 'reasoning' });
+  const input = [reasoning, message(1, '第一段', { segmentTotal: 2 }),
+    message(2, '第二段', { segmentIndex: 1, segmentTotal: 2 }), voice, sticker];
+  const visible = presentation.collapseAssistantSegmentsForPresentation(input, profile);
+  assert.ok(visible.includes(voice), `${theme.id} 必须保留独立语音及其元数据`);
+  assert.ok(visible.includes(sticker), `${theme.id} 必须保留独立表情`);
+  assert.deepEqual(visible.filter(item => item.id === 1 || item.id === 2).map(item => item.text),
+    profile.enableAssistantMessageSegmentation ? ['第一段', '第二段'] : ['第一段\n\n第二段']);
+  const renderer = render(Bubble, {
+    messageId: voice.id, text: voice.text, senderType: voice.senderType, isMe: false,
+    voice: metadata.getMessageVoice(voice), onPreviewFile: () => {},
+  });
+  assert.equal(renderer.root.findAllByType('Voice').length, 1);
+  act(() => renderer.unmount());
+}
 
 // 引用、译文与正文共用左侧起点；其他主题仍保留用户右侧对齐。
 for (theme of themes) {

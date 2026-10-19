@@ -11,7 +11,7 @@ import { migrateAssistantNicknameHistory } from './assistantNicknameHistoryMigra
 import { migrateChatTurnPublication } from './chatTurnPresentationSchema';
 
 /** 114/115 是旧代码里的迁移编号；已发布数据库实际停在 user_version=108。 */
-export const DATABASE_SCHEMA_VERSION = 135;
+export const DATABASE_SCHEMA_VERSION = 136;
 const PUBLIC_RELEASE_VERSION = 108;
 
 /** 当前公开版的关键结构。拒绝旧开发库，避免把不完整库误标为新基线。 */
@@ -54,14 +54,14 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
     }
     return;
   }
-  if (version !== 0 && version !== PUBLIC_RELEASE_VERSION && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134) {
+  if (version !== 0 && version !== PUBLIC_RELEASE_VERSION && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135) {
     throw new Error(`数据库版本 ${version} 不受当前版本支持，请使用匹配的 RavenCat 版本。`);
   }
   const tables = await db.getAllAsync<{ name: string }>(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'android_metadata'",
   );
   const fresh = tables.length === 0;
-  if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134) {
+  if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135) {
     // 在任何 DDL/default 写入之前检查；失败不修改旧库。
     await assertPublicReleaseSchema(db);
     const retiredTables = new Set(['raven_cat_self_wakes', 'capability_bindings', 'assistant_capability_bindings', 'memory_entries']);
@@ -89,9 +89,12 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
     if (!fresh) await migrateChatTurnObservability(db);
     if (!fresh) await migrateChatTurnPublication(db);
     if (!fresh && version < 135) await migrateAssistantNicknameHistory(db, version);
+    if (!fresh && version < 136) {
+      await db.execAsync('ALTER TABLE raven_cat_ai_schedules ADD COLUMN system_calendar INTEGER NOT NULL DEFAULT 0 CHECK (system_calendar IN (0, 1));');
+    }
     for (const sql of Object.values(INDEXES)) await db.execAsync(sql);
     if (!fresh) await migrateApplicationSettingsTools(db);
-    if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134) {
+    if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135) {
       // 纳入公开版115的定向修复：只清理无有效主体的 MCP 授权，正常授权原样保留。
       await db.execAsync(`
         DELETE FROM mcp_server_assistants

@@ -34,6 +34,8 @@ export interface Tool<TArgs = any, TContext = any> {
 
 /** 决定当前 AI 可见工具集合的配置。 */
 export interface AIToolsConfig {
+  baseURL?: string | null;
+  apiBaseUrl?: string | null;
   isHostAI?: boolean;
   enableTools?: boolean;
   triggerSource?: string;

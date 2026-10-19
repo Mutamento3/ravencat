@@ -87,6 +87,7 @@ const { default: ThemePickerView } = load('src/features/miniPrograms/presentatio
   '@shared/ui/NavigationHeader': { default: 'Header' },
   '@shared/ui/ColorPickerModal': { default: 'ColorPicker' },
   '@shared/ui/BackgroundPickerCard': { default: 'BackgroundPickerCard' },
+  './GlassBlurSettings': { default: 'GlassBlurSettings' },
   '@features/assistants': { listAIAssistants: async () => [{ id: 'ai' }] },
   '@features/chat': { getCanonicalChatConversation: async () => ({ id: 'conversation' }), listGroupChats: async () => [{ id: 'group' }] },
 });

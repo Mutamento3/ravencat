@@ -545,6 +545,7 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     '@features/chat/messages/domain': { ...metadata, buildSessionPreviewTextFromMessage: (msg) => msg.text },
     '@shared/utils/timeFormat': { formatMessageTime: () => '12:00' },
     './ChatMessageListParts': { MessageListItem: 'MessageListItem' },
+    './reasoningExpansionState': { ReasoningExpansionContext: React.createContext(null) },
     '../../../messages/domain/ChatMessageSelection': { getChatSelectionKey: (msg) => String(msg.id) },
     './chatMessageRenderUtils': renderUtils,
     '../MessageBubble/layoutProbe': { createLayoutProbeCellRenderer: () => undefined },
@@ -636,7 +637,7 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   assert.equal(scrolls, 2, '历史 prepend 不触发贴底');
   const away = { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 600 } } };
   act(() => {
-    list().props.onScrollBeginDrag();
+    list().props.onScrollBeginDrag(away);
     list().props.onScroll(away);
     list().props.onScrollEndDrag(away);
   });
@@ -730,7 +731,7 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   update({ messages }); commit(2600);
   const dismissesBeforeDrag = dismisses;
   act(() => {
-    list().props.onScrollBeginDrag();
+    list().props.onScrollBeginDrag(away);
   });
   assert.equal(dismisses, dismissesBeforeDrag + 1, '确认原生拖动后仍应收起输入面板');
   act(() => {
@@ -778,6 +779,20 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   assert.equal(scrolls, 7, '离开页面后不执行遗留的贴底请求');
   assert.equal(scrollContainerUnmounts, 2, '离开页面释放剩余滚动容器');
 
+  // 相同文字不代表重复消息；纸条只隐藏 reasoning，其他主题两种消息都保留。
+  const sameTextMessages = [
+    message({ id: 7900, senderType: 'reasoning', text: '相同的正文', logicalMessageId: 'same-text' }),
+    message({ id: 7901, text: '相同的正文', logicalMessageId: 'same-text' }),
+  ];
+  for (const themeId of ['paper-note', 'moon-kimi']) {
+    theme = { ...theme, id: themeId };
+    props = { ...props, sessionId: 'same-text-session', messages: sameTextMessages, anchorMessageId: null };
+    act(() => { renderer = create(React.createElement(List, props)); });
+    assert.deepEqual(list().props.data.map(item => item.msg.id), themeId === 'paper-note' ? [7901] : [7900, 7901]);
+    act(() => renderer.unmount());
+    flushFrames();
+  }
+
   // 使用真实到达订阅、运行片段 merge 与确认 effect，覆盖 native 到达通知晚于 SQLite 读回的交接。
   theme = { ...theme, id: 'daylight' };
   const sessionId = 'arrival-handoff';
@@ -824,6 +839,41 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   assert.deepEqual(list().props.data.map(item => item.msg.id), [user.id, canonical.id, later.id],
     '尾段到达后各显示一次，不重放已经显示的气泡');
   act(() => renderer.unmount());
+  flushFrames();
+
+  // 原生可能合并普通 onScroll；首次位移和手势最终位置仍必须产生分页 demand。
+  let historyLoads = 0;
+  props = { ...props, sessionId: 'history-gesture-boundaries', anchorMessageId: null,
+    messages: [message({ id: 9000 }), message({ id: 9001 })], hasMore: true,
+    onLoadMore: async () => { historyLoads++; return true; } };
+  await act(async () => { renderer = create(React.createElement(List, props)); });
+  const historyScroll = (y) => ({ nativeEvent: {
+    contentOffset: { y }, contentSize: { height: 6000 }, layoutMeasurement: { height: 800 },
+  } });
+  await act(async () => {
+    list().props.onScrollBeginDrag(historyScroll(3000));
+    list().props.onScroll(historyScroll(2200));
+  });
+  assert.equal(historyLoads, 1, '从原生手势起点比较，在旧的 1.5 屏水位之外就能首次上滑预取');
+  await act(async () => list().props.onScrollEndDrag(historyScroll(2200)));
+  assert.equal(historyLoads, 1, '结束位置与普通回调相同，不重复请求');
+  await act(async () => {
+    list().props.onScrollBeginDrag(historyScroll(2200));
+    list().props.onScrollEndDrag(historyScroll(600));
+  });
+  assert.equal(historyLoads, 2, '普通滚动回调被合并时，拖动最终位置仍触发加载');
+  await act(async () => {
+    list().props.onMomentumScrollBegin();
+    list().props.onMomentumScrollEnd(historyScroll(0));
+  });
+  assert.equal(historyLoads, 3, '惯性停在顶部时消费最终位置，不等待下一次触摸');
+  await act(async () => {
+    list().props.onScroll(historyScroll(2000));
+    list().props.onScroll(historyScroll(0));
+    list().props.onContentSizeChange(400, 7000);
+  });
+  assert.equal(historyLoads, 3, '程序化锚点修正与内容增长不能自行续页');
+  await act(async () => renderer.unmount());
   flushFrames();
 }
 console.log('Chat message list state verification passed.');

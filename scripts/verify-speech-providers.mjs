@@ -28,7 +28,8 @@ const callStreams = load('src/features/calls/application/runtime/CallSpeechSente
 });
 const draftModule = load('src/features/assistants/presentation/auxiliaryModels/speechModelDraft.ts', { '@features/speech': catalog });
 const encoding = load(`${speechRoot}infrastructure/speechAudioEncoding.ts`);
-const ai = { normalizeAIBaseURL: (url) => url.replace(/\/$/, ''), getErrorDisplayInfo: (error) => ({ message: error instanceof Error ? error.message : error }) };
+const ai = { normalizeAIBaseURL: (url) => url.replace(/\/$/, ''), ...load('src/platform/ai/errorMapping.ts') };
+const recognitionErrors = load(`${speechRoot}application/SpeechRecognitionErrors.ts`);
 const openai = load(`${speechRoot}infrastructure/OpenAISpeechClient.ts`, { '@platform/ai': ai, './speechAudioEncoding': encoding });
 const minimax = load(`${speechRoot}infrastructure/MiniMaxSpeechClient.ts`, { '@platform/ai': ai });
 const eleven = load(`${speechRoot}infrastructure/ElevenLabsSpeechClient.ts`, { './speechAudioEncoding': encoding });
@@ -393,7 +394,7 @@ try {
   const tencent = load(`${speechRoot}infrastructure/TencentRealtimeASRClient.ts`);
   const signer = load(`${speechRoot}infrastructure/tencentRealtimeASRSignature.ts`);
   const resolver = load(`${speechRoot}application/ResolveSpeechModel.ts`);
-  const realtime = load(`${speechRoot}StartRealtimeSpeechToText.ts`, { '@platform/ai': ai, '@platform/device': device, './application/SpeechProviderCatalog': catalog, './application/ResolveSpeechModel': resolver, './infrastructure/DashScopeRealtimeASRClient': dashscope, './infrastructure/TencentRealtimeASRClient': tencent, './infrastructure/tencentRealtimeASRSignature': signer });
+  const realtime = load(`${speechRoot}StartRealtimeSpeechToText.ts`, { '@platform/ai': ai, '@platform/device': device, './application/SpeechRecognitionErrors': recognitionErrors, './application/SpeechProviderCatalog': catalog, './application/ResolveSpeechModel': resolver, './infrastructure/DashScopeRealtimeASRClient': dashscope, './infrastructure/TencentRealtimeASRClient': tencent, './infrastructure/tencentRealtimeASRSignature': signer });
   const configuration = { baseURL: 'wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference', apiKey: 'key', model: 'paraformer-realtime-v2', metadataJson: JSON.stringify({ provider: 'dashscopeRealtimeAsr', workspaceId: 'workspace', region: 'beijing' }) };
   let resolutionCount = 0;
   resolver.configureSpeechModelResolver(async () => { resolutionCount++; return { ...configuration, modelConfigId: 'selected', modelConfigName: '阿里' }; });
@@ -414,7 +415,64 @@ try {
   assert.equal(JSON.parse(socket.sent.at(-1)).header.action, 'finish-task');
   socket.message('task-finished'); assert.equal(finished, true); connection.session.close();
 
-  const voice = load(`${speechRoot}VoiceMessageTranscription.ts`, { '@platform/ai': ai, './StartRealtimeSpeechToText': realtime });
+  const voice = load(`${speechRoot}VoiceMessageTranscription.ts`, { '@platform/ai': ai, './application/SpeechRecognitionErrors': recognitionErrors, './StartRealtimeSpeechToText': realtime });
+  // 未选择模型时明确提示配置，不建立识别连接。
+  resolver.configureSpeechModelResolver(async () => null);
+  const socketsBeforeMissingModel = sockets.length;
+  for (const consumer of ['call', 'chatVoiceMessage']) {
+    const missing = await realtime.startRealtimeSpeechToText({ consumer });
+    assert.equal(missing.success, false);
+    assert.match(missing.errorInfo.message, /未配置.*STT 模型/);
+    assert.equal(missing.errorInfo.message, missing.rawError);
+  }
+  const missingVoice = await voice.startVoiceMessageTranscription({});
+  assert.equal(missingVoice.code, 'VOICE_STT_NOT_CONFIGURED');
+  assert.match(missingVoice.errorInfo.message, /辅助模型中心/);
+  assert.equal(sockets.length, socketsBeforeMissingModel);
+
+  const unavailableReason = '所选 STT 模型配置不可用，请检查配置或重新选择 STT 模型';
+  resolver.configureSpeechModelResolver(async () => { throw new Error(unavailableReason); });
+  const unavailable = await voice.startVoiceMessageTranscription({});
+  assert.equal(unavailable.code, 'VOICE_STT_CONFIGURATION_INVALID');
+  assert.equal(unavailable.errorInfo.message, unavailableReason);
+  assert.equal(sockets.length, socketsBeforeMissingModel);
+
+  resolver.configureSpeechModelResolver(async () => ({ ...configuration, modelConfigId: 'selected', modelConfigName: '阿里' }));
+  const failedCloud = realtime.startRealtimeSpeechToText({});
+  await Promise.resolve(); await Promise.resolve();
+  sockets.at(-1).onclose();
+  const cloudFailure = await failedCloud;
+  assert.equal(cloudFailure.success, false);
+  assert.equal(cloudFailure.errorInfo.message, cloudFailure.rawError, '连接失败原因必须保留');
+  assert.match(cloudFailure.errorInfo.message, /提前关闭/);
+
+  const networkReason = '阿里百炼实时语音识别 WebSocket 网络失败';
+  const failedVoiceStart = voice.startVoiceMessageTranscription({});
+  await Promise.resolve(); await Promise.resolve();
+  sockets.at(-1).onerror();
+  const startFailure = await failedVoiceStart;
+  assert.equal(startFailure.code, 'VOICE_STT_NETWORK_FAILED');
+  assert.equal(startFailure.errorInfo.message, networkReason);
+
+  const sessionErrors = [];
+  const openingFailedSession = realtime.startRealtimeSpeechToText({ onError: (error) => sessionErrors.push(error.message) });
+  await Promise.resolve(); await Promise.resolve();
+  const failedSessionSocket = sockets.at(-1);
+  failedSessionSocket.onopen(); failedSessionSocket.message('task-started');
+  const failedSession = await openingFailedSession;
+  failedSessionSocket.onerror();
+  assert.deepEqual(sessionErrors, [networkReason], '会话错误不能被通用模型文案替换');
+  failedSession.session.close();
+
+  const openingFailedVoice = voice.startVoiceMessageTranscription({});
+  await Promise.resolve(); await Promise.resolve();
+  const failedVoiceSocket = sockets.at(-1);
+  failedVoiceSocket.onopen(); failedVoiceSocket.message('task-started');
+  const failedVoice = await openingFailedVoice;
+  const finishingFailedVoice = failedVoice.finish({ uri: 'unused', mimeType: 'unused' });
+  failedVoiceSocket.onerror();
+  assert.equal((await finishingFailedVoice).errorInfo.message, networkReason, '结束录音后的失败结果仍保留具体原因');
+
   const openingVoice = voice.startVoiceMessageTranscription({});
   await Promise.resolve(); await Promise.resolve();
   const voiceSocket = sockets.at(-1); voiceSocket.onopen(); voiceSocket.message('task-started');

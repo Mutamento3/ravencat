@@ -4,6 +4,7 @@ export {
   updateGroupChatAvatarFromDraft,
   deleteGroupChat,
   getGroupChat,
+  getGroupAvatarForAssistant,
   listGroupChats,
   updateGroupChatAdminConfig,
   updateGroupChatPinned,

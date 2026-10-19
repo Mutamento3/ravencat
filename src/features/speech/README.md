@@ -4,6 +4,8 @@ Speech 拥有语音能力调用和 Provider client，不拥有 Chat 消息、媒
 
 Chat 语音消息通过 `startVoiceMessageTranscription` 建立单段转写会话。Chat 与 Calls 都使用 `startRealtimeSpeechToText`，支持腾讯实时 ASR、阿里百炼 Fun-ASR / Paraformer：采集期间接收 16 kHz 单声道 PCM，finish 后等待提供方最终完成事件。没有文件转写或自动换提供方的路径。调用方消费中间结果、最终结果或稳定失败码。
 
+Speech 的启动错误、会话错误和聊天录音结果保留具体原因，不经过聊天模型的通用错误文案替换。
+
 AI 语音继续复用 `synthesizeTextToSpeech`，consumer 为 `chatVoiceMessage`。生成的临时文件由调用方在 Media backing prepare 完成后清理，Speech 不提交 MediaAsset 或 Chat 事实。
 
 ## 提供方与参数
@@ -48,6 +50,6 @@ Eleven Audio Tags 接受配对的半角 `[标签]`、全角 `［标签］` 和�
 
 ## 模型选择
 
-STT 选择由 Speech 保存于 `speech_recognition_settings`，所有角色的聊天录音与通话共用。「辅助模型中心 → STT 模型」列表顶部直接嵌入 `SpeechRecognitionModelPicker`，选后立即保存，不增加设置页跳转。角色模型设置不再提供语音识别模型选择。原「我 → 语音识别设置」入口与独立页面已移除，已有选择不变；consumer 只表达场景，不参与模型选择。
+STT 选择由 Speech 保存于 `speech_recognition_settings`，所有角色的聊天录音与通话共用。未选择时提示配置模型，失效引用提示检查或重新选择。「辅助模型中心 → STT 模型」列表顶部直接嵌入 `SpeechRecognitionModelPicker`，选后立即保存，不增加设置页跳转。角色模型设置不再提供语音识别模型选择。原「我 → 语音识别设置」入口与独立页面已移除，已有选择不变；consumer 只表达场景，不参与模型选择。
 TTS 由 Assistants 保存角色明确选择，语音消息和通话共用该角色模型；未选择或失效不会继承全局默认。
 首次 STT 配置可用后初始化全局选择；首次 TTS 配置可用后初始化已有角色的空白设置，新角色创建时也固化该首次模型的可用引用。更换或取消后不自动覆盖。Host 通过 composition 出口装配各 owner 的初始化、选择和资产解析。当前契约见 [模型选择架构](../../../docs/architecture/auxiliary-model-selection.md)。

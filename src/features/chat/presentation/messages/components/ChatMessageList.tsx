@@ -27,6 +27,7 @@ import {
 import { formatMessageTime } from '@shared/utils/timeFormat';
 import type { ChatDetailAIAssistantLike } from './chatTypes';
 import { MessageListItem } from './ChatMessageListParts';
+import { ReasoningExpansionContext } from './reasoningExpansionState';
 import { getChatSelectionKey } from '../../../messages/domain/ChatMessageSelection';
 import {
   buildMessageBubbleRenderState,
@@ -45,7 +46,6 @@ import type { ChatTogetherListeningResult } from '../../../conversation/applicat
 import {
   collapseAssistantSegmentsForPresentation,
   getAssistantPresentationGroupKey,
-  hidePersistedReasoningDuplicatesForPresentation,
   ownsCanonicalSegmentedAssistantPresentation,
   shouldCollapseAssistantSegment,
 } from './chatMessagePresentation';
@@ -320,6 +320,11 @@ function ChatMessageList({
     !hiddenRunId || message.turnRunId !== hiddenRunId || message.turnItemIndex == null
   ), [completeTimelineMessages, hiddenRunId]);
   const listRef = useRef<FlashListRef<RenderedMessageItem> | null>(null);
+  const expandedReasoningKeys = useMemo(() => {
+    // 切换会话就释放旧意图，不让可复用列表把状态带进另一会话。
+    void sessionId;
+    return new Set<string | number>();
+  }, [sessionId]);
   const anchorConsumedRef = useRef(false);
   const anchorPageAttemptsRef = useRef(0);
   const anchorFrameRef = useRef<number | null>(null);
@@ -429,9 +434,7 @@ function ChatMessageList({
     }
 
     const presentationMessages = collapseAssistantSegmentsForPresentation(
-      hidePersistedReasoningDuplicatesForPresentation(
-        timelineMessages
-      ),
+      timelineMessages,
       interactionProfile
     );
     // footer/run-tail 属于 canonical presentation timeline 上的消息事实，先于 ActionGroup
@@ -625,6 +628,19 @@ function ChatMessageList({
     olderPageGateRef.current = applyScrollDemandToGate(olderPageGateRef.current, decision);
   }, [updateBottomFollowOnScroll]);
 
+  const handleHistoryScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    // 起点由原生手势提供，首次 onScroll 就能判方向，不能把第一次真实上滑吃掉。
+    previousContentOffsetYRef.current = event.nativeEvent.contentOffset.y;
+    handleScrollBeginDrag();
+  }, [handleScrollBeginDrag]);
+
+  const handleHistoryUserScrollEnd = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    // FlashList 锚点修正会暂缓 onScroll；结束事件直接消费最终位置，再结束手势上下文。
+    // 若普通回调已经报告同一位置，严格方向判定会忽略它，不会重复产生 demand。
+    handleScroll(event);
+    handleUserScrollEnd(event);
+  }, [handleScroll, handleUserScrollEnd]);
+
   const handleNestedScrollActiveChange = useCallback((isActive: boolean) => {
     // Do not remove casually: this is the FlashList side of the Moon Kimi reasoning
     // nested-scroll handshake, and prevents the parent list from stealing child drags.
@@ -803,35 +819,37 @@ function ChatMessageList({
       onTouchCancel={finishTouch}
     >
       {/* FlashList 按组件类型缓存动画包装；内联函数会在页面更新时重建整张列表。 */}
-      <FlashList
-        key={sessionId || 'message_list'}
-        ref={listRef}
-        data={renderedData}
-        renderItem={renderItem}
-        keyExtractor={keyExtractor}
-        getItemType={getMessageListItemType}
-        CellRendererComponent={probeCellRenderer}
-        renderScrollComponent={TextSelectionScrollView}
-        nestedScrollEnabled
-        scrollEnabled={isListScrollEnabled}
-        contentContainerStyle={styles.contentContainer}
-        showsVerticalScrollIndicator
-        keyboardDismissMode="none"
-        keyboardShouldPersistTaps="handled"
-        scrollEventThrottle={32}
-        maintainVisibleContentPosition={{
-          // 原生维护阅读锚点和初始底部排布；持续贴底由 useChatBottomFollow 拥有。
-          startRenderingFromBottom: true,
-        }}
-        onScroll={handleScroll}
-        onScrollBeginDrag={handleScrollBeginDrag}
-        onScrollEndDrag={handleUserScrollEnd}
-        onMomentumScrollBegin={handleMomentumScrollBegin}
-        onMomentumScrollEnd={handleUserScrollEnd}
-        onLayout={handleListLayout}
-        onCommitLayoutEffect={handleListLayoutCommit}
-        onContentSizeChange={handleContentSizeChange}
-      />
+      <ReasoningExpansionContext.Provider value={expandedReasoningKeys}>
+        <FlashList
+          key={sessionId || 'message_list'}
+          ref={listRef}
+          data={renderedData}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          getItemType={getMessageListItemType}
+          CellRendererComponent={probeCellRenderer}
+          renderScrollComponent={TextSelectionScrollView}
+          nestedScrollEnabled
+          scrollEnabled={isListScrollEnabled}
+          contentContainerStyle={styles.contentContainer}
+          showsVerticalScrollIndicator
+          keyboardDismissMode="none"
+          keyboardShouldPersistTaps="handled"
+          scrollEventThrottle={32}
+          maintainVisibleContentPosition={{
+            // 原生维护阅读锚点和初始底部排布；持续贴底由 useChatBottomFollow 拥有。
+            startRenderingFromBottom: true,
+          }}
+          onScroll={handleScroll}
+          onScrollBeginDrag={handleHistoryScrollBeginDrag}
+          onScrollEndDrag={handleHistoryUserScrollEnd}
+          onMomentumScrollBegin={handleMomentumScrollBegin}
+          onMomentumScrollEnd={handleHistoryUserScrollEnd}
+          onLayout={handleListLayout}
+          onCommitLayoutEffect={handleListLayoutCommit}
+          onContentSizeChange={handleContentSizeChange}
+        />
+      </ReasoningExpansionContext.Provider>
       {showNewMessagePrompt ? (
         <Pressable
           style={styles.newMessagePrompt}

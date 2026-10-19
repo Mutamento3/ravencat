@@ -1234,6 +1234,91 @@ try {
   assert.equal(privateGuest[0].timeline.length,2);
   assert.deepEqual(await summary.readBackgroundContexts('guest-owner','context-group-a',{privateLimit:0,groupLimit:0}),[]);
 
+  // 工具操作同一份二级正文：全文与局部替换、身份隔离及失败原子性。
+  const { GetSecondarySummaryTool, EditSecondarySummaryTool } = load('src/features/chat/summary/aiTools/SecondarySummaryTools.ts');
+  const { matchesAgentToolInputSchema } = load('src/shared/aiTools/AgentToolInputSchema.ts');
+  const editSchema = EditSecondarySummaryTool.definition.parameters;
+  assert.equal(matchesAgentToolInputSchema({ mode: 'replace_text', oldText: '原文', newText: '' }, editSchema), true);
+  for (const invalid of [
+    { mode: 'unknown', oldText: '原文', newText: '新文' },
+    { mode: 'replace_all', oldText: '原文' },
+    { mode: 'replace_text', oldText: '', newText: '新文' },
+    { mode: 'replace_all', oldText: '原文', newText: '新文', assistantId: 'other-ai' },
+  ]) assert.equal(matchesAgentToolInputSchema(invalid, editSchema), false, '参数边界拒绝非法模式、缺字段与伪造身份');
+  database.exec(`INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated_at) VALUES ('tool-ai','tool-actor','摘要工具','chat','${now}','${now}');
+    INSERT INTO chat_conversations VALUES ('tool-summary','direct');
+    INSERT INTO sessions(id,ai_assistant_id,name,created_at,updated_at) VALUES ('tool-summary','tool-ai','摘要工具','${now}','${now}');`);
+  const editContext = { task: { assistantId: 'tool-ai', sessionId: 'tool-summary' }, abortSignal: signal };
+  assert.deepEqual((await GetSecondarySummaryTool.execute({}, editContext)).data, { conversationId: 'tool-summary', content: '' });
+  const emptyEdit = { mode: 'replace_all', oldText: '不存在', newText: '不能新建' };
+  assert.equal((await EditSecondarySummaryTool.execute(emptyEdit, editContext)).status, 'error');
+  await summary.updateSettings('tool-summary', { secondaryTokenThreshold: 1 });
+  for (let index = 1; index <= 2; index++) {
+    await summary.create('tool-summary', 'tool-p' + index, '来源' + index, now, 'Asia/Shanghai');
+    const claim = await summary.claimSecondary('tool-summary', 'tool-claim' + index, now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+    await summary.appendSecondary(claim, 'tool-s' + index, '共同前缀，事件' + index, now);
+  }
+  await summary.updateSettings('tool-summary', { generationEnabled: false, injectEnabled: false, secondaryEnabled: false });
+  const toolOriginal = await summary.readContext('tool-summary', []);
+  const fullText = '共同前缀，事件1\n\n共同前缀，事件2';
+  assert.equal((await GetSecondarySummaryTool.execute({}, editContext)).data.content, fullText, '完整读取独立于注入与生成开关');
+  const expectEditFailure = async (input, context = editContext) => {
+    const before = await summary.readContext('tool-summary', []);
+    assert.equal((await EditSecondarySummaryTool.execute(input, context)).status, 'error');
+    assert.deepEqual(await summary.readContext('tool-summary', []), before, '拒绝写入时保留正文与进度');
+  };
+  await expectEditFailure({ mode: 'replace_text', oldText: '共同前缀', newText: '不确定目标' });
+  await expectEditFailure({ mode: 'replace_text', oldText: '过期原文', newText: '不该保存' });
+  await expectEditFailure({ mode: 'replace_text', oldText: '  ', newText: '不能空白匹配' });
+  await expectEditFailure({ mode: 'replace_all', oldText: '事件1', newText: '不能用片段覆盖全文' });
+  await expectEditFailure({ mode: 'replace_all', oldText: fullText, newText: '  ' });
+  const otherAIContext = { ...editContext, task: { assistantId: 'b', sessionId: 'tool-summary' } };
+  assert.equal((await GetSecondarySummaryTool.execute({}, otherAIContext)).status, 'error');
+  await expectEditFailure({ mode: 'replace_all', oldText: fullText, newText: '越权' }, otherAIContext);
+  assert.equal((await GetSecondarySummaryTool.execute({}, { ...editContext, task: { assistantId: 'tool-ai' } })).status, 'error');
+  assert.equal((await GetSecondarySummaryTool.execute({ conversationId: 'tool-summary' }, { ...editContext, task: { assistantId: 'tool-ai' } })).status, 'success');
+  database.exec("CREATE TRIGGER reject_tool_edit BEFORE DELETE ON chat_summary_segments WHEN OLD.id='tool-s2' BEGIN SELECT RAISE(ABORT,'工具编辑回滚'); END;");
+  await assert.rejects(EditSecondarySummaryTool.execute({ mode: 'replace_text', oldText: '事件1', newText: '已修正' }, editContext), /工具编辑回滚/);
+  assert.deepEqual(await summary.readContext('tool-summary', []), toolOriginal, '编辑失败不能半更新正文或合并标记');
+  database.exec('DROP TRIGGER reject_tool_edit');
+  const notifications = [];
+  const unsubscribeToolEdit = summaryRuntime.subscribeChatSummaryChanged(id => notifications.push(id));
+  const patched = await EditSecondarySummaryTool.execute({ mode: 'replace_text', oldText: '事件1', newText: '字面值$&' }, editContext);
+  assert.equal(patched.data.content, '共同前缀，字面值$&\n\n共同前缀，事件2', '替换文本不解释正则特殊字符');
+  assert.deepEqual(notifications, ['tool-summary'], '提交成功后通知消费者');
+  unsubscribeToolEdit();
+  const toolPatchedSnapshot = await summary.readContext('tool-summary', []);
+  await assert.rejects(summary.replaceSecondary('tool-summary', toolOriginal.segments.filter(item => item.level === 'secondary'), '过期页面草稿', later), /二级摘要已更新/);
+  assert.deepEqual(toolPatchedSnapshot.segments.filter(item => item.level === 'primary').map(item => item.content), ['来源1','来源2']);
+  assert.deepEqual(toolPatchedSnapshot.tasks, toolOriginal.tasks);
+  assert.deepEqual(toolPatchedSnapshot.settings, toolOriginal.settings);
+  await expectEditFailure({ mode: 'replace_all', oldText: fullText, newText: '过期全文' });
+  const replaced = await EditSecondarySummaryTool.execute({ mode: 'replace_all', oldText: patched.data.content, newText: '全新正文，删除这一段' }, editContext);
+  assert.equal(replaced.data.content, '全新正文，删除这一段');
+  assert.equal((await EditSecondarySummaryTool.execute({ mode: 'replace_text', oldText: '，删除这一段', newText: '' }, editContext)).data.content, '全新正文');
+  assert.equal((await GetSecondarySummaryTool.execute({}, editContext)).data.content, '全新正文');
+  const editWinners = await Promise.all(['胜者甲', '胜者乙'].map(newText =>
+    EditSecondarySummaryTool.execute({ mode: 'replace_all', oldText: '全新正文', newText }, editContext)));
+  assert.equal(editWinners.filter(result => result.status === 'success').length, 1, '同一旧全文并发编辑只有一个提交者');
+  const winningText = (await GetSecondarySummaryTool.execute({}, editContext)).data.content;
+  // 新二级加入后拒绝旧全文；新内容不会被旧编辑吞掉。
+  await summary.updateSettings('tool-summary', { generationEnabled: true, secondaryEnabled: true });
+  await summary.create('tool-summary', 'tool-p3', '新的来源', later, 'Asia/Shanghai');
+  const toolNewClaim = await summary.claimSecondary('tool-summary', 'tool-new-claim', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  await summary.appendSecondary(toolNewClaim, 'tool-s3', '新生成的正文', later);
+  await expectEditFailure({ mode: 'replace_all', oldText: winningText, newText: '覆盖新正文' });
+  const groupEditContext = { ...editContext, task: { assistantId: 'a', sessionId: 'context-group-a' } };
+  const groupText = (await GetSecondarySummaryTool.execute({}, groupEditContext)).data.content;
+  assert.ok(groupText);
+  assert.equal((await EditSecondarySummaryTool.execute({ mode: 'replace_all', oldText: groupText, newText: groupText + '，成员修正' }, groupEditContext)).status, 'success');
+  database.prepare("UPDATE group_chat_members SET enabled=0 WHERE group_id='context-group-a'").run();
+  assert.equal((await GetSecondarySummaryTool.execute({}, groupEditContext)).status, 'error');
+  assert.equal((await EditSecondarySummaryTool.execute({ mode: 'replace_text', oldText: '成员修正', newText: '退出后修改' }, groupEditContext)).status, 'error');
+  database.prepare("UPDATE group_chat_members SET enabled=1 WHERE group_id='context-group-a'").run();
+  const cancelledToolRead = new AbortController(); cancelledToolRead.abort();
+  await assert.rejects(GetSecondarySummaryTool.execute({}, { ...editContext, abortSignal: cancelledToolRead.signal }));
+  await assert.rejects(EditSecondarySummaryTool.execute(emptyEdit, { ...editContext, abortSignal: cancelledToolRead.signal }));
+
   const backupGroupId = await commands.addMemoryTrigger('a', '备份绑定词、备份同义词', ['vector-only']);
   await summary.updateSettings('context-group-a', { modelConfigId: 'continuous-reference' });
   const retainedGroupSummary = await summary.readContext('context-group-a', []);

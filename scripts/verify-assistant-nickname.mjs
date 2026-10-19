@@ -153,6 +153,28 @@ assert.ok(parseChatSettingsDraft({ nickname: '长'.repeat(21) }, ['nickname']).e
 assert.deepEqual(parseChatSettingsDraft({ nickname: '🐈'.repeat(20) }, ['nickname']).patch, { nickname: '🐈'.repeat(20) });
 
 const metadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts');
+// 原始 UTC 时刻与给模型的本地发生时间同时保留，避免把八点 UTC 说成上午八点。
+const previousTZ = process.env.TZ;
+try {
+  for (const [zone, timestamp, expectedDate, expectedTime, offset] of [
+    ['Asia/Shanghai', '2026-10-16T08:30:00.000Z', '2026/10/16', '16:30:00', 'GMT+08:00'],
+    ['Asia/Shanghai', '2026-10-16T16:05:00.000Z', '2026/10/17', '00:05:00', 'GMT+08:00'],
+    ['America/New_York', '2026-10-16T08:30:00.000Z', '2026/10/16', '04:30:00', 'GMT-04:00'],
+  ]) {
+    process.env.TZ = zone;
+    const content = metadata.buildChatSystemEventModelText({ senderType: 'system', status: 'sent',
+      createdAt: timestamp, text: '用户修改昵称', metadataJson: event.metadata_json });
+    const projected = JSON.parse(content.slice(content.indexOf('\n') + 1));
+    assert.equal(projected.timestamp, timestamp, '历史发生时刻不能因本地展示转换而改变');
+    assert.ok(projected.localTime.includes(expectedDate));
+    assert.ok(projected.localTime.includes(expectedTime), `${zone} 使用事件时刻，包含跨日和夏令时换算`);
+    assert.ok(projected.localTime.includes(offset));
+    assert.equal(projected.timeZone, zone);
+  }
+} finally {
+  if (previousTZ === undefined) delete process.env.TZ;
+  else process.env.TZ = previousTZ;
+}
 const { buildGroupMentionModelText } = load('src/features/chat/group/application/GroupMentionModelText.ts', {
   '../../messages/domain/chatMessageMetadata': metadata,
 });
@@ -192,6 +214,7 @@ legacy.exec(`INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated
  INSERT INTO assistant_nickname_changes VALUES (1,'legacy',NULL,'旧昵称',0,'2026-01-10');
  INSERT INTO assistant_nickname_changes VALUES (2,'legacy','旧昵称','daddy',1,'2026-03-10');
  INSERT INTO assistant_nickname_changes VALUES (3,'legacy','daddy',NULL,0,'2026-03-11');
+ ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar;
  PRAGMA user_version=134;`);
 await assert.rejects(bootstrapSqlite({ ...legacyExecutor, execAsync: async sql => {
   if (sql.includes('PRAGMA user_version =')) throw new Error('迁移提交失败');

@@ -54,7 +54,7 @@ export default function SpeechModelEditScreen({
     [kind],
   );
   const editor = useAutoSaveDraft({ initial, parse, save: onSave, enabled: !!modelId });
-  const { draft, errors, change, flush, restore, validateAll } = editor;
+  const { draft, errors, change, commit, flush, restore, validateAll } = editor;
   const feedback = useAutoSaveFeedback(errors);
   const { back } = useAutoSaveNavigation(
     flush,
@@ -101,7 +101,7 @@ export default function SpeechModelEditScreen({
     }
   };
   const blur = () => {
-    if (modelId) void flush();
+    if (modelId) void commit();
   };
   const set = (key: string, value: string | boolean, immediate = false) => {
     setTestError(null);
@@ -166,7 +166,7 @@ export default function SpeechModelEditScreen({
   const reset = () => {
     void restore().then(() => feedback.setBlocked(false));
   };
-  const setModel = (model: string) => {
+  const setModel = (model: string, immediate = false) => {
     const next: Partial<SpeechModelDraft> = { model };
     const allowed = getSpeechParameters(provider!.id, model);
     // 新模型不再支持的枚举值由选择动作清空，不能随着隐藏表单进入请求。
@@ -175,7 +175,7 @@ export default function SpeechModelEditScreen({
         next[field.key] = field.defaultValue == null ? '' : String(field.defaultValue);
       else if (field.type === 'boolean' && typeof draft[field.key] !== 'boolean')
         next[field.key] = field.defaultValue === true;
-    change(next, true);
+    change(next, immediate);
   };
   const rightButton = modelId ? (
     feedback.blocked ? (
@@ -300,7 +300,7 @@ export default function SpeechModelEditScreen({
                 label="模型"
                 value={draft.model}
                 options={modelOptions}
-                onChange={setModel}
+                onChange={(value) => setModel(value, true)}
                 error={errors.model}
               />
             ) : (
@@ -308,6 +308,7 @@ export default function SpeechModelEditScreen({
                 label="模型"
                 value={draft.model}
                 onChangeText={setModel}
+                onBlur={blur}
                 error={errors.model}
                 autoCapitalize="none"
                 autoCorrect={false}

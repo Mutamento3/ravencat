@@ -8,6 +8,7 @@
 
 import { BaseAIClient } from './BaseAIClient';
 import { KimiClient } from './KimiClient';
+import { resolveMoonshotAPIBaseURL } from './moonshotEndpoint';
 import type { AIClientConfig } from './types';
 
 export class OpenAIClient extends BaseAIClient {}
@@ -49,7 +50,7 @@ export function createAIClient(aiAssistant: AIAssistantConfig): BaseAIClient {
     disableThinking: aiAssistant.disableThinking,
   };
 
-  if (baseURL.includes('moonshot') || baseURL.includes('kimi')) {
+  if (resolveMoonshotAPIBaseURL(baseURL)) {
     return new KimiClient(config);
   }
 

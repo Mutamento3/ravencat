@@ -145,6 +145,7 @@ export function useChatDetail(
     sendMessage,
     sendSticker,
     voiceRecordingState,
+    voiceRecordingProgress,
     voiceRecordingError,
     voiceReviewDraft,
     prepareVoiceRecordingEntry,
@@ -185,6 +186,7 @@ export function useChatDetail(
     sendMessage,       // 发送新消息 (text: string, replyToId?: number) => void
     sendSticker,       // 发送独立 Sticker 消息
     voiceRecordingState,
+    voiceRecordingProgress,
     voiceRecordingError,
     voiceReviewDraft,
     prepareVoiceRecordingEntry,

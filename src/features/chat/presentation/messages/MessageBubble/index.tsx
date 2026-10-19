@@ -2,6 +2,7 @@
 
 import React, { memo, useCallback, useMemo, useRef } from 'react';
 import { useRecyclingState } from '@shopify/flash-list';
+import { useReasoningExpansion } from '../components/reasoningExpansionState';
 import { releaseTextSelectionFocus } from '@platform/device';
 import {
   View,
@@ -72,7 +73,7 @@ interface MessageBubbleProps {
   messageStatus?: MessageStatus;
   attachments?: ChatAttachment[];
   sticker?: StickerMessageSnapshot | null;
-  messageId?: number;
+  messageId: number;
   voice?: ChatVoiceMessageMetadata['voice'] | null;
   voicePlayedAt?: string | null;
   isVoiceTranscriptExpanded?: boolean;
@@ -211,8 +212,8 @@ function MessageBubble({
     system: [bubbleStyles.bubble, bubbleStyles.systemBubble],
   }), [bubbleStyles]);
 
-  // FlashList 会复用气泡实例；展开状态和滚动尺寸归消息所有，不能随实例传给下一条。
-  const [isExpanded, setIsExpanded] = useRecyclingState(false, [messageId]);
+  // 展开意图跨回收保留；滚动尺寸必须由当前实例重新测量。
+  const [isExpanded, setIsExpanded] = useReasoningExpansion(messageId);
   // 用户长文本的折叠状态同理归 messageId 所有。
   const [isUserTextExpanded, setIsUserTextExpanded] = useRecyclingState(false, [messageId]);
   const currentMessageId = useRef(messageId);
@@ -446,6 +447,17 @@ function MessageBubble({
           <ReplyQuote replyToText={replyToText} quote={replyQuote} messageId={messageId} onPreviewFile={onPreviewFile} isMe={isMe} />
         ) : null}
       </PaperNoteMessageFrame>
+    );
+  }
+
+  // 普通系统提醒以整行居中；不能套用带头像气泡的收缩、箭头和百分比宽度层。
+  if (isSystem && !isToolStatusMessage && !shouldRenderToolProcessCard) {
+    return (
+      <View style={bubbleStyles.systemContainer} onLayout={layoutProbeHandlers?.container}>
+        <View style={bubbleStyles.systemBubble} onLayout={layoutProbeHandlers?.bubble}>
+          {bubbleContent}
+        </View>
+      </View>
     );
   }
 

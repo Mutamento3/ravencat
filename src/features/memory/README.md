@@ -14,7 +14,7 @@ Memory V3 已接入生产。产品契约见 [实施规格](../../../docs/memory-
 - 新组默认只关联手动选择的记忆，可按组开启“正文或摘要包含任一词时自动关联”。手动关系在正文修改、再次启动和备份恢复后保留，删除任一端时清理；关闭一组的关系不影响其他组。117 升级将旧触发词逐条转成保留原 ID 的单词组，继续开启自动文本关联，保留旧手动关系和关闭事实，不自动猜测或合并旧组。
 - embedding 可选。正文或摘要编辑自动重建，模型指纹＋内容 revision＋claim 由 Repository 原子比较；自动最多三次，终态可在详情手动重试。更新工具省略摘要时保留，空字符串时清除。
 - /memory/settings 集中提供召回数量与向量模型选择，首页不再重复展示模型入口。向量模型仍用弹窗选择，展示当前选择及不可用状态；选择保存于 Memory 自有 `memory_model_settings`，所有记忆空间共用。配置管理进入辅助模型中心的 embedding 路由。
-- 聊天两级摘要由 Chat 独立拥有，在聊天菜单管理；记忆工具包提供 Chat 的 search_chat_summaries，只按当前 AI 身份查询摘要，不复制成 MemoryEntry。两级独立维护、支持关闭与整批 token 归纳，当前产品契约见[对话两级摘要](../../../docs/architecture/chat-summary.md)。
+- 聊天两级摘要由 Chat 独立拥有，在聊天菜单管理；记忆工具包提供 Chat 的 search_chat_summaries 查询摘要、get_secondary_summary 读取完整二级正文、edit_secondary_summary 局部或整体替换二级正文。身份来自当前 AI，只访问自己的单聊与仍参加的群，不复制成 MemoryEntry。两级独立维护、支持关闭与整批 token 归纳，当前产品契约见[对话两级摘要](../../../docs/architecture/chat-summary.md)。
 
 ## 所有权
 

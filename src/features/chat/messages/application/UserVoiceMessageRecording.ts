@@ -9,6 +9,7 @@ import {
   temporarySpeechAudioStore,
   voiceRecordingPort,
   type VoiceRecordingError,
+  type VoiceRecordingProgress,
   type VoiceRecordingSession,
 } from '@platform/device';
 
@@ -68,10 +69,9 @@ export type UserVoiceRecordingEntryCheck =
 /**
  * 进入语音输入模式前的 preflight：只确认设备是否允许录音。
  *
- * 这里刻意不解析 STT 模型、不建立腾讯实时 ASR WebSocket——STT session 只在
- * `startUserVoiceMessageRecording()` 真正准备录音时创建，避免“点一下麦克风就
- * 连一次 ASR”。因此本函数只回答权限问题，不回答“STT 是否已配置”：
- * 没配置 STT 的用户仍然可以正常进入“按住说话”，在真正录音时才会看到明确错误。
+ * 这里不解析 STT 选择、不连接识别服务。STT session 只在
+ * `startUserVoiceMessageRecording()` 真正准备录音时创建；模型配置与识别错误
+ * 由真正的启动流程报告。
  *
  * 与 `voiceRecordingPort.start()` 共用 `requestMicrophonePermission()`，因此
  * preflight 与真正 start 之间没有第二套权限逻辑；唯一的竞态是用户在两者之间
@@ -93,6 +93,7 @@ export async function startUserVoiceMessageRecording(params: {
   sessionId: string;
   assistantId: string;
   aiConfig: AIReplyConfig;
+  onProgress?: (progress: VoiceRecordingProgress) => void;
 }): Promise<
   UserVoiceMessageRecording
   | Extract<UserVoiceMessageResult, { success: false }>
@@ -112,6 +113,7 @@ export async function startUserVoiceMessageRecording(params: {
     recording = await voiceRecordingPort.start({
       onAudioChunk: (chunk) => transcription.acceptAudioChunk(chunk),
       onError: (error) => { recordingFailure = error; },
+      onProgress: params.onProgress,
     });
   } catch (error) {
     await transcription.cancel();

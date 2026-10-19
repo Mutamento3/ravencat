@@ -38,6 +38,7 @@ const moments = load('src/features/moments/index.ts', (specifier) => (
 const { AgentToolRegistry } = load('src/platform/agentRuntime/AgentToolRegistry.ts');
 const adapter = load('src/host/composition/agent/LegacyAgentToolAdapter.ts');
 const registration = load('src/host/composition/agent/createAgentToolRegistry.ts', (specifier) => {
+  if (specifier === '@platform/ai') return load('src/platform/ai/moonshotEndpoint.ts');
   if (specifier === '@features/moments') return moments;
   if (specifier === '@platform/agentRuntime') return { AgentToolRegistry };
   if (specifier === './LegacyAgentToolAdapter') return adapter;

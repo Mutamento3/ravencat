@@ -86,6 +86,7 @@ export {
   VoiceRecordingError,
   type VoiceRecordingFailureCode,
   type VoiceRecordingPort,
+  type VoiceRecordingProgress,
   type VoiceRecordingResult,
   type VoiceRecordingSession,
 } from './VoiceRecording';
@@ -156,6 +157,13 @@ export {
   type AppUsageSnapshot,
 } from './DeviceStatus';
 export { getPersistentMediaCategoryPrefix } from './PersistentMediaStore';
+export {
+  systemCalendar,
+  isSystemCalendarPermissionGranted,
+  manageSystemCalendarPermission,
+  type SystemCalendarPort,
+  type SystemCalendarAvailability,
+} from './SystemCalendar';
 export {
   getDeviceLocationAccessState,
   getCurrentDeviceLocation,

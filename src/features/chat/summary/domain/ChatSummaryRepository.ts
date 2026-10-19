@@ -1,4 +1,4 @@
-/** 用户维护摘要；AI 只领取统一时间范围并原子追加，不拥有旧正文的编辑权限。 */
+/** 自动摘要只追加；用户与显式编辑工具维护已有正文。 */
 import type { ChatCanonicalCursor, ChatContextItem } from './ChatContext';
 import type { CallSummarySource } from '@features/calls';
 import type { ConversationContextItem } from './ChatSummaryTimeline';
@@ -66,6 +66,11 @@ export interface ChatSummarySearchInput {
 export interface ChatSummarySearchPage {
   entries: ChatSummarySegment[]; nextOffset: number | null;
 }
+export interface ChatSecondarySummary { conversationId: string; content: string }
+export interface ChatSecondarySummaryEdit {
+  mode: 'replace_text' | 'replace_all'; oldText: string; newText: string;
+}
+export class ChatSummaryEditError extends Error {}
 export interface ChatSummaryClaim {
   requestSettings: ChatSummaryRequestSettings;
   taskId: string;
@@ -112,6 +117,8 @@ export interface ChatSummaryRepository {
   appendSecondary(claim: SecondaryChatSummaryClaim, segmentId: string, content: string, now: string): Promise<boolean>;
   releaseSecondaryClaim(claim: SecondaryChatSummaryClaim): Promise<void>;
   search(assistantId: string, input: ChatSummarySearchInput): Promise<ChatSummarySearchPage>;
+  readSecondaryForAssistant(assistantId: string, conversationId: string): Promise<ChatSecondarySummary>;
+  editSecondaryForAssistant(assistantId: string, conversationId: string, input: ChatSecondarySummaryEdit, now: string): Promise<ChatSecondarySummary>;
   create(conversationId: string, segmentId: string, content: string, now: string, timeZone: string): Promise<void>;
   edit(conversationId: string, segmentId: string, content: string, now: string): Promise<void>;
   replaceSecondary(conversationId: string, expected: readonly ChatSummarySegment[], content: string | null, now: string): Promise<void>;

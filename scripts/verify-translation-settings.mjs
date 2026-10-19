@@ -110,8 +110,17 @@ const persistence = { databaseCoordinator: { openTaskExecutor: () => ({ ...raw, 
   try { const result = await task(raw); db.exec('COMMIT'); return result; }
   catch (error) { db.exec('ROLLBACK'); throw error; }
 } }) } };
+// 仓储写入会经运行时槽撤销引用方在途资格；引用方 owner（chat 摘要、moments 等）不属于翻译专项，
+// 由独立专项验证，这里按空实现装配，避免槽未装配抛错掩盖翻译链路断言。
+const auxiliaryModelInitialization = { getAuxiliaryModelInitialization: () => ({
+  initializeModelSelections: async () => { throw new Error('翻译资产不应重放首次选择初始化'); },
+  initializeAssistantSelections: async () => {},
+  invalidateModelReferencesInTransaction: async () => {},
+  modelSelectionsInitialized() {},
+}) };
 const { auxiliaryModelRepository: repository } = load('src/features/assistants/infrastructure/SQLiteAuxiliaryModelRepository.ts', {
   '@platform/persistence': persistence, '@features/speech': {}, '@features/integrations': contract,
+  '../application/AuxiliaryModelInitialization': auxiliaryModelInitialization,
 });
 const events = load('src/features/assistants/AuxiliaryModelsChanged.ts');
 const assets = load('src/features/assistants/ResolveAuxiliaryModel.ts', {
@@ -240,15 +249,16 @@ try {
   editor.change(draftModule.switchTranslationProvider('tencentCloudTmt'));
   assert.equal(await editor.flush(), false, '提供方切换未填凭据不能提交混合配置');
   assert.equal(JSON.parse((await repository.getModelConfigById(model.id)).metadataJson).provider, 'aiModel');
-  await editor.restore(); editor.cancelTimer();
+  await editor.restore();
 
   const theme = { colors: { text: { tertiary: '#666' }, brand: { primary: '#345' }, background: { app: '#fff', screen: '#eee' }, feedback: { error: '#f00' } }, spacing: { lg: 16, xl: 24, md: 12 } };
   const native = Object.fromEntries(['ActivityIndicator', 'View', 'Text', 'ScrollView', 'KeyboardAvoidingView', 'TouchableOpacity', 'Pressable'].map((name) => [name, name]));
   native.StyleSheet = { create: (styles) => styles };
   native.Alert = { alert() {} };
   native.AppState = native.BackHandler = { addEventListener: () => ({ remove() {} }) };
-  const shared = Object.fromEntries(['Button', 'InputField', 'DropdownField', 'ToggleField', 'ModelPickerModal', 'NavigationHeader', 'EmptyState', 'ListItem'].map((name) => [name, name]));
+  const shared = Object.fromEntries(['Button', 'InputField', 'DropdownField', 'ToggleField', 'ModelPickerModal', 'NavigationHeader', 'EmptyState', 'ListItem', 'KeyboardAvoidingContainer'].map((name) => [name, name]));
   shared.NavigationHeader = function NavigationHeader({ rightButton, ...props }) { return React.createElement('Header', props, rightButton); };
+  shared.showAppDialog = () => {};
   const uiTheme = { useTheme: () => theme, useThemedStyles: () => ({}) };
   shared.ConfiguredModelPicker = load('src/shared/ui/ConfiguredModelPicker.tsx', {
     'react-native': native, '@shared/theme': uiTheme, 'lucide-react-native': { Check: 'Check', ChevronRight: 'ChevronRight' },

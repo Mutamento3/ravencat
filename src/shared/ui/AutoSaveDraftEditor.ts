@@ -9,10 +9,11 @@ export interface DraftCommit<D, P> {
 
 export class AutoSaveDraftEditor<D extends object, P> {
   private saved: D;
-  private timer: ReturnType<typeof setTimeout> | undefined;
   private running: Promise<boolean> | null = null;
   private restoring = false;
   private readyDraft: D | null = null;
+  private readyFields = new Set<keyof D>();
+  private savingDraft: D | null = null;
   private drainAll = false;
   private listeners = new Set<() => void>();
   private state: { draft: D; errors: DraftErrors<D>; saveError: string | null; dirty: boolean };
@@ -44,14 +45,12 @@ export class AutoSaveDraftEditor<D extends object, P> {
 
   change = (patch: Partial<D>, immediate = false) => {
     this.state = { ...this.state, draft: { ...this.state.draft, ...patch } };
-    // 已显示的错误随输入重新校验；首次输入允许完整的编辑间隔。
+    // 已显示的错误随输入重新校验；新草稿等失焦确认后才提交。
     if (Object.keys(this.state.errors).length > 0) {
       this.state.errors = this.parse(this.state.draft, this.changed()).errors;
     }
     this.publish();
-    this.cancelTimer();
-    if (immediate) void this.requestSave(false);
-    else this.timer = setTimeout(() => { void this.requestSave(false); }, 1000);
+    if (immediate) void this.requestSave(false, Object.keys(patch) as (keyof D)[]);
   };
 
   /** 路由保留后的外部刷新只同步没有本地修改的字段。 */
@@ -75,17 +74,26 @@ export class AutoSaveDraftEditor<D extends object, P> {
     return this.requestSave(true);
   };
 
-  private requestSave(drainAll: boolean): Promise<boolean> {
-    this.cancelTimer();
-    this.readyDraft = this.state.draft;
+  /** 失焦只确认此刻的草稿；写入期间继续输入的内容等待下一次确认。 */
+  commit = (): Promise<boolean> => this.requestSave(false, Object.keys(this.saved) as (keyof D)[]);
+
+  private requestSave(drainAll: boolean, fields: (keyof D)[] = []): Promise<boolean> {
+    // 立即控件只推进自己修改的字段；关联字段解析基于已确认或已请求提交的快照。
+    const draft = { ...(this.readyDraft ?? this.savingDraft ?? this.saved) };
+    for (const key of fields) {
+      draft[key] = this.state.draft[key];
+      this.readyFields.add(key);
+    }
+    this.readyDraft = draft;
     this.drainAll ||= drainAll;
     if (this.running) return this.running;
     // 先建立执行句柄，再进入异步写入；所有入口等待同一次 drain。
     this.running = Promise.resolve().then(() => this.drain()).finally(() => {
       this.running = null;
       this.readyDraft = null;
+      this.readyFields.clear();
+      this.savingDraft = null;
       this.drainAll = false;
-      if (this.changed().length === 0) this.cancelTimer();
       this.publish();
     });
     this.publish();
@@ -94,13 +102,22 @@ export class AutoSaveDraftEditor<D extends object, P> {
 
   private async drain(): Promise<boolean> {
     while (true) {
-      // 普通自动保存只消费已结束输入间隔的版本；返回/失焦等明确 flush 才排空当前草稿。
-      // 旧版本在等待写入期间又被编辑时，让最新版本继续自己的防抖间隔。
-      if (!this.drainAll && this.readyDraft !== this.state.draft) return this.changed().length === 0;
-      const snapshot = this.state.draft;
+      // 返回和后台提交排空当前草稿；失焦和立即控件只消费已经明确确认的版本。
+      const snapshot = this.drainAll ? this.state.draft : this.readyDraft!;
+      const fields = this.drainAll ? Object.keys(this.saved) as (keyof D)[] : [...this.readyFields];
       this.readyDraft = null;
-      const commit = this.parse(snapshot, this.changed());
-      this.state = { ...this.state, errors: commit.errors };
+      this.readyFields.clear();
+      this.savingDraft = snapshot;
+      const changed = fields.filter((key) => snapshot[key] !== this.saved[key]);
+      const commit = this.parse(snapshot, changed);
+      const errors = { ...this.state.errors };
+      for (const key of changed) {
+        if (this.state.draft[key] === snapshot[key]) delete errors[key];
+      }
+      for (const key of Object.keys(commit.errors) as (keyof D)[]) {
+        if (this.state.draft[key] === snapshot[key]) errors[key] = commit.errors[key];
+      }
+      this.state = { ...this.state, errors };
       this.publish();
       if (commit.accepted.length === 0) {
         if (this.changed().length === 0) {
@@ -131,12 +148,10 @@ export class AutoSaveDraftEditor<D extends object, P> {
   }
 
   restore = async () => {
-    this.cancelTimer();
     const discarded = this.state.draft;
     this.restoring = true;
     // 已提交的写入不能撤销；等待其确认后恢复到真正持久化的值。
     if (this.running) await this.running;
-    this.cancelTimer();
     const draft = { ...this.state.draft };
     // 恢复只放弃点击时的输入；等待已提交写入期间的新输入仍属于用户。
     for (const key of Object.keys(this.saved) as (keyof D)[]) {
@@ -145,7 +160,6 @@ export class AutoSaveDraftEditor<D extends object, P> {
     this.state = { draft, errors: {}, saveError: null, dirty: false };
     this.restoring = false;
     this.publish();
-    if (this.changed().length > 0) this.timer = setTimeout(() => { void this.requestSave(false); }, 1000);
   };
 
   validateAll = (): P | null => {
@@ -153,10 +167,5 @@ export class AutoSaveDraftEditor<D extends object, P> {
     this.state = { ...this.state, errors: commit.errors };
     this.publish();
     return Object.keys(commit.errors).length === 0 ? commit.patch : null;
-  };
-
-  cancelTimer = () => {
-    clearTimeout(this.timer);
-    this.timer = undefined;
   };
 }

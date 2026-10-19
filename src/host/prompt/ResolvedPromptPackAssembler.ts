@@ -126,6 +126,7 @@ async function resolveParams(
       ...params.aiConfig,
       promptDefinitionOverrides: assistantConfiguration.overrides,
       disabledPromptDefinitionIds: assistantConfiguration.disabledDefinitionIds,
+      agentRegistryExcludedAssistantIds: assistantConfiguration.agentRegistryExcludedAssistantIds,
     },
     preset: {
       ...resolved.preset,

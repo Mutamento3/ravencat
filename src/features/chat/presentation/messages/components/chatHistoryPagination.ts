@@ -20,11 +20,11 @@
  * 组件层与 application 层都是同一份纯逻辑，verify 脚本直接加载本文件验证，不复制影子实现。
  */
 
-/** 历史分页每页条数。首屏窗口与预加载窗口是另外的语义，不要与此混用。 */
-export const CHAT_HISTORY_PAGE_SIZE = 30;
+/** 历史以小页补入，减少单次 prepend 的投影和布局峰值；首屏窗口仍独立维护。 */
+export const CHAT_HISTORY_PAGE_SIZE = 15;
 
 /** 顶部预取水位：视口高度的倍数。用户撞到顶部之前就应开始补页。 */
-export const CHAT_HISTORY_PREFETCH_VIEWPORT_RATIO = 1.5;
+export const CHAT_HISTORY_PREFETCH_VIEWPORT_RATIO = 3;
 
 /**
  * 内容不足一屏时才允许的补页水位。

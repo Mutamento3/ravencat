@@ -53,6 +53,16 @@ scheduled → cancelled
 
 日程不授予额外权限。每次执行都解析当前主理 AI 的工具授权、MCP、运行时暴露面与会话。
 
+### 3.1 系统日历提醒
+
+`create_ai_schedule` 默认 `system_calendar=true`，同时保存内部 AI 日程与手机日历的事件及零分钟提醒。缺少日历读写权限或没有支持提醒的可写日历时，在业务提交前报错，不创建内部记录，也不弹权限框。权限由用户在小程序的「权限与后台运行 → 系统日历」入口主动授权。用户拒绝或已有仅内部提醒偏好时，AI 可显式传 `system_calendar=false`；不静默降级、不反复索要权限。
+
+`system_calendar` 是日程持久事实。既有记录升级后保持仅内部，不自动导出历史安排。更新默认保留原选择，也可显式切换；修改或移除已有系统事件需要日历权限。取消先提交内部终态，再移除系统事件；若授权已撤销，工具必须明确报告系统事件尚未移除，恢复权限后再同步。
+
+SQLite 与 Calendar Provider 不共享事务。内部事实先提交，AI 唤醒投影与系统日历副作用分别执行；提交后的系统写入失败返回带稳定 scheduleId 和 calendarStatus 的部分成功，不能声称系统提醒已成功或重建第二份日程。系统事件用当前安装包与 scheduleId 标记，事件及提醒使用 Provider batch 原子写入；沿用现有投影 owner、bounded repair 和前台恢复入口幂等同步，不建立第二套调度队列。
+
+系统日历负责独立提醒用户，不触发 AI 执行；AI 仍通过唯一的内部日程链路 claim 和运行。关闭主动伴随保留系统提醒，AI claim/consume 不删除已到期系统事件。两边设定相同时间，但内部非精确调度和模型生成不保证消息同秒到达。系统日历自身的通知设置仍由用户和手机系统管理。
+
 ## 4. 主动伴随开关
 
 `raven_cat_companion_state.desired_enabled` 是开关真值。AIScheduleProjectionOwner 在同一 operation lane 提交意图并同步原生镜像；Repository 在 create / update / claim 的同一事务读取开关和绑定主理身份。这是持久化执行边界，UI 防抖或原生镜像不能代替它。

@@ -16,6 +16,7 @@ function check(db){
 const create = () => {const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON');return db;};
 // 旧版本没有用户备注列与修改历史，升级 fixture 必须还原真实旧结构。
 function removeNicknameSchema(db) {
+ db.exec('ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar;');
  db.exec('DROP TABLE IF EXISTS assistant_nickname_changes; ALTER TABLE ai_assistants DROP COLUMN nickname;');
  removeSummaryModelSchema(db);
 }
@@ -24,6 +25,7 @@ function removeSummaryModelSchema(db) {
 }
 
 function installLegacyNicknameAudit(db) {
+ db.exec('ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar;');
  db.exec(`CREATE TABLE assistant_nickname_changes (id INTEGER PRIMARY KEY AUTOINCREMENT,
  assistant_id TEXT NOT NULL REFERENCES ai_assistants(id) ON DELETE CASCADE, previous_nickname TEXT,
  nickname TEXT, acknowledged INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);`);
@@ -154,6 +156,19 @@ for (const version of [120, 121]) {
  assert.equal(previous.prepare("SELECT show_token_usage FROM ai_assistants WHERE id='ai-proof'").get().show_token_usage,0);
  check(previous); previous.close();
 }
+// 135 的既有日程保持仅内部；新字段与版本一起提交，失败必须整体回滚。
+const calendarUpgrade=create(); await bootstrapSqlite(createSqliteExecutor(calendarUpgrade)); seed(calendarUpgrade);
+calendarUpgrade.exec('ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar; PRAGMA user_version=135;');
+const calendarBefore=data(calendarUpgrade), calendarRaw=createSqliteExecutor(calendarUpgrade);
+await assert.rejects(bootstrapSqlite({...calendarRaw,execAsync:async sql=>{
+ if(sql.includes('PRAGMA user_version =')) throw new Error('日历迁移提交失败');
+ return calendarRaw.execAsync(sql);
+}}),/日历迁移提交失败/);
+assert.deepEqual(data(calendarUpgrade),calendarBefore);
+assert.equal(calendarUpgrade.prepare('PRAGMA user_version').get().user_version,135);
+await bootstrapSqlite(calendarRaw);
+assert.equal(calendarUpgrade.prepare("SELECT system_calendar FROM raven_cat_ai_schedules WHERE schedule_id='schedule-proof'").get().system_calendar,0);
+assert.deepEqual(structure(calendarUpgrade),schema); check(calendarUpgrade); calendarUpgrade.close();
 const statements=[];
 await bootstrapSqlite(createSqliteExecutor(db,statements));
 assert.deepEqual(data(db),before);

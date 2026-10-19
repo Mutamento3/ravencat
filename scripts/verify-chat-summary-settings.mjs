@@ -31,7 +31,7 @@ const mocks = {
   'expo-router': { useFocusEffect: callback => React.useEffect(callback,[callback]) },
   '@expo/vector-icons': {Ionicons:'Ionicons'},
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
-  'lucide-react-native': Object.fromEntries(['Plus','Settings','Pin','PinOff','ChevronRight','ChevronDown','Layers3'].map(name=>[name,name])),
+  'lucide-react-native': Object.fromEntries(['Plus','Settings','Pin','PinOff','Star','ChevronRight','ChevronDown','Layers3'].map(name=>[name,name])),
   '@shared/theme': { ThemedSurface:'ThemedSurface', useTheme: () => ({ colors: { brand: { primary: 'blue' }, text: { tertiary: 'gray',secondary:'gray' }, feedback: { error: 'red' }, border:{strong:'gray'} } }), useThemedStyles: () => ({}) },
   '@shared/ui': { AppTextInput: 'TextInput', KeyboardAvoidingContainer: 'KeyboardAvoidingContainer', NavigationHeader: 'NavigationHeader', Toggle: 'Toggle', ConfiguredModelPicker: 'ConfiguredModelPicker', useBusyBackHandler() {}, showAppDialog() {} },
   '@features/assistants': { getAuxiliaryModelSelection: async () => ({}), requireAuxiliaryModel: async () => {}, subscribeAuxiliaryModelsChanged: () => () => {} },
@@ -82,26 +82,32 @@ await act(async () => { renderer = TestRenderer.create(React.createElement(Panel
 const input = () => renderer.root.findByProps({accessibilityLabel:'一级摘要最大 token'});
 mock.timers.enable({apis:['setTimeout']});
 await act(async () => { input().props.onChangeText('9000'); mock.timers.tick(999); });
-assert.equal(saves.length,0,'输入停顿不足一秒不保存');
+assert.equal(saves.length,0,'输入过程中不保存');
 await act(async () => { input().props.onChangeText('9100'); mock.timers.tick(999); });
-assert.equal(saves.length,0,'继续输入重新计算停顿间隔');
-await act(async () => { mock.timers.tick(1); });
-assert.deepEqual(saves.pop(),{secondaryTokenThreshold:9100},'停止输入一秒自动保存最新阈值');
+assert.equal(saves.length,0,'继续输入不提交草稿');
+await act(async () => { mock.timers.tick(10000); });
+assert.equal(saves.length,0,'停输仍然等待失焦');
 await act(async () => { input().props.onBlur(); });
-assert.equal(saves.length,0,'已自动保存后失焦不重复提交');
+assert.deepEqual(saves.pop(),{secondaryTokenThreshold:9100},'失焦保存最新阈值');
+await act(async () => { input().props.onBlur(); });
+assert.equal(saves.length,0,'没有修改时失焦不重复提交');
 await act(async () => { input().props.onChangeText('9200'); });
 await act(async () => { input().props.onBlur(); });
-assert.deepEqual(saves.pop(), {secondaryTokenThreshold:9200},'失焦提前保存');
+assert.deepEqual(saves.pop(), {secondaryTokenThreshold:9200},'失焦保存');
 await act(async () => {renderer.root.findByProps({accessibilityLabel:'摘要输出 token 上限'}).props.onChangeText('4096');mock.timers.tick(1000);});
+await act(async () => {renderer.root.findByProps({accessibilityLabel:'摘要输出 token 上限'}).props.onBlur();});
 assert.deepEqual(saves.pop(),{maxOutputTokens:4096});
 await act(async () => {renderer.root.findByProps({accessibilityLabel:'摘要输出 token 上限'}).props.onChangeText('');mock.timers.tick(1000);});
+await act(async () => {renderer.root.findByProps({accessibilityLabel:'摘要输出 token 上限'}).props.onBlur();});
 assert.deepEqual(saves.pop(),{maxOutputTokens:null},'留空恢复继承聊天设置');
 await act(async () => {renderer.root.findByProps({accessibilityLabel:'摘要最长等待秒数'}).props.onChangeText('600');mock.timers.tick(1000);});
+await act(async () => {renderer.root.findByProps({accessibilityLabel:'摘要最长等待秒数'}).props.onBlur();});
 assert.deepEqual(saves.pop(),{requestTimeoutSeconds:600});
 let failThresholdSave = true;
 const retrySave = async value => { if(failThresholdSave) throw new Error('阈值写入失败'); saves.push(value); };
 await act(async () => {renderer.update(React.createElement(Panel,{settings,pendingTokens:9000,busy:false,onSave:retrySave}));});
 await act(async () => {input().props.onChangeText('9300');mock.timers.tick(1000);});
+await act(async () => {input().props.onBlur();});
 assert.equal(input().props.value,'9300','写入失败保留草稿');
 assert.ok(renderer.root.findByType('AutoSaveErrors').props.error);
 failThresholdSave=false;

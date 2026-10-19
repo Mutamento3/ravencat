@@ -80,7 +80,7 @@ async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSumma
       const toolContext = new ToolContext({ aiConfig, sessionId: input.conversationId, triggerSource: 'chat',
         repositories: { protocol: protocolRepository, profile: userProfileRepository, moment: null, ledger: null } });
       const persistentNames = await resolveAllowedToolNames(assistant!.id);
-      const toolPolicy = { isHostAI: assistant!.isHostAI, enableTools: assistant!.enableTools, triggerSource: 'chat',
+      const toolPolicy = { apiBaseUrl: assistant!.apiBaseUrl, isHostAI: assistant!.isHostAI, enableTools: assistant!.enableTools, triggerSource: 'chat',
         memoryParticipation: 'read_write' as const, allowedToolNames: persistentNames };
       const allowedToolNames = getRuntimeAllowedToolNamesForAI(toolPolicy);
       const mcp = assistant!.enableTools ? await resolveMcpExposure(assistant!.id) : { services: [] };

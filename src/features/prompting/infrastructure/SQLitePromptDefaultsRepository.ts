@@ -17,6 +17,7 @@ export const sqlitePromptDefaultsRepository: PromptDefaultsRepository = {
       return {
         overrides: Object.fromEntries(overrides.map((row) => [row.definition_id, row.content])),
         toolPermissions: Object.fromEntries(switches.filter((row) => row.key.startsWith('tool:')).map((row) => [row.key.slice(5), row.enabled === 1])),
+        agentRegistryExcludedAssistantIds: switches.filter((row) => row.key.startsWith('agent_registry:') && row.enabled === 0).map((row) => row.key.slice('agent_registry:'.length)),
         userPrompts: prompts.map((row) => ({ id: row.id, name: row.name, content: row.content, enabled: row.enabled === 1, sortOrder: row.sort_order })),
       };
     });

@@ -5,9 +5,44 @@ import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import { buildGroupMentionModelText } from '../../group/application/GroupMentionModelText';
 import { timelineOrderedMessagesCte, timelineProjectionOrderBy, timelineCursorCondition } from '../../messages/infrastructure/ChatTimelineSql';
 import { parseChatContextCursor, projectChatContextMessage, type ChatCanonicalCursor, type ChatContextItem } from '../domain/ChatContext';
-import { CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS, DEFAULT_CHAT_SUMMARY_SETTINGS, type ChatSummaryAddition, type ChatSummaryCallBoundary, type ChatSummaryClaim, type ChatSummaryRepository, type ChatSummarySegment, type ChatSummarySettings, type ChatSummarySettingsPatch, type SecondaryChatSummaryClaim, type ChatSummarySearchInput, type ChatSummaryTask, type ChatSummaryTaskClaim, type ChatSummaryFailure, type ChatSummaryCallDiagnostics, type ChatSummaryLevel , ChatBackgroundContextOptions, ChatBackgroundContext } from '../domain/ChatSummaryRepository';
+import { ChatSummaryEditError, type ChatSecondarySummaryEdit, CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS, DEFAULT_CHAT_SUMMARY_SETTINGS, type ChatSummaryAddition, type ChatSummaryCallBoundary, type ChatSummaryClaim, type ChatSummaryRepository, type ChatSummarySegment, type ChatSummarySettings, type ChatSummarySettingsPatch, type SecondaryChatSummaryClaim, type ChatSummarySearchInput, type ChatSummaryTask, type ChatSummaryTaskClaim, type ChatSummaryFailure, type ChatSummaryCallDiagnostics, type ChatSummaryLevel , ChatBackgroundContextOptions, ChatBackgroundContext } from '../domain/ChatSummaryRepository';
 import type { CallSummarySource } from '@features/calls';
 import { buildConversationTimeline, selectSummaryRange, type ConversationContextItem } from '../domain/ChatSummaryTimeline';
+
+// 查询和工具编辑共用同一身份边界；群成员资格必须在写入事务内读取。
+const assistantSummaryAccess = `(s.ai_assistant_id = ? OR EXISTS (SELECT 1 FROM group_chat_members m
+  JOIN group_chats g ON g.id = m.group_id WHERE m.group_id = c.conversation_id AND m.ai_assistant_id = ? AND m.enabled = 1))`;
+async function requireAssistantConversation(db: DatabaseReadExecutor, assistantId: string, conversationId: string) {
+  const row = await db.getFirstAsync<{ conversation_id: string }>(`SELECT c.conversation_id FROM (SELECT id AS conversation_id FROM chat_conversations) c
+    LEFT JOIN sessions s ON s.id = c.conversation_id WHERE c.conversation_id = ? AND ${assistantSummaryAccess}`,
+  [conversationId, assistantId, assistantId]);
+  if (!row) throw new ChatSummaryEditError('来源会话不存在或当前 AI 无权访问');
+}
+function combinedSecondaryContent(segments: readonly ChatSummarySegment[]) {
+  return [...segments].sort((a, b) => a.contextSequence - b.contextSequence || a.sequence - b.sequence).map((segment) => segment.content).join('\n\n');
+}
+
+/** 页面和工具共用正文交接，统一保留来源关联与讨论范围。 */
+async function replaceSecondaryInTransaction(tx: DatabaseTransactionExecutor, conversationId: string, current: ChatSummarySegment[], content: string | null, now: string) {
+  if (content === null) {
+    await tx.runAsync("DELETE FROM chat_summary_segments WHERE conversation_id = ? AND level = 'secondary'", [conversationId]);
+  } else {
+    current.sort((a, b) => a.contextSequence - b.contextSequence || a.sequence - b.sequence);
+    const anchor = current[0];
+    const starts = current.flatMap((segment) => segment.sourceStartAt === null ? [] : [segment.sourceStartAt]).sort();
+    const ends = current.flatMap((segment) => segment.sourceEndAt === null ? [] : [segment.sourceEndAt]).sort();
+    const cursor = await tx.getFirstAsync<{ to_cursor: string | null }>(`SELECT to_cursor FROM chat_summary_segments
+      WHERE conversation_id = ? AND level = 'secondary' AND to_cursor IS NOT NULL ORDER BY json_extract(to_cursor,'$[3]') DESC LIMIT 1`, [conversationId]);
+    await tx.runAsync(`UPDATE chat_summary_segments SET content = ?, source_start_at = ?, source_end_at = ?, updated_at = ?, to_cursor = ?
+      WHERE conversation_id = ? AND id = ?`, [content, starts[0] ?? null, ends.at(-1) ?? null, now, cursor?.to_cursor ?? null, conversationId, anchor.id]);
+    for (const segment of current.slice(1)) {
+      await tx.runAsync('UPDATE chat_summary_segments SET compaction_id = ? WHERE conversation_id = ? AND compaction_id = ?', [anchor.id, conversationId, segment.id]);
+      await tx.runAsync('DELETE FROM chat_summary_segments WHERE conversation_id = ? AND id = ?', [conversationId, segment.id]);
+    }
+  }
+  // 删除二级也不解除一级归纳状态；正文编辑不推进原文处理游标。
+  await tx.runAsync('UPDATE chat_summary_state SET revision = revision + 1 WHERE conversation_id = ?', [conversationId]);
+}
 
 function requestSettings(settings: ChatSummarySettings) {
   return { requestTimeoutSeconds: settings.requestTimeoutSeconds, maxOutputTokens: settings.maxOutputTokens, modelConfigId: settings.modelConfigId };
@@ -468,8 +503,7 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
     });
   }
   async search(assistantId: string, input: ChatSummarySearchInput) {
-    const conditions = [`(s.ai_assistant_id = ? OR EXISTS (SELECT 1 FROM group_chat_members m
-      JOIN group_chats g ON g.id = m.group_id WHERE m.group_id = c.conversation_id AND m.ai_assistant_id = ? AND m.enabled = 1))`];
+    const conditions = [assistantSummaryAccess];
     const params: (string | number)[] = [assistantId, assistantId];
     if (input.conversationId !== undefined) { conditions.push('c.conversation_id = ?'); params.push(input.conversationId); }
     if (input.from !== undefined) { conditions.push('COALESCE(c.source_end_at, c.created_at) >= ?'); params.push(input.from); }
@@ -484,6 +518,31 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
       ORDER BY COALESCE(c.source_start_at, c.created_at) DESC, c.id LIMIT 21 OFFSET ?`, [...params, offset]);
     // 每次分页读当前事实，不缓存正文，用户删除的摘要不会从旧的运行快照再次返回。
     return { entries: rows.slice(0, 20).map(mapSegment), nextOffset: rows.length > 20 ? offset + 20 : null };
+  }
+  async readSecondaryForAssistant(assistantId: string, conversationId: string) {
+    return executor('readSecondaryForAssistant').withExclusiveTransactionAsync(async (tx) => {
+      await requireAssistantConversation(tx, assistantId, conversationId);
+      const segments = (await readSegments(tx, conversationId)).filter((segment) => segment.level === 'secondary');
+      return { conversationId, content: combinedSecondaryContent(segments) };
+    });
+  }
+  async editSecondaryForAssistant(assistantId: string, conversationId: string, input: ChatSecondarySummaryEdit, now: string) {
+    return executor('editSecondaryForAssistant').withExclusiveTransactionAsync(async (tx) => {
+      await requireAssistantConversation(tx, assistantId, conversationId);
+      const current = (await readSegments(tx, conversationId)).filter((segment) => segment.level === 'secondary');
+      const original = combinedSecondaryContent(current);
+      const index = original.indexOf(input.oldText);
+      if (index < 0 || (input.mode === 'replace_all' && original !== input.oldText)) {
+        throw new ChatSummaryEditError('二级摘要原文不匹配或已变化，请重新读取后再编辑');
+      }
+      if (input.mode === 'replace_text' && original.indexOf(input.oldText, index + 1) !== -1) {
+        throw new ChatSummaryEditError('原文片段有多处匹配，请提供更长且唯一的片段');
+      }
+      const content = original.slice(0, index) + input.newText + original.slice(index + input.oldText.length);
+      if (!content.trim()) throw new ChatSummaryEditError('编辑后的二级摘要正文不能为空');
+      await replaceSecondaryInTransaction(tx, conversationId, current, content, now);
+      return { conversationId, content };
+    });
   }
   async create(conversationId: string, segmentId: string, content: string, now: string, timeZone: string) {
     await executor('create').withExclusiveTransactionAsync(async (tx) => {
@@ -514,24 +573,7 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
         const original = originals.get(segment.id);
         return original && segment.content === original.content && segment.updatedAt === original.updatedAt;
       })) throw new Error('二级摘要已更新，请重新打开后再编辑；当前修改未保存。');
-      if (content === null) {
-        await tx.runAsync("DELETE FROM chat_summary_segments WHERE conversation_id = ? AND level = 'secondary'", [conversationId]);
-      } else {
-        current.sort((a, b) => a.contextSequence - b.contextSequence || a.sequence - b.sequence);
-        const anchor = current[0];
-        const starts = current.flatMap((segment) => segment.sourceStartAt === null ? [] : [segment.sourceStartAt]).sort();
-        const ends = current.flatMap((segment) => segment.sourceEndAt === null ? [] : [segment.sourceEndAt]).sort();
-        const cursor = await tx.getFirstAsync<{ to_cursor: string | null }>(`SELECT to_cursor FROM chat_summary_segments
-          WHERE conversation_id = ? AND level = 'secondary' AND to_cursor IS NOT NULL ORDER BY json_extract(to_cursor,'$[3]') DESC LIMIT 1`, [conversationId]);
-        await tx.runAsync(`UPDATE chat_summary_segments SET content = ?, source_start_at = ?, source_end_at = ?, updated_at = ?, to_cursor = ?
-          WHERE conversation_id = ? AND id = ?`, [content, starts[0] ?? null, ends.at(-1) ?? null, now, cursor?.to_cursor ?? null, conversationId, anchor.id]);
-        for (const segment of current.slice(1)) {
-          await tx.runAsync('UPDATE chat_summary_segments SET compaction_id = ? WHERE conversation_id = ? AND compaction_id = ?', [anchor.id, conversationId, segment.id]);
-          await tx.runAsync('DELETE FROM chat_summary_segments WHERE conversation_id = ? AND id = ?', [conversationId, segment.id]);
-        }
-      }
-      // 来源正文、处理游标与调用事实不变；删除二级也不解除一级的已归纳状态。
-      await tx.runAsync('UPDATE chat_summary_state SET revision = revision + 1 WHERE conversation_id = ?', [conversationId]);
+      await replaceSecondaryInTransaction(tx, conversationId, current, content, now);
     });
   }
   async clear(conversationId: string) {

@@ -61,6 +61,7 @@ const groupContext = { groupId: 'group', groupName: '我们的群', currentAIId:
   currentAgentId: 'actor-self', recentWindowLimit: 10, members: [{ aiAssistantId: 'self', agentId: 'actor-self', name: 'AI' }] };
 const group = await assembler.assembleChatPromptPack({ ...params, runtimeContext: { groupChat: groupContext } });
 assert.match(group.stableSystemPrompt, /群聊身份背景[\s\S]*你自己/);
+assert.ok(group.stableSystemPrompt.includes(`group_id：${groupContext.groupId}`), '实际群回复提示词必须提供当前群工具标识');
 assert.match(group.dynamicSystemPrompt, /交互位置：多 AI 群聊“我们的群”/);
 assert.doesNotMatch(group.dynamicSystemPrompt, /【群成员】/);
 const ledger = await assembler.assembleLedgerPromptPack({ ...params, currentInput: '新增支出：午饭 20 元',

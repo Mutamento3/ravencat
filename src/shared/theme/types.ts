@@ -214,4 +214,6 @@ export interface ThemeContextValue {
   setChatColorOverride: (token: ChatColorToken, color: string) => Promise<void>;
   /** 恢复某个聊天文字颜色令牌为主题默认值 */
   resetChatColorOverride: (token: ChatColorToken) => Promise<void>;
+  /** 统一调整玻璃材质并保存；数值由设置控件的范围契约保证。 */
+  setGlassBlurRadius: (radius: number) => Promise<void>;
 }

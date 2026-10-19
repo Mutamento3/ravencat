@@ -82,6 +82,7 @@ function harness({
   let currentObservation = observation;
   let hostAIId = currentHostAIId;
   const projections = [];
+  let lyricReads = 0;
   const repository = {
     async getCurrent() { return rows.find((row) => ['pending_user_response', 'pending_ai_response', 'active'].includes(row.phase)) ?? null; },
     async getById(id) { return rows.find((row) => row.id === id) ?? null; },
@@ -113,13 +114,14 @@ function harness({
     generateId: () => `activity-${nextId++}`,
     nowEpochMs: () => 100,
     observeNetEasePlayback: async () => currentObservation,
-    readCurrentNetEaseLyric: async () => currentLyric,
+    readCurrentNetEaseLyric: async () => { lyricReads += 1; return currentLyric; },
     getCurrentHostAIId: async () => hostAIId,
     resolveSystemPresentationAIIdentity: async () => ({ name: 'Host', avatar: null }),
   });
   return {
     rows: () => rows,
     projections: () => projections,
+    lyricReads: () => lyricReads,
     setObservation: (value) => { currentObservation = value; },
     setHostAIId: (value) => { hostAIId = value; },
   };
@@ -142,16 +144,16 @@ function activity(phase, endReason = null) {
     activityId: 'activity-1',
     phase: 'pending_user_response',
     projectionStatus: 'projected',
-    currentLyric: null,
   });
   assert.equal(state.rows().length, 1);
   assert.equal(state.projections().at(-1)?.phase, 'pending_user_response');
 }
 {
   const currentLyric = { text: '当前歌曲正在播的这一句', startTimeMs: 20_000, positionMs: 21_000 };
-  harness({ currentLyric });
+  const state = harness({ currentLyric });
   const invitation = await inviteTool.execute({}, context);
-  assert.deepEqual(invitation.data.currentLyric, currentLyric, 'AI 发起邀请时即获得当前一句');
+  assert.equal(invitation.data.currentLyric, undefined, '邀请待回应时不附带当前歌词');
+  assert.equal(state.lyricReads(), 0, '邀请待回应时不读取歌词');
   harness({ currentLyric, initial: [activity('pending_ai_response')] });
   const accepted = await respondTool.execute({ decision: 'accept' }, context);
   assert.deepEqual(accepted.data.currentLyric, currentLyric, '接受邀请当轮的工具续轮立即获得当前一句');

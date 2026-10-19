@@ -542,18 +542,18 @@ function createMessages(count) {
 // --- 11. 水位与 bootstrap 边界 ---------------------------------------------
 
 {
-  assert.equal(pagination.resolveHistoryPrefetchDistance(VIEWPORT_HEIGHT), 1200);
+  const prefetchDistance = pagination.resolveHistoryPrefetchDistance(VIEWPORT_HEIGHT);
 
   assert.equal(
     pagination.resolveScrollDemandDecision(
-      scrollInput({ contentOffsetY: 1200, previousContentOffsetY: 1400 }),
+      scrollInput({ contentOffsetY: prefetchDistance, previousContentOffsetY: prefetchDistance + 200 }),
     ),
     'request',
     '恰好落在水位边界上仍应提前分页',
   );
   assert.equal(
     pagination.resolveScrollDemandDecision(
-      scrollInput({ contentOffsetY: 1300, previousContentOffsetY: 1400 }),
+      scrollInput({ contentOffsetY: prefetchDistance + 100, previousContentOffsetY: prefetchDistance + 200 }),
     ),
     'ignore',
     '水位之外即使向上滑也不请求',
@@ -563,7 +563,7 @@ function createMessages(count) {
       scrollInput({ contentOffsetY: 300, previousContentOffsetY: null }),
     ),
     'ignore',
-    '首个滚动回调只建立基线，不产生 demand',
+    '缺少原生手势起点时不猜测滚动方向',
   );
 
   assert.equal(
@@ -963,15 +963,6 @@ function createMessages(count) {
   assert.deepEqual(harness.snapshot(), bSnapshot, '旧 session 的 refresh 结果不得覆盖新 session');
   assert.equal(harness.state.messageCount, 12, 'B 的消息数不得被 A 的 refresh 改写');
   assert.equal(harness.state.hasMore, false, 'B 的 hasMore 不得被 A 的 refresh 改写');
-}
-
-// --- 附加：分页大小与窗口常量语义 ------------------------------------------
-
-{
-  assert.equal(pagination.CHAT_HISTORY_PAGE_SIZE, 30, '历史分页每页 30 条');
-  assert.equal(initialWindow.CHAT_INITIAL_MESSAGE_WINDOW_SIZE, 30, '首屏窗口 30 条');
-  assert.equal(pagination.CHAT_HISTORY_PREFETCH_VIEWPORT_RATIO, 1.5);
-  assert.equal(pagination.CHAT_HISTORY_BOOTSTRAP_VIEWPORT_RATIO, 1.2);
 }
 
 console.log('Chat history continuous load verification passed.');

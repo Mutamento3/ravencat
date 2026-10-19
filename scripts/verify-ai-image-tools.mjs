@@ -286,6 +286,7 @@ legacy.exec(`INSERT INTO media_assets (id,storage_backend,storage_key,hash_algor
   INSERT INTO stickers (id,media_asset_id,name,description,tags_json,mime_type,annotation_status,semantic_revision,created_at,updated_at)
   VALUES ('old-sticker','old','旧名称','旧描述','["旧标签"]','image/png','ready',7,'${now}','${now}');
   INSERT INTO sticker_embeddings VALUES ('old-sticker','embedding','${now}',7,2,'[1,0]','${now}','${now}');
+  ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar;
   PRAGMA user_version=119;`);
 await bootstrapSqlite(createSqliteExecutor(legacy));
 const old = legacy.prepare('SELECT * FROM stickers').get();

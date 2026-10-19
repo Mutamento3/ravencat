@@ -68,6 +68,9 @@ export function resolveToolDisplayName(toolName: string): string {
   const musicName = phonePackageDisplayAliases.neteaseMusic.tools[toolName];
   if (musicName) return `cloudmusic.${musicName}`;
   const displayNameByTool: Record<string, string> = {
+    kimi_web_search: 'Kimi 官方搜索',
+    kimi_web_fetch: 'Kimi 官方网页读取',
+    kimi_mew: 'Kimi 猫叫与祝福',
     web_search: '联网搜索',
     web_fetch: '读取网页',
     download_file: '下载文件',

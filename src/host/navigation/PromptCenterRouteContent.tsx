@@ -27,6 +27,7 @@ export default function PromptCenterRouteContent({ page }: { page: PromptCenterP
   const openPage = (target: PromptCenterPage) => {
     switch (target.kind) {
       case 'overview': router.push({ pathname: '/prompt-center', params }); break;
+      case 'registry': router.push('/prompt-center/registry' as Href); break;
       case 'editor': router.push({ pathname: '/prompt-center/rules/[definitionId]', params: { ...params, definitionId: target.definitionId } }); break;
       case 'persona': router.push({ pathname: '/prompt-center/persona', params }); break;
       case 'custom': router.push({ pathname: '/prompt-center/custom', params }); break;

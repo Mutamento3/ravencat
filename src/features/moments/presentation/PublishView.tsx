@@ -1,9 +1,9 @@
 // 时刻发布界面：正文、图片、可选地点与可见范围。
 // 发布时刻页面 - 简洁风格
 
-import { KeyboardAvoidingContainer, showAppDialog } from '@shared/ui';
+import { AppTextInput, KeyboardAvoidingContainer, showAppDialog } from '@shared/ui';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, BackHandler, Image, Keyboard, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, BackHandler, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { ChevronRight, ImagePlus, MapPin, X } from 'lucide-react-native';
@@ -88,11 +88,11 @@ function createPublishStyles(theme: PresentationTheme) {
       fontWeight: '600',
     },
     inputContainer: {
-      flex: 1,
       padding: theme.spacing.lg,
     },
     textInput: {
-      flex: 1,
+      minHeight: 144,
+      maxHeight: 320,
       fontSize: 16,
       color: theme.colors.text.primary,
       lineHeight: 24,
@@ -281,33 +281,35 @@ export default function PublishMomentScreen({ onPublish, onCancel }: PublishMome
   // 独立 push 页面：安全区由本组件自己负责（此前由 MomentsTab 内嵌渲染时代管）。
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-        <KeyboardAvoidingContainer
-          style={styles.keyboardView}
-        >
-          <View style={styles.header}>
-            <TouchableOpacity onPress={onCancel} activeOpacity={0.7}>
-              <Text style={styles.cancelButton}>取消</Text>
-            </TouchableOpacity>
-            <Text style={styles.headerTitle}>发布时刻</Text>
-            <TouchableOpacity
-              onPress={handlePublish}
-              disabled={!canPublish}
-              style={[styles.publishButton, !canPublish && styles.publishButtonDisabled]}
-              activeOpacity={0.7}
-            >
-              {publishing ? (
-                <ActivityIndicator size="small" color={theme.colors.brand.onPrimary} />
-              ) : (
-                <Text style={styles.publishButtonText}>发布</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+      <KeyboardAvoidingContainer
+        style={styles.keyboardView}
+      >
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.cancelButton}>取消</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>发布时刻</Text>
+          <TouchableOpacity
+            onPress={handlePublish}
+            disabled={!canPublish}
+            style={[styles.publishButton, !canPublish && styles.publishButtonDisabled]}
+            activeOpacity={0.7}
+          >
+            {publishing ? (
+              <ActivityIndicator size="small" color={theme.colors.brand.onPrimary} />
+            ) : (
+              <Text style={styles.publishButtonText}>发布</Text>
+            )}
+          </TouchableOpacity>
+        </View>
 
+        {/* 正文和附加选项共享滚动空间，键盘出现时不再互相挤压高度。 */}
+        <ScrollView style={styles.keyboardView}
+          keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
           <View style={styles.inputContainer}>
-            <TextInput
+            <AppTextInput
               style={styles.textInput}
-              multiline
+              autoGrow
               placeholder="这一刻的想法..."
               placeholderTextColor={theme.colors.text.tertiary}
               value={content}
@@ -320,8 +322,7 @@ export default function PublishMomentScreen({ onPublish, onCancel }: PublishMome
             <Text style={styles.charCount}>{content.length}/2000</Text>
           </View>
 
-          <ScrollView style={styles.mediaSection} contentContainerStyle={styles.mediaGrid}
-            keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+          <View style={[styles.mediaSection, styles.mediaGrid]}>
             {media.map((item) => (
               <View key={item.uri} style={styles.mediaTile}>
                 <Image source={{ uri: item.uri }} style={styles.mediaImage} resizeMode="cover" />
@@ -339,12 +340,12 @@ export default function PublishMomentScreen({ onPublish, onCancel }: PublishMome
                 <Text style={styles.addMediaText}>{media.length}/{MAX_MOMENT_MEDIA_COUNT}</Text>
               </TouchableOpacity>
             ) : null}
-          </ScrollView>
+          </View>
 
           <View style={styles.metaSection}>
             <View style={styles.metaRow}>
               <MapPin size={17} color={theme.colors.icon.secondary} style={styles.metaIcon} />
-              <TextInput
+              <AppTextInput
                 style={styles.metaInput}
                 placeholder="添加地点（可选）"
                 placeholderTextColor={theme.colors.text.tertiary}
@@ -377,8 +378,8 @@ export default function PublishMomentScreen({ onPublish, onCancel }: PublishMome
               <ChevronRight size={16} color={theme.colors.icon.secondary} />
             </TouchableOpacity>
           </View>
-        </KeyboardAvoidingContainer>
-      </TouchableWithoutFeedback>
+        </ScrollView>
+      </KeyboardAvoidingContainer>
 
       <MomentAudienceSelectorModal
         visible={showAudienceSelector}

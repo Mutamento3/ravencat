@@ -29,6 +29,7 @@ export interface AssistantPromptEditorDetails {
     enabled: boolean;
     mutating: boolean;
     callOnly: boolean;
+    unavailableReason?: string;
   }[];
 }
 
@@ -41,6 +42,7 @@ export interface AssistantPromptAdvancedSnapshot {
 }
 
 export interface ResolvedAssistantPromptConfiguration {
+  agentRegistryExcludedAssistantIds: string[];
   timeEnabled: boolean;
   batteryEnabled: boolean;
   overrides: Record<string, string>;
@@ -101,7 +103,7 @@ export async function getAssistantPromptEditorDetails(
 export async function getAssistantToolPermissions(assistantId: string): Promise<AssistantPromptEditorDetails['tools']> {
   const dependencies = getPromptingRuntimeDependencies();
   const [definitions, overrides, defaults] = await Promise.all([
-    dependencies.tools.list(), dependencies.tools.listOverrides(assistantId), dependencies.defaults.read(),
+    dependencies.tools.list(assistantId), dependencies.tools.listOverrides(assistantId), dependencies.defaults.read(),
   ]);
   const overrideByName = new Map(overrides.map((override) => [override.toolName, override.enabled]));
   return definitions.map((definition) => ({
@@ -134,6 +136,7 @@ export async function resolveAssistantPromptConfiguration(params: {
   return {
     timeEnabled: states.find((state) => state.definitionId === 'context.time_awareness')?.enabled ?? true,
     batteryEnabled: states.find((state) => state.definitionId === 'context.device_battery')?.enabled ?? true,
+    agentRegistryExcludedAssistantIds: defaults.agentRegistryExcludedAssistantIds,
     overrides: { ...defaults.overrides, ...Object.fromEntries(
       overrides
         .filter((override) => override.locale === RESOLVED_PROMPT_LOCALE)
@@ -295,8 +298,9 @@ export async function applyAssistantDirectToolsGlobally(directToolNames: readonl
 
 async function assertAssistantToolEditable(assistantId: string, toolName: string): Promise<void> {
   const dependencies = getPromptingRuntimeDependencies();
-  const tool = (await dependencies.tools.list()).find((item) => item.name === toolName);
+  const tool = (await dependencies.tools.list(assistantId)).find((item) => item.name === toolName);
   if (!tool) throw new Error('工具不存在或不在提示词中心管理');
+  if (tool.unavailableReason) throw new Error(tool.unavailableReason);
   if (tool.hostOnly) {
     const assistant = (await dependencies.assistants.listOptions()).find((item) => item.id === assistantId);
     if (tool.cooldownOnly ? !assistant?.isInHostCooldown : !assistant?.isHostAI) {

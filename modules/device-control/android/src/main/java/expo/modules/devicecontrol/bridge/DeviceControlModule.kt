@@ -13,6 +13,7 @@ import expo.modules.devicecontrol.controller.MediaSessionControllerSource
 import expo.modules.devicecontrol.controller.MediaSessionSnapshotReader
 import expo.modules.devicecontrol.controller.MediaSessionTransportController
 import expo.modules.devicecontrol.controller.NotificationListenerAccessReader
+import expo.modules.devicecontrol.controller.SystemCalendarController
 import expo.modules.devicecontrol.model.SoftLockCommand
 import expo.modules.devicecontrol.model.SoftLockCommandParseResult
 import expo.modules.devicecontrol.model.SoftLockReconcileResult
@@ -38,6 +39,25 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class DeviceControlModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RavenCatDeviceControl")
+
+    AsyncFunction("prepareSystemCalendar") {
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      SystemCalendarController(context).prepare()
+    }
+    AsyncFunction("upsertSystemCalendarEvent") { key: String, title: String, description: String, startAtEpochMs: Long ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      SystemCalendarController(context).upsert(
+        key, title, description, startAtEpochMs,
+      )
+    }
+    AsyncFunction("removeSystemCalendarEvent") { key: String ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      SystemCalendarController(context).remove(key)
+    }
+    AsyncFunction("listSystemCalendarEventKeys") {
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      SystemCalendarController(context).listKeys()
+    }
 
     AsyncFunction("startRuntime") {
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()

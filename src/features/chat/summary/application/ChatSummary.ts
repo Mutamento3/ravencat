@@ -1,8 +1,8 @@
-/** 用户可维护已有摘要，自动模型只能消费固定批次并追加。 */
+/** 用户与显式工具可维护已有摘要，自动总结只能消费固定批次并追加。 */
 import { randomUUID } from 'expo-crypto';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { emitChatSummaryChanged, getChatSummaryRuntime } from './ChatSummaryRuntime';
-import { ChatSummaryGenerationError, type ChatSummaryTaskClaim, type ChatSummaryAddition, type ChatSummaryModelInput, type ChatSummarySettingsPatch, type ChatSummarySearchInput, type ChatSummarySegment , ChatBackgroundContextOptions } from '../domain/ChatSummaryRepository';
+import { ChatSummaryEditError, type ChatSecondarySummaryEdit, ChatSummaryGenerationError, type ChatSummaryTaskClaim, type ChatSummaryAddition, type ChatSummaryModelInput, type ChatSummarySettingsPatch, type ChatSummarySearchInput, type ChatSummarySegment , ChatBackgroundContextOptions } from '../domain/ChatSummaryRepository';
 import { splitSummaryMessages } from '../domain/ChatSummaryTimeline';
 import { buildSharedChatRecordText } from '../../messages/domain/SharedChatRecord';
 import type { DatabaseTransactionExecutor } from '@platform/persistence';
@@ -38,6 +38,15 @@ export async function editCombinedSecondarySummary(conversationId: string, expec
 export async function deleteCombinedSecondarySummary(conversationId: string, expected: readonly ChatSummarySegment[]) {
   await getChatSummaryRuntime().repository.replaceSecondary(conversationId, expected, null, new Date().toISOString());
   emitChatSummaryChanged(conversationId);
+}
+export function getSecondarySummaryForAssistant(assistantId: string, conversationId: string) {
+  return getChatSummaryRuntime().repository.readSecondaryForAssistant(assistantId, conversationId);
+}
+export async function editSecondarySummaryForAssistant(assistantId: string, conversationId: string, input: ChatSecondarySummaryEdit) {
+  if (!input.oldText.trim()) throw new ChatSummaryEditError('oldText 必须包含要替换的原文');
+  const result = await getChatSummaryRuntime().repository.editSecondaryForAssistant(assistantId, conversationId, input, new Date().toISOString());
+  emitChatSummaryChanged(conversationId);
+  return result;
 }
 export async function deleteChatSummary(conversationId: string, segmentId: string) {
   await getChatSummaryRuntime().repository.delete(conversationId, segmentId);

@@ -18,6 +18,7 @@ import {
 } from '@features/chat/messages/domain';
 import { getAgentTimelineRenderKey } from '@features/chat/messages/application/AgentTransientTimeline';
 import type { ActionGroupPresentationItem } from '../components/chatActionGrouping';
+import { useReasoningExpansion } from '../components/reasoningExpansionState';
 import {
   getChatInteractionProfile,
   useTheme,
@@ -121,8 +122,7 @@ function ActionGroupProcessCard({
     [styles, theme]
   );
   const { getMappingKey } = useMappingHelper();
-  // 回收容器切换到另一组时，展开状态和尺寸归新组所有；尺寸变化同步通知列表。
-  const [isExpanded, setIsExpanded] = useRecyclingState(false, [group.key]);
+  const [isExpanded, setIsExpanded] = useReasoningExpansion(group.key);
   const currentGroupKey = useRef(group.key);
   currentGroupKey.current = group.key;
   const toggleRequest = useRef(0);
@@ -159,7 +159,7 @@ function ActionGroupProcessCard({
     setContentHeight(height);
   }, [setContentHeight]);
 
-  const childrenContent = group.children.map((message, index) => {
+  const childrenContent = isExpanded ? group.children.map((message, index) => {
     const metadata = parseMessageMetadata(message);
     const isToolStatus = isToolStatusMessageMetadata(metadata);
     return (
@@ -190,7 +190,7 @@ function ActionGroupProcessCard({
         )}
       </View>
     );
-  });
+  }) : null;
 
   if (isOfficialReplica) {
     return (

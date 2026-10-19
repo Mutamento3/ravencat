@@ -1,13 +1,36 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ChatColorOverrides, PresentationThemeId } from './types';
 import { DEFAULT_THEME_ID, getThemeSelectionDisabledReason, isValidThemeId, THEME_REGISTRY } from './themeRegistry';
+import { parseGlassBlurRadius } from './glassBlur';
 
 const STORAGE_KEY = 'presentation.theme.selectedThemeId';
 const CHAT_COLOR_OVERRIDES_KEY_PREFIX = 'presentation.theme.chatColorOverrides.';
+const GLASS_BLUR_RADIUS_KEY = 'presentation.theme.glassBlurRadius';
 
 export interface StoredThemeBackupState {
   selectedThemeId: PresentationThemeId;
   chatColorOverrides: Partial<Record<PresentationThemeId, ChatColorOverrides>>;
+  glassBlurRadius?: number;
+}
+
+export async function loadGlassBlurRadius(): Promise<number | undefined> {
+  try {
+    const stored = await AsyncStorage.getItem(GLASS_BLUR_RADIUS_KEY);
+    if (stored === null) return undefined;
+    const parsed: unknown = JSON.parse(stored);
+    return parsed === null ? undefined : parseGlassBlurRadius(parsed);
+  } catch {
+    // 外部存储损坏或不可读时，运行时使用主题默认材质。
+    return undefined;
+  }
+}
+
+export async function saveGlassBlurRadius(radius: number): Promise<void> {
+  try {
+    await AsyncStorage.setItem(GLASS_BLUR_RADIUS_KEY, JSON.stringify(radius));
+  } catch {
+    // 与其他外观偏好一致，存储失败不阻断当前会话中的调整。
+  }
 }
 
 export async function loadStoredThemeId(): Promise<PresentationThemeId> {
@@ -72,6 +95,7 @@ export async function loadStoredThemeBackupState(): Promise<StoredThemeBackupSta
   const themeIds = Object.keys(THEME_REGISTRY) as PresentationThemeId[];
   const keys = [
     STORAGE_KEY,
+    GLASS_BLUR_RADIUS_KEY,
     ...themeIds.map((themeId) => CHAT_COLOR_OVERRIDES_KEY_PREFIX + themeId),
   ];
   const stored = new Map(await AsyncStorage.multiGet(keys));
@@ -84,12 +108,19 @@ export async function loadStoredThemeBackupState(): Promise<StoredThemeBackupSta
     if (raw === null || raw === undefined) return [];
     return [[themeId, JSON.parse(raw) as unknown]];
   }));
-  return parseStoredThemeBackupState({ selectedThemeId, chatColorOverrides });
+  const rawBlur = stored.get(GLASS_BLUR_RADIUS_KEY);
+  const glassBlurRadius: unknown = rawBlur === null || rawBlur === undefined ? null : JSON.parse(rawBlur);
+  return parseStoredThemeBackupState({
+    selectedThemeId, chatColorOverrides,
+    ...(glassBlurRadius === null ? {} : { glassBlurRadius }),
+  });
 }
 
 export function parseStoredThemeBackupState(value: unknown): StoredThemeBackupState {
   if (!value || typeof value !== 'object') throw new Error('备份主题设置无效');
   const state = value as Partial<StoredThemeBackupState>;
+  const glassBlurRadius = state.glassBlurRadius === undefined
+    ? undefined : parseGlassBlurRadius(state.glassBlurRadius);
   if (typeof state.selectedThemeId !== 'string' || !isValidThemeId(state.selectedThemeId)) {
     throw new Error('备份主题标识无效');
   }
@@ -115,6 +146,7 @@ export function parseStoredThemeBackupState(value: unknown): StoredThemeBackupSt
   return {
     selectedThemeId: state.selectedThemeId,
     chatColorOverrides: Object.fromEntries(validatedOverrides),
+    ...(glassBlurRadius === undefined ? {} : { glassBlurRadius }),
   };
 }
 
@@ -123,6 +155,7 @@ export async function restoreStoredThemeBackupState(value: unknown): Promise<voi
   const themeIds = Object.keys(THEME_REGISTRY) as PresentationThemeId[];
   await AsyncStorage.multiSet([
     [STORAGE_KEY, state.selectedThemeId],
+    [GLASS_BLUR_RADIUS_KEY, JSON.stringify(state.glassBlurRadius ?? null)],
     ...themeIds.map((themeId) => [
       CHAT_COLOR_OVERRIDES_KEY_PREFIX + themeId,
       JSON.stringify(state.chatColorOverrides[themeId] ?? {}),

@@ -5,6 +5,7 @@ AI 日程是唯一的定时自主唤醒能力，Self Wake 已退役。当前业�
 - `AIScheduleApplication` 校验模型输入、时间和来源。
 - `SQLiteAIScheduleRepository` 在事务中维护状态机、开关及 claim。
 - `AIScheduleProjectionOwner` 提交启停意图后同步 keyed Android 投影。
+- 日程工具默认同时写入系统日历；缺权限在提交前报错，用户可显式选择仅内部提醒。设置入口位于「权限与后台运行」，日历副作用与 AI 唤醒共用投影 owner 的恢复入口，系统提醒不依赖应用进程存活。
 - `RunHeadlessAISchedule` 取得当前主理身份与执行权后，进入 `RunHostAutonomousAgent`，复用普通单聊 Prompt、Chat 执行、工具及存档。
 - `ProactiveLifeReadQueries` 组合日程与 Chat 响应证据，提供页面和聊天定位。
 

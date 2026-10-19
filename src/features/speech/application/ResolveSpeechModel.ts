@@ -1,4 +1,4 @@
-/** 解析 Speech 或角色明确选择的模型，consumer 只描述调用场景。 */
+/** 解析明确选择的语音模型，consumer 只描述调用场景。 */
 interface SpeechModelConfig {
   capabilityKind: string;
   modelConfigId: string;

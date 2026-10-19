@@ -25,6 +25,7 @@ import type {
   CommitGroupAvatarMediaAssetReferenceInput,
   GroupAvatarMediaAssetMigrationCandidate,
   GroupChatDeletionResult,
+  GroupAvatarQueryResult,
   IGroupChatRepository,
 } from '../domain/GroupChatRepository';
 import type { CoordinatedDatabaseExecutor, DatabaseTransactionExecutor } from '@platform/persistence';
@@ -116,6 +117,21 @@ function parseInvokedUserMessageIds(json: string | null): number[] {
 }
 
 export class GroupChatRepository implements IGroupChatRepository {
+  async getAvatarForAssistant(groupId: string, assistantId: string, isHostAI: boolean): Promise<GroupAvatarQueryResult> {
+    return databaseCoordinator.read({ name: 'chat.get-group-avatar-for-assistant', feature: 'chat', priority: 'interactive' }, async db => {
+      const row = await db.getFirstAsync<{
+        groupId: string; name: string; avatar: string | null; avatarMediaAssetId: string | null; isMember: number;
+      }>(`SELECT g.id AS groupId, g.name, g.avatar, g.avatar_media_asset_id AS avatarMediaAssetId,
+          EXISTS (SELECT 1 FROM group_chat_members m
+            WHERE m.group_id = g.id AND m.ai_assistant_id = ? AND m.enabled = 1) AS isMember
+        FROM group_chats g WHERE g.id = ?`, [assistantId, groupId]);
+      if (!row) return { status: 'not_found' };
+      if (!isHostAI && row.isMember !== 1) return { status: 'forbidden' };
+      return { status: 'found', groupId: row.groupId, name: row.name,
+        avatar: row.avatar, avatarMediaAssetId: row.avatarMediaAssetId };
+    });
+  }
+
   async isSpeechTaskRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, taskId: string): Promise<boolean> {
     return await transaction.getFirstAsync(`SELECT t.id FROM group_speech_tasks t JOIN group_speech_plans p ON p.id = t.plan_id
       WHERE t.id = ? AND t.status = 'running' AND p.status = 'running'`, [taskId]) !== null;

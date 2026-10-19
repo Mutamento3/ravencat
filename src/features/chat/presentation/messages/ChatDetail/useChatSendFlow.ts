@@ -118,6 +118,7 @@ export function useChatSendFlow({
   const [voiceRecordingError, setVoiceRecordingError] = useState<string | null>(null);
   // 发送前校对阶段。draft 只在 reviewing/committing 期间存在；null 表示没有待发送语音。
   const [voiceReviewDraft, setVoiceReviewDraftState] = useState<ChatVoiceMessageReviewDraft | null>(null);
+  const [voiceRecordingProgress, setVoiceRecordingProgress] = useState({ durationMs: 0, level: 0 });
   // commit 需要读到“用户此刻编辑中的文本”。state 在异步回调里可能是旧值，
   // 因此用 ref 同步镜像最新的校对内容；两者只通过 setVoiceReviewDraft 一起更新。
   const voiceReviewDraftRef = useRef<ChatVoiceMessageReviewDraft | null>(null);
@@ -366,6 +367,7 @@ export function useChatSendFlow({
     voiceStartInFlightRef.current = true;
     const generation = voiceGenerationRef.current;
     setVoiceRecordingError(null);
+    setVoiceRecordingProgress({ durationMs: 0, level: 0 });
     // press grant 后立刻进入 starting：STT 模型解析、ASR 建连、权限确认与
     // native AudioRecord 初始化都在这个窗口内，UI 必须给用户可见反馈。
     setVoiceRecordingState('starting');
@@ -375,6 +377,10 @@ export function useChatSendFlow({
         sessionId,
         assistantId: aiAssistant.id,
         aiConfig: aiRequestConfig,
+        onProgress: (progress) => {
+          // 音量与转写结果共享同一所有权，旧录音不得刷新新会话的反馈。
+          if (generation === voiceGenerationRef.current) setVoiceRecordingProgress(progress);
+        },
       });
       // 启动期间 session 变化 / unmount / 取消 / finish：本次启动已失去所有权。
       // 成功也必须立即 cancel 自己，不得写入 ref/state 污染新 session。
@@ -697,6 +703,7 @@ export function useChatSendFlow({
     sendMessage,
     sendSticker,
     voiceRecordingState,
+    voiceRecordingProgress,
     voiceRecordingError,
     voiceReviewDraft,
     prepareVoiceRecordingEntry,

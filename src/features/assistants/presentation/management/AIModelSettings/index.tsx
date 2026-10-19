@@ -87,14 +87,14 @@ export default function AIModelSettings({
     handleSelectModel,
     handleTestConnection,
     handleHostAIToggle,
-    errors, saveError, flush, restore, getSnapshot, validateAll,
+    errors, saveError, commit, flush, restore, getSnapshot, validateAll,
     handleReset,
   } = useModelSettings({ aiAssistant, onUpdated, onShowAlert: showAlert });
 
   const feedback = useAutoSaveFeedback(errors);
   const { leave, back } = useAutoSaveNavigation(flush, onBack, () => feedback.revealErrors(getSnapshot().errors));
   const navigate = (action: () => void) => { void leave(action); };
-  const blur = () => { void flush(); };
+  const blur = () => { void commit(); };
   const restoreDraft = () => { void restore().then(() => feedback.setBlocked(false)); };
 
   return (

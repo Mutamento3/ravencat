@@ -221,7 +221,7 @@ export default function useChatSettings({
     showTokenUsage: infoEditor.draft.showTokenUsage,
     setShowTokenUsage: (showTokenUsage: boolean) => infoEditor.change({ showTokenUsage }, true),
     infoSaveError: infoEditor.saveError,
-    avatarError, blocked, flush, back, leave, restoreInfo, restoreAvatar, retryAvatar,
+    avatarError, blocked, commit: infoEditor.commit, flush, back, leave, restoreInfo, restoreAvatar, retryAvatar,
     avatarUrl,
     callBackgroundUri,
     isLoading: isLoading || isPickingAvatar || isCommittingAvatar,

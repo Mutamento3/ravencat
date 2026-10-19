@@ -2,6 +2,7 @@ package expo.modules.liquidglass
 
 import android.content.Context
 import android.util.Log
+import android.view.View
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.views.ExpoView
 
@@ -9,6 +10,25 @@ import expo.modules.kotlin.views.ExpoView
 class LiquidGlassBackdropView(context: Context, appContext: AppContext) :
   ExpoView(context, appContext) {
   private var sceneId = DEFAULT_SCENE_ID
+  internal var contentRevision = 0L
+    private set
+
+  override fun invalidate() {
+    contentRevision++
+    super.invalidate()
+  }
+
+  override fun requestLayout() {
+    // RN 增删或重排背景子节点也会改变采样源，不能只观察像素失效。
+    contentRevision++
+    super.requestLayout()
+  }
+
+  override fun onDescendantInvalidated(child: View, target: View) {
+    // 只跟踪背景子树的失效；作为兄弟节点的玻璃刷新不产生新的背景版本。
+    contentRevision++
+    super.onDescendantInvalidated(child, target)
+  }
 
   init {
     orientation = VERTICAL
@@ -51,6 +71,7 @@ class LiquidGlassBackdropView(context: Context, appContext: AppContext) :
 
   override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
     super.onSizeChanged(width, height, oldWidth, oldHeight)
+    contentRevision++
     if (width > 0 && height > 0 && isAttachedToWindow) {
       LiquidGlassSceneRegistry.refreshBackdrop(sceneId, this)
     }

@@ -49,7 +49,7 @@ export default function ChatSummaryEditorScreen({ conversationId, segmentId, onB
     <NavigationHeader title={editing ? '编辑摘要' : '新增摘要'} onGoBack={() => { if (!busy) onBack(); }} rightButton={<Pressable disabled={loading || !!error || busy || !content.trim()} onPress={() => { void run(() => editing ? editChatSummary(conversationId, segmentId!, content) : createChatSummary(conversationId, content)); }}><Text style={styles.action}>{busy ? '保存中' : '保存'}</Text></Pressable>} />
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
       {loading ? <ActivityIndicator color={theme.colors.brand.primary} /> : error ? <Text style={styles.danger}>{error}</Text> : <>
-        <ThemedSurface variant="card" style={styles.card}>
+        <ThemedSurface variant="card" nativeGlass={false} style={styles.card}>
           <TextInput multiline style={styles.editor} value={content} onChangeText={setContent} editable={!busy} placeholder="写下希望长期保留的聊天摘要…" placeholderTextColor={theme.colors.text.secondary} />
           <Text style={styles.meta}>修改这条一级摘要不会自动更新二级正文，需要同步时请分别修改。</Text>
         </ThemedSurface>

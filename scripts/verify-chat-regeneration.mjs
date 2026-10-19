@@ -37,6 +37,9 @@ const databaseCoordinator = {
 const notices = [];
 const releases = [];
 const mocks = {
+  '@shared/theme/themeStorage': {},
+  '@shared/theme/themeRegistry': {},
+  '@shared/theme/themeVariants': {},
   '@platform/persistence': { databaseCoordinator },
   '@features/media': { releaseMediaAssetCandidates: async (ids) => releases.push(ids) },
   '@shared/diagnostics/TurnTimelineLog': { logTurnTimeline() {} },

@@ -93,7 +93,7 @@ export interface PromptingRuntimeDependencies {
     list(): Promise<PromptAssistantSummary[]>;
   };
   tools: {
-    list(): Promise<{
+    list(assistantId?: string): Promise<{
       name: string;
       description: string;
       defaultEnabled: boolean;
@@ -103,6 +103,7 @@ export interface PromptingRuntimeDependencies {
       hostOnly: boolean;
       cooldownOnly?: boolean;
       packageId?: string;
+      unavailableReason?: string;
     }[]>;
     listOverrides(assistantId: string): Promise<{ toolName: string; enabled: boolean }[]>;
     set(assistantId: string, toolName: string, enabled: boolean): Promise<void>;

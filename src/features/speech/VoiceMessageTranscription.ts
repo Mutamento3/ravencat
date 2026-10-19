@@ -1,4 +1,5 @@
-import { getErrorDisplayInfo, type ErrorDisplayInfo } from '@platform/ai';
+import type { ErrorDisplayInfo } from '@platform/ai';
+import { getSpeechRecognitionErrorInfo } from './application/SpeechRecognitionErrors';
 
 import { startRealtimeSpeechToText } from './StartRealtimeSpeechToText';
 
@@ -109,7 +110,7 @@ function failure(
   rawError: string,
   retryable = false,
 ): VoiceMessageTranscriptionFailure {
-  return { success: false, code, rawError, errorInfo: getErrorDisplayInfo(rawError), retryable };
+  return { success: false, code, rawError, errorInfo: getSpeechRecognitionErrorInfo(rawError), retryable };
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

@@ -43,6 +43,9 @@ function loadCompiled(relativePath) {
   return require(path.join(tempRoot, relativePath.replace(/\.ts$/, '.js')));
 }
 
+// 本项验证通知目标与退出事实，不执行导航容器动作。
+writeRuntimeModule('node_modules/@react-navigation/native/index.js', 'exports.CommonActions = {};');
+
 writeRuntimeModule('node_modules/@shared/runtime/RuntimeSlot.js', `
 exports.createRuntimeSlot = (name) => {
   let value = null;

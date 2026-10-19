@@ -15,6 +15,9 @@ android {
   lintOptions {
     abortOnError false
   }
+  testOptions {
+    unitTests.includeAndroidResources = true
+  }
 }
 
 dependencies {
@@ -24,4 +27,5 @@ dependencies {
   // 通用 Overlay primitive；只复用 Window/permission/launch intent，不复用 Floating lifecycle
   implementation project(':android-overlay-runtime')
   testImplementation "junit:junit:4.13.2"
+  testImplementation "org.robolectric:robolectric:4.14.1"
 }

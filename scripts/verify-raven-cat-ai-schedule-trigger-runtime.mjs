@@ -195,7 +195,7 @@ fs.writeFileSync(path.join(tmpDir, 'TestAIScheduleApplication.mjs'), `
       ownerAIId: input.ownerAIId,
       remindAt: input.remindAt,
       summary: input.summary,
-      details: input.details,
+      details: input.details, systemCalendar: input.systemCalendar ?? false,
       sourceConversationId: null, sourceMessageIds: null, sourceExcerpt: null,
       status: 'scheduled', claimedByRunId: null, claimedAt: null,
       consumedAt: null, completionDisposition: null,
@@ -208,7 +208,7 @@ fs.writeFileSync(path.join(tmpDir, 'TestAIScheduleApplication.mjs'), `
     schedule: saveTruth({
       scheduleId: input.scheduleId, ownerAIId: input.ownerAIId,
       remindAt: input.remindAt ?? '2026-09-13T09:00:00.000Z',
-      summary: 's', details: 'd',
+      summary: 's', details: 'd', systemCalendar: input.systemCalendar ?? globalThis.__aiScheduleProjectionTruth.get(input.scheduleId)?.systemCalendar ?? false,
       sourceConversationId: null, sourceMessageIds: null, sourceExcerpt: null,
       status: 'scheduled', claimedByRunId: null, claimedAt: null,
       consumedAt: null, completionDisposition: null,
@@ -222,6 +222,7 @@ fs.writeFileSync(path.join(tmpDir, 'TestAIScheduleApplication.mjs'), `
       scheduleId: input.scheduleId, ownerAIId: input.ownerAIId,
       remindAt: '2026-09-13T09:00:00.000Z', summary: 's', details: 'd',
       sourceConversationId: null, sourceMessageIds: null, sourceExcerpt: null,
+      systemCalendar: globalThis.__aiScheduleProjectionTruth.get(input.scheduleId)?.systemCalendar ?? false,
       status: 'cancelled', claimedByRunId: null, claimedAt: null,
       consumedAt: null, completionDisposition: null,
       cancelledAt: '2026-09-10T00:00:00.000Z', cancelledReason: null,
@@ -258,9 +259,12 @@ fs.writeFileSync(path.join(tmpDir, 'TestAIScheduleProjectionRepairCoordinator.mj
   }
 `, 'utf8');
 
+fs.writeFileSync(path.join(tmpDir, 'TestSystemCalendar.mjs'), 'export const systemCalendar = {};', 'utf8');
+const noCalendar = { prepare: async () => 'ready', upsert: async () => {}, remove: async () => {}, listKeys: async () => [] };
 const ownerModule = await importTypeScriptModule(
   'src/features/companion/application/AIScheduleProjectionOwner.ts',
   (source) => source
+    .replaceAll("'@platform/device/SystemCalendar'", "'./TestSystemCalendar.mjs'")
     .replaceAll("'./AIScheduleApplication'", "'./TestAIScheduleApplication.mjs'")
     .replaceAll("'./AIScheduleProjectionRepairCoordinator'", "'./TestAIScheduleProjectionRepairCoordinator.mjs'")
     .replaceAll("'./CompanionRuntimeDependencies'", "'./TestRuntimeDeps.mjs'"),
@@ -276,6 +280,7 @@ const switchTruth = new Map([
 ]);
 const switchNative = new Map();
 const switchOwner = new ownerModule.AIScheduleProjectionOwner({
+  calendar: noCalendar,
   companionState: {
     ensureDefault: async () => switchState,
     update: async (changes) => (switchState = { ...switchState, ...changes }),
@@ -328,6 +333,7 @@ const projectionRepository = {
 
 // create → project。
 const owner = new ownerModule.AIScheduleProjectionOwner({
+  calendar: noCalendar,
   schedules: projectionRepository,
   companionState: { ensureDefault: async () => ({ desiredEnabled: true }) },
   native: { ...fakeNative, setCompanionSchedulingEnabled: async () => {} },
@@ -364,6 +370,7 @@ const staleOwnerNative = {
   }],
 };
 const reconcileOwner = new ownerModule.AIScheduleProjectionOwner({
+  calendar: noCalendar,
   schedules: repository,
   companionState: { ensureDefault: async () => ({ desiredEnabled: true }) },
   native: { ...staleOwnerNative, setCompanionSchedulingEnabled: async () => {} },
@@ -402,6 +409,7 @@ const overdueNative = {
   listAIScheduleTriggerProjections: async () => [],
 };
 const overdueOwner = new ownerModule.AIScheduleProjectionOwner({
+  calendar: noCalendar,
   schedules: repository,
   companionState: { ensureDefault: async () => ({ desiredEnabled: true }) },
   native: { ...overdueNative, setCompanionSchedulingEnabled: async () => {} },
@@ -450,6 +458,7 @@ const repairRepository = {
   listAllScheduled: async () => [...projectionTruth.values()].filter((item) => item.status === 'scheduled'),
 };
 const repairOwner = new ownerModule.AIScheduleProjectionOwner({
+  calendar: noCalendar,
   schedules: repairRepository,
   companionState: { ensureDefault: async () => ({ desiredEnabled: true }) },
   native: { ...repairNative, setCompanionSchedulingEnabled: async () => {} },
@@ -507,6 +516,7 @@ const serialNative = {
   listAIScheduleTriggerProjections: async () => [],
 };
 const serialOwner = new ownerModule.AIScheduleProjectionOwner({
+  calendar: noCalendar,
   schedules: repairRepository,
   companionState: { ensureDefault: async () => ({ desiredEnabled: true }) },
   native: { ...serialNative, setCompanionSchedulingEnabled: async () => {} },
@@ -527,6 +537,79 @@ assert.deepEqual(serialCalls, ['tok-1']);
 releaseV1();
 await Promise.all([v1Create, v2Update]);
 assert.deepEqual(serialCalls, ['tok-1', 'tok-2']);
+
+// 内外日程共享 stable identity；权限拒绝必须发生在内部事实提交之前。
+projectionTruth.clear();
+let calendarAccess = 'permission_required';
+let calendarWriteFails = false;
+let calendarPrepareCalls = 0;
+const calendarEvents = new Map();
+const calendar = {
+  prepare: async () => { calendarPrepareCalls += 1; return calendarAccess; },
+  upsert: async event => {
+    if (calendarWriteFails) throw new Error('日历服务暂不可用');
+    calendarEvents.set(event.key, event);
+  },
+  remove: async key => { calendarEvents.delete(key); },
+  listKeys: async () => [...calendarEvents.keys()],
+};
+const calendarOwner = new ownerModule.AIScheduleProjectionOwner({
+  calendar, schedules: repairRepository,
+  companionState: { ensureDefault: async () => ({ desiredEnabled: true }) },
+  native: { ...fakeNative, setCompanionSchedulingEnabled: async () => {} },
+  getCurrentHostAIId: async () => 'host-ai',
+  now: () => new Date('2026-09-09T08:00:00.000Z'),
+});
+const calendarInput = { scheduleId: 'calendar', ownerAIId: 'host-ai',
+  remindAt: '2026-09-13T09:00:00.000Z', summary: '考试', details: '带证件', systemCalendar: true };
+assert.equal((await calendarOwner.create(calendarInput)).code, 'calendar_permission_required');
+assert.equal(projectionTruth.size, 0);
+assert.equal(calendarEvents.size, 0);
+const permissionChecks = calendarPrepareCalls;
+assert.equal((await calendarOwner.create({ ...calendarInput, systemCalendar: false })).calendar, 'internal_only');
+assert.equal(calendarPrepareCalls, permissionChecks, '仅内部创建不触碰日历权限');
+calendarAccess = 'no_writable_calendar';
+assert.equal((await calendarOwner.create({ ...calendarInput, scheduleId: 'unavailable' })).code, 'calendar_unavailable');
+assert.equal(projectionTruth.has('unavailable'), false);
+calendarAccess = 'ready';
+assert.equal((await calendarOwner.update({ scheduleId: 'calendar', ownerAIId: 'host-ai', systemCalendar: true })).calendar, 'synced');
+assert.equal(calendarEvents.size, 1);
+const changedTime = '2026-09-14T09:00:00.000Z';
+await calendarOwner.update({ scheduleId: 'calendar', ownerAIId: 'host-ai', remindAt: changedTime });
+assert.equal(calendarEvents.size, 1);
+assert.equal(calendarEvents.get('calendar').startAtEpochMs, Date.parse(changedTime));
+await calendarOwner.update({ scheduleId: 'calendar', ownerAIId: 'host-ai', systemCalendar: false });
+assert.equal(calendarEvents.size, 0);
+await calendarOwner.update({ scheduleId: 'calendar', ownerAIId: 'host-ai', systemCalendar: true });
+calendarAccess = 'permission_required';
+const cancelledCalendar = await calendarOwner.cancel({ scheduleId: 'calendar', ownerAIId: 'host-ai' });
+assert.equal(cancelledCalendar.status, 'cancelled');
+assert.equal(cancelledCalendar.calendar, 'permission_required');
+assert.equal(calendarEvents.size, 1, '撤权时不能声称系统事件已经删除');
+calendarAccess = 'ready';
+await calendarOwner.reconcile();
+assert.equal(calendarEvents.size, 0, '恢复授权后移除已经取消的关联事件');
+calendarWriteFails = true;
+const failedCalendar = await calendarOwner.create({ ...calendarInput, scheduleId: 'repair-calendar' });
+assert.equal(failedCalendar.status, 'created');
+assert.equal(failedCalendar.calendar, 'failed');
+assert.equal(projectionTruth.has('repair-calendar'), true);
+calendarWriteFails = false;
+await calendarOwner.reconcile();
+await calendarOwner.reconcile();
+assert.equal(calendarEvents.size, 1, '恢复同步不能重复创建事件');
+projectionTruth.set('repair-calendar', { ...projectionTruth.get('repair-calendar'), status: 'consumed' });
+await calendarOwner.reconcile();
+assert.equal(calendarEvents.size, 1, 'AI 已执行不撤销系统事件');
+const pausedCalendarOwner = new ownerModule.AIScheduleProjectionOwner({
+  calendar, schedules: repairRepository,
+  companionState: { ensureDefault: async () => ({ desiredEnabled: false }) },
+  native: { ...fakeNative, setCompanionSchedulingEnabled: async () => {} },
+  getCurrentHostAIId: async () => 'host-ai',
+  now: () => new Date('2026-09-09T08:00:00.000Z'),
+});
+await pausedCalendarOwner.reconcile();
+assert.equal(calendarEvents.size, 1, '暂停主动伴随不撤销系统提醒');
 
 // coordinator 的 retry 是单飞、合并、一次性且严格最多四次；第五个 timer 不得产生。
 const repairCoordinatorModule = await importTypeScriptModule(

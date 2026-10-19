@@ -46,6 +46,9 @@ class LiquidGlassModule : Module() {
       Prop("tintAlpha") { view: LiquidGlassEffectView, value: Float ->
         view.setTintAlpha(value)
       }
+      Prop("fluidShape") { view: LiquidGlassEffectView, value: List<Double>? ->
+        view.setFluidShape(value)
+      }
 
       OnViewDestroys { view: LiquidGlassEffectView ->
         view.dispose()

@@ -33,6 +33,7 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
   private var lastContentHeight = -1
   private var lastContentOffsetX = Int.MIN_VALUE
   private var lastContentOffsetY = Int.MIN_VALUE
+  private var lastCaptureRevision = Long.MIN_VALUE
   private val sourcePosition = IntArray(2)
   private val effectPosition = IntArray(2)
 
@@ -43,6 +44,7 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
   private var dispersion = DEFAULT_DISPERSION
   private var tintColor = DEFAULT_TINT_COLOR
   private var tintAlpha = DEFAULT_TINT_ALPHA
+  private var fluidShape: FloatArray? = null
 
   init {
     orientation = VERTICAL
@@ -114,6 +116,16 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
     applyRenderEffect()
   }
 
+  fun setFluidShape(value: List<Double>?) {
+    // 这是原生参数边界；内部绘制只消费已建立的六元组契约。
+    require(value == null || (value.size == 6 && value.all { it.isFinite() } &&
+      value[0] >= 0 && value[3] > 0 && value[4] > 0 && value[5] > 0)) {
+      "fluidShape 必须包含栏顶、球心、正球半径与正融合半径，共六个有限数值。"
+    }
+    fluidShape = value?.map { dp(it.toFloat()) }?.toFloatArray()
+    applyRenderEffect()
+  }
+
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     isAggregatedVisible = isShown
@@ -174,8 +186,11 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
     if (capture !== boundCapture || !isAttachedToWindow || !isAggregatedVisible) {
       return
     }
-    recordSharedContent(capture)
-    invalidate()
+    val geometryChanged = recordSharedContent(capture)
+    val sourceChanged = lastCaptureRevision != capture.revision
+    lastCaptureRevision = capture.revision
+    // preDraw 本身不是新帧来源；只有背景或采样位置变化才请求绘制，避免空闲自刷新。
+    if (geometryChanged || sourceChanged) invalidate()
   }
 
   fun dispose() {
@@ -274,18 +289,19 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
     invalidate()
   }
 
-  private fun recordSharedContent(capture: LiquidGlassSceneCapture) {
-    val source = capture.source ?: return
+  private fun recordSharedContent(capture: LiquidGlassSceneCapture): Boolean {
+    val source = capture.source ?: return false
     if (
       !capture.renderNode.hasDisplayList() ||
       width <= 0 ||
       height <= 0
     ) {
-      return
+      return false
     }
 
-    source.getLocationInWindow(sourcePosition)
-    getLocationInWindow(effectPosition)
+    // 背景与 Modal 不在同一窗口，采样偏移必须使用共同的屏幕坐标系。
+    source.getLocationOnScreen(sourcePosition)
+    getLocationOnScreen(effectPosition)
     val offsetX = sourcePosition[0] - effectPosition[0]
     val offsetY = sourcePosition[1] - effectPosition[1]
     if (
@@ -295,7 +311,7 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
       offsetY == lastContentOffsetY &&
       contentNode.hasDisplayList()
     ) {
-      return
+      return false
     }
 
     contentNode.setPosition(0, 0, width, height)
@@ -309,6 +325,7 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
     lastContentOffsetX = offsetX
     lastContentOffsetY = offsetY
     applyRenderEffect()
+    return true
   }
 
   private fun applyRenderEffect() {
@@ -321,6 +338,13 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
       floatArrayOf(width.toFloat(), height.toFloat())
     )
     liquidShader.setFloatUniform("offset", floatArrayOf(0f, 0f))
+    val shape = fluidShape
+    liquidShader.setFloatUniform("fluidEnabled", if (shape == null) 0f else 1f)
+    liquidShader.setFloatUniform("fluidBar", floatArrayOf(shape?.get(0) ?: 0f, shape?.get(5) ?: 1f))
+    liquidShader.setFloatUniform("fluidBall", floatArrayOf(
+      shape?.get(1) ?: 0f, shape?.get(2) ?: 0f,
+      shape?.get(3) ?: 1f, shape?.get(4) ?: 1f
+    ))
     val resolvedCornerRadius = dp(cornerRadius).coerceAtMost(height / 2f)
     liquidShader.setFloatUniform(
       "cornerRadii",
@@ -391,6 +415,7 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
       }
 
   private fun resetContentGeometry() {
+    lastCaptureRevision = Long.MIN_VALUE
     lastContentWidth = -1
     lastContentHeight = -1
     lastContentOffsetX = Int.MIN_VALUE
@@ -421,7 +446,7 @@ class LiquidGlassEffectView(context: Context, appContext: AppContext) :
 
   private fun loadShaderSource(): String =
     resources
-      .openRawResource(com.qmdeve.liquidglass.R.raw.liquidglass_effect)
+      .openRawResource(R.raw.ravencat_liquidglass_effect)
       .bufferedReader()
       .use { it.readText() }
 

@@ -6,6 +6,7 @@
 
 - `BaseAIClient.ts`：普通、流式、工具调用与向量请求的公共实现；
 - `OpenAIClient.ts` / `KimiClient.ts`：Provider 客户端与创建工厂；
+- `moonshotEndpoint.ts` / `MoonshotToolsClient.ts`：识别 Moonshot 官方 OpenAI 根地址，执行搜索／网页抓取 REST 请求与 mew Formula 调用，验证响应及官方参数声明；工具权限和模型续轮由 Host 与统一 Runtime 持有；
 - `modelDiscovery.ts`：发现模型列表；
 - `connectionTest.ts`：连接测试与工具支持探测；
 - `errorMapping.ts`：把外部错误转换为稳定的展示信息；

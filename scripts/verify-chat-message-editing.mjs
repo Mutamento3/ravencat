@@ -191,7 +191,7 @@ const sentDraft = await messages.commitMessage({ message: {
 }, previewText: '发送引用草稿' });
 assert.equal(sentDraft.replyToText, '草稿中的引用快照');
 
-// 真实渲染菜单：重写按资格显示，多选与分享保留禁用占位，接通后可正常操作。
+// 真实渲染菜单：消息能力只影响启用状态，操作位置与菜单尺寸保持稳定。
 const React = require('react');
 const renderer = require('react-test-renderer');
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -213,8 +213,12 @@ await renderer.act(async () => {
   }));
 });
 const buttons = rendered.root.findAllByType('Button');
-assert.deepEqual(buttons.map((button) => button.props.accessibilityLabel), ['复制', '改写', '删除', '多选', '分享']);
-for (const label of ['多选', '分享']) {
+const labels = ['复制', '改写', '重写', '删除', '多选', '固定', '转文字', '引用', '翻译', '分享', '收藏'];
+assert.deepEqual(buttons.map((button) => button.props.accessibilityLabel), labels);
+const menuGeometry = () => rendered.root.findAllByType('View')
+  .find((node) => Array.isArray(node.props.style) && node.props.style[1]?.width).props.style[1];
+const initialGeometry = menuGeometry();
+for (const label of labels.filter((label) => !['复制', '改写', '删除'].includes(label))) {
   const placeholder = buttons.find((button) => button.props.accessibilityLabel === label);
   assert.equal(placeholder.props.disabled, true);
   assert.equal(placeholder.props.accessibilityState.disabled, true);
@@ -228,6 +232,8 @@ let shareCalls = 0;
 await renderer.act(async () => rendered.update(React.createElement(Menu, {
   visible: true, onClose: () => closeCalls++, onMultiSelect: () => multiCalls++, onForward: () => shareCalls++,
 })));
+assert.deepEqual(rendered.root.findAllByType('Button').map((button) => button.props.accessibilityLabel), labels);
+assert.deepEqual(menuGeometry(), initialGeometry, '可用操作减少不能改变菜单尺寸与锚点');
 for (const label of ['多选', '分享']) {
   const enabled = rendered.root.findAllByType('Button').find((button) => button.props.accessibilityLabel === label);
   assert.equal(enabled.props.disabled, false);
@@ -236,6 +242,22 @@ for (const label of ['多选', '分享']) {
 assert.equal(multiCalls, 1);
 assert.equal(shareCalls, 1);
 assert.equal(closeCalls, 3);
+let transcriptCalls = 0;
+await renderer.act(async () => rendered.update(React.createElement(Menu, {
+  visible: true, onClose: () => closeCalls++, onToggleVoiceTranscript: () => transcriptCalls++,
+})));
+assert.deepEqual(rendered.root.findAllByType('Button').map((button) => button.props.accessibilityLabel), labels);
+assert.deepEqual(menuGeometry(), initialGeometry, '语音操作启用时不能挤动其他操作');
+await renderer.act(async () => rendered.root.findByProps({ accessibilityLabel: '转文字' }).props.onPress());
+assert.equal(transcriptCalls, 1);
+assert.equal(closeCalls, 4);
+await renderer.act(async () => rendered.update(React.createElement(Menu, {
+  visible: true, onClose() {}, onToggleVoiceTranscript() {}, isVoiceTranscriptExpanded: true,
+})));
+assert.deepEqual(rendered.root.findAllByType('Button').map((button) => button.props.accessibilityLabel),
+  labels.map((label) => label === '转文字' ? '收起文字' : label));
+await renderer.act(async () => rendered.update(React.createElement(Menu, { visible: true, onClose() {} })));
+assert.equal(rendered.toJSON(), null, '没有可执行操作时不显示菜单');
 await renderer.act(async () => rendered.unmount());
 
 // 保存失败保留草稿；取消不写入，成功后返回原消息的已提交版本。

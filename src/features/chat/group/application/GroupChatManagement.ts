@@ -106,6 +106,11 @@ export async function getGroupChat(groupId: string): Promise<GroupChatDetails | 
   return getChatGroupRuntimeDependencies().groups.getById(groupId);
 }
 
+/** 群头像查询不加载管理员凭据和成员资料；调用者身份与主理资格来自可信宿主。 */
+export function getGroupAvatarForAssistant(groupId: string, assistantId: string, isHostAI: boolean) {
+  return getChatGroupRuntimeDependencies().groups.getAvatarForAssistant(groupId, assistantId, isHostAI);
+}
+
 export async function deleteGroupChat(groupId: string): Promise<boolean> {
   const normalizedGroupId = String(groupId || '').trim();
   if (!normalizedGroupId) {

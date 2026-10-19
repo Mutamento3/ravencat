@@ -46,6 +46,7 @@ export interface CreateAIScheduleInput {
   remindAt: string;
   summary: string;
   details: string;
+  systemCalendar?: boolean;
   sourceConversationId?: string;
   sourceMessageIds?: string[];
 }
@@ -65,6 +66,7 @@ export interface UpdateAIScheduleCommand {
   remindAt?: string;
   summary?: string;
   details?: string;
+  systemCalendar?: boolean;
 }
 
 const MIN_RANGE_MS = 24 * 60 * 60 * 1_000;
@@ -94,6 +96,7 @@ export class AIScheduleApplication {
       remindAt,
       summary: content.summary,
       details: content.details,
+      systemCalendar: input.systemCalendar ?? false,
       sourceConversationId: source?.conversationId ?? null,
       sourceMessageIds: source?.messageIds ?? null,
       sourceExcerpt: source?.excerpt ?? null,
@@ -160,7 +163,7 @@ export class AIScheduleApplication {
     input: UpdateAIScheduleCommand,
   ): Promise<AIScheduleApplicationOutcome<'updated', { schedule: AISchedule }>> {
     const occurredAt = this.dependencies.now().toISOString();
-    if (input.remindAt === undefined && input.summary === undefined && input.details === undefined) {
+    if (input.remindAt === undefined && input.summary === undefined && input.details === undefined && input.systemCalendar === undefined) {
       return { status: 'error', code: 'invalid_content' };
     }
     const remindAt = input.remindAt === undefined
@@ -188,6 +191,7 @@ export class AIScheduleApplication {
       remindAt,
       summary: summary ?? undefined,
       details: details ?? undefined,
+      systemCalendar: input.systemCalendar,
     });
     return outcome.status === 'updated'
       ? { status: 'updated', schedule: outcome.schedule }

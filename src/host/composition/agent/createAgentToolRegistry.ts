@@ -3,7 +3,8 @@
 
 import { readPromptDefaults, listAssistantDirectToolNames } from '@features/prompting';
 import { createMomentToolForRun } from '@features/moments/composition';
-import { WebSearchTool, WebFetchTool, DownloadFileTool } from '@features/webTools';
+import { WebSearchTool, WebFetchTool, DownloadFileTool, KimiWebSearchTool, KimiWebFetchTool, KimiMewTool } from '@features/webTools';
+import { resolveMoonshotAPIBaseURL } from '@platform/ai';
 import { DownloadImageTool, ViewImageTool } from '@features/media';
 import { applicationSettingsTools } from './ApplicationSettingsTools';
 import type {
@@ -69,7 +70,7 @@ import {
 } from '@features/phoneTools';
 import { productionNetEaseChildTools } from '@features/phoneTools/neteaseComposition';
 import { ReadScreenAccessibilityTool, ReadScreenOcrTool } from '@features/screenCapture';
-import { SendMessageTool, SendVoiceMessageTool, SearchChatSummariesTool, createConfiguredVoiceMessageTool } from '@features/chat';
+import { SendMessageTool, SendVoiceMessageTool, SearchChatSummariesTool, GetSecondarySummaryTool, EditSecondarySummaryTool, createConfiguredVoiceMessageTool } from '@features/chat';
 import {
   ListStickerGroupsTool,
   ListStickersInGroupTool,
@@ -123,6 +124,8 @@ interface BuiltInToolRegistrationBase extends LegacyAgentToolMetadata {
   toolPackageId?: string;
   /** schema 由 Host run preparation 按一次 run 的产品状态选择。 */
   dynamicRunExposure?: boolean;
+  /** 接口能力只限制本次可用性，不改写持久调用权限或星标。 */
+  moonshotOnly?: boolean;
 }
 
 interface AgentNativeBuiltInTool {
@@ -203,6 +206,7 @@ function builtInTool(
     | 'phoneToolPackageId'
     | 'toolPackageId'
     | 'dynamicRunExposure'
+    | 'moonshotOnly'
   >> = {},
 ): BuiltInToolRegistration {
   return {
@@ -223,6 +227,7 @@ function builtInTool(
     phoneToolPackageId: options.phoneToolPackageId ?? null,
     toolPackageId: options.toolPackageId,
     dynamicRunExposure: options.dynamicRunExposure ?? false,
+    moonshotOnly: options.moonshotOnly,
   };
 }
 
@@ -279,6 +284,9 @@ const USER_VISIBLE_REPLY_TRIGGER_SOURCES = new Set([
 
 /** 生产 Built-in Tool 的唯一顺序与元数据 owner。 */
 const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
+  builtInTool(KimiWebSearchTool, 'webTools', SAFE_READ, { defaultEnabled: false, toolPackageId: 'kimiOfficial', moonshotOnly: true }),
+  builtInTool(KimiWebFetchTool, 'webTools', SAFE_READ, { defaultEnabled: false, toolPackageId: 'kimiOfficial', moonshotOnly: true }),
+  builtInTool(KimiMewTool, 'webTools', { risk: 'safe_read', idempotency: 'not_idempotent' }, { defaultEnabled: false, toolPackageId: 'kimiOfficial', moonshotOnly: true }),
   agentNativeBuiltInTool(WebSearchTool, 'webTools', SAFE_READ),
   agentNativeBuiltInTool(WebFetchTool, 'webTools', SAFE_READ),
   agentNativeBuiltInTool(DownloadFileTool, 'webTools', REVERSIBLE_ACTION),
@@ -315,7 +323,9 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   builtInTool(LookAtUserTool, 'calls', SENSITIVE_ACTION, { callOnly: true }),
   agentNativeBuiltInTool(RememberMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   agentNativeBuiltInTool(RecallMemoryTool, 'memory', PRIVATE_READ, { memoryParticipation: 'read_write' }),
-  agentNativeBuiltInTool(SearchChatSummariesTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true }),
+  agentNativeBuiltInTool(SearchChatSummariesTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
+  agentNativeBuiltInTool(GetSecondarySummaryTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
+  agentNativeBuiltInTool(EditSecondarySummaryTool, 'chat', REVERSIBLE_WRITE, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
   agentNativeBuiltInTool(UpdateMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   agentNativeBuiltInTool(ForgetMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   builtInTool(BlockAIAssistantTool, 'assistants', SENSITIVE_ACTION, { hostOnly: true }),
@@ -499,7 +509,7 @@ export function getToolPackageRuntimeBindings(
   return BUILT_IN_TOOL_REGISTRATIONS.map((registration) => {
     const tool = registry.get(registration.tool.name);
     if (!tool) throw new Error(`工具未注册：${registration.tool.name}`);
-    return { packageId: registration.toolPackageId ?? (registration.tool.name === SearchChatSummariesTool.name ? 'memory' : registration.phoneToolPackageId ?? registration.owner), tool };
+    return { packageId: registration.toolPackageId ?? registration.phoneToolPackageId ?? registration.owner, tool };
   });
 }
 
@@ -538,6 +548,7 @@ interface BuiltInToolPolicyEntry {
   callForbidden?: boolean;
   memoryParticipation: BuiltInToolMemoryParticipation;
   dynamicRunExposure?: boolean;
+  moonshotOnly?: boolean;
 }
 
 export function getPolicyAllowedToolEntriesForAI<T extends BuiltInToolPolicyEntry>(
@@ -552,6 +563,7 @@ export function getPolicyAllowedToolEntriesForAI<T extends BuiltInToolPolicyEntr
   return registrations.filter((registration) => {
     if (aiConfig.enableTools !== true) return false;
     if (!allowedToolNames.has(registration.tool.name)) return false;
+    if (registration.moonshotOnly && !resolveMoonshotAPIBaseURL(aiConfig.baseURL || aiConfig.apiBaseUrl)) return false;
     if (registration.callForbidden && hasCallCapability) return false;
     if (registration.groupChatForbidden && aiConfig.triggerSource === 'group_chat') return false;
     if (registration.dynamicRunExposure) return false;
@@ -592,6 +604,7 @@ export interface ToolPermissionDescriptor {
   hostOnly: boolean;
   cooldownOnly?: boolean;
   packageId?: string;
+  moonshotOnly?: boolean;
 }
 
 /** 全部内置工具共享默认与 AI 权限；主理身份和场景限制仍由 policy 裁决。 */
@@ -608,6 +621,7 @@ export function getToolPermissionDescriptors(): ToolPermissionDescriptor[] {
       hostOnly: registration.hostOnly,
       cooldownOnly: registration.cooldownOnly,
       packageId: registration.toolPackageId,
+      moonshotOnly: registration.moonshotOnly,
     }));
 }
 

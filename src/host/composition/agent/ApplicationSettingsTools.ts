@@ -2,6 +2,7 @@
 import { Dimensions } from 'react-native';
 import { Asset } from 'expo-asset';
 import { DEFAULT_MOMENTS_COVER_SOURCE } from '@features/moments';
+import { getGroupAvatarForAssistant } from '@features/chat';
 import {
   ApplicationSettingsAccessError, assertApplicationSettingsAccessInTransaction,
   changeAssistantAvatarFromMediaAsset, changeAssistantPublicName, listAIAssistantSummaries,
@@ -17,6 +18,7 @@ import type { AgentToolExecutionContext, AgentToolExecutionResult, ToolDefinitio
 import { SettingChangeConflictError } from '@shared/errors/SettingChangeConflictError';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { loadStoredThemeId } from '@shared/theme/themeStorage';
+import { getDefaultGroupAvatarAsset } from '@shared/avatar/avatarRegistry';
 import { assertImageToolRunCurrent } from './assertImageToolRunCurrent';
 
 type Context = AgentToolExecutionContext;
@@ -116,6 +118,29 @@ const getAIAvatar = tool<TargetInput>('get_ai_avatar', '获取并查看 AI 头�
     const target = await targetFor(context, input.agent_id, 'avatar_read');
     return ViewImageTool.execute({ target: 'assistant_avatar', selector: target.agentId }, context);
   });
+const getGroupAvatar = tool<{ group_id?: string }>('get_group_avatar', '获取并查看群聊头像。群聊中省略 group_id 表示当前群；其他场景必须指定群聊 ID。普通 AI 只能查看自己当前仍启用的群成员关系所在群，当前主理 AI 可查看所有群。沿用当前 AI 的视觉能力。',
+  { type: 'object', properties: { group_id: { type: 'string', minLength: 1, maxLength: 120, description: '群聊身份背景中的 group_id，或跨会话背景中 kind=group 的 conversationId；只有在当前群聊中才可省略。' } }, additionalProperties: false },
+  async (input, context) => {
+    if (input.group_id === undefined && context.task.type !== 'group_chat_reply') {
+      return failure('SETTING_TARGET_REQUIRED', '当前运行不在群聊中，请提供 group_id；不能把单聊会话 ID 当作群聊 ID。');
+    }
+    const groupId = input.group_id ?? context.task.sessionId!;
+    const actor = await targetFor(context, undefined, 'avatar_read');
+    const selection = await getGroupAvatarForAssistant(groupId, actor.id, actor.isHostAI);
+    if (selection.status === 'not_found') return failure('SETTING_TARGET_UNAVAILABLE', '目标群聊不存在或已被删除。');
+    if (selection.status === 'forbidden') return failure('SETTING_ACCESS_DENIED', '普通 AI 只能查看自己当前仍启用的群成员关系所在群的头像。');
+    let imageUri = selection.avatar ?? undefined;
+    if (selection.avatarMediaAssetId === null && selection.avatar === null) {
+      const bundled = await Asset.fromModule(getDefaultGroupAvatarAsset()).downloadAsync();
+      imageUri = bundled.localUri!;
+    }
+    const result = await viewImageSource({ mediaAssetId: selection.avatarMediaAssetId ?? undefined,
+      imageUri, label: `${selection.name}的群头像` }, context);
+    if (result.status !== 'success') return result;
+    const group = { groupId: selection.groupId, groupName: selection.name };
+    return { ...result, data: { ...result.data as Record<string, unknown>, ...group },
+      modelContent: `${JSON.stringify(group)}\n${result.modelContent}` };
+  });
 const getChatBackground = tool<TargetInput>('get_chat_background', `获取并查看单聊实际背景，并说明是独立设置、玻璃主题全局图还是默认绘制。${ownOrHost}`, targetParameters,
   async (input, context) => {
     const target = await targetFor(context, input.agent_id, 'manage');
@@ -191,6 +216,7 @@ const setAIName = tool<TargetInput & { name: string }>('set_ai_name', `修改 AI
 export const applicationSettingsTools = [
   { tool: getUserAvatar, owner: 'profile', hostOnly: false, mutating: false },
   { tool: getAIAvatar, owner: 'assistants', hostOnly: false, mutating: false },
+  { tool: getGroupAvatar, owner: 'chat', hostOnly: false, mutating: false },
   { tool: getChatBackground, owner: 'profile', hostOnly: false, mutating: false },
   { tool: getCallBackground, owner: 'calls', hostOnly: false, mutating: false },
   { tool: getGlobalBackground, owner: 'profile', hostOnly: true, mutating: false },

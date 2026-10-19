@@ -8,7 +8,7 @@ import { createChatSummaryStyles } from './chatSummaryStyles';
 export default function ChatSummaryDiagnostics({ task }: { task: ChatSummaryTask }) {
   const styles = useThemedStyles(createChatSummaryStyles);
   const number = (value: number | null) => value === null ? '服务端未提供' : String(value);
-  return <ThemedSurface variant="card" style={styles.card}>
+  return <ThemedSurface variant="card" nativeGlass={false} style={styles.card}>
     <Text style={styles.body}>调用信息 · 任务尝试 {task.attemptCount} 次</Text>
     <Text style={styles.meta}>最多自动重试 {CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS - 1} 次。尝试次数包含手动重试和取消后恢复；长原文会分多次调用。</Text>
     {task.error && <>

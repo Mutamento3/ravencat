@@ -1,7 +1,8 @@
-import { getErrorDisplayInfo, type ErrorDisplayInfo } from '@platform/ai';
+import type { ErrorDisplayInfo } from '@platform/ai';
 import { createRandomUUID } from '@platform/device';
 import type { RealtimeRecognitionConnection, RealtimeRecognitionHandlers, RealtimeTranscript, SpeechConnectionConfig, SpeechMetadata } from './domain/SpeechProvider';
 import { readSpeechMetadata } from './application/SpeechProviderCatalog';
+import { getSpeechRecognitionErrorInfo } from './application/SpeechRecognitionErrors';
 import { resolveSpeechToTextModel, type SpeechModelConsumer } from './application/ResolveSpeechModel';
 import { connectDashScopeRealtimeASR } from './infrastructure/DashScopeRealtimeASRClient';
 import { createTencentRealtimeASRClient } from './infrastructure/TencentRealtimeASRClient';
@@ -25,17 +26,20 @@ export interface StartRealtimeSpeechToTextParams {
 }
 export type StartRealtimeSpeechToTextResult = { success: true; session: RealtimeSpeechToTextSession } | { success: false; rawError: string; errorInfo: ErrorDisplayInfo };
 export async function startRealtimeSpeechToText(params: StartRealtimeSpeechToTextParams): Promise<StartRealtimeSpeechToTextResult> {
-  const selected = params.configuration ? null : await resolveSpeechToTextModel(params);
-  const model = params.configuration ?? selected;
-  if (!model) { const rawError = '未配置可用的实时 STT 模型'; return { success: false, rawError, errorInfo: getErrorDisplayInfo(rawError) }; }
   try {
-    const handlers: RealtimeRecognitionHandlers = { ...params, onError: (error) => params.onError?.(getErrorDisplayInfo(error)) };
+    const selected = params.configuration ? null : await resolveSpeechToTextModel(params);
+    const model = params.configuration ?? selected;
+    const handlers: RealtimeRecognitionHandlers = { ...params, onError: (error) => params.onError?.(getSpeechRecognitionErrorInfo(error.message)) };
+    if (!model) {
+      const rawError = '未配置可用的实时 STT 模型，请在辅助模型中心配置并选择 STT 模型';
+      return { success: false, rawError, errorInfo: getSpeechRecognitionErrorInfo(rawError) };
+    }
     const metadata = readSpeechMetadata(model.metadataJson);
     const connection = await connectRealtimeRecognition(model, metadata, handlers, params.signal);
     return { success: true, session: { ...connection, modelConfigId: selected?.modelConfigId ?? 'preview', modelConfigName: selected?.modelConfigName ?? model.model } };
   } catch (error) {
     const rawError = error instanceof Error ? error.message : '实时语音识别启动失败';
-    return { success: false, rawError, errorInfo: getErrorDisplayInfo(rawError) };
+    return { success: false, rawError, errorInfo: getSpeechRecognitionErrorInfo(rawError) };
   }
 }
 function connectRealtimeRecognition(config: SpeechConnectionConfig, metadata: SpeechMetadata, handlers: RealtimeRecognitionHandlers, signal?: AbortSignal): Promise<RealtimeRecognitionConnection> {

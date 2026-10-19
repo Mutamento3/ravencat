@@ -179,10 +179,14 @@ const assistantToolPermissionRepository = {
     toolPermissionOverrides = [...toolPermissionOverrides.filter(({ toolName }) => toolName !== permission.toolName), permission];
   },
 };
-const aiAssistantRepository = { listSummaries: async () => [{ id: 'host-ai', name: '主理', isHostAI: true }, { id: 'ordinary-ai', name: '普通', isHostAI: false }] };
+const aiAssistantRepository = {
+  getById: async id => ({ id, apiBaseUrl: 'https://third-party.test/v1' }),
+  listSummaries: async () => [{ id: 'host-ai', name: '主理', isHostAI: true }, { id: 'ordinary-ai', name: '普通', isHostAI: false }],
+};
 const registration = loadTypeScriptModule(
   'src/host/composition/agent/createAgentToolRegistry.ts',
   {
+    '@platform/ai': loadTypeScriptModule('src/platform/ai/moonshotEndpoint.ts', {}),
     '@features/prompting': { readPromptDefaults: async () => ({ toolPermissions: defaultToolPermissions }) },
     '@features/webTools': featureProxy,
     '@features/media': featureProxy,
@@ -286,6 +290,7 @@ toolPermissionOverrides = [];
 // 真实 Host 装配和 Prompting 用例共用权限目录，页面写入必须被下一次授权冻结消费。
 let promptingDependencies;
 const { configurePromptingRuntime } = loadTypeScriptModule('src/host/composition/configurePromptingRuntime.ts', {
+  '@platform/ai': loadTypeScriptModule('src/platform/ai/moonshotEndpoint.ts', {}),
   '@features/prompting/composition': {
     configurePromptingRuntimeDependencies: (dependencies) => { promptingDependencies = dependencies; },
     sqlitePromptingRepository: {},

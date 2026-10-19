@@ -167,12 +167,12 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
   }),
   define({
     id: 'context.together_listening_runtime', name: '用户运行时状态与当前共同活动', owner: 'host',
-    description: '提供本轮唯一的网易云播放事实，以及只对对应主理 AI 生效的共同聆听上下文。',
+    description: '仅在当前主理 AI 与用户正在一起听时，提供本轮播放、输出设备与当前歌词。',
     category: 'context', supportedScenarios: ['chat.private_reply', 'chat.group_member_reply', 'raven_cat.ai_schedule_trigger'],
     defaultSlot: 'dynamic_context', placement: 'system', protection: 'locked',
     protectionReason: '当前运行时事实必须保持单轮一致，且不能被 token trimming 删除。',
     contentKind: 'provider', providerId: 'runtime.together_listening',
-    contentDescription: 'Host run 准备阶段只读取一次网易云 MediaSession，并与当前 Activity 共同形成一致快照。',
+    contentDescription: 'Host 读取一次网易云 MediaSession，与 Activity 形成一致快照；仅 active 时注入，邀请待回应或结束后省略。',
     sourcePath: 'src/host/prompt/TogetherListeningPromptBlock.ts',
   }),
   define({

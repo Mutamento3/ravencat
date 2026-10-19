@@ -246,6 +246,10 @@ export type MediaSessionTransportResult =
     };
 
 declare class DeviceControlNativeModule extends NativeModule {
+  prepareSystemCalendar(): Promise<'ready' | 'permission_required' | 'no_writable_calendar'>;
+  upsertSystemCalendarEvent(key: string, title: string, description: string, startAtEpochMs: number): Promise<void>;
+  removeSystemCalendarEvent(key: string): Promise<void>;
+  listSystemCalendarEventKeys(): Promise<string[]>;
   startRuntime(): Promise<DeviceControlRuntimeStartResult>;
   reconcileSoftLocks(
     activeLocks: DeviceControlSoftLockProjection[],

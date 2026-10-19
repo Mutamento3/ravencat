@@ -110,7 +110,7 @@ assert.equal(modelRequests[1].tools.length, 4);
 assert.deepEqual(modelRequests[1].messages.slice(1, 3), history, '历史继续保持真实消息角色');
 
 // 默认配置与旧 AI 覆盖共同解析，语言不再受旧英文设置影响。
-const defaults = { overrides: { 'foundation.default_core': '全局规则' }, userPrompts: [{ id: 'g1', name: '全局', content: '全局常驻', enabled: true, sortOrder: 1 }], toolPermissions: {}, timeEnabled: false };
+const defaults = { overrides: { 'foundation.default_core': '全局规则' }, userPrompts: [{ id: 'g1', name: '全局', content: '全局常驻', enabled: true, sortOrder: 1 }], toolPermissions: {}, agentRegistryExcludedAssistantIds: [], timeEnabled: false };
 const { resolveAssistantPromptConfiguration } = load('src/features/prompting/application/ManageAssistantPrompts.ts', {
   './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => ({
     defaults: { read: async () => defaults }, assistantPrompts: {
@@ -144,7 +144,7 @@ const executor = {
 const { sqlitePromptDefaultsRepository: repository } = load('src/features/prompting/infrastructure/SQLitePromptDefaultsRepository.ts', {
   '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => executor } },
 });
-assert.deepEqual(await repository.read(), { overrides: {}, userPrompts: [], toolPermissions: {} });
+assert.deepEqual(await repository.read(), { overrides: {}, userPrompts: [], toolPermissions: {}, agentRegistryExcludedAssistantIds: [] });
 const first = { id: 'p1', name: '第一条', content: '规则一', enabled: true, sortOrder: 10 };
 const second = { id: 'p2', name: '第二条', content: '规则二', enabled: true, sortOrder: 20 };
 await repository.saveUserPrompt(first); await repository.saveUserPrompt(second);
@@ -166,6 +166,71 @@ database.exec("PRAGMA foreign_keys = ON; INSERT INTO ai_assistants VALUES ('ai-1
 const { sqlitePromptingRepository: assistantRepository } = load('src/features/prompting/infrastructure/SQLitePromptingRepository.ts', {
   '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => executor } },
 });
+// 全局名单经真实持久化、配置解析、Host 与身份目录进入模型提示词。
+let registryAssistants = [
+  { id: 'ai-1', agentId: 'agent-1', name: '入选 AI', model: 'model-one', isHostAI: false },
+  { id: 'ai-2', agentId: 'agent-2', name: '隐藏 AI', model: 'model-hidden', isHostAI: true, isBlocked: true },
+];
+const registryDependencies = {
+  defaults: repository, assistantPrompts: assistantRepository,
+  assistants: { list: async () => registryAssistants },
+};
+const registryManagement = load('src/features/prompting/application/ManagePromptDefaults.ts', {
+  './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => registryDependencies },
+});
+const registryConfiguration = load('src/features/prompting/application/ManageAssistantPrompts.ts', {
+  './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => registryDependencies },
+});
+const { AgentRegistryService } = load('src/features/assistants/AgentRegistryService.ts', {
+  './infrastructure/SQLiteAssistantRepository': { aiAssistantRepository: { getAll: async () => registryAssistants } },
+  './infrastructure/SQLiteHostRepository': { aiHostRepository: {
+    cleanupExpiredBlocks: async () => {}, checkHostCooldown: async () => ({ isInCooldown: false }),
+  } },
+});
+const registry = new AgentRegistryService();
+const { PromptPackBlockFactory } = load('src/host/prompt/PromptPackBlockFactory.ts', {
+  '@shared': {}, '@features/memory': {}, '@features/moments': {},
+  '@features/assistants': { agentRegistryService: registry }, './PromptBuiltInContent': {},
+});
+const registryFactory = new PromptPackBlockFactory();
+const { assembleResolvedChatPromptPack: assembleRegistryPack } = load('src/host/prompt/ResolvedPromptPackAssembler.ts', {
+  '@features/prompting': {
+    listPromptCustomBlocks: async () => [],
+    resolveLegacyPromptPreset: async () => ({ preset }),
+    resolveAssistantPromptConfiguration: registryConfiguration.resolveAssistantPromptConfiguration,
+  },
+  './PromptPackAssembler': { promptPackAssembler: { assembleChatPromptPack: async (params) => new PromptPackCompiler().compile({
+    scenario: 'chat.private_reply', preset: { ...params.preset, items: params.preset.items.filter((item) => item.definitionId === 'context.agent_registry') },
+    blocks: [await registryFactory.createAgentRegistrySummaryBlock(params.aiConfig)], recentMessages: [],
+  }) } },
+  './compiler': {}, './DeviceBatteryPromptBlock': { createDeviceBatteryPromptBlocks: async () => [] },
+  './PromptPackBlockFactory': {},
+});
+assert.ok((await registryManagement.getAgentRegistrySettings()).every((item) => item.included), '无配置时默认全部勾选');
+await registryManagement.setAgentRegistryAssistantIncluded('ai-2', false);
+assert.deepEqual((await repository.read()).agentRegistryExcludedAssistantIds, ['ai-2']);
+const registryParams = { aiConfig: { id: 'ai-1', agentId: 'agent-1' }, currentInput: '' };
+let registryPack = await assembleRegistryPack(registryParams);
+assert.match(registryPack.systemPrompt, /入选 AI.*底层模型：model-one/);
+assert.doesNotMatch(registryPack.systemPrompt, /隐藏 AI|agent-2|model-hidden/);
+assert.match(registryPack.systemPrompt, /身份池内共有 1 个 AI/);
+const selfExcluded = await registry.getSummary({ currentAgentId: 'agent-2', excludedAssistantIds: ['ai-2'] });
+assert.equal(selfExcluded.entries.length, 1, '当前 AI 自己也不能绕过排除名单');
+assert.equal(selfExcluded.totalCount, 1);
+assert.equal(selfExcluded.availableCount, 1);
+assert.equal(selfExcluded.hostAgentName, null);
+assert.equal(selfExcluded.blockedCount, 0);
+registryAssistants[0].model = 'model-updated';
+assert.match((await assembleRegistryPack(registryParams)).systemPrompt, /底层模型：model-updated/);
+await registryManagement.setAgentRegistryAssistantIncluded('ai-1', false);
+assert.equal((await assembleRegistryPack(registryParams)).systemPrompt, '', '全部取消后省略整块');
+registryAssistants.push({ id: 'ai-3', agentId: 'agent-3', name: '新增 AI', model: 'new-model' });
+assert.equal((await registryManagement.getAgentRegistrySettings()).find((item) => item.id === 'ai-3').included, true, '新添加的 AI 默认入选');
+await registryManagement.setAgentRegistryAssistantIncluded('ai-1', true);
+await registryManagement.setAgentRegistryAssistantIncluded('ai-2', true);
+registryPack = await assembleRegistryPack(registryParams);
+assert.match(registryPack.systemPrompt, /隐藏 AI.*底层模型：model-hidden/);
+registryAssistants = [];
 const scopedManagement = load('src/features/prompting/application/ManageAssistantPrompts.ts', {
   './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => ({
     assistantPrompts: assistantRepository, defaults: repository,
@@ -241,7 +306,6 @@ assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-future'
 await scopedManagement.setAssistantDirectToolExposure('ai-2', 'send_voice_message', true);
 database.exec('PRAGMA foreign_keys = ON; DELETE FROM ai_assistants WHERE id = \'ai-2\';');
 assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-2'), [], '角色删除同时清除特批配置');
-database.close();
 
 // 真实组件的用户操作：无 AI 概览、详情、编辑、重置、开关与宿主导航。
 const React = require('react');
@@ -276,15 +340,17 @@ const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx'
   '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
   '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname ?? assistant.name },
   '@shared/ui': { Toggle: 'Switch', showAppDialog: ({ title, message, buttons }) => alerts.push([title, message, buttons]) },
-  'react-native': native, 'lucide-react-native': { ChevronDown: 'ChevronDown', ChevronRight: 'ChevronRight', Star: 'Star' },
+  'react-native': native, 'lucide-react-native': { ChevronDown: 'ChevronDown', ChevronRight: 'ChevronRight', Square: 'Square', SquareCheck: 'SquareCheck', Star: 'Star' },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
-  '@shared/theme': { ThemedSurface: 'View', useTheme: () => ({ colors: { text: { tertiary: '#666' }, brand: { primary: '#f90' } } }), useThemedStyles: () => ({}) },
+  '@shared/theme': { ThemedSurface: 'View', useTheme: () => ({ effects: { glass: { enabled: false } }, colors: { text: { tertiary: '#666' }, brand: { primary: '#f90' } } }), useThemedStyles: () => ({}) },
   '@shared/ui/NavigationHeader': { default: ({ title, onGoBack, rightButton }) => React.createElement('Header', { title, onGoBack }, rightButton), __esModule: true },
   '@shared/ui/ModalSheet': { default: ({ children, onClose }) => React.createElement('ModalSheet', { onClose }, children), __esModule: true },
   '../application/GetPromptCenterSnapshot': { getPromptCenterSnapshot: () => ({ definitions: [
     { id: 'foundation.default_core', defaultContent: '代码默认规则' }, { id: 'foundation.visual_grounding', defaultContent: '视觉默认规则' },
   ] }) },
   '../application/ManagePromptDefaults': {
+    getAgentRegistrySettings: registryManagement.getAgentRegistrySettings,
+    setAgentRegistryAssistantIncluded: registryManagement.setAgentRegistryAssistantIncluded,
     getDefaultPromptEditor: async () => ({ ...fixture }), getPromptAssistant: async (id) => { aiReads.push(['assistant', id]); return { ...(id === ai.id ? ai : otherAI) }; },
     setDefaultPromptSwitch: async (key, enabled) => { actions.push([key, enabled]); fixture.toolPermissions[key.slice(5)] = enabled; },
     saveDefaultDefinition: async (id, content) => { await definitionSaveGate; fixture.overrides[id] = content; }, resetDefaultDefinition: async (id) => { delete fixture.overrides[id]; },
@@ -384,8 +450,12 @@ assert.equal(activeScreen().findAllByType('TextInput').length, 0);
 assert.ok(button('AI 人设') === undefined);
 assert.ok(button('用户人设'), '用户人设不依赖 AI 身份，始终可进入个人资料');
 assert.ok(button('协议空间常驻提示词') === undefined);
-assert.ok(button('AI 身份池') === undefined);
+assert.ok(button('AI 身份池'));
 assert.ok(text(activeScreen()).includes('AI 身份池'));
+await renderer.act(async () => button('AI 身份池').props.onPress());
+assert.equal(stackState.routes.at(-1).name, 'prompt-center/registry');
+assert.ok(text(activeScreen()).includes('暂无 AI'));
+await systemBack();
 await renderer.act(async () => button('用户人设').props.onPress());
 assert.equal(stackState.routes.at(-1).name, 'profile');
 await systemBack();
@@ -471,13 +541,16 @@ assert.ok(text(activeScreen()).includes('编辑保存后的正文'));
 await systemBack();
 assert.equal(currentTitle(), '提示词中心');
 await renderer.act(async () => button('系统基础规则').props.onPress());
+const ruleEntryDepth = stackState.routes.length;
 await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('基础规则未保存草稿'));
 await renderer.act(async () => button('视觉规则').props.onPress());
 assert.equal(currentTitle(), '视觉真实性规则');
 assert.equal(activeScreen().findByType('TextInput').props.value, '视觉默认规则');
-await systemBack();
+assert.equal(stackState.routes.length, ruleEntryDepth, '基础规则与视觉规则是同一入口的两个条目，切换不能压栈');
+await renderer.act(async () => button('基础规则').props.onPress());
 assert.equal(currentTitle(), '系统基础规则');
-assert.equal(activeScreen().findByType('TextInput').props.value, '基础规则未保存草稿');
+assert.equal(activeScreen().findByType('TextInput').props.value, '基础规则未保存草稿', '切回时保留另一条规则的未保存正文');
+assert.equal(stackState.routes.length, ruleEntryDepth);
 let finishSave;
 definitionSaveGate = new Promise((resolve) => { finishSave = resolve; });
 await renderer.act(async () => button('保存').props.onPress());
@@ -494,7 +567,19 @@ assert.deepEqual(aiReads, [], '全局概览与工具、自定义提示词只读�
 assistantOptions = [otherAI, ai];
 await renderer.act(async () => expo.useRouter().push('/prompt-center'));
 assert.equal(stackState.routes.at(-1).params.assistantId, ai.id, '已有 AI 时应选主理，而不是列表首位');
-assert.equal(button('AI 身份池'), undefined);
+registryAssistants = [{ ...ai, model: 'model-one' }, { ...otherAI, model: 'model-two' }];
+await renderer.act(async () => button('AI 身份池').props.onPress());
+assert.equal(stackState.routes.at(-1).params?.assistantId, undefined, '全局名单不绑定编辑对象');
+const registryCheckboxes = () => activeScreen().findAllByType('TouchableOpacity').filter((node) => node.props.accessibilityRole === 'checkbox');
+assert.deepEqual(registryCheckboxes().map((node) => node.props.accessibilityState.checked), [true, true]);
+assert.ok(text(activeScreen()).includes('底层模型：model-one'));
+await renderer.act(async () => registryCheckboxes()[0].props.onPress());
+assert.deepEqual(registryCheckboxes().map((node) => node.props.accessibilityState.checked), [false, true]);
+await systemBack();
+await renderer.act(async () => button('AI 身份池').props.onPress());
+assert.deepEqual(registryCheckboxes().map((node) => node.props.accessibilityState.checked), [false, true], '返回再进入仍读取已保存的全局名单');
+await renderer.act(async () => registryCheckboxes()[0].props.onPress());
+await systemBack();
 await renderer.act(async () => button('AI 人设').props.onPress());
 assert.equal(stackState.routes.at(-1).params.assistantId, ai.id);
 assert.ok(text(activeScreen()).includes('原始人设'));
@@ -657,4 +742,33 @@ assert.ok(text(activeScreen()).includes('未能读取 AI 列表'));
 assert.equal(button('系统基础规则'), undefined, '列表读取失败时不能退回可编辑全局配置');
 await systemBack();
 await renderer.act(async () => screen.unmount());
-console.log('提示词顺序与默认概览行为通过：历史后系统上下文、批量输入、工具续轮、中文与配置继承、编辑重置、真实路由接线、逐层返回、主理默认选择、AI 切换隔离、按 AI 保存时间、手机开关所有权与全局提示词管理可达性。');
+
+// 切换到不支持的接口时呈现不可用，不把保留的权限和星标显示成正在生效。
+fixture.tools.push({ name: 'kimi_web_search', owner: 'webTools', packageId: 'kimiOfficial', hostOnly: false,
+  defaultEnabled: false, enabled: false, mutating: false, callOnly: false, description: 'Kimi 官方搜索' });
+aiDetails.tools = [{ name: 'kimi_web_search', enabled: true, unavailableReason: '当前接口不支持，仅限 Moonshot 官方 API；已保存偏好会保留。' }];
+aiDetails.directToolNames = ['kimi_web_search'];
+const kimiProps = { assistantId: ai.id, assistants: [ai], assistantListError: false, page: { kind: 'package', id: 'kimiOfficial' },
+  refreshRevision: 0, onBack() {}, onOpenPage() {} };
+let kimiScreen;
+await renderer.act(async () => { kimiScreen = renderer.create(React.createElement(Screen, kimiProps)); });
+assert.equal(kimiScreen.root.findByType('Header').props.title, 'Kimi 官方工具');
+const kimiToggle = () => kimiScreen.root.findByProps({ accessibilityLabel: '启用 kimi_web_search' });
+const kimiStar = () => kimiScreen.root.findByProps({ accessibilityLabel: '直接暴露 kimi_web_search' });
+assert.equal(kimiToggle().props.disabled, true);
+assert.equal(kimiToggle().props.value, false);
+assert.equal(kimiStar().props.disabled, true);
+assert.equal(kimiStar().props.accessibilityState.checked, false);
+assert.ok(text(kimiScreen.root).includes('当前接口不支持'));
+assert.ok(text(kimiScreen.root).includes('已保存偏好：允许调用，已设特批'));
+aiDetails.tools = [{ name: 'kimi_web_search', enabled: true }];
+await renderer.act(async () => kimiScreen.update(React.createElement(Screen, { ...kimiProps, refreshRevision: 1 })));
+assert.equal(kimiToggle().props.disabled, false);
+assert.equal(kimiToggle().props.value, true, '恢复官方接口后沿用已保存的调用权限');
+assert.equal(kimiStar().props.accessibilityState.checked, true, '恢复官方接口后沿用已保存的星标');
+await renderer.act(async () => kimiToggle().props.onValueChange(false));
+assert.equal(kimiToggle().props.value, false);
+assert.equal(kimiStar().props.accessibilityState.checked, true, '关闭权限不会删除星标偏好');
+await renderer.act(async () => kimiScreen.unmount());
+database.close();
+console.log('提示词顺序与默认概览行为通过：历史后系统上下文、批量输入、工具续轮、中文与配置继承、编辑重置、真实路由接线、逐层返回、主理默认选择、AI 切换隔离、按 AI 保存时间、手机开关所有权、全局提示词管理，以及身份池名单保存、默认入选、模型名注入和排除记录隐私。');

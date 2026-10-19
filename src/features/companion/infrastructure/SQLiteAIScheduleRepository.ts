@@ -40,8 +40,8 @@ export class SQLiteAIScheduleRepository implements AIScheduleRepository {
          schedule_id, owner_ai_id, remind_at, summary, details,
          source_conversation_id, source_message_ids_json, source_excerpt,
          status, claimed_by_run_id, claimed_at, consumed_at, completion_disposition, cancelled_at,
-         cancelled_reason, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         cancelled_reason, created_at, updated_at, system_calendar
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         toValues(schedule),
       );
       return { status: 'created', schedule };
@@ -112,11 +112,12 @@ export class SQLiteAIScheduleRepository implements AIScheduleRepository {
         remindAt: input.remindAt ?? current!.remindAt,
         summary: input.summary ?? current!.summary,
         details: input.details ?? current!.details,
+        systemCalendar: input.systemCalendar ?? current!.systemCalendar,
         updatedAt: input.occurredAt,
       });
       const result = await tx.runAsync(
         `UPDATE raven_cat_ai_schedules
-         SET remind_at = ?, summary = ?, details = ?, updated_at = ?
+         SET remind_at = ?, summary = ?, details = ?, updated_at = ?, system_calendar = ?
          WHERE schedule_id = ? AND owner_ai_id = ?
            AND status = 'scheduled' AND remind_at > ?`,
         [
@@ -124,6 +125,7 @@ export class SQLiteAIScheduleRepository implements AIScheduleRepository {
           next.summary,
           next.details,
           next.updatedAt,
+          next.systemCalendar ? 1 : 0,
           input.scheduleId,
           input.ownerAIId,
           input.occurredAt,
@@ -340,7 +342,7 @@ function classifyMutableSchedule(
   return null;
 }
 
-function toValues(schedule: AISchedule): (string | null)[] {
+function toValues(schedule: AISchedule): (string | number | null)[] {
   return [
     schedule.scheduleId,
     schedule.ownerAIId,
@@ -359,6 +361,7 @@ function toValues(schedule: AISchedule): (string | null)[] {
     schedule.cancelledReason,
     schedule.createdAt,
     schedule.updatedAt,
+    schedule.systemCalendar ? 1 : 0,
   ];
 }
 

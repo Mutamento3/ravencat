@@ -65,33 +65,28 @@ function ChatMessageActionMenu({
   const theme = useTheme();
   const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
 
-  const topRow = ([
+  // 槽位只随屏幕宽度换行，不随消息能力增删，避免同一操作在不同消息间跳位。
+  const actions = [
     { key: 'copy', label: '复制', icon: 'copy-outline', onPress: onCopy },
     { key: 'rewrite', label: '改写', icon: 'pencil-outline', onPress: onRewrite },
     { key: 'rewriteAI', label: '重写', icon: 'reload-outline', onPress: onRegenerate },
     { key: 'delete', label: '删除', icon: 'trash-outline', onPress: onDelete },
     { key: 'multi', label: '多选', icon: 'list-outline', onPress: onMultiSelect },
-  ] satisfies ActionItem[]).filter(
-    (item) => item.key === 'multi' || Boolean(item.onPress),
-  );
-
-  const bottomRow = ([
     { key: 'fixedStart', label: isFixedStart ? '取消固定' : '固定', icon: 'pin-outline', onPress: onFixedStart },
-    ...(onToggleVoiceTranscript ? [{
+    {
       key: 'voiceTranscript',
       label: isVoiceTranscriptExpanded ? '收起文字' : '转文字',
-      icon: 'document-text-outline' as const,
+      icon: 'document-text-outline',
       onPress: onToggleVoiceTranscript,
-    }] : []),
+    },
     { key: 'quote', label: '引用', icon: 'return-up-back-outline', onPress: onQuote },
     { key: 'translate', label: '翻译', icon: 'language-outline', onPress: onTranslate },
     { key: 'forward', label: '分享', icon: 'arrow-redo-outline', onPress: onForward },
     { key: 'favorite', label: '收藏', icon: 'star-outline', onPress: onFavorite },
-  ] satisfies ActionItem[]).filter(
-    (item) => item.key === 'forward' || Boolean(item.onPress),
-  );
+  ] satisfies ActionItem[];
 
-  const actions = [...topRow, ...bottomRow];
+  if (!actions.some((item) => item.onPress)) return null;
+
   const columns = Math.max(1, Math.min(5, Math.floor((SCREEN_WIDTH - 24) / BUTTON_WIDTH), actions.length));
   const rows: ActionItem[][] = [];
   for (let index = 0; index < actions.length; index += columns) rows.push(actions.slice(index, index + columns));

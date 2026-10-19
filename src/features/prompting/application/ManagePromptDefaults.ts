@@ -48,6 +48,22 @@ export function listPromptAssistantOptions() {
   return getPromptingRuntimeDependencies().assistants.listOptions();
 }
 
+export async function getAgentRegistrySettings() {
+  const dependencies = getPromptingRuntimeDependencies();
+  const [assistants, defaults] = await Promise.all([dependencies.assistants.list(), dependencies.defaults.read()]);
+  const excludedIds = new Set(defaults.agentRegistryExcludedAssistantIds);
+  return assistants.map((assistant) => ({
+    id: assistant.id,
+    name: assistant.name,
+    model: assistant.model,
+    included: !excludedIds.has(assistant.id),
+  }));
+}
+
+export function setAgentRegistryAssistantIncluded(assistantId: string, included: boolean) {
+  return getPromptingRuntimeDependencies().defaults.setEnabled(`agent_registry:${assistantId}`, included);
+}
+
 export async function getPromptAssistant(assistantId: string) {
   const assistant = (await getPromptingRuntimeDependencies().assistants.list()).find((item) => item.id === assistantId);
   if (!assistant) throw new Error('AI 不存在');

@@ -68,8 +68,8 @@ assert.match(contextBlock.content, /你自己，显示名“同名成员”/);
 assert.equal((contextBlock.content.match(/你自己，显示名/g) || []).length, 1, '群上下文只能按 assistant ID 标记一个当前 AI');
 assert.equal((contextBlock.content.match(/其他成员，显示名/g) || []).length, 2);
 assert.doesNotMatch(contextBlock.content, /SELF|OTHER_AI|USER（|ai_assistant_id|agent_id/);
+assert.ok(contextBlock.content.includes(groupChat.groupId), '群身份背景提供真实 group_id，供群聊工具定位');
 for (const secret of [
-  groupChat.groupId,
   ...groupChat.members.flatMap((member) => [member.aiAssistantId, member.agentId]),
 ]) {
   assert.ok(!contextBlock.content.includes(secret), `群上下文不得暴露真实身份：${secret}`);
@@ -522,5 +522,5 @@ assert.deepEqual(privateHistory.map((message) => message.content), ['私聊用�
 
 // 单聊与通话的摘要／完整原文契约由 verify-memory-v3-prompt 验证，退休旧 over-fetch 窗口断言。
 
-console.log('群聊 Prompt 隐私与 perspective role 契约通过（同名身份区分、真实 ID 隔离、低显著归因、Provider role 透传）。');
+console.log('群聊 Prompt 隐私与 perspective role 契约通过（同名身份区分、成员身份隔离、群工具 ID 提供、低显著归因、Provider role 透传）。');
 fs.rmSync(tempRoot, { recursive: true, force: true });

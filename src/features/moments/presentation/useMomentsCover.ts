@@ -14,11 +14,8 @@ import {
 
 
 export const DEFAULT_MOMENTS_COVER_SOURCE = require('../../../../assets/ravenphone_bg.png');
-/**
- * @param refreshRevision 保活路由的焦点刷新版本：设置页改为独立路由后调用方不再重挂载，
- * 封面 / 用户名等 Profile 变更必须靠 revision 递增触发重读。
- */
-export function useMomentsCover(refreshRevision = 0) {
+/** 首次挂载读取资料，后续封面与用户名变更由 Profile 提交后的事实同步。 */
+export function useMomentsCover() {
   const [currentUser, setCurrentUser] = useState<UserProfile>(DEFAULT_USER_PROFILE as UserProfile);
   const [coverSource, setCoverSource] = useState<ImageSourcePropType>(DEFAULT_MOMENTS_COVER_SOURCE);
   const [isUpdatingCover, setIsUpdatingCover] = useState(false);
@@ -34,7 +31,7 @@ export function useMomentsCover(refreshRevision = 0) {
       console.error('Failed to load user profile for moments cover:', error);
     });
     return () => { active = false; unsubscribe(); };
-  }, [refreshRevision]);
+  }, []);
 
   useEffect(() => {
     setCoverSource(currentUser.momentsCover ? { uri: currentUser.momentsCover } : DEFAULT_MOMENTS_COVER_SOURCE);

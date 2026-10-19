@@ -24,6 +24,7 @@ const calls = [];
 const schedule = {
   scheduleId: 'schedule-a',
   ownerAIId: 'host-ai',
+  systemCalendar: true,
   remindAt: '2026-09-10T09:00:00.000Z',
   summary: '考试',
   details: '数据库考试',
@@ -57,6 +58,8 @@ const application = {
 };
 
 let projectionMode = 'projected';
+let calendarMode = 'synced';
+let createError = null;
 function projectionFor(operation) {
   return projectionMode === 'failed'
     ? { status: 'projection_failed', operation, error: new Error('native unavailable') }
@@ -66,15 +69,16 @@ function projectionFor(operation) {
 const projectionOwner = {
   createAIScheduleWithProjection: async (input) => {
     calls.push(['create', input]);
-    return { status: 'created', schedule, projection: projectionFor('schedule') };
+    if (createError) return { status: 'error', code: createError, projection: null };
+    return { status: 'created', schedule: { ...schedule, systemCalendar: input.systemCalendar }, calendar: calendarMode, projection: projectionFor('schedule') };
   },
   updateAIScheduleWithProjection: async (input) => {
     calls.push(['update', input]);
-    return { status: 'updated', schedule: { ...schedule, summary: input.summary ?? schedule.summary }, projection: projectionFor('schedule') };
+    return { status: 'updated', schedule: { ...schedule, summary: input.summary ?? schedule.summary }, calendar: 'synced', projection: projectionFor('schedule') };
   },
   cancelAIScheduleWithProjection: async (input) => {
     calls.push(['cancel', input]);
-    return { status: 'cancelled', schedule: { ...schedule, status: 'cancelled' }, projection: projectionFor('cancel') };
+    return { status: 'cancelled', schedule: { ...schedule, status: 'cancelled' }, calendar: 'synced', projection: projectionFor('cancel') };
   },
 };
 
@@ -159,6 +163,9 @@ assert.equal((await tools[3].execute({ schedule_id: 'schedule-a', summary: '改�
 assert.equal((await tools[4].execute({ schedule_id: 'schedule-a' }, context)).status, 'success');
 assert.deepEqual(calls.map(([name]) => name), ['create', 'list', 'get', 'update', 'cancel']);
 assert.equal(calls[0][1].sourceConversationId, 'session-a');
+assert.equal(calls[0][1].systemCalendar, true);
+await tools[0].execute({ remind_at: schedule.remindAt, summary: schedule.summary, details: schedule.details, system_calendar: false }, context);
+assert.equal(calls.at(-1)[1].systemCalendar, false);
 
 // native projection 失败仍返回 durable degraded success；模型必须知道不要重复业务操作。
 projectionMode = 'failed';
@@ -187,6 +194,24 @@ assert.equal(degradedCancel.data.projectionStatus, 'projection_failed');
 assert.equal(degradedCancel.data.projectionOperation, 'cancel');
 assert.match(degradedCancel.modelContent, /不要重复取消/);
 projectionMode = 'projected';
+
+// 模型可明确区分提交前拒绝与提交后系统提醒未同步，避免生成重复日程。
+createError = 'calendar_permission_required';
+const missingCalendarPermission = await tools[0].execute({
+  remind_at: schedule.remindAt, summary: schedule.summary, details: schedule.details,
+}, context);
+assert.equal(missingCalendarPermission.status, 'error');
+assert.equal(missingCalendarPermission.code, 'CALENDAR_PERMISSION_REQUIRED');
+assert.match(missingCalendarPermission.modelContent, /system_calendar=false/);
+createError = null;
+calendarMode = 'failed';
+const calendarPartialSuccess = await tools[0].execute({
+  remind_at: schedule.remindAt, summary: schedule.summary, details: schedule.details,
+}, context);
+assert.equal(calendarPartialSuccess.status, 'success');
+assert.equal(calendarPartialSuccess.data.scheduleId, schedule.scheduleId);
+assert.equal(calendarPartialSuccess.data.calendarStatus, 'failed');
+assert.match(calendarPartialSuccess.modelContent, /不要重复创建/);
 
 currentHostAIId = 'other-ai';
 const denied = await tools[1].execute({

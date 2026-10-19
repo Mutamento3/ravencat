@@ -87,6 +87,7 @@ export function buildRuntimeAIToolsConfig(
   runtimeContext: AIReplyRuntimeContext
 ): AIToolsConfig {
   return {
+    apiBaseUrl: aiConfig.apiBaseUrl,
     isHostAI: aiConfig.isHostAI,
     enableTools: aiConfig.enableTools,
     triggerSource: runtimeContext.triggerSource,

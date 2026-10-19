@@ -43,10 +43,17 @@ export interface CommitGroupAvatarMediaAssetReferenceInput {
   mediaAssetId: string;
 }
 
+export type GroupAvatarQueryResult =
+  | { status: 'not_found' }
+  | { status: 'forbidden' }
+  | { status: 'found'; groupId: string; name: string; avatar: string | null; avatarMediaAssetId: string | null };
+
 export interface IGroupChatRepository {
   isSpeechTaskRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, taskId: string): Promise<boolean>;
   getAll(): Promise<GroupChat[]>;
   getById(groupId: string): Promise<GroupChatDetails | null>;
+  /** 主理资格由 Host 提供可信事实；当前成员关系与头像选择在同一次读取中裁决。 */
+  getAvatarForAssistant(groupId: string, assistantId: string, isHostAI: boolean): Promise<GroupAvatarQueryResult>;
   getMembers(groupId: string): Promise<GroupChatMember[]>;
   getAdminConfig(groupId: string): Promise<GroupChatAdminConfig | null>;
   create(input: CreateGroupChatRecordInput): Promise<GroupChatDetails>;

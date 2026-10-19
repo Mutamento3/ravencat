@@ -34,6 +34,7 @@ export interface AISchedule {
   remindAt: string;
   summary: string;
   details: string;
+  systemCalendar: boolean;
   sourceConversationId: string | null;
   sourceMessageIds: string[] | null;
   sourceExcerpt: string | null;
@@ -54,6 +55,7 @@ export interface AIScheduleRow {
   remind_at: string;
   summary: string;
   details: string;
+  system_calendar: number;
   source_conversation_id: string | null;
   source_message_ids_json: string | null;
   source_excerpt: string | null;
@@ -92,6 +94,7 @@ export function createAIScheduleFromRow(row: AIScheduleRow | null): AISchedule |
     remindAt: row.remind_at,
     summary: row.summary,
     details: row.details,
+    systemCalendar: row.system_calendar === 1,
     sourceConversationId: row.source_conversation_id,
     sourceMessageIds: parseSourceMessageIds(row.source_message_ids_json),
     sourceExcerpt: row.source_excerpt,

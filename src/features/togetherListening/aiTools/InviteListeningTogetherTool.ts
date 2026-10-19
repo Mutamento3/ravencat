@@ -8,7 +8,6 @@ import {
   readCurrentActivity,
   readCurrentHostAuthority,
   observeLatestNetEase,
-  readLatestCurrentLyric,
   typedResult,
   unavailable,
 } from './TogetherListeningToolRuntime';
@@ -17,9 +16,9 @@ export const definition = {
   name: 'invite_listening_together',
   description: [
     'RavenCat 已有的 Together Listening 能力：向用户发起一起听网易云音乐的邀请。',
-    '当前网易云暂时不可用不代表你没有一起听能力；执行时工具会返回 typed unavailable。',
-    '不要仅因为当前没有播放就告诉用户“我不能一起听”。',
-    '只在用户明确想一起听，或对话上下文自然适合时调用；不要为了展示功能随意发邀请。',
+    '当前网易云暂时不可用时，工具会返回 typed unavailable。',
+    '网易云一起听功能是当前软件特有的能力，通过安卓的原生功能实现。',
+    '想跟用户一起听歌的时候即可发起。',
     '邀请成功后只是等待用户回应，不要声称已经开始一起听。',
   ].join(''),
   parameters: {
@@ -84,7 +83,6 @@ export async function execute(_args: Record<string, never>, context: ToolContext
     activityId: result.activity.id,
     phase: result.activity.phase,
     projectionStatus: result.projectionStatus,
-    currentLyric: await readLatestCurrentLyric(availability),
   }, 'Together Listening 邀请已创建，正在等待用户回应。');
 }
 

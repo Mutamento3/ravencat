@@ -36,7 +36,7 @@ try {
       const writes = [];
       const editor = new AutoSaveDraftEditor(initial, draftModule.parseGroupAdminSettingsDraft, async (patch) => { writes.push(patch); });
       editor.change({ [key]: invalid, systemPrompt: '新提示词' });
-      mock.timers.tick(1000); await tick();
+      await editor.commit();
       assert.ok(editor.getSnapshot().errors[key], `${key}=${invalid} 必须显示字段错误`);
       assert.equal(editor.getSnapshot().draft[key], invalid, '无效输入不能静默回填默认值');
       assert.deepEqual(writes, [{ systemPrompt: '新提示词' }], '其他合法字段可以独立保存');
@@ -78,7 +78,8 @@ try {
     first.resolve(); await tick();
     assert.equal(editor.getSnapshot().draft.apiKey, 'B');
     assert.deepEqual(writes, [{ apiKey: 'A' }]);
-    mock.timers.tick(1000); await tick(); assert.deepEqual(writes, [{ apiKey: 'A' }, { apiKey: 'B' }]);
+    mock.timers.tick(10000); await tick(); assert.deepEqual(writes, [{ apiKey: 'A' }]);
+    await editor.commit(); assert.deepEqual(writes, [{ apiKey: 'A' }, { apiKey: 'B' }]);
   }
   // 页面 hook 的数值投影不会把非法文本送入滑块，测试连接也先展示字段错误。
   {
@@ -97,7 +98,7 @@ try {
         useAutoSaveDraft: (options) => {
           save = options.save;
           if (!editor) editor = new AutoSaveDraftEditor(options.initial, options.parse, (patch) => save(patch));
-          return { ...editor.getSnapshot(), change: editor.change, flush: editor.flush, restore: editor.restore, getSnapshot: editor.getSnapshot, validateAll: editor.validateAll };
+          return { ...editor.getSnapshot(), change: editor.change, commit: editor.commit, flush: editor.flush, restore: editor.restore, getSnapshot: editor.getSnapshot, validateAll: editor.validateAll };
         },
         useAutoSaveNavigation: (flush, back, blocked) => ({ back: async () => { if (await flush()) back(); else blocked(); } }),
       },
@@ -111,7 +112,7 @@ try {
       stateIndex = 0;
       return renderHook({ adminConfig: config, onUpdate: async (patch) => { writes.push(patch); }, onBack: () => { returned++; } });
     };
-    render().handleTempChange('3'); mock.timers.tick(1000); await tick();
+    render().handleTempChange('3'); await render().commit();
     assert.ok(render().errors.tempInput); assert.equal(render().temperature, 0.7);
     await render().handleTestConnection(); assert.equal(tested, 0); assert.ok(revealed.tempInput);
     await render().back(); assert.equal(returned, 0);

@@ -16,6 +16,7 @@ import type { WallpaperSelection, WallpaperSlot } from '@shared/theme/wallpaper'
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import ColorPickerModal from '@shared/ui/ColorPickerModal';
 import BackgroundPickerCard from '@shared/ui/BackgroundPickerCard';
+import GlassBlurSettings from './GlassBlurSettings';
 
 import { listAIAssistants } from '@features/assistants';
 import { getCanonicalChatConversation, listGroupChats } from '@features/chat';
@@ -370,6 +371,13 @@ export default function ThemePickerView({ onBack }: ThemePickerViewProps) {
         </View>
 
         <View style={styles.sectionGap} />
+
+        {theme.effects.glass.enabled && (
+          <>
+            <GlassBlurSettings />
+            <View style={styles.sectionGap} />
+          </>
+        )}
 
         {/* 文字颜色 */}
         <Text style={styles.sectionTitle}>文字颜色</Text>

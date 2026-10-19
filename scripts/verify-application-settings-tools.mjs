@@ -127,6 +127,14 @@ const assistants = load('src/features/assistants/AIAssistantManagement.ts', { ..
   './infrastructure/SQLiteAssistantRepository': { aiAssistantRepository: aiPort },
   './infrastructure/SQLiteHostRepository': { aiHostRepository: {} },
 });
+const { GroupChatRepository } = load('src/features/chat/group/infrastructure/SQLiteGroupChatRepository.ts', {
+  ...common, '@features/profile': {},
+});
+const groupRuntime = load('src/features/chat/group/application/ChatGroupRuntime.ts', { '@shared/runtime/RuntimeSlot': slot });
+groupRuntime.configureChatGroupRuntime({ groups: new GroupChatRepository() });
+const groupQueries = load('src/features/chat/group/application/GroupChatManagement.ts', {
+  './ChatGroupRuntime': groupRuntime, './GroupAutoInvocationScheduler': {}, '@features/media': media,
+});
 const userDomain = load('src/features/profile/domain/UserProfile.ts', { '@shared': { SELF_USER_ID: 'self', DEFAULT_SELF_NAME: '用户' } });
 const { SQLiteUserProfileRepository } = load('src/features/profile/infrastructure/SQLiteUserProfileRepository.ts', { ...common, '../domain/UserProfile': userDomain });
 const userRepository = new SQLiteUserProfileRepository();
@@ -151,23 +159,34 @@ const fence = load('src/host/composition/agent/assertImageToolRunCurrent.ts', {
     isGroupSpeechTaskRunCurrentInTransaction: async () => runCurrent },
 });
 const viewed = [];
+let visionRoute = 'direct_vision', pauseVision = null;
+class BrokenGroupImage extends Error {}
 const imageRuntime = load('src/features/media/application/AIImageRuntime.ts', { '@shared/runtime/RuntimeSlot': slot });
 const imageTools = load('src/features/media/application/AIImageTools.ts', {
-  'expo-file-system': {}, '@platform/device': { inspectLocalImage: async () => ({ mimeType: 'image/png', isAnimated: false }) },
+  'expo-file-system': {}, '@platform/device': { inspectLocalImage: async uri => {
+    if (uri === 'file:///broken-group.png') throw new BrokenGroupImage();
+    return { mimeType: 'image/png', isAnimated: false };
+  } },
   '@platform/web': {}, '@shared/runtime/abortSignal': abort, './AIImageRuntime': imageRuntime,
   './MediaImageToolResult': {}, './MediaAssetRuntime': mediaRuntime, './MediaAssetBacking': backing,
 });
 imageRuntime.configureAIImageRuntime({ view: async input => {
-  viewed.push(input); return { route: 'direct_vision', ocrSucceeded: null,
-    parts: [{ type: 'text', text: '原图已提供' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }] };
+  viewed.push(input);
+  if (pauseVision) await pauseVision();
+  return { route: visionRoute, ocrSucceeded: visionRoute === 'ocr' ? true : null,
+    parts: visionRoute === 'ocr' ? [{ type: 'text', text: '辅助视觉转述群头像' }]
+      : [{ type: 'text', text: '原图已提供' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }] };
 }, resolveAvatar: async (target, _actor, selector) => ({ status: 'found', imageUri: 'file:///default-avatar.png', label: `${selector ?? target}的头像` }) });
 const { applicationSettingsTools } = load('src/host/composition/agent/ApplicationSettingsTools.ts', {
   'react-native': { Dimensions: { get: () => ({ width: 1080, height: 2400 }) } },
-  'expo-asset': { Asset: { fromModule: () => ({ downloadAsync: async () => ({ localUri: 'file:///default-cover.png' }) }) } },
+  'expo-asset': { Asset: { fromModule: assetId => ({ downloadAsync: async () => ({ localUri: assetId === 2 ? 'file:///default-group.png' : 'file:///default-cover.png' }) }) } },
+  '@shared/avatar/avatarRegistry': { getDefaultGroupAvatarAsset: () => 2 },
+  '@features/chat': groupQueries,
   '@features/moments': { DEFAULT_MOMENTS_COVER_SOURCE: 1 },
   '@features/assistants': { ...assistants, ...access }, '@features/profile': { ...profile, ...wallpapers }, '@features/calls': calls,
   '@features/media': { ...imageTools, mediaImageFailure: error => error instanceof MediaAssetNotFoundError
-    ? { status: 'error', code: 'IMAGE_NOT_FOUND', retryable: false, modelContent: '图片不存在' } : null },
+    ? { status: 'error', code: 'IMAGE_NOT_FOUND', retryable: false, modelContent: '图片不存在' }
+    : error instanceof BrokenGroupImage ? { status: 'error', code: 'IMAGE_UNREADABLE', retryable: false, modelContent: '群头像文件已损坏' } : null },
   '@shared/errors/SettingChangeConflictError': conflict, '@shared/runtime/abortSignal': abort,
   '@shared/theme/themeStorage': { loadStoredThemeId: async () => themeId }, './assertImageToolRunCurrent': fence,
 });
@@ -247,6 +266,71 @@ await execute('set_moments_cover', reset, 'host');
 assert.equal((await execute('get_moments_cover')).data.source, 'default_cover');
 assert.equal(viewed.at(-1).imageUri, 'file:///default-cover.png', '默认封面取实际打包图片');
 
+// 群头像只查询头像与当前成员关系；不依赖群管理员配置或向模型暴露成员私有资料。
+for (const [id, avatar, mediaAssetId] of [['group-a', null, originalId], ['group-b', 'file:///legacy-group.png', null],
+  ['group-default', null, null], ['group-broken', 'file:///broken-group.png', null]]) {
+  db.prepare('INSERT INTO chat_conversations (id,kind) VALUES (?,?)').run(id, 'group');
+  db.prepare('INSERT INTO group_chats (id,name,avatar,avatar_media_asset_id,created_at,updated_at) VALUES (?,?,?,?,?,?)')
+    .run(id, '同名群', avatar, mediaAssetId, now, now);
+}
+for (const [groupId, assistantId, enabled] of [['group-a', 'a', 1], ['group-a', 'b', 0], ['group-b', 'b', 1],
+  ['group-default', 'a', 1], ['group-broken', 'a', 1]]) {
+  db.prepare(`INSERT INTO group_chat_members (id,group_id,ai_assistant_id,agent_id,display_order,enabled,created_at,updated_at)
+    VALUES (?,?,?,?,0,?,?,?)`).run(`${groupId}-${assistantId}`, groupId, assistantId, `agent-${assistantId}`, enabled, now, now);
+}
+const currentGroupActor = { ...context(), task: { ...context().task, type: 'group_chat_reply', sessionId: 'group-a' } };
+const currentGroupAvatar = await execute('get_group_avatar', {}, currentGroupActor);
+assert.equal(currentGroupAvatar.status, 'success');
+assert.equal(currentGroupAvatar.data.groupId, 'group-a');
+assert.equal(currentGroupAvatar.data.mediaAssetId, originalId);
+assert.equal(currentGroupAvatar.modelImages[0].url, 'data:image/png;base64,AA==');
+assert.match(currentGroupAvatar.modelContent, /group-a/);
+assert.ok(!JSON.stringify(currentGroupAvatar).includes('用户私密备注'));
+assert.equal((await execute('get_group_avatar', { group_id: 'group-a' })).status, 'success', '单聊允许明确读取仍参加的群');
+const deniedVisualCount = viewed.length;
+assert.equal((await execute('get_group_avatar')).code, 'SETTING_TARGET_REQUIRED');
+assert.equal((await execute('get_group_avatar', {}, { ...context(), task: { ...context().task, sessionId: 'group-a' } })).code,
+  'SETTING_TARGET_REQUIRED', '非群任务的 sessionId 不得被当作当前群');
+assert.equal((await execute('get_group_avatar', { group_id: 'group-b' })).code, 'SETTING_ACCESS_DENIED');
+assert.equal((await execute('get_group_avatar', { group_id: 'group-a' }, 'b')).code, 'SETTING_ACCESS_DENIED', '禁用的成员关系没有读取资格');
+assert.equal((await execute('get_group_avatar', { group_id: 'missing-group' })).code, 'SETTING_TARGET_UNAVAILABLE');
+assert.equal(viewed.length, deniedVisualCount, '未授权或目标不存在时不读取或交付图片');
+for (const input of [{ group_id: '' }, { group_id: 'group-b', is_host_ai: true }, { group_id: 'group-b', assistant_id: 'host' }]) {
+  assert.equal(schemas.matchesAgentToolInputSchema(input, tools.get('get_group_avatar').definition.parameters), false);
+}
+const hostGroupAvatar = await execute('get_group_avatar', { group_id: 'group-b' }, 'host');
+assert.equal(hostGroupAvatar.status, 'success', '当前主理不必入群即可读取');
+assert.equal(hostGroupAvatar.data.groupId, 'group-b', '重名群按稳定 group_id 定位');
+assert.equal(viewed.at(-1).imageUri, 'file:///legacy-group.png');
+const defaultGroupAvatar = await execute('get_group_avatar', { group_id: 'group-default' }, currentGroupActor);
+assert.equal(defaultGroupAvatar.data.mediaAssetId, null);
+assert.equal(defaultGroupAvatar.data.groupId, 'group-default', '显式目标优先于当前群');
+assert.equal(viewed.at(-1).imageUri, 'file:///default-group.png', '默认群头像使用实际打包资源');
+visionRoute = 'ocr';
+const auxiliaryGroupAvatar = await execute('get_group_avatar', { group_id: 'group-a' });
+assert.equal(auxiliaryGroupAvatar.data.route, 'ocr');
+assert.deepEqual(auxiliaryGroupAvatar.modelImages, []);
+assert.match(auxiliaryGroupAvatar.modelContent, /辅助视觉转述群头像/);
+visionRoute = 'direct_vision';
+assert.equal((await execute('get_group_avatar', { group_id: 'group-broken' })).code, 'IMAGE_UNREADABLE', '选中图片损坏时不伪装成默认头像');
+db.exec("DELETE FROM group_chat_members WHERE group_id='group-a' AND ai_assistant_id='a'");
+assert.equal((await execute('get_group_avatar', {}, currentGroupActor)).code, 'SETTING_ACCESS_DENIED', '移出群后不能沿用当前任务的旧成员快照');
+db.exec("UPDATE ai_assistants SET is_host_ai=0 WHERE id='host'");
+assert.equal((await execute('get_group_avatar', { group_id: 'group-b' }, 'host')).code, 'SETTING_ACCESS_DENIED', '撤销主理后恢复普通成员权限');
+db.exec("UPDATE ai_assistants SET is_host_ai=1 WHERE id='host'");
+db.exec("DELETE FROM group_chats WHERE id='group-b'");
+assert.equal((await execute('get_group_avatar', { group_id: 'group-b' }, 'host')).code, 'SETTING_TARGET_UNAVAILABLE');
+let visionStarted, resumeVision;
+const visionBegun = new Promise(resolve => { visionStarted = resolve; });
+pauseVision = async () => { visionStarted(); await new Promise(resolve => { resumeVision = resolve; }); };
+const groupViewController = new AbortController();
+const groupViewing = execute('get_group_avatar', { group_id: 'group-default' }, { ...context(), abortSignal: groupViewController.signal });
+await visionBegun;
+groupViewController.abort();
+resumeVision();
+await assert.rejects(groupViewing, { name: 'AbortError' });
+pauseVision = null;
+
 // 文件准备暂停后再修改事实，检查迟到提交不会覆盖用户或已撤销的主理身份。
 async function duringCrop(name, actor, mutate, expectedCode, input = set) {
   let started, release;
@@ -318,6 +402,7 @@ upgrade.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updat
   CREATE TABLE assistant_nickname_changes(id INTEGER PRIMARY KEY AUTOINCREMENT,
     assistant_id TEXT NOT NULL REFERENCES ai_assistants(id) ON DELETE CASCADE,
     previous_nickname TEXT, nickname TEXT, acknowledged INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+  ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar;
   PRAGMA user_version=127;`);
 upgrade.exec(`CREATE TRIGGER reject_setting_migration BEFORE INSERT ON prompt_default_switches
   WHEN NEW.key='tool:set_ai_avatar' BEGIN SELECT RAISE(ABORT,'injected setting migration'); END;`);

@@ -44,6 +44,8 @@ import {
 import { createStyles } from './CompanionSettingsShared.styles';
 import {
   getDeviceLocationAccessState,
+  isSystemCalendarPermissionGranted,
+  manageSystemCalendarPermission,
   isUsageAccessGranted,
   manageDeviceLocationPermission,
   openDeviceLocationSettings,
@@ -58,6 +60,7 @@ interface CompanionSystemAccessScreenProps {
 
 interface SystemAccessSnapshot {
   overlayGranted: boolean;
+  calendarGranted: boolean;
   notificationGranted: boolean;
   fullScreenIntentAllowed: boolean;
   incomingCallChannelEnabled: boolean;
@@ -80,7 +83,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
   const refresh = useCallback(async (pullToRefresh = false) => {
     if (pullToRefresh) setRefreshing(true);
     try {
-      const [overlayGranted, notification, battery, observer, incomingCallDiagnostics, usageAccessGranted, notificationListener, location] =
+      const [overlayGranted, notification, battery, observer, incomingCallDiagnostics, usageAccessGranted, notificationListener, location, calendarGranted] =
         await Promise.all([
           isOverlayPermissionGranted(),
           getCompanionNotificationDiagnostics(),
@@ -90,9 +93,11 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
           isUsageAccessGranted(),
           getNotificationListenerAccessState(),
           getDeviceLocationAccessState(),
+          isSystemCalendarPermissionGranted(),
         ]);
       setSnapshot({
         overlayGranted,
+        calendarGranted,
         notificationGranted: notification.postNotificationsGranted
           && notification.notificationsEnabled
           && notification.channelImportance > 0,
@@ -169,6 +174,9 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
             <ThemedSurface variant="card" style={styles.card}>
               <View style={styles.cardContent}>
                 <PermissionRow label="通知提醒" value={snapshot.notificationGranted} onPress={() => void openNotificationSettings()} styles={styles} description="用于普通消息、主动联系和后台状态通知。" />
+                <PermissionRow label="系统日历" value={snapshot.calendarGranted} onPress={() => {
+                  void manageSystemCalendarPermission().then(() => refresh()).catch((error: unknown) => setErrorMessage(toMessage(error, '无法管理系统日历权限。')));
+                }} styles={styles} description="允许 AI 日程同时写入手机日历；写入后由系统日历独立提醒，RavenCat 被后台清理也不影响这条系统提醒。" />
                 <PermissionRow label="通知使用权" value={snapshot.notificationListenerGranted} onPress={() => {
                   void openNotificationListenerSettings().then((result) => {
                     if (result.status === 'settings_open_failed') setErrorMessage(result.reason);

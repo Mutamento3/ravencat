@@ -58,6 +58,7 @@ export interface UpdateAIScheduleInput {
   remindAt?: string;
   summary?: string;
   details?: string;
+  systemCalendar?: boolean;
 }
 
 export interface AIScheduleRepository {

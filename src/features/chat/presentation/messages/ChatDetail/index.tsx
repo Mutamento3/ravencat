@@ -212,6 +212,7 @@ export default function ChatDetailModule({
     sendMessage,
     sendSticker,
     voiceRecordingState,
+    voiceRecordingProgress,
     voiceRecordingError,
     voiceReviewDraft,
     prepareVoiceRecordingEntry,
@@ -528,6 +529,7 @@ export default function ChatDetailModule({
                 onChangeText={setInputText}
                 onSend={handleSend}
                 voiceRecordingState={voiceRecordingState}
+                voiceRecordingProgress={voiceRecordingProgress}
                 voiceRecordingError={voiceRecordingError}
                 onDismissVoiceRecordingError={dismissVoiceRecordingError}
                 onVoiceModeEnter={prepareVoiceRecordingEntry}

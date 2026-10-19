@@ -49,16 +49,18 @@ export async function prepareTogetherListeningHostModelRun(
   if (snapshot.currentHostAiId !== input.currentAiId) {
     return base;
   }
-  const currentLyric = snapshot.activity?.hostAiId === input.currentAiId
-    ? await readTogetherListeningCurrentLyric(snapshot.netease, snapshot.capturedAtEpochMs)
-    : null;
+  const additionalPromptBlocks: HostModelRunPreparationResult['additionalPromptBlocks'] = [];
+  // 邀请只通过聊天历史和工具结果表达；实时歌曲资料仅属于已开始的共同活动。
+  if (snapshot.activity?.hostAiId === input.currentAiId && snapshot.activity.phase === 'active') {
+    const currentLyric = await readTogetherListeningCurrentLyric(snapshot.netease, snapshot.capturedAtEpochMs);
+    additionalPromptBlocks.push(createTogetherListeningRuntimePromptBlock({
+      snapshot: { ...snapshot, currentLyric },
+      scenario: input.scenario,
+    }));
+  }
   return {
     ...base,
-    additionalPromptBlocks: [createTogetherListeningRuntimePromptBlock({
-      snapshot: { ...snapshot, currentLyric },
-      currentAiId: input.currentAiId,
-      scenario: input.scenario,
-    })],
+    additionalPromptBlocks,
     dynamicAllowedToolNames: TOGETHER_LISTENING_AI_TOOL_NAMES.filter((name) =>
       persistentNames.has(name)),
   };

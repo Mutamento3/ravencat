@@ -260,6 +260,7 @@ export class PromptPackBlockFactory {
     try {
       const summary = await agentRegistryService.getSummary({
         currentAgentId: aiConfig.agentId || null,
+        excludedAssistantIds: aiConfig.agentRegistryExcludedAssistantIds,
       });
 
       if (!summary.entries.length || !summary.text.trim()) {
@@ -358,6 +359,7 @@ export class PromptPackBlockFactory {
     const content = [
       '【群聊身份背景】',
       `- 群名称：“${groupChat.groupName}”。`,
+      `- 群聊工具标识 group_id：${groupChat.groupId}。仅用于工具参数，不写入聊天正文。`,
       `- 你正在与“${userDisplayName}”和其他 AI 成员共同聊天。`,
       `- 你在本群中的显示名是“${displayName(groupChat.currentAIName)}”。`,
       '- 群聊历史中，API role 为 assistant 只表示你自己先前的输出；API role 为 user 表示外部上下文，既可能是用户输入，也可能是其他 AI 成员的发言。',

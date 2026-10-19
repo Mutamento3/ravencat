@@ -14,3 +14,15 @@
 审阅范围包含 `util/crypto.js`、`util/request.js`、`util/option.js` 与歌曲搜索、歌单详情、歌曲详情、歌词和评论接口定义。当前模块使用 Kotlin/JCA 实现 MD5、AES-128-ECB envelope、HTTPS 请求与响应映射，未引入上游 Node/Express 服务，也未将上游完整请求层作为依赖打包。
 
 这里保留已确定的参考来源与许可，不把改写或仅使用子集当作取消上游署名的理由，也不将整个模块宣称为没有参考实现的独立原创。网易云接口、音乐、歌词、评论与品牌的服务或内容权利不由上述 MIT 许可授予。
+
+## 底部 Tab 栏动效（Floating Ball / Melting Ball）
+
+- 本地实现：`src/features/chat/presentation/messages/components/bottomTabBar/`。
+- 参考项目：
+  - [moeen-mahmud/react-native-floating-tab](https://github.com/moeen-mahmud/react-native-floating-tab)（`main` 分支，参考时上游标记 Beta）。
+  - [vipin14444/react-native-fluid-bottom-bar](https://github.com/vipin14444/react-native-fluid-bottom-bar)（`main` 分支）。
+- 参考范围：普通主题凹槽的贝塞尔形态、小数选中序号驱动曲线与球体的弹簧运动模型。未引入上游 npm 包或 Skia，未复制 Dribbble 参考作品的设计素材。选中图标在移动球体内交叉淡入，导航与未读数沿用 RavenCat 原有契约。
+- 上游署名：`Copyright (c) 2024 Moeen Mahmud`、`Copyright (c) 2026 Vipin Sharma`。
+- 许可：[react-native-floating-tab MIT 原文快照](upstream/react-native-floating-tab-main-LICENSE.txt)、[react-native-fluid-bottom-bar MIT 原文快照](upstream/react-native-fluid-bottom-bar-main-LICENSE.txt)，原始地址记录于 [sources.json](upstream/sources.json)。
+
+Glass 通过现有 `modules/liquid-glass` 原生材质绘制一个连续表面：圆角栏体与椭圆球体使用平滑并集距离场，实际位移的滞后量驱动拉伸、压低和融合宽度。模糊、折射、色散与边缘高光共用该轮廓，不再叠加圆球、SVG 连接片和独立底栏。`ravencat_liquidglass_effect.agsl` 基于 AndroidLiquidGlassView 1.0.3 shader 修改，保留文件内 QmDeve 的完整 MIT 许可与版权声明；上游许可另见 [原文快照](upstream/liquid-glass-1.0.3-LICENSE.txt)。

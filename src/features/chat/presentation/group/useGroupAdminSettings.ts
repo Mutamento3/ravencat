@@ -76,7 +76,7 @@ export default function useGroupAdminSettings({ adminConfig, onUpdate, onBack }:
   };
   return {
     readModelConfig,
-    ...draft, errors, saveError: editor.saveError, flush, back, restoreDraft, feedback, connectionError,
+    ...draft, errors, saveError: editor.saveError, commit: editor.commit, flush, back, restoreDraft, feedback, connectionError,
     temperature: temperatureInput.error ? adminConfig?.temperature ?? null : temperatureInput.value,
     topP: topPInput.error ? adminConfig?.topP ?? null : topPInput.value,
     setApiBaseUrl: (value: string) => setField('apiBaseUrl', value),
