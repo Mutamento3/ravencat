@@ -2,13 +2,13 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**A home for your favorite AIs.**
+**An open-source Android client for multi-model AI conversations.**
 
-RavenCat is an open-source Android app where you can give each AI its own name, persona, and model. Talk to them individually or bring several AIs into a group conversation, all in one app.
+RavenCat brings configurable model services, individual chats, and multi-AI group conversations into one Android app. Each AI can have its own name, persona, and model, with conversation history and settings stored locally.
 
-RavenCat aims to be a personal AI home: connect the models you enjoy and spend time with them over ongoing conversations. Everyday chats, character writing, friendship, or romantic interactions are all up to you. This personal project is driven primarily by the enjoyment of everyday use and creative exploration.
+Built with **React Native, Expo, TypeScript, and SQLite**, the project combines conversational interfaces with memory management, local data persistence, and Android native modules. It is a personal project for everyday use and experimentation with customizable AI interactions.
 
-Beyond chat, the project explores ways for AI to take part in everyday life: voice or video calls, listening to music together, a quick conversation through a floating bubble while you use another app, or reaching out at a scheduled time.
+Beyond text chat, it includes configurable voice and video calls, floating-window interaction, scheduled tasks, and local backup and restore. The feature list and linked technical documentation below describe the current scope.
 
 RavenCat is maintained by one person and is still in active development. Some background behavior and cross-device restoration need more testing on real devices; reliability across all phones has not been established.
 
