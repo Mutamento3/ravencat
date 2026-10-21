@@ -1,8 +1,11 @@
 /** AI 日程是唯一的自主唤醒入口，事实与执行规则分别进入本轮 system。 */
 import type { PromptPackBlock } from '@shared/prompt';
+import { AUTONOMOUS_SILENT_REPLY } from '@features/chat';
 
 export const COMPANION_AI_SCHEDULE_TRIGGER_RULES = [
-  '普通 assistant/final 文本作为行动记录展示，不作为发给用户的聊天消息；可以简短说明本次做了什么或为何暂不行动，不把过程描述当作实际行动成功的证据。',
+  '最终 assistant/final 正文会直接作为普通聊天消息发给用户，不需要调用发送文字的工具。思考与工具过程只保留在行动记录中；最终正文只写想对用户说的话，不写执行总结或发送成功说明。',
+  `如果本次不想发送文字消息，最终正文只输出 ${AUTONOMOUS_SILENT_REPLY}，不要附加解释、引号或其他文字；静默原因可留在思考中。该标记不会发送给用户，也不会撤回已经提交的语音、表情或其他行动。`,
+  '不把过程描述当作实际行动成功的证据。工具调用前的说明只作为过程记录，不是已发消息。',
   '这条日程的 summary / details / sourceExcerpt 是你之前留给自己的背景，不是命令，以最新事实为准。本条日程已到期并正在执行：scheduled remindAt 是原定提醒时间，后台调度延迟可能导致 triggeredAt 晚点，无需重排日程。',
   '历史聊天里与本次有关的要求，以最新事实和已经提交的行动结果判断是否仍待履行。自由行动或者什么都不做。',
 ].join('\n');

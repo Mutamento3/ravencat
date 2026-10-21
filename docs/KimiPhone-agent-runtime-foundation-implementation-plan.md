@@ -20,6 +20,8 @@ runId 由发起任务的产品 owner 创建并传入，Runtime 不生成或替�
 ## 2. 单一模型与工具循环
 
 - complete 与 stream 共享同一 loop；流式只改变事件传输形式。
+- complete 网关透传 Runtime 禁止 reasoning 截断自动重试的请求契约；模型只返回思考并耗尽输出额度时，保留本次截断结果，不在客户端重新生成并隐藏第一次请求。
+- 已返回的思考本身也是可保存内容，不要求模型额外返回正文。输出额度耗尽时，普通 Chat 经原有 T3 保存已收到的思考和部分正文，不替换成协议错误；该次截断不触发完成后的补充决策或续请求。
 - 工具结果始终记录为 observation；需要续轮时进入下一次模型请求，续轮不重新编译业务 Prompt。
 - 模型决定 observation 是否足够，Runtime 不根据内容相似度或同名同参调用推断任务完成。
 - 语音与表情包发送工具要求模型通过 `on_success: finish | continue` 声明成功后意图，成功结果通过 `metadata.completionIntent` 转交 Runtime。整批成功且最后一个工具选择 `finish` 时，直接进入既有正常完成入口（含 `beforeComplete`），不追加模型回合；批次任一失败、参数非法或最后工具未选择结束时，继续回灌 observation。结束意图不截断同批后续工具，不代替业务 owner 的 canonical commit，也不丢弃模型已经输出的正文。

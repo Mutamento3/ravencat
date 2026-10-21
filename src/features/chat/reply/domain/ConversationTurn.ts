@@ -44,6 +44,7 @@ export interface ConversationTurnRun {
 
 /** 菜单资格与重写中的隐藏范围均来自持久化 owner。 */
 export interface ChatRegenerationState {
+  versionedRunIds: string[];
   eligibleRunId: string | null;
   sourceRunId: string | null;
   hiddenMessageIds: number[];

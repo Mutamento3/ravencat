@@ -95,7 +95,7 @@ export async function shareChatRecord(params: { target: ChatShareTarget; record:
     return { warning: null };
   }
   const session = await resolveCanonicalConversation({ aiId: target.id });
-  if (isChatSendBlockedByCall(await getActiveChatCall('chat-send-preflight'), session.id, target.id)) throw new Error('目标 AI 正在通话，请结束通话后再分享');
+  if (isChatSendBlockedByCall(getActiveChatCall(), session.id, target.id)) throw new Error('目标 AI 正在通话，请结束通话后再分享');
   const result = await sendUserMessage({ sessionId: session.id, text, sharedRecord: record, clientMessageId }, target.aiConfig);
   if (!result.userMessage) throw new Error(result.error ?? '分享失败');
   return { warning: result.success ? null : `记录已分享，AI 回复启动失败：${result.error}` };

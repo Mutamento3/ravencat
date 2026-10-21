@@ -10,6 +10,7 @@
  */
 
 import type { DatabaseTransactionExecutor } from '@platform/persistence';
+import type { ChatReplyVersionHistory } from './ChatReplyVersion';
 import type {
   ConversationTurnCommitItem,
   ConversationToolPackageCommit,
@@ -27,6 +28,9 @@ export interface IConversationTurnRepository {
   finishExecutionHostRequests(attempts: readonly ConversationHostStartAttempt[], accepted: boolean): Promise<void>;
   isRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, runId: string): Promise<boolean>;
   getRegenerationState(sessionId: string): Promise<ChatRegenerationState>;
+  getReplyVersionHistory(sessionId: string, runId: string): Promise<ChatReplyVersionHistory | null>;
+  /** 在同一事务裁决最新回合资格并替换当前候选，不执行模型或工具。 */
+  adoptReplyVersion(sessionId: string, runId: string, versionId: string, expectedVersionId: string): Promise<void>;
   /** 只持久化用户意图；实际 claim 和执行仍由 Android 宿主完成。 */
   requestRegeneration(sessionId: string, messageId: number): Promise<number>;
   /** 启动失败只能撤销自己的请求，不能撤销后来一次重写。 */
@@ -55,7 +59,7 @@ export interface IConversationTurnRepository {
    * T2 模式一：CAS 含 active_run_id IS NULL；已有 active run 时返回 null，
    * 不得抢走正常 active run。普通发送流程与重复触发一律使用此模式。
    *
-   * @returns 新 active run；无待回复输入／重写意图，或已有 active run 返回 null
+   * @returns 新 active run；无待回复输入／重写意图、已有 active run，或输入已被失败／取消终态覆盖时返回 null
    */
   claimIfIdle(
     sessionId: string,
@@ -65,6 +69,7 @@ export interface IConversationTurnRepository {
   /**
    * T2 模式二：完整 claim，事务内 supersede 既有 active run（崩溃孤儿）。
    * 只有 recovery 在确认当前进程无对应内存句柄时才允许使用。
+   * 与 claimIfIdle 一样，不重新领取失败／取消终态覆盖的输入。
    */
   takeOverOrphan(
     sessionId: string,

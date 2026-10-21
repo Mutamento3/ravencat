@@ -88,7 +88,7 @@ interface InvalidChatMetadataRow {
   metadata_json: string;
 }
 
-const MEDIA_ASSET_REFERENCE_QUERY = `
+const MEDIA_ASSET_LEGACY_REFERENCE_QUERY = `
   SELECT moments_cover_media_asset_id AS asset_id, 'moments_cover' AS reference_kind,
          id AS owner_id, 'user_profile.moments_cover_media_asset_id' AS location
   FROM user_profile WHERE moments_cover_media_asset_id IS NOT NULL
@@ -154,6 +154,16 @@ const MEDIA_ASSET_REFERENCE_QUERY = `
     AND TRIM(CAST(tree.value AS TEXT)) <> ''
 `;
 
+const MEDIA_ASSET_REFERENCE_QUERY = `${MEDIA_ASSET_LEGACY_REFERENCE_QUERY}
+  UNION ALL
+  SELECT CAST(tree.value AS TEXT), 'chat_reply_version', chat_reply_versions.id,
+         'chat_reply_versions.snapshot_json:' || tree.fullkey
+  FROM chat_reply_versions, json_tree(chat_reply_versions.snapshot_json) AS tree
+  WHERE tree.type = 'text'
+    AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
+    AND TRIM(CAST(tree.value AS TEXT)) <> ''
+`;
+
 /**
  * targeted release 的候选裁决：只对候选 asset id 探测全部引用源。
  *
@@ -208,6 +218,12 @@ const MEDIA_ASSET_CANDIDATE_UNREFERENCED_QUERY = `
             AND TRIM(CAST(tree.value AS TEXT)) = candidate.asset_id
         )
     AND NOT EXISTS (
+          SELECT 1 FROM chat_reply_versions, json_tree(chat_reply_versions.snapshot_json) AS tree
+          WHERE tree.type = 'text'
+            AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
+            AND TRIM(CAST(tree.value AS TEXT)) = candidate.asset_id
+        )
+    AND NOT EXISTS (
           SELECT 1
           FROM messages,
                json_tree(CASE
@@ -242,6 +258,13 @@ const CHAT_SESSION_MEDIA_ASSET_IDS_QUERY = `
     AND json_valid(messages.metadata_json) = 1
     AND tree.type = 'text'
     AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
+    AND TRIM(CAST(tree.value AS TEXT)) <> ''
+  UNION
+  SELECT DISTINCT CAST(tree.value AS TEXT) AS asset_id
+  FROM chat_reply_versions v JOIN chat_reply_version_sets s ON s.id = v.set_id,
+       json_tree(v.snapshot_json) AS tree
+  WHERE s.session_id IN ({{SESSIONS}})
+    AND tree.type = 'text' AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
     AND TRIM(CAST(tree.value AS TEXT)) <> ''
 `;
 
@@ -333,9 +356,12 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
 
   /** 备份读取 snapshot 自己的引用，不拿活动库的新选择替代已经快照的事实。 */
   async listBackupAssets(executor: DatabaseReadExecutor): Promise<readonly MediaAsset[]> {
+    // 恢复预检读取尚未升级的 staging 快照；版本表从 137 起存在，不能对旧备份执行新表查询。
+    const version = await executor.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+    const references = version!.user_version >= 137 ? MEDIA_ASSET_REFERENCE_QUERY : MEDIA_ASSET_LEGACY_REFERENCE_QUERY;
     const rows = await executor.getAllAsync<Omit<MediaAssetRow, 'id'> & { id: string | null; asset_id: string }>(`
       SELECT media_assets.*, referenced.asset_id
-      FROM (SELECT DISTINCT asset_id FROM (${MEDIA_ASSET_REFERENCE_QUERY})) AS referenced
+      FROM (SELECT DISTINCT asset_id FROM (${references})) AS referenced
       LEFT JOIN media_assets ON media_assets.id = referenced.asset_id
     `);
     return rows.map((row) => {
@@ -563,8 +589,8 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
     }
 
     const rows = await executor.getAllAsync<{ asset_id: string }>(
-      CHAT_SESSION_MEDIA_ASSET_IDS_QUERY.replace('{{SESSIONS}}', buildPlaceholders(sessions.length)),
-      sessions,
+      CHAT_SESSION_MEDIA_ASSET_IDS_QUERY.replaceAll('{{SESSIONS}}', buildPlaceholders(sessions.length)),
+      [...sessions, ...sessions],
     );
 
     return rows.map((row) => row.asset_id);

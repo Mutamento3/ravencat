@@ -18,7 +18,12 @@ import {
 export interface AssistantPromptEditorDetails {
   directToolNames: string[];
   timeEnabled: boolean;
+  messageTimestampsEnabled: boolean;
   batteryEnabled: boolean;
+  /** 第 11 项「用户状态与一起听」注入开关，默认开启。 */
+  userStateEnabled: boolean;
+  /** 第 12 项「时刻社交信息」注入开关，默认开启。 */
+  socialEnabled: boolean;
   settings: AssistantPromptSettings;
   states: AssistantPromptDefinitionState[];
   overrides: AssistantPromptDefinitionOverride[];
@@ -44,7 +49,10 @@ export interface AssistantPromptAdvancedSnapshot {
 export interface ResolvedAssistantPromptConfiguration {
   agentRegistryExcludedAssistantIds: string[];
   timeEnabled: boolean;
+  messageTimestampsEnabled: boolean;
   batteryEnabled: boolean;
+  userStateEnabled: boolean;
+  socialEnabled: boolean;
   overrides: Record<string, string>;
   disabledDefinitionIds: string[];
   userPrompts: AssistantUserPrompt[];
@@ -91,7 +99,10 @@ export async function getAssistantPromptEditorDetails(
     directToolNames,
     settings,
     timeEnabled: states.find((state) => state.definitionId === 'context.time_awareness')?.enabled ?? true,
+    messageTimestampsEnabled: states.find((state) => state.definitionId === 'context.message_timestamps')?.enabled ?? false,
     batteryEnabled: states.find((state) => state.definitionId === 'context.device_battery')?.enabled ?? true,
+    userStateEnabled: states.find((state) => state.definitionId === 'context.user_state')?.enabled ?? true,
+    socialEnabled: states.find((state) => state.definitionId === 'context.social')?.enabled ?? true,
     states,
     overrides,
     userPrompts: [...userPrompts].sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id)),
@@ -135,7 +146,10 @@ export async function resolveAssistantPromptConfiguration(params: {
   ]);
   return {
     timeEnabled: states.find((state) => state.definitionId === 'context.time_awareness')?.enabled ?? true,
+    messageTimestampsEnabled: states.find((state) => state.definitionId === 'context.message_timestamps')?.enabled ?? false,
     batteryEnabled: states.find((state) => state.definitionId === 'context.device_battery')?.enabled ?? true,
+    userStateEnabled: states.find((state) => state.definitionId === 'context.user_state')?.enabled ?? true,
+    socialEnabled: states.find((state) => state.definitionId === 'context.social')?.enabled ?? true,
     agentRegistryExcludedAssistantIds: defaults.agentRegistryExcludedAssistantIds,
     overrides: { ...defaults.overrides, ...Object.fromEntries(
       overrides

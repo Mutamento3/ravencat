@@ -34,7 +34,7 @@ export interface CommitMessagesInput {
 
 /** Stateful timeline entry 的幂等提交输入。 */
 export interface UpsertStatefulTimelineEntryInput {
-  /** 业务消息已经由 Chat application 构造完成，仓储只负责原子落库。 */
+  /** 完整消息快照由 Chat 构造；可将同一身份的过程原子转换为最终 assistant 正文。 */
   message: CreateMessageInput;
   previewText: string | null;
 }
@@ -418,6 +418,7 @@ export interface IMessageRepository {
   deleteMessagesWithMediaCandidatesInTransaction(
     transaction: DatabaseTransactionExecutor,
     messageIds: readonly number[],
+    options?: { preserveReplyVersions: boolean },
   ): Promise<DeleteMessagesWithMediaCandidatesResult>;
 
   // ============================================================================

@@ -137,8 +137,8 @@ assert.equal((await factory.createProtocolPromptBlock('missing', context, {})).s
 
 const { getSystemPromptPreset } = load('src/host/prompt/compiler/systemPromptPresets.ts');
 const { PromptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
-    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
-  '../tokenBudget': load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': load('src/shared/prompt/estimateTextTokens.ts') }),
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW, ...load('src/shared/prompt/messageTimestamp.ts') },
+  '../tokenBudget': load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': { ...load('src/shared/prompt/estimateTextTokens.ts'), ...load('src/shared/prompt/messageTimestamp.ts') } }),
   './promptBlockMetadata': load('src/host/prompt/compiler/promptBlockMetadata.ts'),
 });
 const compiler = new PromptPackCompiler();
@@ -155,7 +155,6 @@ const factoryBoundary = {
   createAutonomousRecentChatContextBlock: () => draft('recent_chat_window'),
   createAutonomousExecutionTimeBlock: () => draft('time_awareness'),
   createGroupMemberReplyConfidentialityBlock: () => ({ ...draft('group_chat_context'), definitionId: 'output.group_member_reply_confidentiality', slot: 'output_contract', protection: 'locked' }),
-  createRecentMomentsBlock: async () => draft('recent_moments_summary'),
 };
 const providerKeys = { 'context.agent_registry': 'agent_registry_summary', 'context.moments_social_inbox': 'moments_social_inbox',
   'context.passive_memory': 'passive_memory', 'context.group_chat': 'group_chat_context', 'context.assistant_nickname': 'assistant_nickname',

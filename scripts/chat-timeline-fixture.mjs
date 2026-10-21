@@ -34,6 +34,8 @@ export function installChatTimelineSchema(database) {
     database.exec('ALTER TABLE conversation_turn_runs ADD COLUMN input_cursor_at_claim INTEGER');
   }
   database.exec(SCHEMAS.chatRegenerationRequests);
+  database.exec(SCHEMAS.chatReplyVersions);
+  database.exec(SCHEMAS.agentRuns);
   database.exec(SCHEMAS.chatTurnPresentations);
 }
 const timelineModule = ts.transpileModule(fs.readFileSync(new URL('../src/features/chat/messages/infrastructure/ChatTimelineSql.ts', import.meta.url), 'utf8'), {
@@ -42,6 +44,11 @@ const timelineModule = ts.transpileModule(fs.readFileSync(new URL('../src/featur
 export const chatTimelineModuleUrl = 'data:text/javascript;base64,' + Buffer.from(timelineModule).toString('base64');
 const mutationSourceUrl = new URL('../src/features/chat/messages/infrastructure/ChatMessageMutationSql.ts', import.meta.url);
 export const chatMessageMutations = loadSource(mutationSourceUrl);
+export const chatReplyVersionSql = loadSource(new URL('../src/features/chat/reply/infrastructure/ChatReplyVersionSql.ts', import.meta.url));
+const replyVersionModule = ts.transpileModule(fs.readFileSync(new URL('../src/features/chat/reply/infrastructure/ChatReplyVersionSql.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+export const chatReplyVersionModuleUrl = 'data:text/javascript;base64,' + Buffer.from(replyVersionModule).toString('base64');
 const presentationSql = ts.transpileModule(fs.readFileSync(new URL('../src/features/chat/reply/infrastructure/ChatTurnPresentationSql.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText;
 const presentationSqlUrl = 'data:text/javascript;base64,' + Buffer.from(presentationSql).toString('base64');
 const mutationModule = ts.transpileModule(fs.readFileSync(mutationSourceUrl, 'utf8').replace("from '../../reply/infrastructure/ChatTurnPresentationSql'", `from '${presentationSqlUrl}'`), {

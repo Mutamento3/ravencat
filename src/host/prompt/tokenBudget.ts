@@ -1,6 +1,7 @@
 /** 估算 Prompt token，并在超过提醒阈值时记录诊断；不改写运行时内容。 */
 import {
   estimateTextTokens,
+  renderPromptMessageWithTimestamp,
   type PromptPackBlock,
   type PromptPackMessage,
   type PromptPackMessageContent,
@@ -32,7 +33,8 @@ export function applyTokenBudget(
   blocks: PromptPackBlock[],
   recentMessages: PromptPackMessage[],
   currentInputMessage: PromptPackMessage | null,
-  budget = DEFAULT_TOKEN_BUDGET
+  budget = DEFAULT_TOKEN_BUDGET,
+  messageTimestampsEnabled = false,
 ): ApplyTokenBudgetResult {
   const log: string[] = [];
 
@@ -43,7 +45,7 @@ export function applyTokenBudget(
     const modelMessages = currentInputMessage
       ? [...currentRecentMessages, currentInputMessage]
       : currentRecentMessages;
-    const modelMessagesTokens = modelMessages.reduce((sum, msg) => {
+    const modelMessagesTokens = modelMessages.flatMap((message) => renderPromptMessageWithTimestamp(message, messageTimestampsEnabled)).reduce((sum, msg) => {
       return sum + estimateMessageContentTokens(msg.content);
     }, 0);
     return Math.ceil(blocksTokens + modelMessagesTokens);

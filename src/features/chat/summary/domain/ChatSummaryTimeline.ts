@@ -2,7 +2,6 @@
 import type { CallSummarySource } from '@features/calls';
 import type { ChatContextItem } from './ChatContext';
 import type { SharedChatRecord } from '../../messages/domain/SharedChatRecord';
-import { CHAT_SUMMARY_INPUT_MAX_CHARACTERS } from './ChatSummaryRepository';
 
 export interface ConversationContextItem {
   source: 'chat' | 'call';
@@ -18,8 +17,6 @@ export interface ConversationContextItem {
   eventId?: string;
   callId?: string;
   callBoundary?: 'start' | 'end';
-  /** 单条超长原文分片仍属于同一消息，只在摘要任务输入标明续段。 */
-  continuation?: { index: number; total: number };
 }
 
 export function buildConversationTimeline(raw: readonly ChatContextItem[], calls: readonly CallSummarySource[]): ConversationContextItem[] {
@@ -89,26 +86,4 @@ export function selectSummaryRange(items: readonly ConversationContextItem[], ba
     end = Math.max(end, endedIndex + 1);
   }
   return items.slice(0, end);
-}
-
-/** 5000 字只约束本次新原文；优先完整消息，单条超限才按 Unicode 码点拆开。 */
-export function splitSummaryMessages(items: readonly ConversationContextItem[]): ConversationContextItem[][] {
-  const batches: ConversationContextItem[][] = [];
-  let batch: ConversationContextItem[] = [];
-  let length = 0;
-  for (const item of items) {
-    const characters = Array.from(item.content);
-    const total = Math.ceil(characters.length / CHAT_SUMMARY_INPUT_MAX_CHARACTERS);
-    for (let index = 0; index < total; index++) {
-      const part = characters.slice(index * CHAT_SUMMARY_INPUT_MAX_CHARACTERS, (index + 1) * CHAT_SUMMARY_INPUT_MAX_CHARACTERS).join('');
-      const partLength = Array.from(part).length;
-      if (length + partLength > CHAT_SUMMARY_INPUT_MAX_CHARACTERS && batch.length) {
-        batches.push(batch); batch = []; length = 0;
-      }
-      batch.push(total === 1 ? item : { ...item, content: part, continuation: { index: index + 1, total } });
-      length += partLength;
-    }
-  }
-  if (batch.length) batches.push(batch);
-  return batches;
 }

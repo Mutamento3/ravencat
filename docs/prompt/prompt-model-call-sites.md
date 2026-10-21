@@ -26,7 +26,7 @@
 | `call.outgoing_decision` | `features/calls/application/runtime/OutgoingCallDecision.ts` | resolved Chat Pack + Calls Blocks | accept/reject JSON |
 | `call.post_user_hangup` | `features/calls/application/runtime/PostUserHangUpFollowUp.ts` | standalone Pack + Calls Blocks | send_message/stay_silent JSON |
 | `together_listening.post_user_decline` | `features/togetherListening/application/PostUserDeclineFollowUp.ts` | standalone Pack + Together Listening Blocks | send_message/stay_silent 严格 JSON |
-| `raven_cat.ai_schedule_trigger` | `features/companion/application/RunAIScheduleAutonomousAgent.ts` → `RunHostAutonomousAgent.ts` → Host Agent assembly | resolved Chat Pack + AI Schedule Blocks | 正常 Agent tool loop；业务动作由 Feature Tool 提交 |
+| `raven_cat.ai_schedule_trigger` | `features/companion/application/RunAIScheduleAutonomousAgent.ts` → `RunHostAutonomousAgent.ts` → Host Agent assembly | resolved Chat Pack + AI Schedule Blocks | 正常 Agent tool loop；最终正文直接提交，`[[NO_MESSAGE]]` 精确表示静默 |
 | `chat.summary` | `host/composition/configureChatSummaryRuntime.ts` | resolved Summary Pack：聊天稳定前缀＋一级或二级任务规则 | content JSON；一级追加或二级归纳交接的事务提交归 Chat |
 | `vision.ocr` | `features/chat/reply/application/ResolveChatImageModelInput.ts` | standalone Pack | 视觉转述纯文本 |
 

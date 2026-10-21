@@ -81,13 +81,14 @@ const chatGatewayModule = loadTypeScriptModule(
 
 const { ChatAgentModelGateway } = chatGatewayModule;
 
-const tokenEstimator = loadTypeScriptModule('src/shared/prompt/estimateTextTokens.ts');
+const tokenEstimator = { ...loadTypeScriptModule('src/shared/prompt/estimateTextTokens.ts'),
+  ...loadTypeScriptModule('src/shared/prompt/messageTimestamp.ts') };
 const tokenBudget = loadTypeScriptModule('src/host/prompt/tokenBudget.ts', {
   '@shared/prompt': tokenEstimator,
 });
 const blockMetadata = loadTypeScriptModule('src/host/prompt/compiler/promptBlockMetadata.ts');
 const { PromptPackCompiler } = loadTypeScriptModule('src/host/prompt/compiler/PromptPackCompiler.ts', {
-    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW, ...tokenEstimator },
   '../tokenBudget': tokenBudget,
   './promptBlockMetadata': blockMetadata,
 });
@@ -247,7 +248,7 @@ for (const testCase of cases) {
 
   assert.equal(call.options.signal, signal, '请求必须透传同一个 abort signal');
   if (testCase.transport === 'complete') {
-    assert.equal(call.options.allowReasoningLengthRetry, true, 'complete 请求必须保留 reasoning-length retry');
+    assert.equal(call.options.allowReasoningLengthRetry, false, 'complete 请求不得在 Runtime 之外隐藏重发');
   } else {
     assert.equal(typeof call.options.onDelta, 'function', 'stream 请求必须透传增量回调');
   }
@@ -308,7 +309,7 @@ assert.ok(appendedSummaryPrompt.systemPrompt.startsWith(oldSummaryPrompt.systemP
 assert.deepEqual(appendedSummaryPrompt.recentMessages, oldSummaryPrompt.recentMessages);
 
 // 输入适配只替换末尾输入，编译器固定的本轮状态位置不依赖输入条数或多模态形式。
-const { applyRuntimeModelInput } = loadTypeScriptModule('src/features/chat/reply/application/ChatReplyUtils.ts');
+const { applyRuntimeModelInput } = loadTypeScriptModule('src/features/chat/reply/application/ChatReplyUtils.ts', { '@shared/prompt': tokenEstimator });
 for (const inputOptions of [
   { batch: [{ type: 'text', text: '图片问题' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,test' } }] },
   { inputs: [{ role: 'user', content: '第一条输入' }, { role: 'user', content: '第二条输入' }] },
@@ -360,6 +361,7 @@ for (const transport of ['complete', 'stream']) {
 
 // 验证真实 Client 发出的请求，避免只验证网关向 Client 传参而漏掉重复 system。
 const { BaseAIClient } = loadTypeScriptModule('src/platform/ai/BaseAIClient.ts', {
+  './HttpExchangeCapture': { beginAIHttpCapture: async () => null },
   './errorMapping': loadTypeScriptModule('src/platform/ai/errorMapping.ts'),
   './baseUrl': loadTypeScriptModule('src/platform/ai/baseUrl.ts'),
 });
@@ -389,7 +391,7 @@ globalThis.fetch = async (_url, options) => {
     ok: true,
     data: { id: 'provider-message', choices: [{ finish_reason: 'stop', message: { content: '真实回复' } }] },
   };
-  return { ok: next.ok, status: next.ok ? 200 : 400, json: async () => next.data };
+  return Response.json(next.data, { status: next.ok ? 200 : 400 });
 };
 try {
   const promptPack = compilePrompt();
@@ -414,6 +416,19 @@ try {
 
   const tools = requestBodies[0].tools;
   const explicitMessages = [{ role: 'system', content: '显式 system' }, { role: 'user', content: '测试' }];
+  // Runtime 的一次模型回合不能在客户端内丢弃已计费的思考并重新生成。
+  for (const exposedTools of [[], [toolDescriptor()]]) {
+    const start = requestBodies.length;
+    queuedResponses.push({ ok: true, data: { choices: [{ finish_reason: 'length',
+      message: { content: '', reasoning_content: '输出额度内只有思考' } }] } });
+    const limitedGateway = new ChatAgentModelGateway({ client, initialMessages: explicitMessages,
+      diagnosticContext: { sessionId: 'limited', runId: `limited-${exposedTools.length}` } });
+    const turn = await limitedGateway.runTurn({ task: {}, history: [], tools: exposedTools, transport: 'complete' });
+    assert.equal(requestBodies.length, start + 1, '思考耗尽输出额度时一次模型回合只能发送一次 HTTP 请求');
+    assert.equal(turn.finishReason, 'length', '截断事实应交回 Runtime，不能被第二次生成覆盖');
+    assert.equal(turn.reasoningText, '输出额度内只有思考');
+    assert.equal(turn.assistantText, '');
+  }
   for (const retryResponse of [
     { ok: true, data: { choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: '尚未完成' } }] } },
   ]) {

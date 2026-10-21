@@ -169,7 +169,7 @@ assert.equal(capturedRunRequest.request.task.sessionId, 'real-session');
 assert.deepEqual(capturedRunRequest.request.task.allowedToolNames, [
   'normal_host_tool', 'create_ai_schedule', 'mcp.service.lookup', 'invite_listening_together',
 ]);
-assert.equal(capturedRunRequest.finalAssistantPolicy, 'record_as_activity');
+assert.equal(capturedRunRequest.finalAssistantPolicy, 'autonomous_reply');
 assert.deepEqual(
   {
     triggerSource: capturedRunRequest.runtimeContext.triggerSource,
@@ -222,9 +222,10 @@ assert.equal(capturedPromptParams.sessionId, 'real-session');
 // Self Wake wrapper 与 AI Schedule wrapper 只提供各自 trigger context，并委托
 // 公共 bootstrap，不复制整条 autonomous run 链。
 // ---------------------------------------------------------------------------
-const promptBlocks = loadModule('src/features/companion/application/CompanionPromptBlocks.ts', {});
-assert.doesNotMatch(promptBlocks.COMPANION_AI_SCHEDULE_TRIGGER_RULES, /update_ai_schedule|调用.*工具|Registry/,
-  '日程触发输入只声明事实与输出语义，不介绍工具');
+const autonomousReplyContract = loadModule('src/features/chat/reply/application/AutonomousReplyContract.ts', {});
+const promptBlocks = loadModule('src/features/companion/application/CompanionPromptBlocks.ts', {
+  '@features/chat': autonomousReplyContract,
+});
 assistant.enableTools = false;
 await runHostAutonomousAgent({
   runId: 'run-without-tools', ownerAIId: 'host-ai', triggeredAt,

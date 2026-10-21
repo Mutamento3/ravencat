@@ -11,6 +11,7 @@ import { mock } from 'node:test';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cache = new Map();
 const mocks = new Map();
+mocks.set('./HttpExchangeCapture', { beginAIHttpCapture: async () => null });
 let batteryReads = 0;
 mocks.set('@platform/device', { getDeviceBatterySnapshot: async () => { batteryReads++; return { status: 'unavailable' }; } });
 function load(relative) {
@@ -38,7 +39,8 @@ let remaining = raw;
 let passiveInput;
 let timelineMessages = [];
 mocks.set('@shared', { DEFAULT_SELF_NAME: '用户' });
-mocks.set('@shared/prompt', { ...load('src/shared/prompt/estimateTextTokens.ts'), CHAT_PROMPT_READING_FLOW });
+mocks.set('@shared/prompt', { ...load('src/shared/prompt/estimateTextTokens.ts'),
+  ...load('src/shared/prompt/messageTimestamp.ts'), CHAT_PROMPT_READING_FLOW });
 mocks.set('@features/memory', { recallPassiveMemory: async (_assistant, input) => {
   passiveInput = input;
   return [{ id: 'memory', content: '被动记忆的完整正文', summary: '记忆独立摘要', rememberedAt: '2026-10-04T03:00:00.000Z' }];
@@ -74,6 +76,19 @@ const params = { sessionId: 'conversation', aiConfig: { id: 'a', name: '小鸦',
 const pending = await assembler.assembleChatPromptPack(params);
 const systemText = (pack) => [pack.systemPrompt, ...pack.modelMessages.filter((item) => item.role === 'system').map((item) => item.content)].join('\n');
 assert.equal(pending.recentMessages.length, 25, '摘要等待期间不能按 N 静默裁掉原文');
+assert.equal(pending.recentMessages[0].content, '原文 1');
+assert.equal(pending.recentMessages[1].content, '原文 2', '用户与 AI 历史正文不混入时间');
+assert.equal(pending.recentMessages[1].createdAt, '2026-10-04T04:00:00.000Z');
+assert.equal(pending.messageTimestampsEnabled, false);
+assert.ok(!pending.modelMessages.some((item) => String(item.content).includes('【下一条消息的记录时间】')));
+const timestamped = await assembler.assembleChatPromptPack({ ...params, aiConfig: { ...params.aiConfig, messageTimestampsEnabled: true } });
+assert.equal(timestamped.messageTimestampsEnabled, true);
+assert.match(timestamped.modelMessages[0].content, /2026-10-04T04:00:00Z/);
+assert.equal(timestamped.modelMessages[0].role, 'system');
+assert.equal(timestamped.modelMessages[3].role, 'assistant');
+assert.equal(timestamped.modelMessages[3].content, '原文 2', '开启后时间也不能变成 assistant 回复范例');
+assert.ok(timestamped.estimatedTokenCount > pending.estimatedTokenCount, '估算包含时间元数据的开销');
+assert.equal(raw[0].content, '原文 1', '时间只属于模型输入，不改写保存的正文');
 assert.equal(passiveInput, params.currentInput);
 assert.equal(pending.modelMessages.filter((item) => item.content === params.currentInput).length, 1);
 assert.ok(systemText(pending).includes('被动记忆的完整正文'));
@@ -170,8 +185,9 @@ remaining = [raw[0], project(errorMessage), project(toolMessage)];
 const recovered = await assembler.assembleChatPromptPack({ ...params, runtimeContext: { forceAppendUserText: true } });
 assert.deepEqual(recovered.recentMessages.map((item) => item.sourceMessageId), [1, 31, 32]);
 for (const event of [errorMessage, toolMessage]) {
-  const sent = recovered.modelMessages.find((item) => item.content === metadata.buildChatSystemEventModelText(event));
+  const sent = recovered.modelMessages.find((item) => item.sourceMessageId === event.id);
   assert.equal(sent.role, 'user');
+  assert.equal(sent.content, metadata.buildChatSystemEventModelText(event));
   assert.ok(!recovered.systemPrompt.includes(event.text));
 }
 // 通话、语音和全部表情包工具，与其他工具共用后续 Prompt 的历史事件通道。
@@ -187,8 +203,9 @@ remaining = [raw[0], ...mediaToolEvents.map(project)];
 const afterMediaTools = await assembler.assembleChatPromptPack({ ...params, runtimeContext: { forceAppendUserText: true } });
 assert.deepEqual(afterMediaTools.recentMessages.map((item) => item.sourceMessageId), [1, 50, 51, 52, 53, 54, 55]);
 for (const event of mediaToolEvents) {
-  const history = afterMediaTools.modelMessages.find((item) => item.content === metadata.buildChatSystemEventModelText(event));
+  const history = afterMediaTools.modelMessages.find((item) => item.sourceMessageId === event.id);
   assert.equal(history.role, 'user');
+  assert.equal(history.content, metadata.buildChatSystemEventModelText(event));
   assert.ok(!afterMediaTools.systemPrompt.includes(event.text), '工具历史没有指令权限');
 }
 remaining = [raw[0], project(errorMessage), project(toolMessage)];
@@ -275,15 +292,22 @@ let summaryBus;
 let auxiliaryChanged;
 mocks.set('@features/assistants', { subscribeAuxiliaryModelsChanged: listener => { auxiliaryChanged = listener; return () => {}; } });
 let summaryRuns = 0;
+let summaryConversations = ['conversation'];
+const preparedSummaryScopes = [];
+const processedSummaryIds = [];
 let processSummaryHook = async () => false;
 let summaryChanged;
+mocks.set('@shared/ui/appDialogStore', { showAppDialog() {} });
 Object.assign(mocks.get('@features/chat'), { subscribeChatSummaryChanged: listener => { summaryChanged=listener; return()=>{}; } });
 mocks.set('react-native', { InteractionManager: { runAfterInteractions(callback) {
   scheduledSummaries.push(callback); return { cancel() {} };
 } } });
 mocks.set('@features/chat/composition', {
-  setChatEventBus(bus) { summaryBus = bus; }, prepareChatSummaryConversations: async () => ['conversation'],
-  processChatSummary: async () => { summaryRuns++; return processSummaryHook(); }, getNextChatSummaryWakeAt: async () => null,
+  setChatEventBus(bus) { summaryBus = bus; }, prepareChatSummaryConversations: async ids => {
+    preparedSummaryScopes.push(ids);
+    return summaryConversations.filter(id => ids === undefined || ids.includes(id));
+  },
+  processChatSummary: async id => { summaryRuns++; processedSummaryIds.push(id); return processSummaryHook(); }, getNextChatSummaryWakeAt: async () => null,
 });
 const summaryQueue = load('src/host/runtime/ChatSummaryQueueCoordinator.ts');
 summaryQueue.configureChatSummaryQueue();
@@ -295,7 +319,7 @@ summaryChanged('conversation','task');
 assert.equal(scheduledSummaries.length,0,'页面任务状态刷新不唤醒模型队列');
 summaryBus.emit('typingStatusChanged');
 assert.equal(scheduledSummaries.length, 0);
-summaryBus.emit('messagesPatched');
+summaryBus.emit('messagesPatched', { sessionId: 'conversation' });
 assert.equal(scheduledSummaries.length, 1);
 scheduledSummaries.shift()();
 await new Promise(setImmediate);
@@ -308,7 +332,7 @@ summaryQueue.setChatSummaryForegroundActive(true);
 scheduledSummaries.shift()();
 await new Promise(setImmediate);
 const activeRuns = summaryRuns;
-for(let index=0;index<100;index++) summaryBus.emit('messagesUpdated');
+for(let index=0;index<100;index++) summaryBus.emit('messagesUpdated', { sessionId: 'conversation' });
 assert.equal(scheduledSummaries.length,0);
 assert.equal(summaryRuns,activeRuns);
 processSummaryHook = async () => false;
@@ -318,7 +342,33 @@ assert.equal(scheduledSummaries.length,1,'一百次唤醒合并成一次后续�
 scheduledSummaries.shift()();
 await new Promise(setImmediate);
 assert.equal(summaryRuns,activeRuns+1);
+assert.deepEqual(preparedSummaryScopes.at(-1), ['conversation']);
 await summaryQueue.stopChatSummaryQueueForReset();
+// 普通消息仅检查所属会话，前台恢复与模型配置变化仍完整发现；多个会话不相互覆盖。
+summaryConversations = ['conversation', 'other'];
+summaryQueue.setChatSummaryForegroundActive(true);
+scheduledSummaries.shift()(); await new Promise(setImmediate);
+assert.equal(preparedSummaryScopes.at(-1), undefined);
+assert.deepEqual(processedSummaryIds.slice(-2), summaryConversations);
+summaryBus.emit('messagesUpdated', { sessionId: 'conversation' });
+scheduledSummaries.shift()(); await new Promise(setImmediate);
+assert.deepEqual(preparedSummaryScopes.at(-1), ['conversation']);
+summaryChanged('other', 'summary');
+summaryBus.emit('messagesPatched', { sessionId: 'conversation' });
+scheduledSummaries.shift()(); await new Promise(setImmediate);
+assert.deepEqual(new Set(preparedSummaryScopes.at(-1)), new Set(summaryConversations));
+auxiliaryChanged();
+scheduledSummaries.shift()(); await new Promise(setImmediate);
+assert.equal(preparedSummaryScopes.at(-1), undefined);
+let firstBacklog = true;
+processSummaryHook = async () => { const processed = firstBacklog; firstBacklog = false; return processed; };
+summaryBus.emit('messagesUpdated', { sessionId: 'conversation' });
+scheduledSummaries.shift()(); await new Promise(setImmediate);
+assert.equal(scheduledSummaries.length, 1, '成功处理后继续消费该会话积压');
+scheduledSummaries.shift()(); await new Promise(setImmediate);
+assert.deepEqual(preparedSummaryScopes.at(-1), ['conversation']);
+await summaryQueue.stopChatSummaryQueueForReset();
+summaryConversations = ['conversation'];
 processSummaryHook=async()=>{summaryChanged('conversation','task');throw new Error('本地维护故障');};
 const loggedErrors=[];
 const previousConsoleError=console.error;
@@ -337,7 +387,7 @@ const summaryPrompt = load('src/features/chat/summary/application/ChatSummaryPro
 mocks.set('@features/prompting', {
   resolveLegacyPromptPreset: async ({ scenarioId }) => ({ preset: presets.getSystemPromptPreset(scenarioId) }),
   listPromptCustomBlocks: async () => [],
-  resolveAssistantPromptConfiguration: async () => ({ overrides: {}, disabledDefinitionIds: [], timeEnabled: true, batteryEnabled: true,
+  resolveAssistantPromptConfiguration: async () => ({ overrides: {}, disabledDefinitionIds: [], timeEnabled: true, batteryEnabled: true, userStateEnabled: true, socialEnabled: true,
     userPrompts: [{ id: 'static', name: '长期片段', content: '保持不变的长期静态提示词' }] }),
 });
 mocks.set('./compiler', load('src/host/prompt/compiler/PromptPackCompiler.ts'));
@@ -391,7 +441,6 @@ load('src/host/composition/configureChatSummaryRuntime.ts').configureChatSummary
 const diagnostics=[]; const report=async value=>{diagnostics.push(value);};
 const requestSettings={requestTimeoutSeconds:300,maxOutputTokens:null,modelConfigId:null};
 const summaryClaim = { conversationId: 'a', previous: [], timeZone: 'Asia/Shanghai', calls: [],
-  part: { index: 1, total: 1 }, earlierAdditionsReadOnly: [],
   messages: [{ source: 'chat', speaker: 'user', timestamp: '2026-10-04T04:00:00.000Z', content: '我很担心复习进度，想一起定个计划。' }] };
 assert.equal(await summaryRuntime.generateAddition(summaryClaim, new AbortController().signal,report,requestSettings), plainSummary,
   '一级直接返回去除首尾空白的纯正文，保留引号与换行');

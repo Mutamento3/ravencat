@@ -15,6 +15,14 @@ import { emitChatMessagesReloadRequested, emitChatTurnExecutionChanged } from '.
 import { isChatConversationForeground } from '../delivery/ChatForegroundContext';
 import { ChatReplyRunCancelledError } from './ChatReplyAbort';
 
+/**
+ * 流式展示批合并间隔。模型 delta 是逐 token 到达的，但「交付必须先持久化、后更新
+ * 展示 store」，每个批次都要先写展示表再推给 UI；间隔直接决定用户看到的流式节奏。
+ * 400ms 时正文约 2.5 次/秒整块出现，肉眼明显「一段一段」；80ms（12.5 批/秒）时
+ * 每批只有几个字符，接近逐字打字机效果，而展示表写入量仍远低于 SQLite 调度能力。
+ */
+export const TURN_DISPLAY_FLUSH_INTERVAL_MS = 80;
+
 const repositorySlot = createRuntimeSlot<IChatTurnPresentationRepository>('Chat turn presentation');
 export const configureChatTurnPresentation = (repository: IChatTurnPresentationRepository) => repositorySlot.configure(repository);
 export const getChatTurnExecutionStatus = (sessionId: string) => repositorySlot.get().getExecutionStatus(sessionId);
@@ -30,15 +38,16 @@ const frozenSessions = new Map<string, number>();
 const closingRuns = new Map<string, Set<string>>();
 interface HistorySession {
   owners: number;
-  reads: number;
+  reading: Promise<void> | null;
   revision: number;
   window: ChatTurnPresentationWindow;
+  includeRunIds: Set<string>;
 }
 const historySessions = new Map<string, HistorySession>();
 function historySession(sessionId: string): HistorySession {
   let session = historySessions.get(sessionId);
   if (!session) {
-    session = { owners: 0, reads: 0, revision: 0, window: { fromMessageId: Number.MAX_SAFE_INTEGER, runIds: [] } };
+    session = { owners: 0, reading: null, revision: 0, window: { fromMessageId: Number.MAX_SAFE_INTEGER, runIds: [] }, includeRunIds: new Set() };
     historySessions.set(sessionId, session);
   }
   return session;
@@ -119,43 +128,55 @@ export async function interruptChatRunPresentation(runId: string, reason: string
   if (run) await run.stopFromHost(reason);
 }
 
-export async function reloadTurnDisplayHistory(sessionId: string, messages?: readonly ChatMessage[], includeRunIds: readonly string[] = []): Promise<void> {
+export function reloadTurnDisplayHistory(sessionId: string, messages?: readonly ChatMessage[], includeRunIds: readonly string[] = []): Promise<void> {
   const session = historySession(sessionId);
   if (messages) session.window = {
     fromMessageId: messages.reduce((min, message) => message.id > 0 ? Math.min(min, message.id) : min, Number.MAX_SAFE_INTEGER),
     runIds: [...new Set(messages.flatMap(message => message.turnRunId ? [message.turnRunId] : []))],
   };
-  const window = session.window;
-  const revision = ++session.revision;
-  session.reads++;
-  try {
-    const history = await repositorySlot.get().listHistory(sessionId, { ...window,
-      runIds: [...window.runIds, ...includeRunIds] });
-    if (historySessions.get(sessionId) !== session || session.revision !== revision) return;
-    const retained = new Set(history.map(run => run.runId));
-    for (const id of getLiveAgentTimelineRunIds(sessionId)) {
-      if (!retained.has(id) && !runs.has(id)) clearAgentTransientTimelineRun(id, sessionId);
-    }
-    for (const run of history) {
-      if (runs.has(run.runId) && run.state === 'open') continue;
-      runs.get(run.runId)?.interrupt();
-      runs.delete(run.runId);
-      if (run.kind === 'regenerate' && !run.committed) {
-        // 显式重写是替换原答复；失败按原契约撤销尝试投影，恢复仍在库中的原答复。
-        clearAgentTransientTimelineRun(run.runId, sessionId);
-        continue;
+  session.revision++;
+  for (const id of includeRunIds) session.includeRunIds.add(id);
+  if (session.reading) return session.reading;
+  // 页面消息变化、事实事件和宿主收口共享读取；迟到结果作废后，只按最新窗口补读一次。
+  session.reading = Promise.resolve().then(async () => {
+    try {
+      while (historySessions.get(sessionId) === session) {
+        const revision = session.revision;
+        const window = session.window;
+        const history = await repositorySlot.get().listHistory(sessionId, { ...window,
+          runIds: [...new Set([...window.runIds, ...session.includeRunIds])] });
+        if (historySessions.get(sessionId) !== session) return;
+        if (session.revision !== revision) continue;
+        const retained = new Set(history.map(run => run.runId));
+        for (const id of getLiveAgentTimelineRunIds(sessionId)) {
+          if (!retained.has(id) && !runs.has(id)) clearAgentTransientTimelineRun(id, sessionId);
+        }
+        for (const run of history) {
+          if (runs.has(run.runId) && run.state === 'open') continue;
+          runs.get(run.runId)?.interrupt();
+          runs.delete(run.runId);
+          if (run.kind === 'regenerate' && !run.committed) {
+            // 显式重写是替换原答复；失败按原契约撤销尝试投影，恢复仍在库中的原答复。
+            clearAgentTransientTimelineRun(run.runId, sessionId);
+            continue;
+          }
+          // 当前页面已经交付的行保留到 canonical 读回；不制造先清空再异步重载的空窗。
+          if (run.items.length) applyAgentTransientTimelineSnapshots({ sessionId, snapshots: run.items.map(({ snapshot }) => ({
+            ...snapshot, status: run.state === 'interrupted' && snapshot.kind !== 'tool' && (snapshot.status === 'streaming' || snapshot.status === 'running')
+              ? 'sent' as const : snapshot.status,
+            // 终态只用于结束局部运行样式，不能替换已交付正文或工具的真实完成状态。
+            interrupted: run.state === 'interrupted',
+          })) });
+        }
+        if (session.revision === revision) break;
       }
-      // 当前页面已经交付的行保留到 canonical 读回；不制造先清空再异步重载的空窗。
-      if (run.items.length) applyAgentTransientTimelineSnapshots({ sessionId, snapshots: run.items.map(({ snapshot }) => ({
-        ...snapshot, status: run.state === 'interrupted' && snapshot.kind !== 'tool' && (snapshot.status === 'streaming' || snapshot.status === 'running')
-          ? 'sent' as const : snapshot.status,
-        // 终态只用于结束局部运行样式，不能替换已交付正文或工具的真实完成状态。
-        interrupted: run.state === 'interrupted',
-      })) });
+    } finally {
+      session.reading = null;
+      session.includeRunIds.clear();
+      if (session.owners === 0 && historySessions.get(sessionId) === session) historySessions.delete(sessionId);
     }
-  } finally {
-    if (--session.reads === 0 && session.owners === 0 && historySessions.get(sessionId) === session) historySessions.delete(sessionId);
-  }
+  });
+  return session.reading;
 }
 
 export class ChatTurnPresentation {
@@ -175,6 +196,8 @@ export class ChatTurnPresentation {
   private arrivalByIdentity = new Map<string, Promise<void>>();
   private writable = true;
   private progress: ChatTurnExecutionProgress | undefined;
+  /** 最近一次成功 emit 的执行阶段；同阶段进度事件不重复 emit（见 observeRunEvent）。 */
+  private emittedProgressPhase: ChatTurnExecutionPhase | undefined;
   private activeTools = new Set<string>();
   private hostClosed: Promise<void> | null = null;
   private readonly onHostStopped = () => {
@@ -227,6 +250,12 @@ export class ChatTurnPresentation {
         : event.result.terminalCode === 'COMPLETED' ? 'committing' : 'closing'; break;
       default: return;
     }
+    // 流式期间 delta 逐 token 到达会把进度事件放大到批次频率；状态消费者只关心
+    // 阶段是否变化，同阶段重复 emit 只会制造多余的执行状态重读与头部重渲染。
+    const effectivePhase = this.progress?.phase ?? this.emittedProgressPhase;
+    if (effectivePhase === phase) {
+      return;
+    }
     this.progress = { phase, at: new Date().toISOString() };
     this.schedule();
   }
@@ -235,7 +264,7 @@ export class ChatTurnPresentation {
     if (this.timer === null && !this.closed) this.timer = setTimeout(() => {
       this.timer = null;
       void this.flush().catch(error => { this.failure = error; });
-    }, 400);
+    }, TURN_DISPLAY_FLUSH_INTERVAL_MS);
   }
 
   interrupt(): void {
@@ -322,7 +351,10 @@ export class ChatTurnPresentation {
       const repository = repositorySlot.get();
       const accepted = batch.length === 0 && !progress || await repository.checkpoint(this.runId, batch, progress);
       if (!accepted) this.writable = false;
-      if (accepted && progress) emitChatTurnExecutionChanged(this.sessionId);
+      if (accepted && progress) {
+        emitChatTurnExecutionChanged(this.sessionId);
+        this.emittedProgressPhase = progress.phase;
+      }
       if (accepted) for (const item of batch) this.available.set(item.snapshot.clientMessageId, item);
       if (!accepted || frozenSessions.has(this.sessionId) || this.closed) return;
       const immediate: ChatTurnDisplayVersion[] = [];

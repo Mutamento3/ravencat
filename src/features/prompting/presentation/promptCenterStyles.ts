@@ -16,6 +16,8 @@ export const createPromptCenterStyles = (theme: PresentationTheme) => StyleSheet
   glassRow: { borderRadius: theme.radius.lg },
   glassRowInner: { minHeight: 76, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 14 },
   number: { width: 30, height: 30, borderRadius: 15, textAlign: 'center', textAlignVertical: 'center', overflow: 'hidden', color: theme.colors.brand.primary, backgroundColor: theme.colors.surface.raised, fontSize: 12, fontWeight: '700', lineHeight: 30 },
+  // 附属设置保留编号列的宽度，让文字与上方主项对齐。
+  numberPlaceholder: { opacity: 0 },
   copy: { flex: 1, gap: 5 },
   title: { color: theme.colors.text.primary, fontSize: 15, fontWeight: '600' },
   subtitle: { color: theme.colors.text.tertiary, fontSize: 12, lineHeight: 18 },

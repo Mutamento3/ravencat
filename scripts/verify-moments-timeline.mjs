@@ -644,23 +644,23 @@ await createUserMomentAt(aclDb, aclRepository, '公开 2', ts_(50), { mode: 'all
 await createUserMomentAt(aclDb, aclRepository, '仅乙 2', ts_(40), { mode: 'selected', viewerAgentIds: ['agent-b'] });
 
 {
-  const firstPage = await aclRepository.listVisibleMomentsForAgent('agent-b', { limit: 2 });
+  const firstPage = await aclRepository.queryVisibleMomentsForAgent('agent-b', { limit: 2 });
   assert.deepEqual(
     firstPage.map((moment) => moment.content),
     ['公开 1', '仅乙 1'],
-    'AI 可见列表必须由 SQL ACL 决定并尊重 limit',
+    'AI 搜索结果必须由 SQL ACL 决定并尊重 limit',
   );
   const cursor = {
     createdAt: firstPage[firstPage.length - 1].createdAt,
     id: firstPage[firstPage.length - 1].id,
   };
-  const secondPage = await aclRepository.listVisibleMomentsForAgent('agent-b', { limit: 3, cursor });
+  const secondPage = await aclRepository.queryVisibleMomentsForAgent('agent-b', { limit: 3, cursor });
   assert.deepEqual(
     secondPage.map((moment) => moment.content),
     ['公开 2', '仅乙 2'],
     'ACL 与 cursor 必须同时作用：不可见项不得占据分页位置',
   );
-  const all = await aclRepository.listVisibleMomentsForAgent('agent-b');
+  const all = await aclRepository.queryVisibleMomentsForAgent('agent-b', { limit: 10 });
   assert.deepEqual(
     all.map((moment) => moment.content).sort(),
     ['公开 1', '公开 2', '仅乙 1', '仅乙 2'].sort(),
@@ -1129,26 +1129,6 @@ await createUserMomentAt(aclDb, aclRepository, '仅乙 2', ts_(40), { mode: 'sel
   assert.doesNotMatch(toolPresentation, /'人机时刻/, 'Tool progress 的 active labels 必须统一为「时刻」');
   assert.match(toolPresentation, /aiCreateMoment: '发布时刻'/);
   assert.match(toolPresentation, /getMomentDetail: '时刻详情'/);
-
-  // recent Moments 文案：仓储返回的是「对该 AI 可见的全部 Moment」，不是「用户的动态」。
-  const promptFactory = read('src/host/prompt/PromptPackBlockFactory.ts');
-  assert.match(promptFactory, /近期对你可见的时刻/);
-  assert.match(promptFactory, /可能来自用户，也可能来自其他 AI/);
-  assert.doesNotMatch(promptFactory, /以下是用户近期人机时刻动态/, '不得再把可见集合误称为用户自己的动态');
-  assert.doesNotMatch(promptFactory, /These are the user\\?'s latest social posts/, '英文文案同样不得误称');
-  assert.doesNotMatch(promptFactory, /offset:\s*0/, 'recent moments 必须改成 first page，不再传 offset');
-
-  // location / 图片 / 评论不得因此塞进 lightweight recent_moments block。
-  const blockBody = promptFactory.slice(
-    promptFactory.indexOf('async createRecentMomentsBlock'),
-    promptFactory.indexOf('createTimeAwarenessBlock'),
-  );
-  for (const forbidden of ['locationLabel', 'moment_media', 'listComments', 'socialInbox']) {
-    assert.ok(
-      !blockBody.includes(forbidden),
-      `recent_moments 必须保持 lightweight，不得注入 ${forbidden}`,
-    );
-  }
 }
 
 currentExecutor = previousExecutor;

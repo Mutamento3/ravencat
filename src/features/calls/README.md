@@ -4,6 +4,8 @@
 
 Calls Repository 是通话会话、事件与附件的唯一业务真值。`AICallRuntimeService` 在提交状态后更新消息时间线和原生投影；接听、拒接、去电决策和挂断通过 Repository CAS 提交，晚到决策不能复活终态。
 
+`AICallRuntimeService` 同时维护接通期间的内存标记：active 提交后设置，终态提交后按通话 ID 清除。Chat 经 Host 注入的快照与订阅同步输入框，发送、重试及分享读取同一标记，不轮询 SQLite；标记不承担持久并发裁决。冷启动复用已有通话恢复查询补齐，恢复期间的新生命周期提交优先，页面卸载和切后台不清除标记。
+
 启动恢复先按通话 ID 查询原生执行宿主；页面重新挂载而宿主仍存活时，不提交故障终态，也不回收该通话快照。重复挂断已是终态的通话仍释放媒体并完成 Headless 等待，只保留首次终态事实，不重写结束原因、状态气泡或重复触发跟进。
 
 持续执行入口位于 Host：`CallExecutionHeadlessTask` 先等待备份恢复和普通 SQLite bootstrap，再创建唯一 `CallMediaRuntime`，等待通话终态、输入退场和命令回执后释放原生宿主。媒体仍复用统一用户输入、Call reply run、TTS 队列、ASR 与快照持久化链，没有独立后台回复流程。

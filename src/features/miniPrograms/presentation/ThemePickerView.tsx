@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { pickCroppedImage } from '@platform/device/DeviceMediaService';
 import { Ionicons } from '@expo/vector-icons';
-import { getThemeById, useThemeContext, useThemedStyles, useWallpaper } from '@shared/theme';
+import { getThemeById, isPaperNoteTheme, useThemeContext, useThemedStyles, useWallpaper } from '@shared/theme';
 import type {
   ChatColorToken,
   PresentationTheme,
@@ -17,6 +17,7 @@ import NavigationHeader from '@shared/ui/NavigationHeader';
 import ColorPickerModal from '@shared/ui/ColorPickerModal';
 import BackgroundPickerCard from '@shared/ui/BackgroundPickerCard';
 import GlassBlurSettings from './GlassBlurSettings';
+import PaperNoteChatFooterSettings from './PaperNoteChatFooterSettings';
 
 import { listAIAssistants } from '@features/assistants';
 import { getCanonicalChatConversation, listGroupChats } from '@features/chat';
@@ -418,6 +419,14 @@ export default function ThemePickerView({ onBack }: ThemePickerViewProps) {
         </View>
 
         <View style={styles.sectionGap} />
+
+        {isPaperNoteTheme(theme) && (
+          <>
+            <Text style={styles.sectionTitle}>聊天底栏</Text>
+            <PaperNoteChatFooterSettings />
+            <View style={styles.sectionGap} />
+          </>
+        )}
 
         {renderWallpaperCard(
           'app',

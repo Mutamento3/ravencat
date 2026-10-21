@@ -34,13 +34,16 @@ export function configureChatSummary(): void {
       const model = settings.modelConfigId === null ? group?.adminConfig ?? assistant!
         : await resolveAuxiliaryModel({ modelConfigId: settings.modelConfigId, capabilityKind: 'general' });
       if (!model || !model.apiKey || !('baseURL' in model ? model.baseURL : model.apiBaseUrl) || !model.model) return null;
-      return group ? settings.groupTriggerCount : assistant!.privateContextPrimaryLimit;
+      // 单聊每次整理条数默认跟随主视角上限；用户手动设置后固定，不再跟随。
+      return group ? settings.groupTriggerCount : settings.primaryLimit ?? assistant!.privateContextPrimaryLimit;
     },
     generateAddition: (input, signal, report, settings) => generateSummary(input, signal, report, settings),
     generateSecondary: (input, signal, report, settings) => generateSummary(input, signal, report, settings),
   });
   configureChatSummaryQueue();
 }
+// 常见 OpenAI 兼容网关的上下文不足表述；命中即视为范围问题而非普通请求失败。
+const CONTEXT_OVERFLOW_PATTERN = /maximum context|context[ _-]?length|context window|prompt is too long|input (?:is )?too long|reduce the length|request entity too large/i;
 async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSummaryClaim, signal: AbortSignal,
   report: (diagnostics: ChatSummaryCallDiagnostics) => Promise<void>, settings: ChatSummaryRequestSettings) {
   const group = await groupChatRepository.getById(input.conversationId);
@@ -121,6 +124,12 @@ async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSumma
     if (!response.success) {
       diagnostics.serverError = redact(response.error ?? '服务端未提供错误信息');
       const status = response.httpStatus;
+      // 上下文溢出与本次整理范围有关，重试同样范围没有意义；换大上下文模型或调小每次整理条数才有用。
+      if (status === 413 || CONTEXT_OVERFLOW_PATTERN.test(diagnostics.serverError)) {
+        throw new ChatSummaryGenerationError({ kind: 'context_overflow',
+          message: '这批原文超出了当前模型的上下文上限。请在摘要设置中把「每次整理条数」调小，或给摘要换用上下文更大的模型后重试。',
+          retryable: false });
+      }
       throw new ChatSummaryGenerationError({ kind: 'request', message: diagnostics.serverError,
         retryable: status == null || status === 408 || status === 429 || status >= 500 });
     }

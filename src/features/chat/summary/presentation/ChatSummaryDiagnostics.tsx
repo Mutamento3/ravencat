@@ -10,7 +10,7 @@ export default function ChatSummaryDiagnostics({ task }: { task: ChatSummaryTask
   const number = (value: number | null) => value === null ? '服务端未提供' : String(value);
   return <ThemedSurface variant="card" nativeGlass={false} style={styles.card}>
     <Text style={styles.body}>调用信息 · 任务尝试 {task.attemptCount} 次</Text>
-    <Text style={styles.meta}>最多自动重试 {CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS - 1} 次。尝试次数包含手动重试和取消后恢复；长原文会分多次调用。</Text>
+    <Text style={styles.meta}>最多自动重试 {CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS - 1} 次。尝试次数包含手动重试和取消后恢复；一次任务只调用一次模型。</Text>
     {task.error && <>
       <Text accessibilityRole={task.status === 'completed' ? undefined : 'alert'} style={task.status === 'completed' ? styles.meta : styles.danger}>
         {task.status === 'completed' ? '最近一次失败（已恢复）：' : ''}{task.error.message}

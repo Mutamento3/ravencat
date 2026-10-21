@@ -105,6 +105,7 @@ export class PromptPackAssembler {
       blocks,
       recentMessages,
       currentInput: currentInputMessage,
+      messageTimestampsEnabled: resolvedParams.aiConfig.messageTimestampsEnabled,
       preset: this.withRuntimeCapabilityPreset(
         params.preset || getSystemPromptPreset(scenario),
         params,
@@ -140,7 +141,7 @@ export class PromptPackAssembler {
 
     blocks.push(await renderHostPromptProviderBlock('context.agent_registry', { scenario, params }));
 
-    if (scenario === 'chat.private_reply') {
+    if (scenario === 'chat.private_reply' && !this.isDefinitionDisabled(params, 'context.moments_social_inbox')) {
       blocks.push(await renderHostPromptProviderBlock('context.moments_social_inbox', { scenario, params }));
     }
 
@@ -149,6 +150,14 @@ export class PromptPackAssembler {
     blocks.push(promptPackBlockFactory.createTimeAwarenessBlock());
     if (this.isPrivateConversationScenario(scenario)) blocks.push(await renderHostPromptProviderBlock('context.passive_memory', { scenario, params }));
     return blocks;
+  }
+
+  /** 被本轮配置关闭的定义既不查询对应资料，也不生成块；编译器仍是注入与否的最终裁决。 */
+  private isDefinitionDisabled(
+    params: AssemblePromptPackParams,
+    definitionId: string
+  ): boolean {
+    return (params.aiConfig.disabledPromptDefinitionIds ?? []).includes(definitionId);
   }
 
   private async createStableScenarioBlocks(
@@ -180,10 +189,11 @@ export class PromptPackAssembler {
       ...await this.createStableScenarioBlocks(scenario, params, userIdentity),
       promptPackBlockFactory.createTimeAwarenessBlock(),
       await renderHostPromptProviderBlock('context.agent_registry', { scenario, params }),
-      await renderHostPromptProviderBlock('context.moments_social_inbox', { scenario, params }),
+      ...(this.isDefinitionDisabled(params, 'context.moments_social_inbox') ? [] : [
+        await renderHostPromptProviderBlock('context.moments_social_inbox', { scenario, params }),
+      ]),
       await renderHostPromptProviderBlock('context.group_chat', { scenario, params }),
       promptPackBlockFactory.createGroupMemberReplyConfidentialityBlock(params.aiConfig, userIdentity.displayName),
-      await promptPackBlockFactory.createRecentMomentsBlock(2, params.toolContext, params.aiConfig),
     ];
     if (this.hasCurrentTurnVisualContext(params)) {
       blocks.push(promptPackBlockFactory.createVisualGroundingRulesBlock(params.aiConfig));
@@ -233,7 +243,10 @@ export class PromptPackAssembler {
         enabled: true, required: true, protection: 'locked' });
     }
     if (scenario === 'chat.private_reply' || scenario === 'chat.group_member_reply') {
-      runtimeItems.push(MOMENTS_SOCIAL_INBOX_PRESET_ITEM);
+      runtimeItems.push({
+        ...MOMENTS_SOCIAL_INBOX_PRESET_ITEM,
+        enabled: !this.isDefinitionDisabled(params, 'context.moments_social_inbox'),
+      });
     }
     const runtimeDefinitionIds = new Set(runtimeItems.map((item) => item.definitionId));
     return {

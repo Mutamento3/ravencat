@@ -205,9 +205,9 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
   const editingPrompt = page.kind === 'userEditor' ? prompts.find((item) => item.id === page.promptId) : undefined;
   const title = page.kind === 'overview' ? '提示词中心' : page.kind === 'registry' ? 'AI 身份池' : page.kind === 'custom' ? (assistantId ? '自定义提示词' : '全局常驻提示词') : page.kind === 'tools' ? '工具调用' : page.kind === 'package' ? PACKAGE_NAMES[page.id] ?? page.id : page.kind === 'editor' ? (ruleId === 'foundation.default_core' ? '系统基础规则' : '视觉真实性规则') : page.kind === 'persona' ? 'AI 人设' : page.promptId ? '编辑提示词' : '添加提示词';
   /** 首页概览的条目用原生玻璃承载；内部页面仍是普通染色列表，避免整页逐项运行模糊。 */
-  function row(label: string, description: string, action?: () => void, number?: number, disabled = false, right?: React.ReactNode, glass = false) {
+  function row(label: string, description: string, action?: () => void, number?: number | null, disabled = false, right?: React.ReactNode, glass = false) {
     const body = <>
-      {number !== undefined && <Text style={styles.number}>{String(number).padStart(2, '0')}</Text>}
+      {number !== undefined && <Text style={[styles.number, number === null && styles.numberPlaceholder]}>{number === null ? '' : String(number).padStart(2, '0')}</Text>}
       <View style={styles.copy}><Text style={styles.title}>{label}</Text><Text style={styles.subtitle}>{description}</Text></View>
       {right ?? (action && !disabled ? <ChevronRight size={18} color={theme.colors.text.tertiary} /> : null)}
     </>;
@@ -220,7 +220,7 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
     }
     return <React.Fragment key={label}>{content}</React.Fragment>;
   }
-  const overviewRow = (label: string, description: string, action?: () => void, number?: number, disabled = false, right?: React.ReactNode) =>
+  const overviewRow = (label: string, description: string, action?: () => void, number?: number | null, disabled = false, right?: React.ReactNode) =>
     row(label, description, action, number, disabled, right, true);
   function readingStep(step: ChatPromptReadingStep, position: number) {
     switch (step) {
@@ -232,29 +232,47 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
       </ThemedSurface>;
       case 'group_identity': return overviewRow('群聊身份背景', '群聊时提供群名称、成员及当前 AI 的群内身份', undefined, position);
       case 'protocol': return overviewRow('协议空间常驻提示词', assistant ? '你与 AI 均可修改的固定注入信息，全部持续生效' : '当前未绑定 AI，无法查看', assistant ? () => onOpenProtocols(assistant.id) : undefined, position, !assistant);
-      case 'agent_registry': return overviewRow('AI 身份池', '选择加入身份池的 AI · 名单与底层模型名供所有 AI 共用', () => onOpenPage({ kind: 'registry' }), position);
+      case 'agent_registry': return overviewRow('AI 身份池', '入池 AI 相互可见 · 未入池的 AI 与身份池双向隔离', () => onOpenPage({ kind: 'registry' }), position);
       case 'custom': return overviewRow('自定义提示词', `${prompts.length} 条${assistant ? '专属' : '全局'}提示词 · 按列表顺序拼接`, () => onOpenPage({ kind: 'custom' }), position);
       case 'tools': return overviewRow('工具调用', '按用途管理工具包与调用权限', () => onOpenPage({ kind: 'tools' }), position);
       case 'mcp': return overviewRow('MCP', '外部服务由 MCP 模块按需注入', onOpenMcp, position);
       case 'history': return overviewRow('历史聊天', '聊天、用户操作与应用事件按发生顺序进入历史和摘要', undefined, position);
       case 'tool_runtime': return overviewRow('工具运行上下文', '有可用工具时提供本轮调用的运行上下文', undefined, position);
-      case 'user_state': return overviewRow('用户状态与一起听', '仅一起听期间提供播放状态、输出设备与当前歌词', undefined, position);
-      case 'social': return overviewRow('时刻社交信息', '单聊与群聊均提供当前 AI 的未读事件；群聊另含近期可见时刻', undefined, position);
+      case 'user_state': return overviewRow('用户状态与一起听', assistant ? '仅一起听期间提供播放状态、输出设备与当前歌词 · 关闭后不注入 · 仅对这位 AI 生效' : '选择 AI 后可调整一起听状态注入', undefined, position, false,
+        <Toggle accessibilityLabel="注入用户状态与一起听" disabled={busy || !assistant} value={details?.userStateEnabled ?? true} onValueChange={(enabled) => { void mutate(() => saveAssistantDefinitionState({ assistantId: assistantId!, definitionId: 'context.user_state', enabled })); }} />);
+      case 'social': return overviewRow('时刻社交信息', assistant ? '单聊与群聊均提供当前 AI 的未读事件 · 关闭后不注入 · 仅对这位 AI 生效' : '选择 AI 后可调整时刻社交信息注入', undefined, position, false,
+        <Toggle accessibilityLabel="注入时刻社交信息" disabled={busy || !assistant} value={details?.socialEnabled ?? true} onValueChange={(enabled) => { void mutate(() => saveAssistantDefinitionState({ assistantId: assistantId!, definitionId: 'context.social', enabled })); }} />);
       case 'environment': return overviewRow('环境信息', '当前单聊、群聊或通话 · 本轮由用户、账本或日程等来源触发', undefined, position);
       case 'assistant_state': return overviewRow('AI 当前身份状态', '按需提供原主理 AI 冷静期及剩余时间', undefined, position);
       case 'memory': return overviewRow('被动记忆', '按当前输入触发的历史资料', undefined, position);
       case 'battery': return overviewRow('手机电量', assistant ? '本轮电量与充电状态 · 关闭后不读取 · 仅对这位 AI 生效' : '选择 AI 后可调整电量注入', undefined, position, false,
         <Toggle accessibilityLabel="注入手机电量" disabled={busy || !assistant} value={details?.batteryEnabled ?? true} onValueChange={(enabled) => { void mutate(() => saveAssistantDefinitionState({ assistantId: assistantId!, definitionId: 'context.device_battery', enabled })); }} />);
-      case 'time': return overviewRow('当前时间', assistant ? '为本轮校准现在 · 开关仅对这位 AI 生效' : '选择 AI 后可调整时间注入', undefined, position, false,
-        <Toggle accessibilityLabel="注入当前时间" disabled={busy || !assistant} value={details?.timeEnabled ?? true} onValueChange={(enabled) => { void mutate(() => saveAssistantDefinitionState({ assistantId: assistantId!, definitionId: 'context.time_awareness', enabled })); }} />);
+      case 'time': return <>
+        {overviewRow('当前时间', assistant ? '为本轮校准现在 · 开关仅对这位 AI 生效' : '选择 AI 后可调整时间注入', undefined, position, false,
+          <Toggle accessibilityLabel="注入当前时间" disabled={busy || !assistant} value={details?.timeEnabled ?? true} onValueChange={(enabled) => { void mutate(() => saveAssistantDefinitionState({ assistantId: assistantId!, definitionId: 'context.time_awareness', enabled })); }} />)}
+        {overviewRow('消息时间戳', '默认关闭 · 为历史及本轮消息提供时间，帮助理解先后与间隔。开启会增加输入 Token；部分模型仍可能模仿时间格式。独立于当前时间，仅对所选 AI 生效。', undefined, null, false,
+          <Toggle accessibilityLabel="注入消息时间戳" disabled={busy || !assistant} value={details?.messageTimestampsEnabled ?? false} onValueChange={(enabled) => { void mutate(() => saveAssistantDefinitionState({ assistantId: assistantId!, definitionId: 'context.message_timestamps', enabled })); }} />)}
+      </>;
       case 'output': return overviewRow('本轮回应要求', '按场景提供记账回复、日程行动等本轮执行与输出要求', undefined, position);
       case 'input': return overviewRow('当前聊天', '真实用户输入位于最后；账本、日程等应用触发时省略', undefined, position);
     }
   }
   const readingSections = { identity: '先认识彼此', capabilities: '可用的能力', context: '从过去，回到现在' };
+  // 页面规则说明挂在标题后的问号里，正文只留可操作内容。
+  const headerHelp = page.kind === 'registry' ? {
+    sections: [
+      { title: '入池规则', body: '选择加入身份池的 AI，默认全部勾选，新添加的 AI 也默认入选。名单为全局设置，修改自动保存。' },
+      { title: '可见范围', body: '入池 AI 可通过身份池了解彼此及底层模型名；未勾选的 AI 不会出现在身份池中，也不会收到其他 AI 的身份池信息。' },
+    ],
+  } : page.kind === 'tools' ? {
+    sections: [
+      { title: '单项权限', body: assistant ? '这位 AI 的单项权限；工具总开关、场景与身份边界仍共同决定本轮可用工具。' : '全局默认权限；AI 的单独设置可以覆盖默认值，主理专属工具仍只授予主理 AI。' },
+      ...(assistant ? [{ title: '全局应用', body: '全局应用会以点击时的普通工具星标覆盖所有现有 AI，主理专属星标与调用权限保持不变。' }] : []),
+    ],
+  } : undefined;
   const rightButton = page.kind === 'custom' ? <TouchableOpacity disabled={busy} onPress={() => openUser(null)}><Text style={styles.action}>添加</Text></TouchableOpacity> : undefined;
   return <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}><View style={styles.screen}>
-    <NavigationHeader title={title} onGoBack={onBack} rightButton={rightButton} />
+    <NavigationHeader title={title} onGoBack={onBack} rightButton={rightButton} help={headerHelp} />
     {assistantListError ? <Text style={styles.description}>未能读取 AI 列表，请返回后重新打开。</Text> : !snapshot ? loadError ? <Text style={styles.description}>未能读取提示词配置，请返回后重新打开。</Text> : <ActivityIndicator style={styles.loading} /> : <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
       {page.kind === 'overview' && <>
         <View style={styles.hero}><Text style={styles.eyebrow}>{assistant ? getAssistantDisplayName(assistant) : '全局默认'} · 中文</Text><Text style={styles.heading}>从身份，到此刻</Text><Text style={styles.description}>单聊、群聊、记账回应和日程唤醒共用以下顺序。
@@ -267,7 +285,6 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
         </React.Fragment>)}
       </>}
       {page.kind === 'registry' && <>
-        <Text style={styles.description}>选择要注入身份池的 AI，默认全部勾选，新添加的 AI 也默认入选。未勾选的 AI 不会出现在身份池提示词中；已勾选的 AI 会同时注明底层模型名。名单对所有 AI 共用，修改自动保存。</Text>
         {!registrySettings.length && <Text style={styles.body}>暂无 AI，添加后可在这里选择。</Text>}
         {registrySettings.map((item) => <TouchableOpacity key={item.id} accessibilityRole="checkbox" accessibilityLabel={`将 ${item.name} 加入身份池`}
           accessibilityState={{ checked: item.included, disabled: busy }} disabled={busy} activeOpacity={0.7} style={styles.row}
@@ -305,7 +322,6 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
           onMove={(offset) => movePrompt(prompt, index, offset)} onDelete={() => deletePrompt(prompt)} />)}
       </>}
       {page.kind === 'tools' && <>
-        <Text style={styles.description}>{assistant ? '这位 AI 的单项权限；总开关、场景与身份边界仍共同决定本轮可用工具。全局应用会以当前普通工具星标覆盖所有现有 AI，主理专属星标与调用权限保持不变。' : '全局默认权限；AI 的单独设置可以覆盖默认值。主理专属工具仍只授予主理 AI。'}</Text>
         <ThemedSurface variant="card" style={styles.card}>
           <View style={styles.cardHeader}>
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="特批工具" accessibilityState={{ expanded: directToolsExpanded }}
@@ -336,9 +352,7 @@ export default function PromptCenterScreen({ assistants, assistantListError, onS
         })}
       </>}
       {page.kind === 'package' && <>
-        {page.id === 'kimiOfficial' && <Text style={styles.description}>仅支持 Moonshot 官方 API，使用当前 AI 的账号密钥，搜索与网页读取按次计费。接口识别不会自动开启工具；换回官方地址后恢复已保存的权限和星标。全局默认仅对支持的 AI 生效。</Text>}
         {page.id === 'webTools' && row('搜索来源配置', '设置默认来源、Tavily 与 Brave 密钥；也可从「AI 工具 → 联网搜索」进入', onOpenWebSearch)}
-        <Text style={styles.description}>{assistant ? `点亮星标，将工具设为 ${getAssistantDisplayName(assistant)} 的用户特批工具，直接注入说明与调用参数，无需拆包。右侧开关仍控制调用权限。` : '选择 AI 后可配置星标特批工具；这里仅管理全局默认调用权限。'}</Text>
         {tools.filter((tool) => getToolPackageId(tool) === page.id).map((tool) => <ThemedSurface variant="card" nativeGlass={false} key={tool.name} style={[styles.card, toolIsUnavailable(tool) && styles.muted]}>
           <View style={styles.cardHeader}><Text style={[styles.title, styles.copy]}>{tool.name}</Text>
             {assistantId && <TouchableOpacity accessibilityRole="switch" accessibilityLabel={`直接暴露 ${tool.name}`} accessibilityState={{ checked: !toolIsUnavailable(tool) && directToolNames.has(tool.name), disabled: toolIsReadOnly(tool) }}

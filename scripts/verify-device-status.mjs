@@ -28,11 +28,11 @@ assert.equal(batteryReads, 0, '关闭注入时不读取设备电池');
 const blocks = await createDeviceBatteryPromptBlocks(true, 'chat.private_reply');
 assert.equal(batteryReads, 1);
 assert.match(blocks[0].content, /23%，未充电/);
-const estimator = load('src/shared/prompt/estimateTextTokens.ts');
+const estimator = { ...load('src/shared/prompt/estimateTextTokens.ts'), ...load('src/shared/prompt/messageTimestamp.ts') };
 const budget = load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': estimator });
 const metadata = load('src/host/prompt/compiler/promptBlockMetadata.ts');
 const { PromptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
-    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW, ...estimator },
   '../tokenBudget': budget, './promptBlockMetadata': metadata,
 });
 const { getSystemPromptPreset } = load('src/host/prompt/compiler/systemPromptPresets.ts');

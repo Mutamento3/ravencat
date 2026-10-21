@@ -1,5 +1,6 @@
 /** 提供 Chat 回复的时间与逻辑消息标识工具，并将运行时输入适配为模型请求消息。 */
 import type { ChatContextMessage } from './ChatReplyTypes';
+import { renderPromptMessageWithTimestamp } from '@shared/prompt';
 
 export function formatMessageTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
@@ -15,7 +16,8 @@ export function buildLogicalMessageId(): string {
 export function applyRuntimeModelInput(
   modelMessages: ChatContextMessage[],
   batchModelInput?: ChatContextMessage['content'],
-  turnInputMessages?: ChatContextMessage[]
+  turnInputMessages?: ChatContextMessage[],
+  messageTimestampsEnabled = false,
 ): ChatContextMessage[] {
   const requestMessages: ChatContextMessage[] = modelMessages.map((message) => ({
     role: message.role,
@@ -28,7 +30,7 @@ export function applyRuntimeModelInput(
     if (lastIndex >= 0 && requestMessages[lastIndex].role === 'user') {
       requestMessages.splice(lastIndex, 1);
     }
-    requestMessages.push(...turnInputMessages);
+    requestMessages.push(...turnInputMessages.flatMap((message) => renderPromptMessageWithTimestamp(message, messageTimestampsEnabled)));
     return requestMessages;
   }
 

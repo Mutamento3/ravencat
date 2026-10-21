@@ -17,7 +17,8 @@ function load(file, mocks = {}) {
   }, module, module.exports);
   return module.exports;
 }
-const shared = { CHAT_PROMPT_READING_FLOW, ...load('src/shared/prompt/estimateTextTokens.ts') };
+const shared = { CHAT_PROMPT_READING_FLOW, ...load('src/shared/prompt/estimateTextTokens.ts'),
+  ...load('src/shared/prompt/messageTimestamp.ts') };
 const compiler = load('src/host/prompt/compiler/PromptPackCompiler.ts', { '@shared/prompt': shared });
 const presets = load('src/host/prompt/compiler/systemPromptPresets.ts');
 const { promptPackBlockFactory: factory } = load('src/host/prompt/PromptPackBlockFactory.ts', {
@@ -29,7 +30,6 @@ const { promptPackBlockFactory: factory } = load('src/host/prompt/PromptPackBloc
 });
 const omitted = key => ({ key, title: key, content: '', required: false, status: 'omitted', placement: 'system' });
 factory.resolveUserIdentity = async () => ({ displayName: '枫渡', source: 'profile', profile: null });
-factory.createRecentMomentsBlock = async () => omitted('recent_moments_summary');
 const history = [{ role: 'user', content: '先前的真实用户输入' }, { role: 'assistant', content: '先前回复' },
   { role: 'user', content: '最后一条真实用户发言，应用触发时也不能被删除' }];
 const { promptPackAssembler: assembler } = load('src/host/prompt/PromptPackAssembler.ts', {
@@ -72,7 +72,9 @@ assert.deepEqual(ledger.modelMessages.slice(0, history.length), history);
 assert.match(ledger.dynamicSystemPrompt, /一对一单聊[\s\S]*记账应用[\s\S]*新增支出：午饭 20 元/);
 assert.doesNotMatch(ledger.stableSystemPrompt, /账本回复要求|新增支出/);
 assert.match(ledger.outputRequirement, /1~3 句/);
-const { buildAIScheduleTriggerBlocks } = load('src/features/companion/application/CompanionPromptBlocks.ts');
+const { buildAIScheduleTriggerBlocks } = load('src/features/companion/application/CompanionPromptBlocks.ts', {
+  '@features/chat': load('src/features/chat/reply/application/AutonomousReplyContract.ts'),
+});
 const scheduleBlocks = buildAIScheduleTriggerBlocks({ scheduleId: 'due-schedule', remindAt: '2026-10-16T01:00:00Z',
   triggeredAt: '2026-10-16T01:00:03Z', summary: '约好的问候', details: '看看用户现在怎样', sourceExcerpt: null });
 const autonomous = await assembler.assembleChatPromptPack({ ...params, currentInput: '', additionalBlocks: scheduleBlocks,

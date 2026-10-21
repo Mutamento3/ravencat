@@ -16,6 +16,13 @@ import {
   saveThemeId,
   saveGlassBlurRadius,
 } from './themeStorage';
+import {
+  DEFAULT_CHAT_FOOTER_SETTINGS,
+  loadChatFooterSettings,
+  saveChatFooterSettings,
+  type ChatFooterImageRef,
+  type ChatFooterSettings,
+} from './chatFooterSettings';
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);
 
@@ -49,13 +56,14 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   const [baseTheme, setBaseTheme] = useState<PresentationTheme>(getThemeById(DEFAULT_THEME_ID));
   const [chatColorOverrides, setChatColorOverridesState] = useState<ChatColorOverrides>({});
   const [glassBlurRadius, setGlassBlurRadiusState] = useState<number>();
+  const [chatFooter, setChatFooterState] = useState<ChatFooterSettings>(DEFAULT_CHAT_FOOTER_SETTINGS);
 
   useEffect(() => {
     let isMounted = true;
 
     const init = async () => {
-      const [storedId, storedBlurRadius] = await Promise.all([
-        loadStoredThemeId(), loadGlassBlurRadius(),
+      const [storedId, storedBlurRadius, storedChatFooter] = await Promise.all([
+        loadStoredThemeId(), loadGlassBlurRadius(), loadChatFooterSettings(),
       ]);
       const storedOverrides = await loadChatColorOverrides(storedId);
       if (isMounted) {
@@ -63,6 +71,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
         setBaseTheme(applyChatColorOverrides(getThemeById(storedId), storedOverrides));
         setChatColorOverridesState(storedOverrides);
         setGlassBlurRadiusState(storedBlurRadius);
+        setChatFooterState(storedChatFooter);
       }
     };
 
@@ -114,6 +123,21 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     await saveGlassBlurRadius(radius);
   }, []);
 
+  const setChatFooterText = useCallback(async (text: string | null) => {
+    const next: ChatFooterSettings = {
+      ...chatFooter,
+      text: text && text.trim() ? text : null,
+    };
+    setChatFooterState(next);
+    await saveChatFooterSettings(next);
+  }, [chatFooter]);
+
+  const setChatFooterImage = useCallback(async (image: ChatFooterImageRef | null) => {
+    const next: ChatFooterSettings = { ...chatFooter, image };
+    setChatFooterState(next);
+    await saveChatFooterSettings(next);
+  }, [chatFooter]);
+
   // 模糊覆盖层独立于聊天颜色，切换主题或修改文字颜色不会丢失玻璃偏好。
   const theme = useMemo<PresentationTheme>(() => {
     if (!baseTheme.effects.glass.enabled || glassBlurRadius === undefined) return baseTheme;
@@ -135,6 +159,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     setChatColorOverride,
     resetChatColorOverride,
     setGlassBlurRadius,
+    chatFooter,
+    setChatFooterText,
+    setChatFooterImage,
   };
 
   return (

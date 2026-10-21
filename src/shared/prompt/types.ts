@@ -47,7 +47,6 @@ export type PromptBlockKey =
   | 'ledger_reply_rules'
   | 'moments_context_summary'
   | 'user_identity_summary'
-  | 'recent_moments_summary'
   | 'passive_memory'
   | 'conversation_summary'
   | 'chat_summary_task'
@@ -103,12 +102,14 @@ export type PromptPackMessageContent = string | PromptPackMessageContentPart[];
 export interface PromptPackMessage {
   role: 'user' | 'assistant';
   content: PromptPackMessageContent;
+  /** 原消息时间仅作为元数据传递；是否注入由本轮冻结的 AI 配置决定。 */
+  createdAt?: string;
   sourceMessageId?: number;
   sourceCallEventId?: string;
   logicalMessageId?: string | null;
 }
 
-/** 请求可在历史之后放置本轮 system，历史本身仍只有 user/assistant。 */
+/** 正文保留原角色；请求可另放 system 时间元数据与本轮上下文。 */
 export type PromptPackRequestMessage = PromptPackMessage | { role: 'system'; content: string };
 
 export interface PromptPackTextMessage extends PromptPackMessage {
@@ -124,6 +125,7 @@ export interface PromptPackAIConfig {
   systemPrompt?: string;
   enableTools?: boolean;
   allowMultipleBubbles?: boolean;
+  messageTimestampsEnabled?: boolean;
   promptDefinitionOverrides?: Record<string, string>;
   disabledPromptDefinitionIds?: string[];
   /** 本次组装冻结的全局身份池排除名单；不影响模型调用权限。 */
@@ -205,6 +207,7 @@ export interface AssembleStandalonePromptPackParams {
 
 export interface PromptPack {
   scenario: PromptPackScenario;
+  messageTimestampsEnabled: boolean;
   blocks: PromptPackBlock[];
   /** 前置系统内容：固定规则与用途说明在前，聊天摘要在后；本轮上下文位于 modelMessages 的历史之后。 */
   systemPrompt: string;

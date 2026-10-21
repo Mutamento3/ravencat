@@ -250,12 +250,7 @@ export {
   conversationKeyOfGroup,
 } from './conversation/domain/ConversationRef';
 
-// Chat 拥有的 AI 工具：消息提交能力属于 Chat，不由调用方 Feature 自行落库。
-export { SendMessageTool } from './aiTools/SendMessageTool';
-export type {
-  SendMessageArgs,
-  SendMessageResultData,
-} from './aiTools/SendMessageTool';
+export { AUTONOMOUS_SILENT_REPLY } from './reply/application/AutonomousReplyContract';
 
 // AI 消息事实的观察入口；交付发布与内部 UI 信号仅由 Chat composition 使用。
 export type {
@@ -310,7 +305,7 @@ export { subscribeChatSummaryChanged } from './summary/application/ChatSummaryRu
 export type { ChatSummarySegment, ChatSummarySnapshot, ChatSummarySettings, ChatSummarySettingsPatch, ChatSummarySearchInput, ChatSummarySearchPage } from './summary/domain/ChatSummaryRepository';
 export type { ChatSummaryTask, ChatSummaryCallDiagnostics } from './summary/domain/ChatSummaryRepository';
 export { SearchChatSummariesTool } from './summary/aiTools/SearchChatSummariesTool';
-export { GetSecondarySummaryTool, EditSecondarySummaryTool } from './summary/aiTools/SecondarySummaryTools';
+export { GetSecondarySummaryTool, EditSecondarySummaryTool, EditPrimarySummaryTool, DeletePrimarySummaryTool } from './summary/aiTools/ChatSummaryTools';
 export { isChatReplyRunCurrentInTransaction } from './reply/application/ChatRunMutationFence';
 export { isGroupSpeechTaskRunCurrentInTransaction } from './group/application/GroupSpeechTermination';
 

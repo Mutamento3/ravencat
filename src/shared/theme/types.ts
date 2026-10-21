@@ -1,4 +1,5 @@
 import type { TextStyle } from 'react-native';
+import type { ChatFooterImageRef, ChatFooterSettings } from './chatFooterSettings';
 
 export type PresentationThemeId =
   | 'default-light'
@@ -216,4 +217,10 @@ export interface ThemeContextValue {
   resetChatColorOverride: (token: ChatColorToken) => Promise<void>;
   /** 统一调整玻璃材质并保存；数值由设置控件的范围契约保证。 */
   setGlassBlurRadius: (radius: number) => Promise<void>;
+  /** 纸条主题聊天底栏的自定义设置（文字 + 图标）。 */
+  chatFooter: ChatFooterSettings;
+  /** 设置底栏文字；null 或空白表示恢复默认文案。 */
+  setChatFooterText: (text: string | null) => Promise<void>;
+  /** 设置底栏图标文件引用；null 表示恢复内置 yaya.png。 */
+  setChatFooterImage: (image: ChatFooterImageRef | null) => Promise<void>;
 }

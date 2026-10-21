@@ -403,6 +403,7 @@ upgrade.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updat
     assistant_id TEXT NOT NULL REFERENCES ai_assistants(id) ON DELETE CASCADE,
     previous_nickname TEXT, nickname TEXT, acknowledged INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
   ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar;
+  ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit;
   PRAGMA user_version=127;`);
 upgrade.exec(`CREATE TRIGGER reject_setting_migration BEFORE INSERT ON prompt_default_switches
   WHEN NEW.key='tool:set_ai_avatar' BEGIN SELECT RAISE(ABORT,'injected setting migration'); END;`);

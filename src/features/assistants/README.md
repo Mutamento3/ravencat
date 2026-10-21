@@ -5,7 +5,7 @@
 总结模型使用通用资产的持续引用，与角色／群管理员创建时的独立副本不同。资产调用参数、启停或删除与 Chat 引用任务资格撤销共享事务；保留引用、摘要正文和进度，不自动切换。一次性应用上下文设置通过 `applyAssistantContextLimits` 只复制四项数值，之后各角色独立修改，不增加继承关系。
 
 辅助模型中心创建、编辑、启停、删除和测试模型配置。每种能力首个配置可用后，Host 在同一事务中组合各 owner 的初始选择；后续新增不覆盖。AI 翻译与腾讯云的连接配置由 Assistants 作为资产管理，翻译参数契约、业务选择和调用归 Integrations。
-配置列表路由为 `/auxiliary-models/capabilities/[kind]`，包含 general、embedding、OCR、STT、TTS、translation 六类资产；历史退休的 translate 占位类型不进入列表。
+配置列表路由为 `/auxiliary-models/capabilities/[kind]`，包含 general、embedding、OCR、STT、TTS、translation 六类资产；历史退休的 translate 占位类型不进入列表。能力池页的用途与选择规则收在标题后的问号气泡，正文只有当前选择控件和配置列表；内联选择器与列表卡片使用同一表面样式，原有说明文字改在选择弹层顶部显示。
 
 通用辅助模型复用资产的名称、连接、参数、启停、连接测试与自动保存表单，不参与首次资产初始化，不提供全局默认。单聊模型设置与群管理员设置可从当前合法草稿创建独立命名的副本；创建角色或群聊时可选择可用通用模型填入初始配置。复制字段为 API 地址、Key、模型、Temperature、Top P 与 Max Tokens，不复制角色名称、人设、上下文、工具权限或角色行为开关。复制只传递值，不保存来源 ID；双方后续编辑、停用或删除互不影响。创建表单显示填入的初始参数，连接测试使用这些参数，角色和管理员仍走原有创建命令。总结模型引用与调用见上方持续引用契约。行为验证为 `node --no-warnings scripts/verify-general-model-copies.mjs`。
 

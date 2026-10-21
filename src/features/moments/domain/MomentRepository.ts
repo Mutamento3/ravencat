@@ -211,10 +211,6 @@ export interface IMomentRepository {
   getMomentForUser(momentId: string): Promise<Moment | null>;
 
   /** AI viewer 读路径；viewer 是不可变 agentId。 */
-  listVisibleMomentsForAgent(
-    viewerAgentId: string,
-    options?: MomentPageRequest
-  ): Promise<Moment[]>;
   queryVisibleMomentsForAgent(
     viewerAgentId: string,
     options: MomentQueryRequest

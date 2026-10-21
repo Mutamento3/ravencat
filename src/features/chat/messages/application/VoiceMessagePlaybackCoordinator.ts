@@ -14,7 +14,7 @@ export type VoiceMessagePlaybackViewState = LocalAudioPlaybackSnapshot | {
 };
 
 type Listener = (state: VoiceMessagePlaybackViewState) => void;
-export type VoicePlaybackTarget = { kind: 'message'; id: number; isIncoming: boolean } | { kind: 'favorite' | 'quote'; id: string };
+export type VoicePlaybackTarget = { kind: 'message'; id: number; isIncoming: boolean } | { kind: 'favorite' | 'quote' | 'reply_version'; id: string };
 export function getVoicePlaybackKey(target: VoicePlaybackTarget): number | string {
   return target.kind === 'message' ? target.id : `${target.kind}:${target.id}`;
 }

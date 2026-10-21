@@ -54,7 +54,7 @@ export class BaseAIClientAgentModelGateway implements AgentRunModelGateway {
         if (tools.length === 0) {
           const response = await params.client.chat(messages, {
             includeSystemPrompt: options?.includeSystemPrompt,
-            allowReasoningLengthRetry: true,
+            allowReasoningLengthRetry: options?.allowReasoningLengthRetry,
             allowImageContentFallback: this.allowImageContentFallback,
             signal: options?.signal,
           });
@@ -64,7 +64,6 @@ export class BaseAIClientAgentModelGateway implements AgentRunModelGateway {
 
         const response = await params.client.chatWithTools(messages, tools, {
           ...options,
-          allowReasoningLengthRetry: true,
           allowImageContentFallback: this.allowImageContentFallback,
         });
         this.providerMessageId = response.messageId;

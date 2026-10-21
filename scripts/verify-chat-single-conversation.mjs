@@ -1,4 +1,4 @@
-import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionModuleUrl, chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /** Chat Single-Conversation Foundation 的持久化与公开产品契约验证。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -52,7 +52,7 @@ async function importSessionRepository(executor) {
 
 async function importMessageRepository(executor) {
   globalThis.__CHAT_MESSAGE_EXECUTOR__ = executor;
-  const source = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`)
+  const source = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`)
     .replace(
       /import \{[\s\S]*?\} from '@platform\/persistence';/,
       'const databaseCoordinator = { openTaskExecutor: () => globalThis.__CHAT_MESSAGE_EXECUTOR__ };',

@@ -262,6 +262,25 @@ for (const modelTransport of ['complete', 'stream']) {
   assert.equal(view.result.terminalCode, 'COMPLETED');
 }
 
+for (const modelTransport of ['complete', 'stream']) {
+  for (const text of ['', '部分正文']) {
+    let completionChecks = 0;
+    const truncated = await runCase({
+      task: { modelTransport },
+      turns: [{ ...createTurn({ text, reasoningText: '部分思考' }), finishReason: 'length' }],
+      beforeComplete: async () => {
+        completionChecks++;
+        return { action: 'continue', instruction: '补充生成', allowedToolNames: [] };
+      },
+    });
+    assert.equal(truncated.result.terminalCode, 'COMPLETED');
+    assert.equal(truncated.gateway.requests.length, 1, '输出额度耗尽后不能追加补充请求');
+    assert.equal(completionChecks, 0, '截断不是正常回答完成，不能触发完成后的派生决策');
+    assert.equal(truncated.result.steps[0].modelTurn.reasoningText, '部分思考');
+    assert.equal(truncated.result.finalText, text);
+  }
+}
+
 const continuationDecisions = [];
 const completionContinuation = await runCase({
   task: { allowedToolNames: ['schedule_self_wake'] },

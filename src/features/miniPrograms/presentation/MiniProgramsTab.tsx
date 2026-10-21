@@ -10,6 +10,7 @@ import NavigationHeader from '@shared/ui/NavigationHeader';
 type MiniProgramId =
   | 'wallet'
   | 'auxiliaryModels'
+  | 'aiRequestDiagnostics'
   | 'mcpTools'
   | 'webSearch'
   | 'memory'
@@ -49,6 +50,12 @@ const MINI_PROGRAMS: MiniProgramConfig[] = [
     name: '提示词中心',
     icon: 'code-slash-outline',
     iconColor: '#AF52DE',
+    category: 'AI 工具',
+  },
+  {
+    id: 'aiRequestDiagnostics',
+    name: 'AI 请求诊断',
+    icon: 'pulse-outline',
     category: 'AI 工具',
   },
   {

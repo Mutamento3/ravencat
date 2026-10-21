@@ -332,10 +332,11 @@ const builtInTools = [
   { module: '@features/companion', symbol: 'GetAIScheduleTool', name: 'get_ai_schedule', owner: 'companion', ...PRIVATE_READ },
   { module: '@features/companion', symbol: 'UpdateAIScheduleTool', name: 'update_ai_schedule', owner: 'companion', ...REVERSIBLE_WRITE },
   { module: '@features/companion', symbol: 'CancelAIScheduleTool', name: 'cancel_ai_schedule', owner: 'companion', ...SENSITIVE_ACTION },
-  { module: '@features/chat', symbol: 'SendMessageTool', name: 'send_message', owner: 'chat', ...EXTERNAL_SIDE_EFFECT },
   { module: '@features/chat', symbol: 'SearchChatSummariesTool', name: 'search_chat_summaries', owner: 'chat', ...PRIVATE_READ },
   { module: '@features/chat', symbol: 'GetSecondarySummaryTool', name: 'get_secondary_summary', owner: 'chat', ...PRIVATE_READ },
   { module: '@features/chat', symbol: 'EditSecondarySummaryTool', name: 'edit_secondary_summary', owner: 'chat', ...REVERSIBLE_WRITE },
+  { module: '@features/chat', symbol: 'EditPrimarySummaryTool', name: 'edit_primary_summary', owner: 'chat', ...REVERSIBLE_WRITE },
+  { module: '@features/chat', symbol: 'DeletePrimarySummaryTool', name: 'delete_primary_summary', owner: 'chat', ...REVERSIBLE_WRITE },
   { module: '@features/chat', symbol: 'SendVoiceMessageTool', name: 'send_voice_message', owner: 'chat', ...EXTERNAL_SIDE_EFFECT },
   { module: '@features/stickers', symbol: 'SearchStickersTool', name: 'search_stickers', owner: 'stickers', ...SAFE_READ },
   { module: '@features/stickers', symbol: 'ListStickerGroupsTool', name: 'list_sticker_groups', owner: 'stickers', ...SAFE_READ },
@@ -390,6 +391,8 @@ for (const tool of builtInTools) {
     || tool.symbol === 'SearchChatSummariesTool'
     || tool.symbol === 'GetSecondarySummaryTool'
     || tool.symbol === 'EditSecondarySummaryTool'
+    || tool.symbol === 'EditPrimarySummaryTool'
+    || tool.symbol === 'DeletePrimarySummaryTool'
   )
     ? createAgentNativeBuiltInTool(tool.name)
     : createLegacyTool(tool.name);
@@ -439,7 +442,7 @@ const productionRegistry = createAgentToolRegistry({
   },
 });
 const productionDescriptors = productionRegistry.list();
-for (const name of ['search_chat_summaries', 'get_secondary_summary', 'edit_secondary_summary']) {
+for (const name of ['search_chat_summaries', 'get_secondary_summary', 'edit_secondary_summary', 'edit_primary_summary', 'delete_primary_summary']) {
   assert.equal(getToolPackageRuntimeBindings(productionRegistry).find(binding => binding.tool.descriptor.name === name).packageId, 'memory');
 }
 assert.deepEqual(
@@ -507,7 +510,6 @@ for (const name of ['lookAtUser', 'web_search', 'recall_memory', 'searchProtocol
   assert.ok(callNames.includes(name), `通话保留已授权的业务工具：${name}`);
 }
 assert.ok(!callNames.includes('requestVideoCall'), '通话中不能再次发起通话');
-assert.ok(!availableNames({ triggerSource: 'call', isHostAI: true }).includes('send_message'), '通话正文已经朗读，不重复投递普通聊天消息');
 assert.deepEqual(availableNames({ triggerSource: 'call', allowedToolNames: [] }), [], '通话沿用原有授权边界');
 const settingsNames = builtInTools.filter(entry => entry.module === './ApplicationSettingsTools').map(entry => entry.name);
 for (const name of settingsNames) {
@@ -552,7 +554,7 @@ const autonomousNames = availableNames({ triggerSource: 'raven_cat_wake', capabi
 assert.ok(autonomousNames.includes('send_voice_message'), '自主执行已接入同事务媒体存档，必须使用正常授权的语音工具');
 assert.ok(autonomousNames.includes('select_sticker'), '自主执行必须使用正常授权的贴纸工具');
 const groupNames=availableNames({triggerSource:'group_chat',memoryParticipation:'read_write'});
-for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_summaries','get_secondary_summary','edit_secondary_summary','download_image','view_image','set_ai_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
+for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_summaries','get_secondary_summary','edit_secondary_summary','edit_primary_summary','delete_primary_summary','download_image','view_image','set_ai_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
   assert.ok(groupNames.includes(name),`群聊应提供已授权工具：${name}`);
 }
 assert.ok(!groupNames.includes('requestVideoCall'),'群聊不能发起视频通话');
@@ -576,7 +578,6 @@ for (const forbiddenName of [
   'read_screen_accessibility',
   'read_screen_ocr',
   'create_ai_schedule',
-  'send_message',
   'lookAtUser',
   'recall_memory',
   'update_memory',
@@ -747,16 +748,6 @@ assert.deepEqual(
   ['getProtocols'],
   'autonomous Self Wake 必须能通过普通 Registry 与 allowlist 获得正常 Host Tool schema',
 );
-assert.deepEqual(
-  getAuthorizedToolDefinitionsForAI({
-    enableTools: true,
-    isHostAI: true,
-    triggerSource: 'chat',
-    allowedToolNames: ['send_message'],
-  }),
-  [],
-  '普通 Chat 可见回复不得暴露 send_message，否则同一意图会落两条消息',
-);
 const descriptors = getToolPermissionDescriptors();
 assert.deepEqual(
   descriptors.map(({ name, owner, defaultEnabled, callOnly, memoryParticipation }) => ({
@@ -791,7 +782,6 @@ assert.deepEqual(
       || name === 'read_screen_accessibility'
       || name === 'read_screen_ocr'
       || name === 'create_ai_schedule'
-      || name === 'send_message'
     )).sort(),
   [
     'blockAIAssistant',
@@ -802,7 +792,6 @@ assert.deepEqual(
     'read_screen_ocr',
     'release_soft_lock',
     'search_installed_apps',
-    'send_message',
     'soft_lock_app',
     'unblockAIAssistant',
   ],

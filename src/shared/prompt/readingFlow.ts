@@ -13,7 +13,7 @@ export const CHAT_PROMPT_READING_FLOW = [
   { id: 'history', section: 'context', blockKeys: ['conversation_summary', 'recent_chat_window'] },
   { id: 'tool_runtime', section: 'context', blockKeys: ['tool_context_explanation'] },
   { id: 'user_state', section: 'context', blockKeys: ['together_listening_runtime'] },
-  { id: 'social', section: 'context', blockKeys: ['moments_social_inbox', 'recent_moments_summary', 'moments_context_summary'] },
+  { id: 'social', section: 'context', blockKeys: ['moments_social_inbox', 'moments_context_summary'] },
   { id: 'environment', section: 'context', blockKeys: ['interaction_environment', 'application_trigger'] },
   { id: 'assistant_state', section: 'context', blockKeys: ['host_cooldown'] },
   { id: 'memory', section: 'context', blockKeys: ['passive_memory'] },

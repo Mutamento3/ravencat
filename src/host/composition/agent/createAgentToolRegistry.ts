@@ -70,7 +70,7 @@ import {
 } from '@features/phoneTools';
 import { productionNetEaseChildTools } from '@features/phoneTools/neteaseComposition';
 import { ReadScreenAccessibilityTool, ReadScreenOcrTool } from '@features/screenCapture';
-import { SendMessageTool, SendVoiceMessageTool, SearchChatSummariesTool, GetSecondarySummaryTool, EditSecondarySummaryTool, createConfiguredVoiceMessageTool } from '@features/chat';
+import { SendVoiceMessageTool, SearchChatSummariesTool, GetSecondarySummaryTool, EditSecondarySummaryTool, EditPrimarySummaryTool, DeletePrimarySummaryTool, createConfiguredVoiceMessageTool } from '@features/chat';
 import {
   ListStickerGroupsTool,
   ListStickersInGroupTool,
@@ -106,12 +106,6 @@ interface BuiltInToolRegistrationBase extends LegacyAgentToolMetadata {
   hostOnly: boolean;
   cooldownOnly?: boolean;
   callOnly: boolean;
-  /**
-   * 只在旁路交付运行（模型 finalText 不会自动成为用户可见消息）中暴露。
-   * Chat 可见回复链路由 run 自己把 finalText 投影成 assistant 消息，
-   * 再暴露旁路发送工具会产生同一意图的两条消息。
-   */
-  outOfBandOnly: boolean;
   /** 媒体 intent 必须由已接入 Chat 持久提交的场景消费；群聊沿用群任务 fence。 */
   directChatOnly: boolean;
   groupChatAllowed: boolean;
@@ -197,7 +191,6 @@ function builtInTool(
     | 'hostOnly'
     | 'cooldownOnly'
     | 'callOnly'
-    | 'outOfBandOnly'
     | 'directChatOnly'
     | 'groupChatAllowed'
     | 'groupChatForbidden'
@@ -218,7 +211,6 @@ function builtInTool(
     hostOnly: options.hostOnly ?? false,
     cooldownOnly: options.cooldownOnly,
     callOnly: options.callOnly ?? false,
-    outOfBandOnly: options.outOfBandOnly ?? false,
     directChatOnly: options.directChatOnly ?? false,
     groupChatAllowed: options.groupChatAllowed ?? false,
     groupChatForbidden: options.groupChatForbidden ?? false,
@@ -240,7 +232,6 @@ function agentNativeBuiltInTool(
     | 'defaultEnabled'
     | 'hostOnly'
     | 'callOnly'
-    | 'outOfBandOnly'
     | 'directChatOnly'
     | 'groupChatAllowed'
     | 'groupChatForbidden'
@@ -259,7 +250,6 @@ function agentNativeBuiltInTool(
     defaultEnabled: options.defaultEnabled ?? true,
     hostOnly: options.hostOnly ?? false,
     callOnly: options.callOnly ?? false,
-    outOfBandOnly: options.outOfBandOnly ?? false,
     directChatOnly: options.directChatOnly ?? false,
     groupChatAllowed: options.groupChatAllowed ?? false,
     groupChatForbidden: options.groupChatForbidden ?? false,
@@ -270,17 +260,6 @@ function agentNativeBuiltInTool(
     dynamicRunExposure: options.dynamicRunExposure ?? false,
   };
 }
-
-/**
- * 可见回复链路的 triggerSource：Chat 提交消息，Calls 朗读正文；
- * outOfBandOnly 工具不应再为这些回复生成另一份普通聊天消息。
- */
-const USER_VISIBLE_REPLY_TRIGGER_SOURCES = new Set([
-  'chat',
-  'group_chat',
-  'ledger',
-  'call',
-]);
 
 /** 生产 Built-in Tool 的唯一顺序与元数据 owner。 */
 const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
@@ -326,6 +305,8 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   agentNativeBuiltInTool(SearchChatSummariesTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
   agentNativeBuiltInTool(GetSecondarySummaryTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
   agentNativeBuiltInTool(EditSecondarySummaryTool, 'chat', REVERSIBLE_WRITE, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
+  agentNativeBuiltInTool(EditPrimarySummaryTool, 'chat', REVERSIBLE_WRITE, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
+  agentNativeBuiltInTool(DeletePrimarySummaryTool, 'chat', REVERSIBLE_WRITE, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
   agentNativeBuiltInTool(UpdateMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   agentNativeBuiltInTool(ForgetMemoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write' }),
   builtInTool(BlockAIAssistantTool, 'assistants', SENSITIVE_ACTION, { hostOnly: true }),
@@ -351,10 +332,6 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   agentNativeBuiltInTool(GetAIScheduleTool, 'companion', PRIVATE_READ, { hostOnly: true }),
   agentNativeBuiltInTool(UpdateAIScheduleTool, 'companion', REVERSIBLE_WRITE, { hostOnly: true }),
   agentNativeBuiltInTool(CancelAIScheduleTool, 'companion', SENSITIVE_ACTION, { hostOnly: true }),
-  builtInTool(SendMessageTool, 'chat', EXTERNAL_SIDE_EFFECT, {
-    hostOnly: true,
-    outOfBandOnly: true,
-  }),
   agentNativeBuiltInTool(
     SendVoiceMessageTool,
     'chat',
@@ -541,7 +518,6 @@ interface BuiltInToolPolicyEntry {
   tool: { name: string };
   hostOnly: boolean;
   callOnly: boolean;
-  outOfBandOnly: boolean;
   directChatOnly?: boolean;
   groupChatAllowed?: boolean;
   groupChatForbidden?: boolean;
@@ -575,12 +551,6 @@ export function getPolicyAllowedToolEntriesForAI<T extends BuiltInToolPolicyEntr
     }
     if (registration.callOnly && !hasCallCapability) return false;
     if (registration.hostOnly && !isHostAI) return false;
-    if (
-      registration.outOfBandOnly
-      && USER_VISIBLE_REPLY_TRIGGER_SOURCES.has(aiConfig.triggerSource ?? 'chat')
-    ) {
-      return false;
-    }
     if (registration.directChatOnly && !(registration.groupChatAllowed && aiConfig.triggerSource === 'group_chat') && (aiConfig.triggerSource ?? 'chat') !== 'chat'
       && !aiConfig.capabilities?.includes('raven_cat.autonomous')) {
       return false;

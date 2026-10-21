@@ -28,6 +28,57 @@ function load(relativePath, dependencies = {}) {
 let call = { id: 'call-1', state: 'active', chatSessionId: 'session-1' };
 let renderer;
 
+// 聊天输入状态直接消费 Calls 的接通标记；重挂页面不改变通话生命周期。
+const chatCallGateway = load('src/features/chat/conversation/application/ChatCallGateway.ts');
+let activeCallSnapshot = null;
+const activeCallListeners = new Set();
+chatCallGateway.configureChatCallGateway({
+  getActiveCallSnapshot: () => activeCallSnapshot,
+  subscribeActiveCall(listener) {
+    activeCallListeners.add(listener);
+    return () => activeCallListeners.delete(listener);
+  },
+});
+const chatDetail = load('src/features/chat/presentation/messages/ChatDetail/useChatDetail.ts', {
+  '../components/chatTypes': { buildAIRequestConfig: (assistant) => assistant },
+  '../components/useMessageHistoryState': { useMessageHistoryState: () => ({ messages: [] }) },
+  '../components/useChatTimelineSync': { useChatTimelineSync() {} },
+  './useChatSendFlow': { useChatSendFlow: () => ({}) },
+  '../../../conversation/application/ChatCallGateway': chatCallGateway,
+  '@shared/theme': { useTheme: () => ({}), getChatInteractionProfile: () => ({ enableAssistantMessageSegmentation: true }) },
+});
+let chatBlocked;
+function ChatInputState({ sessionId = 'session-1', assistantId = 'ai-1' }) {
+  chatBlocked = chatDetail.useChatDetail(sessionId, { id: assistantId }).isChatSendBlockedByActiveCall;
+  return null;
+}
+try {
+  await act(async () => { renderer = create(React.createElement(ChatInputState)); });
+  assert.equal(chatBlocked, false);
+  await act(async () => {
+    activeCallSnapshot = { id: 'chat-call', state: 'active', chatSessionId: 'session-1', aiAssistantId: 'ai-1' };
+    for (const listener of activeCallListeners) listener();
+  });
+  assert.equal(chatBlocked, true, '接通通知立即阻断输入');
+  await act(async () => { renderer.update(React.createElement(ChatInputState, { sessionId: 'other', assistantId: 'other-ai' })); });
+  assert.equal(chatBlocked, false, '其他角色的聊天不受影响');
+  await act(async () => { renderer.update(React.createElement(ChatInputState, { sessionId: 'other', assistantId: 'ai-1' })); });
+  assert.equal(chatBlocked, true, '同一 AI 的另一会话仍受通话限制');
+  await act(async () => { renderer.unmount(); });
+  assert.equal(activeCallListeners.size, 0, '卸载只释放订阅');
+  assert.equal(activeCallSnapshot.id, 'chat-call', '页面卸载不清除接通标记');
+  await act(async () => { renderer = create(React.createElement(ChatInputState)); });
+  assert.equal(chatBlocked, true, '重新进入聊天直接读取当前接通标记');
+  await act(async () => {
+    activeCallSnapshot = null;
+    for (const listener of activeCallListeners) listener();
+  });
+  assert.equal(chatBlocked, false, '挂断通知立即解除输入限制');
+} finally {
+  if (renderer) await act(async () => { renderer.unmount(); });
+  renderer = null;
+}
+
 // 保留 Router 的异步派发边界：小窗恢复先提交 Host 状态，路径稍后才改变。
 // 使用真实 Host 验证迟到的自动恢复不会留下第二层通话页；媒体生命周期另有专项验证。
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;

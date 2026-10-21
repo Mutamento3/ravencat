@@ -23,12 +23,20 @@ function load(file, dependencies) {
   return module.exports;
 }
 const listeners = new Map();
-let visible = false;
+let keyboard;
+let frame = { y: 0, height: 800 };
+let deferMeasurements = false;
+const measurements = [];
+const windowNative = { measureInWindow(callback) {
+  const measured = { ...frame };
+  const complete = () => callback(0, measured.y, 400, measured.height);
+  if (deferMeasurements) measurements.push(complete); else complete();
+} };
 const native = {
-  TextInput: 'Input', Text: 'Text', View: 'View', KeyboardAvoidingView: 'Avoiding',
-  StyleSheet: { create: (styles) => styles },
+  TextInput: 'Input', Text: 'Text', View: 'View',
+  StyleSheet: { create: (styles) => styles, compose: (a, b) => [a, b] },
   Keyboard: {
-    isVisible() { assert.equal(this, native.Keyboard); return visible; },
+    metrics() { assert.equal(this, native.Keyboard); return keyboard; },
     addListener(event, callback) {
       if (!listeners.has(event)) listeners.set(event, new Set());
       const subscriptions = listeners.get(event);
@@ -52,11 +60,22 @@ const inputNative = { focused: false, focus() { this.focused = true; }, blur() {
 const changes = [];
 function Editor({ enabled = true }) {
   const [value, setValue] = React.useState('第一行');
-  return React.createElement(Container, { enabled }, React.createElement(Input, {
+  return React.createElement(Container, { enabled, testID: 'window' }, React.createElement(Input, {
     ref, value, autoGrow: true, onChangeText: (text) => { changes.push(text); setValue(text); },
   }));
 }
-await act(async () => { rendered = create(React.createElement(Editor), { createNodeMock: (element) => element.type === 'Input' ? inputNative : null }); });
+await act(async () => { rendered = create(React.createElement(Editor), { createNodeMock: (element) => element.type === 'Input' ? inputNative : windowNative }); });
+const windowView = () => rendered.root.findAllByType('View').find(node => node.props.testID === 'window');
+const bottom = () => Object.assign({}, ...windowView().props.style).paddingBottom;
+const emit = async (event, coordinates) => {
+  keyboard = event === 'keyboardDidShow' ? coordinates : undefined;
+  await act(async () => { for (const listener of listeners.get(event)) listener({ endCoordinates: coordinates }); });
+};
+const showKeyboard = () => emit('keyboardDidShow', { screenY: 500, screenX: 0, width: 400, height: 300 });
+const layout = async (nextFrame) => {
+  frame = nextFrame;
+  await act(async () => windowView().props.onLayout({ nativeEvent: { layout: { y: 0, height: frame.height } } }));
+};
 ref.current.focus();
 await act(async () => rendered.root.findByType('Input').props.onChangeText('第一行\n第二行'));
 assert.deepEqual(changes, ['第一行\n第二行']);
@@ -65,22 +84,84 @@ assert.equal(rendered.root.findByType('Input').props.multiline, true);
 assert.equal(ref.current, inputNative);
 assert.equal(ref.current.focused, true);
 for (let cycle = 0; cycle < 3; cycle++) {
-  visible = true;
-  await act(async () => { for (const listener of listeners.get('keyboardDidShow')) listener(); });
-  assert.equal(rendered.root.findByType('Avoiding').props.enabled, true);
-  visible = false;
-  await act(async () => { for (const listener of listeners.get('keyboardDidHide')) listener(); });
-  assert.equal(rendered.root.findByType('Avoiding').props.enabled, false);
+  await showKeyboard();
+  assert.equal(bottom(), 300, '只补窗口与键盘重叠的部分');
+  await emit('keyboardDidHide', { screenY: 400, height: 0 });
+  assert.equal(bottom(), 0, '隐藏事件即使携带旧坐标也清除留白');
   assert.equal(rendered.root.findByType('Input').props.value, '第一行\n第二行');
 }
 await act(async () => rendered.update(React.createElement(Editor, { enabled: false })));
 assert.equal(listeners.size, 0, '窗口关闭后释放键盘监听');
-visible = true;
+keyboard = { screenY: 500, screenX: 0, width: 400, height: 300 };
 await act(async () => rendered.update(React.createElement(Editor)));
-assert.equal(rendered.root.findByType('Avoiding').props.enabled, true, '接入已经打开键盘的窗口时读取当前状态');
+assert.equal(bottom(), 300, '接入已打开键盘的改写窗口时读取当前键盘位置');
+await layout({ y: 0, height: 500 });
+assert.equal(bottom(), 0, '原生窗口已缩到键盘上方时不能再加一次键盘高度');
+await layout({ y: 120, height: 500 });
+assert.equal(bottom(), 120, '局部 onLayout 的 y 为零时仍使用窗口实际起点');
+await layout({ y: 0, height: 800 });
+assert.equal(bottom(), 300, '窗口恢复全屏时重新计算实际重叠');
+deferMeasurements = true;
+await showKeyboard();
+await emit('keyboardDidHide', { screenY: 500, height: 0 });
+await act(async () => measurements.splice(0).forEach(complete => complete()));
+assert.equal(bottom(), 0, '隐藏后晚到的测量不能恢复大块空白');
+await showKeyboard();
+await layout({ y: 0, height: 500 });
+await act(async () => measurements.splice(0).reverse().forEach(complete => complete()));
+assert.equal(bottom(), 0, '窗口缩放后旧测量逆序返回也不能覆盖最新重叠量');
+await showKeyboard();
+await act(async () => rendered.update(React.createElement(Editor, { enabled: false })));
+await act(async () => measurements.splice(0).forEach(complete => complete()));
+assert.equal(bottom(), 0, '退出窗口后不再接受旧测量');
+deferMeasurements = false;
 await act(async () => rendered.unmount());
 assert.equal(listeners.size, 0, '窗口卸载后释放键盘监听');
 assert.equal(ref.current, null);
+
+// 改写单聊/群聊消息共用同一个编辑器；使用真实表单、弹窗和避让容器验证窗口缩放后的间隙。
+const modalTheme = load('src/shared/theme/themes/defaultLight.ts', {}).defaultLightTheme;
+const modalNative = {
+  ...native, TouchableOpacity: 'Button', TouchableWithoutFeedback: 'Backdrop',
+  Dimensions: { get: () => ({ width: 400, height: 800 }) },
+  Modal: function Modal(props) {
+    React.useEffect(() => { props.onShow(); }, []);
+    return React.createElement('Modal', props, props.children);
+  },
+  Animated: {
+    Value: class { constructor(value) { this.value = value; } }, View: 'AnimatedView',
+    timing: (value, { toValue }) => ({ start() { value.value = toValue; } }),
+    parallel: animations => ({ start(callback) { animations.forEach(animation => animation.start()); callback({ finished: true }); }, stop() {} }),
+  },
+};
+const ModalSheet = load('src/shared/ui/ModalSheet.tsx', {
+  'react-native': modalNative,
+  '@shared/theme': { useTheme: () => modalTheme, useThemedStyles: factory => factory(modalTheme), ThemedSurface: 'Surface' },
+  'react-native-safe-area-context': { useSafeAreaInsets: () => ({ bottom: 0 }) },
+  './KeyboardAvoidingContainer': { __esModule: true, default: props => React.createElement(Container, { ...props, testID: 'window' }) },
+}).default;
+const MessageEditor = load('src/features/chat/presentation/messages/components/ChatMessageEditor.tsx', {
+  ...dependencies,
+  '@shared/ui': { ModalSheet, InputField: Field, Button: 'Button' },
+  '../../../messages/application/EditChatMessage': { editChatMessage: async () => { throw new Error('布局回归不应提交消息'); } },
+}).default;
+for (let cycle = 0; cycle < 3; cycle++) {
+  frame = { y: 0, height: 800 };
+  keyboard = { screenY: 500, screenX: 0, width: 400, height: 300 };
+  await act(async () => { rendered = create(React.createElement(MessageEditor, {
+    message: { id: 1, text: '待改写的 AI 正文' }, onClose() {}, onSaved() {},
+  }), { createNodeMock: () => windowNative }); });
+  await layout({ y: 0, height: 500 });
+  assert.equal(bottom(), 0, '每次改写时窗口已避开键盘，不能额外顶起弹窗');
+  const editorInput = rendered.root.findByType('Input');
+  await act(async () => editorInput.props.onChangeText('修改后的 AI 正文'));
+  await showKeyboard();
+  assert.equal(bottom(), 0, '编辑和重复键盘事件不会在弹窗下方叠加空白');
+  assert.equal(editorInput.props.value, '修改后的 AI 正文');
+  assert.equal(rendered.root.findAllByType('Input').length, 1, '改写只有一个原生输入');
+  await act(async () => rendered.unmount());
+  assert.equal(listeners.size, 0);
+}
 
 // 字段名称不是密码语义；只有调用方明确声明的敏感输入才遮蔽。
 await act(async () => { rendered = create(React.createElement(Field, { label: 'API Key', value: 'key', autoGrow: true, onChangeText() {} })); });
@@ -94,4 +175,4 @@ await act(async () => rendered.update(React.createElement(Input, { value: '13', 
 assert.equal(rendered.root.findByType('Input').props.keyboardType, 'number-pad');
 assert.equal(rendered.root.findByType('Input').props.submitBehavior, 'submit');
 await act(async () => rendered.unmount());
-console.log('verify-ui-input: 输入草稿、原生 ref、密码语义、键盘反复开合及窗口监听生命周期通过。');
+console.log('verify-ui-input: 草稿、原生 ref、键盘实际重叠、窗口缩放、逆序测量与监听生命周期通过。');

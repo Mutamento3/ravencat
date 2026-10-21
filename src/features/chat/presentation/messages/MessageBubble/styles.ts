@@ -20,6 +20,8 @@ export function createMessageBubbleStyles(theme: PresentationTheme) {
       maxWidth: isMoonKimi ? '92%' : '84%',
       flexDirection: 'row',
       alignItems: 'flex-start',
+      // 头像与气泡之间额外留出呼吸间距；头像自身 marginHorizontal 只负责贴屏幕边缘的留白。
+      gap: theme.spacing.sm,
     },
     myContainer: isMoonKimi ? {
       alignSelf: 'flex-end',
@@ -74,13 +76,12 @@ export function createMessageBubbleStyles(theme: PresentationTheme) {
       marginVertical: 8,
     },
     avatarWrapper: {
+      // 只负责占位与边距：尺寸必须与 Avatar 的 size 一致，圆角和裁切交给 AvatarImage，
+      // 否则外层圆角会把头像四角二次削掉一点（表现为头像被裁）。
       width: 36,
       height: 36,
-      borderRadius: 4,
-      backgroundColor: theme.colors.brand.primary + '15',
       justifyContent: 'center',
       alignItems: 'center',
-      overflow: 'hidden',
       marginHorizontal: 6,
       alignSelf: 'flex-start',
     },

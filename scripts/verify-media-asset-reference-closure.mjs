@@ -1,4 +1,4 @@
-import { chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /**
  * MediaAsset M5 correctness closure：引用写入与 release 的 TOCTOU、级联删除候选收集。
  *
@@ -306,6 +306,7 @@ function createHarness() {
     {
       '@platform/persistence': persistenceMock,
       './ChatMessageMutationSql': chatMessageMutations,
+      '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
       './ChatTimelineSql': chatTimelineSqlModule,
       '../domain/MessageTimeSeparator': messageTimeSeparatorModule,
     },

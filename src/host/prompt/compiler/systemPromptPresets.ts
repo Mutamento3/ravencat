@@ -146,7 +146,6 @@ const PROMPT_PACK_ITEMS: Partial<Record<PromptPackScenario, PromptPresetItemDefi
     item('context.moments_social_inbox', 'dynamic_context', 125, 'locked'),
     item('context.group_chat', 'persona', 38, 'locked'),
     item('output.group_member_reply_confidentiality', 'output_contract', 95, 'locked', true),
-    item('context.recent_moments', 'dynamic_context', 140),
     ...HISTORY_AND_INPUT_ITEMS,
   ],
   'ledger.reply': [

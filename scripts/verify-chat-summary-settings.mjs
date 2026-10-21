@@ -31,7 +31,7 @@ const mocks = {
   'expo-router': { useFocusEffect: callback => React.useEffect(callback,[callback]) },
   '@expo/vector-icons': {Ionicons:'Ionicons'},
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
-  'lucide-react-native': Object.fromEntries(['Plus','Settings','Pin','PinOff','Star','ChevronRight','ChevronDown','Layers3'].map(name=>[name,name])),
+  'lucide-react-native': Object.fromEntries(['Plus','Settings','Pin','PinOff','Star','History','ChevronRight','ChevronDown','Layers3'].map(name=>[name,name])),
   '@shared/theme': { ThemedSurface:'ThemedSurface', useTheme: () => ({ colors: { brand: { primary: 'blue' }, text: { tertiary: 'gray',secondary:'gray' }, feedback: { error: 'red' }, border:{strong:'gray'} } }), useThemedStyles: () => ({}) },
   '@shared/ui': { AppTextInput: 'TextInput', KeyboardAvoidingContainer: 'KeyboardAvoidingContainer', NavigationHeader: 'NavigationHeader', Toggle: 'Toggle', ConfiguredModelPicker: 'ConfiguredModelPicker', useBusyBackHandler() {}, showAppDialog() {} },
   '@features/assistants': { getAuxiliaryModelSelection: async () => ({}), requireAuxiliaryModel: async () => {}, subscribeAuxiliaryModelsChanged: () => () => {} },

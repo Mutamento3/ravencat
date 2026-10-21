@@ -61,11 +61,11 @@ export default function ConfiguredModelPicker({ title, description, unconfigured
         <View style={styles.grow}><Text style={styles.label}>{title}</Text><Text style={styles.subtitle}>{loading && !settings ? '正在读取…' : selectionLabel}</Text></View>
         <ChevronRight size={20} color={theme.colors.text.tertiary} />
       </View>
-      <Text style={styles.subtitle}>{description}选择后立即保存。</Text>
       {error && <Text style={styles.danger}>{error}</Text>}
     </Pressable>
     <ModalSheet visible={visible} onClose={() => { if (!saving) setVisible(false); }} title={`选择${title}`}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+        {!loading && !error && <Text style={styles.hint}>{description}选择后立即保存。</Text>}
         {loading ? <ActivityIndicator color={theme.colors.brand.primary} /> : error ? <>
           <Text style={styles.danger}>{error}</Text><Pressable onPress={() => { void reload(); }}><Text style={styles.action}>重新读取</Text></Pressable>
         </> : settings && <>
@@ -89,11 +89,13 @@ export default function ConfiguredModelPicker({ title, description, unconfigured
 }
 
 const createStyles = (theme: PresentationTheme) => StyleSheet.create({
-  card: { padding: theme.spacing.md, marginVertical: theme.spacing.sm, borderRadius: theme.radius.lg, backgroundColor: theme.colors.background.app },
+  // 内联选择器的表面与列表卡片一致，不再用页面背景色自成一块。
+  card: { padding: theme.spacing.md, marginVertical: theme.spacing.sm, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.default, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light },
   row: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm },
   grow: { flex: 1 },
   label: { fontSize: 16, fontWeight: '600', color: theme.colors.text.primary },
   subtitle: { fontSize: 13, lineHeight: 20, marginTop: theme.spacing.xs, color: theme.colors.text.secondary },
+  hint: { fontSize: 13, lineHeight: 20, marginBottom: theme.spacing.sm, color: theme.colors.text.secondary },
   danger: { fontSize: 13, color: theme.colors.feedback.error },
   action: { fontSize: 15, color: theme.colors.brand.primary, paddingVertical: theme.spacing.md },
   scroll: { maxHeight: 420 },

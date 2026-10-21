@@ -345,7 +345,7 @@ try {
   const { applyRuntimeModelInput } = load('src/features/chat/reply/application/ChatReplyUtils.ts');
   const actualModelInput = applyRuntimeModelInput([{ role: 'system', content: '冻结上下文' }, { role: 'user', content: continuedInput.displayText }],
     undefined, continuedInput.turnInputMessages);
-  assert.deepEqual(actualModelInput.slice(1), continuedInput.turnInputMessages, '真实模型输入适配不能把旧任务重复追加到执行结果之后');
+  assert.deepEqual(actualModelInput.slice(1), continuedInput.turnInputMessages.map(({ createdAt, ...message }) => message), '真实模型输入适配不能把旧任务重复追加到执行结果之后');
   const protectedHistory = await promptHistoryBuilder.loadPrivateSummaryContext({ sessionId: 's', aiConfig: ai,
     runtimeContext: { batchedUserMessageIds: pendingUsers.map(message => message.id) } });
   assert.equal(protectedHistory.messages.some(message => message.logicalMessageId === `interrupted:${run.runId}`), false, '本轮固定输入内的执行记录不能重复注入普通历史');
@@ -369,7 +369,11 @@ try {
   arrival.configureAssistantMessageArrivalRuntime({ begin: async batch => ({ revision: ++arrivalRevision,
     pendingMessageIds: batch.messageIds, pendingSessionIds: ['s'] }),
     finish: async () => ({ revision: ++arrivalRevision, pendingMessageIds: [], pendingSessionIds: [] }) });
-  load('src/features/chat/reply/delivery/AIMessageEvents.ts').configureAIMessageDeliveryHandler(async () => ({ status: 'suppressed' }));
+  const deliveryEvents = [];
+  load('src/features/chat/reply/delivery/AIMessageEvents.ts').configureAIMessageDeliveryHandler(async payload => {
+    deliveryEvents.push(payload);
+    return { status: 'suppressed_foreground' };
+  });
   const { createSingleTransactionTurnCommit } = load('src/features/chat/reply/application/SingleTransactionTurnCommit.ts');
   const commit = createSingleTransactionTurnCommit(next, ai.id, nextDisplay);
   const delivered = [];
@@ -662,29 +666,33 @@ try {
   const firstOwner = presentation.retainTurnDisplayHistory('window-lifetime');
   const secondOwner = presentation.retainTurnDisplayHistory('window-lifetime');
   const oldRead = presentation.reloadTurnDisplayHistory('window-lifetime', [{ id: 301, turnRunId: 'old-window' }]);
+  await Promise.resolve();
   firstOwner();
   const sharedRead = presentation.reloadTurnDisplayHistory('window-lifetime');
-  assert.equal(historyRequests[1].window.fromMessageId, 301, '另一个挂载列表仍拥有分页窗口');
+  assert.equal(historyRequests.length, 1, '共享分页窗口的在途读取不重复查库');
+  assert.equal(historyRequests[0].window.fromMessageId, 301, '另一个挂载列表仍拥有分页窗口');
   secondOwner();
   const newOwner = presentation.retainTurnDisplayHistory('window-lifetime');
   const newRead = presentation.reloadTurnDisplayHistory('window-lifetime');
-  assert.equal(historyRequests[2].window.fromMessageId, Number.MAX_SAFE_INTEGER, '重进会话不能继承已卸载的窗口');
-  historyRequests[2].gate.resolve([]);
+  await Promise.resolve();
+  assert.equal(historyRequests[1].window.fromMessageId, Number.MAX_SAFE_INTEGER, '重进会话不能继承已卸载的窗口');
+  historyRequests[1].gate.resolve([]);
   await newRead;
   const staleHistory = [{ runId: 'old-window', kind: 'user_reply', state: 'interrupted', items: [{ version: 1, snapshot: {
     runId: 'old-window', sequence: 1, kind: 'reasoning', status: 'sent', text: '迟到的页面结果',
     clientMessageId: 'old-window:1', createdAt: stamp, time: '18:00' } }] }];
   historyRequests[0].gate.resolve(staleHistory);
-  historyRequests[1].gate.resolve(staleHistory);
   await Promise.all([oldRead, sharedRead]);
   assert.deepEqual(store.snapshotAgentTransientTimelineWithReplacements('window-lifetime'), []);
   newOwner();
   // 没有页面的历史恢复也只临时保留读取状态。
   const backgroundRead = presentation.reloadTurnDisplayHistory('window-lifetime', [{ id: 999 }]);
-  historyRequests[3].gate.resolve([]); await backgroundRead;
+  await Promise.resolve();
+  historyRequests[2].gate.resolve([]); await backgroundRead;
   const afterBackgroundRead = presentation.reloadTurnDisplayHistory('window-lifetime');
-  assert.equal(historyRequests[4].window.fromMessageId, Number.MAX_SAFE_INTEGER);
-  historyRequests[4].gate.resolve([]); await afterBackgroundRead;
+  await Promise.resolve();
+  assert.equal(historyRequests[3].window.fromMessageId, Number.MAX_SAFE_INTEGER);
+  historyRequests[3].gate.resolve([]); await afterBackgroundRead;
   presentation.configureChatTurnPresentation(displays);
   // 刷新已加载多页不能裁成最新 20 条；数据库在同一快照内识别真实身份并排除乐观 ID。
   const windowSession = 'reload-window';
@@ -708,6 +716,61 @@ try {
     initialWindow.messages.map(message => message.id), '只有乐观消息时读取真实首屏，不清空发送中的列表');
   db.prepare('UPDATE sessions SET visible_after_message_id = ? WHERE id = ?').run(appendedId, windowSession);
   assert.deepEqual(await readWindow(), [], '清空会话仍按持久可见边界清除窗口');
+
+  // 自主唤醒复用真实 Runtime、Projector、SQLite 与交付事件；关闭工具仍能发正文或静默。
+  const { configureChatReplyRuntime } = load('src/features/chat/reply/application/ChatReplyRuntimeDependencies.ts');
+  const { runChatVisibleAgent } = load('src/features/chat/reply/application/RunChatVisibleAgent.ts');
+  const { AUTONOMOUS_SILENT_REPLY } = load('src/features/chat/reply/application/AutonomousReplyContract.ts');
+  const autonomousDeliveries = deliveryEvents;
+  configureChatReplyRuntime({ agent: { run: request => new AgentRuntime({
+    registry: new AgentToolRegistry(), modelGateway: request.modelGateway,
+  }).run(request) } });
+  for (const transport of ['complete', 'stream']) for (const silent of [false, true]) {
+    const sessionId = `autonomous-${transport}-${silent}`;
+    db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(sessionId, 'direct');
+    db.prepare('INSERT INTO sessions(id) VALUES (?)').run(sessionId);
+    const turn = { assistantText: silent ? AUTONOMOUS_SILENT_REPLY : '今天过得怎么样？\n\n想你了。',
+      reasoningText: '根据最近的对话决定是否联系', toolCalls: [], historyItems: [], finishReason: 'stop',
+      messageId: sessionId, usage: { totalTokens: 10, promptTokens: 6, completionTokens: 4 } };
+    let requests = 0;
+    const result = await runChatVisibleAgent({
+      sessionId, runId: sessionId, aiConfig: ai, runtimeContext: { triggerSource: 'raven_cat_ai_schedule' },
+      finalAssistantPolicy: 'autonomous_reply',
+      prepare: async () => ({
+        request: { task: { id: sessionId, type: 'raven_cat_autonomous', source: 'raven_cat_ai_schedule',
+          goal: '自主行动', assistantId: ai.id, sessionId, allowedToolNames: [], modelTransport: transport,
+          maxSteps: 10, maxToolCalls: 30, maxToolCallsPerStep: 3, createdAt: stamp }, initialHistory: [] },
+        modelGateway: {
+          runTurn: async (request, emit) => {
+            requests++;
+            assert.deepEqual(request.tools, []);
+            if (transport === 'stream') {
+              await emit({ type: 'reasoning_delta', text: turn.reasoningText });
+              for (const text of [turn.assistantText.slice(0, 4), turn.assistantText.slice(4)]) {
+                await emit({ type: 'assistant_text_delta', text });
+              }
+            }
+            assert.equal(autonomousDeliveries.filter(item => item.sessionId === sessionId).length, 0, '模型尚未结束时不能发送正文');
+            return turn;
+          },
+          takeCompletedTurn: () => turn,
+        }, createLegacyContext: () => ({}),
+      }),
+    });
+    assert.equal(result.terminalCode, 'COMPLETED');
+    assert.equal(requests, 1, '无需追加工具调用或第二轮生成');
+    const saved = (await messages.getMessages(sessionId, { limit: 30 })).messages;
+    const bodies = saved.filter(message => message.senderType === 'assistant');
+    const deliveries = autonomousDeliveries.filter(item => item.sessionId === sessionId);
+    assert.deepEqual(bodies.map(message => message.text), silent ? [] : ['今天过得怎么样？', '想你了。']);
+    assert.equal(deliveries.length, silent ? 0 : 2);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id = ? AND is_read = 0').get(sessionId).count, silent ? 0 : 2);
+    assert.equal(db.prepare('SELECT last_message FROM sessions WHERE id = ?').get(sessionId).last_message, silent ? null : '想你了。');
+    assert.ok(saved.every(message => !message.text.includes(AUTONOMOUS_SILENT_REPLY)));
+    if (silent) assert.ok(saved.some(message => message.text === '本次选择不发送消息'));
+    else assert.deepEqual(deliveries.map(item => [item.segmentIndex, item.segmentTotal]), [[0, 2], [1, 2]]);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id = ? AND sender_type = ?').get(sessionId, 'reasoning').count, 1);
+  }
   await writer;
   db.close();
   const child = spawnSync(process.execPath, ['--no-warnings', import.meta.filename, '--read', filename], { encoding: 'utf8' });

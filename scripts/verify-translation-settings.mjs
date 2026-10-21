@@ -174,7 +174,7 @@ try {
 
 const errorMapping = load('src/platform/ai/errorMapping.ts');
 const baseUrl = load('src/platform/ai/baseUrl.ts');
-const baseClient = load('src/platform/ai/BaseAIClient.ts', { './errorMapping': errorMapping, './baseUrl': baseUrl });
+const baseClient = load('src/platform/ai/BaseAIClient.ts', { './HttpExchangeCapture': { beginAIHttpCapture: async () => null }, './errorMapping': errorMapping, './baseUrl': baseUrl });
 const kimiClient = load('src/platform/ai/KimiClient.ts', { './BaseAIClient': baseClient });
 const discovery = load('src/platform/ai/modelDiscovery.ts', { './errorMapping': errorMapping, './baseUrl': baseUrl });
 const aiPlatform = { ...load('src/platform/ai/OpenAIClient.ts', { './BaseAIClient': baseClient, './KimiClient': kimiClient, './modelDiscovery': discovery, './errorMapping': errorMapping }), ...discovery };
@@ -193,8 +193,8 @@ let modelResponse = { choices: [{ message: { content: '你好！\n世界。', re
 globalThis.fetch = async (url, options) => {
   requests.push({ url, ...options, body: options.body ? JSON.parse(options.body) : undefined });
   if (url.endsWith('/models')) return { ok: true, json: async () => ({ data: [{ id: 'any-text-model' }] }) };
-  if (networkError) return { ok: false, status: 401, json: async () => ({ error: { message: '翻译密钥无效' } }) };
-  return { ok: true, json: async () => modelResponse };
+  if (networkError) return Response.json({ error: { message: '翻译密钥无效' } }, { status: 401 });
+  return Response.json(modelResponse);
 };
 try {
   const result = await translation.translateMessageText({ text: 'Hello!\nWorld.' });

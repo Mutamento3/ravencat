@@ -26,6 +26,7 @@ import type {
 import { CHAT_RECORD_STATISTICS_SQL, timelineOrderedMessagesCte, timelineProjectionOrderBy, timelineCursorCondition, type TimelineOrderRow } from './ChatTimelineSql';
 import { shouldShowTimeSeparatorBefore } from '../domain/MessageTimeSeparator';
 import { cancelRegenerationInTransaction } from './ChatMessageMutationSql';
+import { deleteReplyVersionsForMessages, editSelectedReplyVersion } from '../../reply/infrastructure/ChatReplyVersionSql';
 import type { ChatRecordStatistics } from '../domain/ChatRecordStatistics';
 
 interface MessageRow {
@@ -823,6 +824,22 @@ export class MessageRepository implements IMessageRepository {
     message: CreateMessageInput,
     previousMessage: { createdAt: string } | null,
   ): Promise<ChatMessage> {
+    // 后续用户输入或另一轮 AI 消息一旦落地，旧候选永久转为只读，删除后续消息也不解锁。
+    if (message.senderType === 'assistant' || message.senderType === 'user') {
+      await transaction.runAsync(`UPDATE chat_reply_version_sets SET locked = 1
+        WHERE session_id = ? AND current_run_id IS NOT ?
+          AND json_extract(CASE WHEN json_valid(?) THEN ? END, '$.type') IS NOT 'callStatus'`,
+      [message.sessionId, message.turnRunId ?? null, message.metadataJson ?? null, message.metadataJson ?? null]);
+    }
+    if (message.senderType === 'assistant') {
+      // 旁路回复已成为新后续时，旧重写不能再把替换结果提交到它后面。
+      const replaced = await transaction.getFirstAsync(`SELECT 1 FROM chat_regeneration_requests
+        WHERE session_id = ? AND source_run_id IS NOT ?
+        UNION ALL SELECT 1 FROM conversation_turn_state WHERE session_id = ?
+          AND active_run_kind = 'regenerate' AND active_run_id IS NOT ? LIMIT 1`,
+      [message.sessionId, message.turnRunId ?? null, message.sessionId, message.turnRunId ?? null]);
+      if (replaced) await cancelRegenerationInTransaction(transaction, message.sessionId);
+    }
     await this.assertMetadataMediaAssetReferencesExistInTransaction(
       transaction,
       message.metadataJson,
@@ -1033,10 +1050,12 @@ export class MessageRepository implements IMessageRepository {
           input.message.metadataJson,
         );
         const updatedAt = new Date().toISOString();
+        // 自主执行的正文先按过程存档，正常完成后沿同一身份成为消息及分段。
         await transaction.runAsync(
           `UPDATE messages
            SET text = ?, metadata_json = ?, is_read = ?, updated_at = ?, status = ?,
-               api_message_id = ?, tokens_used = ?, prompt_tokens = ?, completion_tokens = ?
+               api_message_id = ?, tokens_used = ?, prompt_tokens = ?, completion_tokens = ?,
+               sender_type = ?, logical_message_id = ?, segment_index = ?, segment_total = ?, delivery_status = ?
            WHERE id = ?`,
           [
             input.message.text,
@@ -1048,6 +1067,11 @@ export class MessageRepository implements IMessageRepository {
             input.message.tokensUsed ?? 0,
             input.message.promptTokens ?? 0,
             input.message.completionTokens ?? 0,
+            input.message.senderType,
+            input.message.logicalMessageId ?? null,
+            input.message.segmentIndex ?? 0,
+            input.message.segmentTotal ?? 1,
+            input.message.deliveryStatus ?? null,
             existingRow.id,
           ],
         );
@@ -1147,6 +1171,13 @@ export class MessageRepository implements IMessageRepository {
     return row ? this.mapRowToEntity(row) : null;
   }
 
+  async listTurnMessagesInTransaction(transaction: DatabaseReadExecutor, runId: string): Promise<ChatMessage[]> {
+    const rows = await transaction.getAllAsync<MessageRow>(
+      'SELECT * FROM messages WHERE turn_run_id = ? AND turn_item_index IS NOT NULL ORDER BY turn_item_index', [runId],
+    );
+    return rows.map(row => this.mapRowToEntity(row));
+  }
+
   async editMessageTextInTransaction(
     transaction: DatabaseTransactionExecutor,
     input: { messageId: number; text: string; previewText: string },
@@ -1158,6 +1189,12 @@ export class MessageRepository implements IMessageRepository {
     );
     const edited = (await this.getMessageByIdInTransaction(transaction, input.messageId))!;
     await cancelRegenerationInTransaction(transaction, edited.sessionId);
+    await editSelectedReplyVersion(transaction, edited);
+    // 完成回复的手动改字仍是已展示事实，避免旧展示快照把新正文扣留在可见视图之外。
+    await transaction.runAsync(`UPDATE chat_turn_display_items
+      SET snapshot_json = json_set(snapshot_json, '$.text', ?),
+          shown_json = json_set(shown_json, '$.text', ?) WHERE message_id = ?`,
+    [edited.text, edited.text, edited.id]);
     // 沿用可见时间线与预览成员口径，改写旧消息不会把它提升成最新活动。
     const latest = await transaction.getFirstAsync<{ id: number }>(
       `${timelineOrderedMessagesCte(`m.session_id = ? AND m.id > COALESCE((
@@ -1370,6 +1407,7 @@ export class MessageRepository implements IMessageRepository {
   async deleteMessagesWithMediaCandidatesInTransaction(
     transaction: DatabaseTransactionExecutor,
     messageIds: readonly number[],
+    options?: { preserveReplyVersions: boolean },
   ): Promise<DeleteMessagesWithMediaCandidatesResult> {
     const targetIds = normalizeMessageIds(messageIds);
     if (targetIds.length === 0) return { deletedMessageIds: [], mediaAssetCandidates: [] };
@@ -1384,9 +1422,10 @@ export class MessageRepository implements IMessageRepository {
     const candidates = await transaction.getAllAsync<{ asset_id: string }>(
       MESSAGE_MEDIA_ASSET_CANDIDATES_QUERY.replace('{{MESSAGE_IDS}}', placeholders), targetIds,
     );
+    const versionAssets = options?.preserveReplyVersions ? [] : await deleteReplyVersionsForMessages(transaction, targetIds);
     const deleted = await transaction.runAsync(`DELETE FROM messages WHERE id IN (${placeholders})`, targetIds);
     if (deleted.changes !== rows.length) throw new Error('事务内删除消息数与读取行数不一致');
-    return { deletedMessageIds: rows.map((row) => row.id), mediaAssetCandidates: candidates.map((row) => row.asset_id) };
+    return { deletedMessageIds: rows.map((row) => row.id), mediaAssetCandidates: [...new Set([...versionAssets, ...candidates.map((row) => row.asset_id)])] };
   }
 
   async updateSessionPreview(sessionId: string, lastMessage: string, lastTime: string | null): Promise<boolean> {

@@ -94,7 +94,6 @@ export function mergeTimelineRenderMessages({
 export function useAgentTransientTimeline(
   sessionId: string | null | undefined,
   persistedMessages: ChatMessage[],
-  filterPendingAssistantMessages: boolean,
 ): UseAgentTransientTimelineResult {
   const subscribe = useCallback((listener: () => void) => (
     sessionId
@@ -112,12 +111,11 @@ export function useAgentTransientTimeline(
     // 否则下游会重新投影全部历史消息。缓存只属于当前渲染，不进入历史 state。
     void revision;
     const transientMessages = agentTransientTimeline.snapshotWithReplacements(sessionId);
+    // 到达资格与主题无关；切换气泡布局不能提前确认 canonical 并撤掉已交付的运行片段。
     // 两个来源都先投影到达资格。尚被隐藏的 canonical 行不能确认并清掉已展示的运行片段，
     // committed replacement 也不能提前放行尚未到达的后续分段。
-    const arrivedPersistedMessages = filterPendingAssistantMessages
-      ? projectArrivedAssistantMessages(persistedMessages, arrival.pendingMessageIds) : persistedMessages;
-    const arrivedTransientMessages = filterPendingAssistantMessages
-      ? projectArrivedAssistantMessages(transientMessages, arrival.pendingMessageIds) : transientMessages;
+    const arrivedPersistedMessages = projectArrivedAssistantMessages(persistedMessages, arrival.pendingMessageIds);
+    const arrivedTransientMessages = projectArrivedAssistantMessages(transientMessages, arrival.pendingMessageIds);
     return {
       arrivedPersistedMessages,
       messages: mergeTimelineRenderMessages({
@@ -126,7 +124,7 @@ export function useAgentTransientTimeline(
       }),
       liveRunIds: getLiveAgentTimelineRunIds(sessionId),
     };
-  }, [sessionId, persistedMessages, revision, filterPendingAssistantMessages, arrival.pendingMessageIds]);
+  }, [sessionId, persistedMessages, revision, arrival.pendingMessageIds]);
 
   useEffect(() => {
     if (sessionId) acknowledgeAgentTransientTimelineCommitted(sessionId, timeline.arrivedPersistedMessages);

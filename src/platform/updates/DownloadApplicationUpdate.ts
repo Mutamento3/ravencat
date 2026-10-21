@@ -2,21 +2,39 @@ import * as FileSystem from 'expo-file-system/legacy';
 import AppUpdates from '../../../modules/app-updates';
 import type { ApplicationRelease } from './GitHubReleases';
 
-export async function downloadApplicationUpdate(release: ApplicationRelease, onProgress: (progress: number) => void): Promise<string> {
+export type ApplicationUpdateDownloadSource = 'github' | 'gitee';
+
+export async function downloadApplicationUpdate(release: ApplicationRelease, source: ApplicationUpdateDownloadSource,
+  onProgress: (progress: number) => void): Promise<string> {
   const directory = `${FileSystem.cacheDirectory}app-updates/`;
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
-  const uri = `${directory}RavenCat-update.apk`;
-  await FileSystem.deleteAsync(uri, { idempotent: true });
-  const download = FileSystem.createDownloadResumable(release.apk.url, uri, {}, (event) => {
-    onProgress(Math.min(1, event.totalBytesWritten / release.apk.size));
+  const apkUri = `${directory}RavenCat-update.apk`;
+  const zipUri = `${directory}RavenCat-update.zip`;
+  const compressed = source === 'gitee';
+  const uri = compressed ? zipUri : apkUri;
+  // Gitee 沿用发布约定的附件名；版本和 APK 校验信息仍由 GitHub 发布边界提供。
+  const url = compressed
+    ? `https://gitee.com/skylucky163/ravencat/releases/download/${encodeURIComponent(release.tag)}/${encodeURIComponent(`RavenCat-${release.version}-download.zip`)}`
+    : release.apk.url;
+  await FileSystem.deleteAsync(apkUri, { idempotent: true });
+  await FileSystem.deleteAsync(zipUri, { idempotent: true });
+  const download = FileSystem.createDownloadResumable(url, uri, {}, (event) => {
+    if (event.totalBytesExpectedToWrite > 0) {
+      onProgress(Math.min(1, event.totalBytesWritten / event.totalBytesExpectedToWrite));
+    }
   });
   try {
     const result = await download.downloadAsync();
-    if (!result || result.status !== 200) throw new Error('安装包下载未完成，请重试');
-    await AppUpdates.verifyDownloadedUpdate(result.uri, release.apk.sha256, release.apk.size, release.version);
-    return result.uri;
+    if (!result || result.status !== 200) {
+      throw new Error(compressed ? 'Gitee 下载未完成，附件可能尚未同步。请稍后重试或选择 GitHub 下载。' : '安装包下载未完成，请重试');
+    }
+    const verifiedUri = await AppUpdates.prepareDownloadedUpdate(result.uri, release.apk.sha256,
+      release.apk.size, release.version, compressed);
+    if (compressed) await FileSystem.deleteAsync(zipUri, { idempotent: true });
+    return verifiedUri;
   } catch (error) {
-    await FileSystem.deleteAsync(uri, { idempotent: true });
+    await FileSystem.deleteAsync(apkUri, { idempotent: true });
+    await FileSystem.deleteAsync(zipUri, { idempotent: true });
     throw error;
   }
 }

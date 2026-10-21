@@ -94,9 +94,10 @@ export function usePhoneToolSettings() {
 
   return {
     isEnabled, statusLabel, toggleTool, refresh, disabled: !snapshot?.host || saving,
-    description: error ? `读取失败：${error}` : snapshot
-      ? snapshot.host ? `调用开关仅对主理 AI「${snapshot.host.name}」生效，与提示词中心同步。权限就绪表示系统前提已满足；工具总开关、受保护应用及执行时状态仍决定调用结果。`
-        : '请先设置主理 AI，再配置手机工具调用权限。'
-      : '正在读取调用权限与系统状态…',
+    hostName: snapshot?.host?.name ?? null,
+    // 说明文字归标题问号；这里只留读取、失败和缺主理 AI 的临时状态。
+    notice: error ? `读取失败：${error}`
+      : !snapshot ? '正在读取调用权限与系统状态…'
+        : snapshot.host ? null : '请先设置主理 AI，再配置手机工具调用权限。',
   };
 }

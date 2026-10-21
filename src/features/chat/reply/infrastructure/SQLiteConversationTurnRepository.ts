@@ -33,6 +33,8 @@ import {
 } from '../domain/ConversationTurn';
 import { buildSessionPreviewTextFromMessage } from '../../messages/domain';
 import type { IConversationTurnRepository } from '../domain/ConversationTurnRepository';
+import type { ChatReplyVersionHistory } from '../domain/ChatReplyVersion';
+import { decodeReplyVersion, findReplyVersionSet, saveReplyVersion } from './ChatReplyVersionSql';
 
 interface TurnRunRow {
   run_id: string;
@@ -77,6 +79,52 @@ function mapRowToRun(row: TurnRunRow): ConversationTurnRun {
 }
 
 export class ConversationTurnRepository implements IConversationTurnRepository {
+  getReplyVersionHistory(sessionId: string, runId: string): Promise<ChatReplyVersionHistory | null> {
+    return databaseCoordinator.read({ name: 'chat.reply-versions', feature: 'chat', priority: 'interactive' }, async db => {
+      const set = await findReplyVersionSet(db, runId);
+      if (!set || set.session_id !== sessionId) return null;
+      const rows = await db.getAllAsync<{ id: string; created_at: string; snapshot_json: string }>(
+        'SELECT * FROM chat_reply_versions WHERE set_id = ? ORDER BY rowid', [set.id],
+      );
+      return {
+        currentRunId: set.current_run_id, selectedVersionId: set.selected_version_id,
+        canAdopt: (await this.eligibleRegenerationSource(db, sessionId))?.run_id === set.current_run_id,
+        versions: rows.map(row => ({ id: row.id, createdAt: row.created_at, messages: decodeReplyVersion(row.snapshot_json) })),
+      };
+    });
+  }
+
+  adoptReplyVersion(sessionId: string, runId: string, versionId: string, expectedVersionId: string): Promise<void> {
+    return databaseCoordinator.transaction({ name: 'chat.adopt-reply-version', feature: 'chat', priority: 'interactive' }, async tx => {
+      const set = await findReplyVersionSet(tx, runId);
+      if (!set || set.session_id !== sessionId || (await this.eligibleRegenerationSource(tx, sessionId))?.run_id !== set.current_run_id) {
+        throw new Error('只能切换尚未继续对话、且当前没有正在生成回复的最新一轮版本');
+      }
+      if (set.selected_version_id !== expectedVersionId) throw new Error('当前版本已变化，请重新查看历史版本');
+      const candidate = await tx.getFirstAsync<{ snapshot_json: string }>(
+        'SELECT snapshot_json FROM chat_reply_versions WHERE id = ? AND set_id = ?', [versionId, set.id],
+      );
+      if (!candidate) throw new Error('这个回复版本已被删除');
+      if (versionId === set.selected_version_id) return;
+      const current = await messageRepository.listTurnMessagesInTransaction(tx, runId);
+      await saveReplyVersion(tx, set.id, set.selected_version_id, current);
+      await messageRepository.deleteMessagesWithMediaCandidatesInTransaction(tx, current.map(message => message.id), { preserveReplyVersions: true });
+      await tx.runAsync('DELETE FROM chat_turn_display_items WHERE run_id = ?', [runId]);
+      await tx.runAsync('DELETE FROM chat_timeline_run_anchors WHERE turn_run_id = ? AND session_id = ?', [runId, sessionId]);
+      // 采用只改变这一轮的正文，沿用当前槽位时间、已读状态和回合 owner，不制造一次新消息到达。
+      const messages = decodeReplyVersion(candidate.snapshot_json).map(({ id: _id, ...message }, index) => ({
+        ...message, sessionId, turnRunId: runId, turnItemIndex: index + 1,
+        createdAt: current[current.length - 1].createdAt, time: current[current.length - 1].time, isRead: true,
+      }));
+      const lastAssistant = [...messages].reverse().find(message => message.senderType === 'assistant')!;
+      await messageRepository.commitMessagesInTransaction(tx, {
+        messages, previewText: buildSessionPreviewTextFromMessage(lastAssistant),
+      });
+      await tx.runAsync('UPDATE chat_reply_version_sets SET selected_version_id = ? WHERE id = ?', [versionId, set.id]);
+      await tx.runAsync('UPDATE conversation_turn_state SET revision = revision + 1 WHERE session_id = ?', [sessionId]);
+    });
+  }
+
   async beginExecutionHostRequests(sessionIds: readonly string[]): Promise<ConversationHostStartAttempt[]> {
     return databaseCoordinator.transaction({ name: 'chat.host-start-requested', feature: 'chat', priority: 'interactive' }, async tx => {
       const attempts: ConversationHostStartAttempt[] = [];
@@ -119,7 +167,17 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
        JOIN sessions c ON c.id = r.session_id
        WHERE r.session_id = ? AND r.status = 'committed' AND r.kind IN ('user_reply', 'regenerate')
          AND s.active_run_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM chat_turn_presentations p WHERE p.session_id = r.session_id AND p.state = 'open')
+         AND NOT EXISTS (SELECT 1 FROM agent_runs a WHERE a.session_id = r.session_id
+           AND a.status IN ('queued', 'running', 'waiting_for_confirmation', 'waiting_for_foreground', 'suspended'))
+         AND NOT EXISTS (SELECT 1 FROM messages a WHERE a.session_id = r.session_id
+           AND json_valid(a.metadata_json) AND json_extract(a.metadata_json, '$.type') = 'agentActivity'
+           AND json_extract(a.metadata_json, '$.phase') = 'started'
+           AND NOT EXISTS (SELECT 1 FROM messages t WHERE t.turn_run_id = a.turn_run_id
+             AND json_valid(t.metadata_json) AND json_extract(t.metadata_json, '$.type') = 'agentActivity'
+             AND json_extract(t.metadata_json, '$.phase') = 'terminal'))
          AND NOT EXISTS (SELECT 1 FROM chat_regeneration_requests q WHERE q.session_id = r.session_id)
+         AND NOT EXISTS (SELECT 1 FROM chat_reply_version_sets v WHERE v.current_run_id = r.run_id AND v.locked = 1)
          AND r.input_high_watermark = s.reply_cursor
          AND r.run_id = (SELECT m.turn_run_id FROM messages m
            WHERE m.session_id = r.session_id AND m.sender_type = 'assistant' AND m.status = 'sent'
@@ -151,7 +209,10 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
           'SELECT id FROM messages WHERE turn_run_id = ? AND turn_item_index IS NOT NULL', [sourceRunId],
         ) : [];
         const eligible = sourceRunId ? null : await this.eligibleRegenerationSource(db, sessionId);
-        return { eligibleRunId: eligible?.run_id ?? null, sourceRunId, hiddenMessageIds: rows.map((row) => row.id),
+        const versionSets = await db.getAllAsync<{ current_run_id: string }>(
+          'SELECT current_run_id FROM chat_reply_version_sets WHERE session_id = ?', [sessionId],
+        );
+        return { versionedRunIds: versionSets.map(set => set.current_run_id), eligibleRunId: eligible?.run_id ?? null, sourceRunId, hiddenMessageIds: rows.map((row) => row.id),
           ...(pending?.active_run_id ? { activeRunId: pending.active_run_id } : {}) };
       },
     );
@@ -342,6 +403,16 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
     if (mode === 'claim_if_idle' && state.active_run_id !== null) {
       return null;
     }
+    // 宿主请求可能排队到上一轮失败之后才执行；终态资格必须与 claim 原子裁决，
+    // 不能只依赖恢复扫描时的读取，否则同一输入会再次请求模型。
+    if (!source && await transaction.getFirstAsync(
+      `SELECT 1 FROM conversation_turn_runs
+       WHERE session_id = ? AND kind = 'user_reply' AND status IN ('failed', 'cancelled')
+         AND input_high_watermark >= ? LIMIT 1`,
+      [sessionId, highWatermark],
+    )) {
+      return null;
+    }
 
     const runId = createTurnRunId();
     const revisionAtClaim = state.revision + 1;
@@ -465,13 +536,20 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
         if (execution?.signal?.aborted) throw new Error('execution_host_stopped');
 
         let mediaAssetCandidates: string[] = [];
+        let replyVersionSetId: string | null = null;
         if (run.regenerationSourceRunId) {
-          const old = await transaction.getAllAsync<{ id: number }>(
-            `SELECT id FROM messages WHERE turn_run_id = ? AND turn_item_index IS NOT NULL
-             ORDER BY turn_item_index`, [run.regenerationSourceRunId],
-          );
+          const old = await messageRepository.listTurnMessagesInTransaction(transaction, run.regenerationSourceRunId);
+          const existing = await findReplyVersionSet(transaction, run.regenerationSourceRunId);
+          const setId = existing?.id ?? run.regenerationSourceRunId;
+          replyVersionSetId = setId;
+          if (!existing) await transaction.runAsync(`INSERT INTO chat_reply_version_sets
+            (id, session_id, current_run_id, selected_version_id) VALUES (?, ?, ?, ?)`,
+          [setId, run.sessionId, run.regenerationSourceRunId, run.regenerationSourceRunId]);
+          await saveReplyVersion(transaction, setId, existing?.selected_version_id ?? run.regenerationSourceRunId, old);
+          await transaction.runAsync('UPDATE chat_reply_version_sets SET current_run_id = ?, selected_version_id = ? WHERE id = ?',
+            [run.runId, run.runId, setId]);
           // 业务卡片的 turn_item_index 为 NULL，保留其已发生的事实。
-          const removed = await messageRepository.deleteMessagesWithMediaCandidatesInTransaction(transaction, old.map((row) => row.id));
+          const removed = await messageRepository.deleteMessagesWithMediaCandidatesInTransaction(transaction, old.map((row) => row.id), { preserveReplyVersions: true });
           mediaAssetCandidates = [...removed.mediaAssetCandidates];
           // 旧 run 已无 canonical 成员；保留的业务卡片应恢复自身真实时间排序。
           await transaction.runAsync(
@@ -503,6 +581,9 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
           messages,
           previewText,
         });
+        if (replyVersionSetId) {
+          await saveReplyVersion(transaction, replyVersionSetId, run.runId, inserted);
+        }
 
         if (messages.some((message) => message.senderType === 'assistant')) {
           // 开关与正式回复共用 T3 fence；按执行顺序应用，同包的最后一次决定生效。

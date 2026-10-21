@@ -71,28 +71,70 @@ assert.equal(wallpaperReads, readsAfterUnmount, '卸载后的 Provider 不再读
 const assistantListeners = new Set();
 const initialAIRead = deferred();
 let aiReads = 0, assistantsSnapshot;
+let arrival = { revision: 0 };
+let previewReads = 0;
+let previewGate = null;
+let previewText = '已有消息预览';
+let nextAIError = null;
 let profiles = [{ id: 'a', name: '原名', avatar: 'file:///old.png', canonicalConversationId: 'chat' }];
 const { default: useAIAssistants } = load('src/features/chat/presentation/shell/useAIAssistants.ts', {
   '@features/assistants': {
-    listAIAssistants: () => ++aiReads === 1 ? initialAIRead.promise : Promise.resolve(profiles),
+    listAIAssistants: () => {
+      aiReads++;
+      if (nextAIError) { const error = nextAIError; nextAIError = null; return Promise.reject(error); }
+      return aiReads === 1 ? initialAIRead.promise : Promise.resolve(profiles);
+    },
     subscribeAIAssistantUpdated: listener => { assistantListeners.add(listener); return () => { assistantListeners.delete(listener); }; },
   },
-  './arrivedConversationPreview': { withArrivedConversationPreview: async profile => ({ ...profile, lastMessage: '已有消息预览' }) },
-  '../../reply/delivery/AssistantMessageArrival': { getAssistantMessageArrivalSnapshot: () => null },
+  './arrivedConversationPreview': { withArrivedConversationPreview: async profile => {
+    previewReads++;
+    const text = previewText;
+    if (previewGate) await previewGate.promise;
+    return { ...profile, lastMessage: text };
+  } },
+  '../../reply/delivery/AssistantMessageArrival': { getAssistantMessageArrivalSnapshot: () => arrival },
 });
 function AssistantsProbe() { assistantsSnapshot = useAIAssistants(); return null; }
 await act(async () => { renderer = create(React.createElement(AssistantsProbe)); });
 let oldRead;
 await act(async () => { oldRead = assistantsSnapshot.loadAIAssistants(); });
+const arrivalLoads = [];
+await act(async () => {
+  for (let revision = 1; revision <= 3; revision++) {
+    arrival = { revision };
+    arrivalLoads.push(assistantsSnapshot.loadAIAssistants());
+  }
+});
+assert.equal(aiReads, 1, '到达快照变化不并行重读包含头像的助手列表');
 await act(async () => {
   profiles = [{ ...profiles[0], name: '自主新名称', avatar: 'file:///ai-new.png' }];
   for (const listener of assistantListeners) listener(profiles[0]);
 });
+assert.equal(aiReads, 1, '资料变更合并到在途读取后处理');
+await act(async () => { initialAIRead.resolve([{ id: 'a', name: '旧快照' }]); await Promise.all([oldRead, ...arrivalLoads]); });
 assert.equal(assistantsSnapshot.aiList[0].name, '自主新名称');
 assert.equal(assistantsSnapshot.aiList[0].avatar, 'file:///ai-new.png');
 assert.equal(assistantsSnapshot.aiList[0].lastMessage, '已有消息预览');
-await act(async () => { initialAIRead.resolve([{ id: 'a', name: '旧快照' }]); await oldRead; });
+assert.equal(aiReads, 2, '真实资料变更仍需补读，不能把旧助手资料当缓存');
 assert.equal(assistantsSnapshot.aiList[0].name, '自主新名称', '旧列表读取不能覆盖提交后的资料');
+previewGate = deferred();
+let pendingPreview;
+await act(async () => { pendingPreview = assistantsSnapshot.loadAIAssistants(); });
+const readsBeforePreviewChange = aiReads;
+await act(async () => {
+  arrival = { revision: 4 };
+  previewText = '刚到达的新消息';
+  assistantsSnapshot.loadAIAssistants();
+});
+await act(async () => { previewGate.resolve(); await pendingPreview; });
+assert.equal(aiReads, readsBeforePreviewChange, '预览期间的新到达只补读预览，不重新解析全部头像');
+assert.equal(assistantsSnapshot.aiList[0].lastMessage, '刚到达的新消息');
+assert.equal(previewReads, 3);
+previewGate = null;
+nextAIError = new Error('模拟列表读取失败');
+await act(async () => { await assert.rejects(assistantsSnapshot.loadAIAssistants(), /模拟列表读取失败/u); });
+await act(async () => { await assistantsSnapshot.loadAIAssistants(); });
+assert.equal(assistantsSnapshot.aiList[0].name, '自主新名称', '失败后新的刷新不能卡在已拒绝的在途状态');
 await act(async () => { renderer.unmount(); });
 assert.equal(assistantListeners.size, 0);
 

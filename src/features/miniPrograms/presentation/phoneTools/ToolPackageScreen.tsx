@@ -113,8 +113,7 @@ export default function ToolPackageScreen({ packageId, onBack }: ToolPackageScre
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <NavigationHeader title={displayModel.title} onGoBack={onBack} />
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.description}>{displayModel.description}</Text>
-        <Text style={styles.toolDescription}>{settings.description}</Text>
+        {settings.notice && <Text style={styles.toolDescription}>{settings.notice}</Text>}
         <Text style={styles.sectionTitle}>工具</Text>
         <ThemedSurface nativeGlass variant="card" style={styles.card}>
           {displayModel.tools.length === 0 ? (

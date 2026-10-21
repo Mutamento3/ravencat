@@ -46,7 +46,6 @@ import type { ChatTogetherListeningResult } from '../../../conversation/applicat
 import {
   collapseAssistantSegmentsForPresentation,
   getAssistantPresentationGroupKey,
-  ownsCanonicalSegmentedAssistantPresentation,
   shouldCollapseAssistantSegment,
 } from './chatMessagePresentation';
 import { buildToolStatusProcessCard } from './chatToolStatusPresentation';
@@ -66,9 +65,10 @@ import {
   getAgentTimelineMessageIdentity,
   getAgentTimelineRenderKey,
 } from '@features/chat/messages/application/AgentTransientTimeline';
-import { getChatInteractionProfile, useTheme } from '@shared/theme';
+import { getChatInteractionProfile, isPaperNoteTheme, useTheme } from '@shared/theme';
 import { shouldShowTimeSeparator } from './chatMessageListState';
 import { useChatBottomFollow } from './useChatBottomFollow';
+import PaperNoteChatFooter from './PaperNoteChatFooter';
 import {
   IDLE_HISTORY_PAGINATION_GATE,
   applyScrollDemandToGate,
@@ -83,6 +83,17 @@ import { reloadTurnDisplayHistory, retainTurnDisplayHistory } from '../../../rep
 import { setChatEventBus } from '../../../messages/events/ChatEvents';
 
 const EMPTY_ATTACHMENTS: ChatAttachment[] = [];
+interface PaperNoteFooterItem {
+  kind: 'paper-note-footer';
+  key: 'paper-note-footer';
+  aiName: string | null;
+}
+type ChatListItem = RenderedMessageItem | PaperNoteFooterItem;
+
+function getChatListItemType(item: ChatListItem): string {
+  return 'kind' in item ? item.kind : getMessageListItemType(item);
+}
+
 /** 主动生活 anchor 定位最多向前追加的历史分页次数，避免为定位无限翻历史。 */
 const ANCHOR_MAX_PAGE_ATTEMPTS = 4;
 
@@ -307,19 +318,14 @@ function ChatMessageList({
       if (payload.sessionId === sessionId && name !== 'typingStatusChanged' && name !== 'turnExecutionChanged') reload();
     } });
   }, [sessionId, messages]);
-  // 非流式多气泡主题消费统一的分段到达投影。
-  const isCanonicalSegmentedAssistant = ownsCanonicalSegmentedAssistantPresentation(
-    interactionProfile
-  );
   const { messages: completeTimelineMessages } = useAgentTransientTimeline(
     sessionId,
     messages,
-    isCanonicalSegmentedAssistant,
   );
   const timelineMessages = useMemo(() => completeTimelineMessages.filter((message) =>
     !hiddenRunId || message.turnRunId !== hiddenRunId || message.turnItemIndex == null
   ), [completeTimelineMessages, hiddenRunId]);
-  const listRef = useRef<FlashListRef<RenderedMessageItem> | null>(null);
+  const listRef = useRef<FlashListRef<ChatListItem> | null>(null);
   const expandedReasoningKeys = useMemo(() => {
     // 切换会话就释放旧意图，不让可复用列表把状态带进另一会话。
     void sessionId;
@@ -568,6 +574,7 @@ function ChatMessageList({
     enableAssistantMessageSegmentation: interactionProfile.enableAssistantMessageSegmentation,
     paused: Boolean(selection) || pauseAutoScroll,
     listRef,
+    contentPaddingBottom: styles.contentContainer.paddingVertical,
     timelineMessages,
     renderedData,
     onDismissInputSurface,
@@ -671,29 +678,32 @@ function ChatMessageList({
   }, [selection]);
 
   const renderItem = useCallback(
-    ({ item }: ListRenderItemInfo<RenderedMessageItem>) => (
-      <MessageListItem
-        item={item}
-        userAvatar={userAvatar}
-        userName={userName}
-        showAssistantName={showAssistantName}
-        isSelected={selection ? selection.selectedKeys.has(getChatSelectionKey(item.msg)) && Boolean(selectionKeyForItem(item)) : item.msg.id === selectedMessageId}
-        selectionMode={Boolean(selection)}
-        selectionKey={selectionKeyForItem(item)}
-        showSelectionControl={selectionControls.has(item.key)}
-        selectionDisabled={selection?.disabled}
-        onToggleSelection={selection?.onToggle}
-        isVoiceTranscriptExpanded={expandedVoiceTranscriptIds.has(item.msg.id)}
-        onMessageLongPress={onMessageLongPress}
-        onRetryMessage={onRetryMessage}
-        onHideTranslation={onHideTranslation}
-        onPreviewFile={onPreviewFile}
-        onNestedScrollActiveChange={handleNestedScrollActiveChange}
-        onTogetherListeningAccept={onTogetherListeningAccept}
-        onTogetherListeningDecline={onTogetherListeningDecline}
-        onTogetherListeningLeave={onTogetherListeningLeave}
-      />
-    ),
+    ({ item }: ListRenderItemInfo<ChatListItem>) => {
+      if ('kind' in item) return <PaperNoteChatFooter aiName={item.aiName} />;
+      return (
+        <MessageListItem
+          item={item}
+          userAvatar={userAvatar}
+          userName={userName}
+          showAssistantName={showAssistantName}
+          isSelected={selection ? selection.selectedKeys.has(getChatSelectionKey(item.msg)) && Boolean(selectionKeyForItem(item)) : item.msg.id === selectedMessageId}
+          selectionMode={Boolean(selection)}
+          selectionKey={selectionKeyForItem(item)}
+          showSelectionControl={selectionControls.has(item.key)}
+          selectionDisabled={selection?.disabled}
+          onToggleSelection={selection?.onToggle}
+          isVoiceTranscriptExpanded={expandedVoiceTranscriptIds.has(item.msg.id)}
+          onMessageLongPress={onMessageLongPress}
+          onRetryMessage={onRetryMessage}
+          onHideTranslation={onHideTranslation}
+          onPreviewFile={onPreviewFile}
+          onNestedScrollActiveChange={handleNestedScrollActiveChange}
+          onTogetherListeningAccept={onTogetherListeningAccept}
+          onTogetherListeningDecline={onTogetherListeningDecline}
+          onTogetherListeningLeave={onTogetherListeningLeave}
+        />
+      );
+    },
     [
       userAvatar,
       userName,
@@ -714,7 +724,18 @@ function ChatMessageList({
     ]
   );
 
-  const keyExtractor = useCallback((item: RenderedMessageItem) => item.key, []);
+  const keyExtractor = useCallback((item: ChatListItem) => item.key, []);
+
+  const footerAIName = aiAssistant ? getAssistantDisplayName(aiAssistant) : null;
+  const paperNoteFooter = useMemo<PaperNoteFooterItem>(() => ({
+    kind: 'paper-note-footer', key: 'paper-note-footer', aiName: footerAIName,
+  }), [footerAIName]);
+  const showPaperNoteFooter = isPaperNoteTheme(theme);
+  // 尾栏与消息进入同一次测量、锚点修正和底部排布，避免列表外 footer 先位移再被贴底拉回。
+  // 它只是展示项，不进入消息跟随判定、选择和历史定位等业务投影。
+  const listData = useMemo<ChatListItem[]>(() => showPaperNoteFooter
+    ? [...renderedData, paperNoteFooter]
+    : renderedData, [renderedData, showPaperNoteFooter, paperNoteFooter]);
 
   // 开发态布局探针：FlashList 自己测量并缓存 cell 尺寸（`dist/recyclerview/ViewHolder.js`），
   // 只有通过 `CellRendererComponent` 才能拿到 cell 这一层的真实 onLayout（它的 y 就是消息在
@@ -823,10 +844,10 @@ function ChatMessageList({
         <FlashList
           key={sessionId || 'message_list'}
           ref={listRef}
-          data={renderedData}
+          data={listData}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
-          getItemType={getMessageListItemType}
+          getItemType={getChatListItemType}
           CellRendererComponent={probeCellRenderer}
           renderScrollComponent={TextSelectionScrollView}
           nestedScrollEnabled

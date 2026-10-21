@@ -21,7 +21,7 @@ function removeNicknameSchema(db) {
  removeSummaryModelSchema(db);
 }
 function removeSummaryModelSchema(db) {
- db.exec('ALTER TABLE chat_summary_request_settings DROP COLUMN model_config_id; ALTER TABLE chat_summary_request_settings DROP COLUMN group_trigger_count;');
+ db.exec('ALTER TABLE chat_summary_request_settings DROP COLUMN model_config_id; ALTER TABLE chat_summary_request_settings DROP COLUMN group_trigger_count; ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit;');
 }
 
 function installLegacyNicknameAudit(db) {
@@ -95,6 +95,7 @@ observableUpgrade.exec(`INSERT INTO conversation_turn_state(session_id,reply_cur
  ALTER TABLE conversation_turn_state DROP COLUMN host_request_at;
  ALTER TABLE chat_turn_presentations DROP COLUMN phase;
  ALTER TABLE chat_turn_presentations DROP COLUMN phase_at;
+ ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit;
  PRAGMA user_version=130;`);
 const savedDisplay=observableUpgrade.prepare('SELECT * FROM chat_turn_display_items').all();
 const observableExecutor=createSqliteExecutor(observableUpgrade);
@@ -134,7 +135,7 @@ for (const [runId, status, displayState, reason] of [
  if(!['old-finished','old-restarted'].includes(runId)) add(runId+':tail','assistant','未交付尾部',status==='committed',false);
 }
 installLegacyNicknameAudit(publicationUpgrade);
-publicationUpgrade.exec('PRAGMA user_version=131');
+publicationUpgrade.exec('ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit; PRAGMA user_version=131');
 await bootstrapSqlite(createSqliteExecutor(publicationUpgrade));
 assert.equal(publicationUpgrade.prepare("SELECT shown_json FROM chat_turn_display_items WHERE identity='old-process:process'").get().shown_json.includes('可恢复的过程'),true);
 assert.equal(publicationUpgrade.prepare("SELECT shown_json FROM chat_turn_display_items WHERE identity='old-process:tail'").get().shown_json,null);
@@ -158,7 +159,7 @@ for (const version of [120, 121]) {
 }
 // 135 的既有日程保持仅内部；新字段与版本一起提交，失败必须整体回滚。
 const calendarUpgrade=create(); await bootstrapSqlite(createSqliteExecutor(calendarUpgrade)); seed(calendarUpgrade);
-calendarUpgrade.exec('ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar; PRAGMA user_version=135;');
+calendarUpgrade.exec('ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar; ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit; PRAGMA user_version=135;');
 const calendarBefore=data(calendarUpgrade), calendarRaw=createSqliteExecutor(calendarUpgrade);
 await assert.rejects(bootstrapSqlite({...calendarRaw,execAsync:async sql=>{
  if(sql.includes('PRAGMA user_version =')) throw new Error('日历迁移提交失败');
@@ -169,6 +170,20 @@ assert.equal(calendarUpgrade.prepare('PRAGMA user_version').get().user_version,1
 await bootstrapSqlite(calendarRaw);
 assert.equal(calendarUpgrade.prepare("SELECT system_calendar FROM raven_cat_ai_schedules WHERE schedule_id='schedule-proof'").get().system_calendar,0);
 assert.deepEqual(structure(calendarUpgrade),schema); check(calendarUpgrade); calendarUpgrade.close();
+// 136 的原消息和业务数据原样升级，版本表与 user_version 同事务建立。
+const versionUpgrade=create(); await bootstrapSqlite(createSqliteExecutor(versionUpgrade)); seed(versionUpgrade);
+versionUpgrade.exec('DROP TABLE chat_reply_versions; DROP TABLE chat_reply_version_sets; ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit; PRAGMA user_version=136;');
+const versionBefore=data(versionUpgrade), versionRaw=createSqliteExecutor(versionUpgrade);
+await assert.rejects(bootstrapSqlite({...versionRaw,execAsync:async sql=>{
+ if(sql.includes('PRAGMA user_version =')) throw new Error('回复版本迁移提交失败');
+ return versionRaw.execAsync(sql);
+}}),/回复版本迁移提交失败/);
+assert.deepEqual(data(versionUpgrade),versionBefore);
+assert.equal(versionUpgrade.prepare('PRAGMA user_version').get().user_version,136);
+await bootstrapSqlite(versionRaw);
+assert.equal(versionUpgrade.prepare('SELECT COUNT(*) n FROM chat_reply_versions').get().n,0);
+assert.deepEqual(data(versionUpgrade).filter(table=>!['chat_reply_versions','chat_reply_version_sets'].includes(table.name)),versionBefore);
+assert.deepEqual(structure(versionUpgrade),schema); check(versionUpgrade); versionUpgrade.close();
 const statements=[];
 await bootstrapSqlite(createSqliteExecutor(db,statements));
 assert.deepEqual(data(db),before);
@@ -235,7 +250,7 @@ installLegacyNicknameAudit(modelUpgrade);
 removeSummaryModelSchema(modelUpgrade);modelUpgrade.exec('PRAGMA user_version=125;');
 await bootstrapSqlite(createSqliteExecutor(modelUpgrade));
 assert.deepEqual({...modelUpgrade.prepare("SELECT * FROM chat_summary_request_settings WHERE conversation_id='group-proof'").get()},
- {conversation_id:'group-proof',timeout_seconds:600,max_output_tokens:2048,model_config_id:null,group_trigger_count:40});
+ {conversation_id:'group-proof',timeout_seconds:600,max_output_tokens:2048,model_config_id:null,group_trigger_count:40,primary_limit:null});
 check(modelUpgrade);modelUpgrade.close();
 // 126 的三轮状态直接清空重建；所有其他业务资料和升级原子性保持不变。
 const packageUpgrade=create();await bootstrapSqlite(createSqliteExecutor(packageUpgrade));seed(packageUpgrade);
@@ -250,6 +265,7 @@ packageUpgrade.exec(`DROP TABLE chat_tool_package_exposure;
   PRIMARY KEY(session_id,assistant_id,package_id));
  INSERT INTO chat_tool_package_exposure VALUES ('direct-proof','ai-proof','memory',1);
  INSERT INTO chat_tool_package_exposure VALUES ('direct-proof','ai-proof','neteaseMusic',3);
+ ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit;
  PRAGMA user_version=126;`);
 const packageBefore=data(packageUpgrade), packageBeforeSchema=structure(packageUpgrade), packageRaw=createSqliteExecutor(packageUpgrade);
 await assert.rejects(bootstrapSqlite({...packageRaw,execAsync:async sql=>{

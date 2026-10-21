@@ -110,16 +110,26 @@ eas credentials --platform android
 ```powershell
 $env:EAS_BUILD_PROFILE = 'preview'
 $env:NODE_ENV = 'production'
+
+# 首次生成、切换 profile，或修改原生配置、插件、图标及原生依赖后执行；日常业务代码改动可跳过。
 npx expo prebuild --platform android --no-install
+if ($LASTEXITCODE -ne 0) { throw 'Android prebuild 失败' }
+
 Push-Location android
 try {
     .\gradlew.bat :app:assembleRelease
+    if ($LASTEXITCODE -ne 0) { throw 'Android release 构建失败' }
 } finally {
     Pop-Location
 }
+
+adb install -r ".\android\app\build\outputs\apk\release\app-release.apk"
+if ($LASTEXITCODE -ne 0) { throw 'APK 安装失败' }
 ```
 
-APK 位于 `android/app/build/outputs/apk/release/app-release.apk`。上述命令会实际构建；只检查签名配置时，将 Gradle 任务换成 `:app:validateSigningRelease :app:signingReport`，不会打包 APK。已有原生工程也要先执行一次 prebuild，让签名插件生效。
+APK 位于 `android/app/build/outputs/apk/release/app-release.apk`。上述命令会实际构建并安装；只检查签名配置时，将 Gradle 任务换成 `:app:validateSigningRelease :app:signingReport`，并跳过 `adb install`，不会打包 APK。已有原生工程也要先执行一次 prebuild，让签名插件生效。
+
+Expo SDK 54 的 prebuild 更新 `package.json` scripts 时不区分目标平台，即使指定 `--platform android`，缺失 `ios` script 也会被补为 `expo run:ios`，并触发整个 JSON 的重新排版。`--no-install` 仅跳过依赖安装，`--skip-dependency-update` 也不控制 scripts。项目保留一个明确报错退出的 `ios` script，声明不支持 iOS，同时避免每次 prebuild 都补回构建入口；Android 平台范围仍由 `app.config.js` 的 `platforms: ["android"]` 和 prebuild 参数负责。参见 [Expo SDK 54 的 scripts 更新实现](https://github.com/expo/expo/blob/sdk-54/packages/%40expo/cli/src/prebuild/updatePackageJson.ts)。
 
 Android 自适应图标在 development 使用透明的 `assets/adaptive-icon.png` 作为前景并配白底，preview／发布版使用 `assets/icon.png` 作为前景并配黑底；通用图标仍为 `assets/icon.png`。`plugins/withAndroidDevelopmentIcon.js` 在每次 prebuild 时生成 `src/debug/res` 中的开发版前景和白色背景，确保 preview 原生工程直接构建 debug 时也使用开发版图标；不能只覆盖底色，因为 `icon.png` 的不透明黑底会盖住它。启动屏由 `expo-splash-screen` 插件配置为黑底，居中显示 `assets/icon.png`，图像宽度为 200；实际效果以 release 构建为准。修改图标、Expo 原生配置或切换构建 profile 后，先设置对应的 `EAS_BUILD_PROFILE`，再运行不带 `--clean` 的 prebuild，将配置同步到 `android/`；仅修改业务 TypeScript / JavaScript 时，可以直接执行 Gradle 构建。保留 `android/` 和 Gradle 缓存时，未变化的任务可以复用上次输出，通常显示 `UP-TO-DATE`；不需要每次重新生成原生工程或执行 `clean`。详见 [Gradle 增量构建说明](https://docs.gradle.org/current/userguide/incremental_build.html)。
 

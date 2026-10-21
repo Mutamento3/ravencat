@@ -18,7 +18,11 @@ interface ChatBottomFollowOptions {
   sessionId: string | null | undefined;
   enableAssistantMessageSegmentation: boolean;
   paused: boolean;
-  listRef: RefObject<FlashListRef<RenderedMessageItem> | null>;
+  listRef: RefObject<Pick<FlashListRef<unknown>,
+    'scrollToEnd' | 'scrollToOffset' | 'getChildContainerDimensions' | 'getFirstItemOffset'
+    | 'getWindowSize' | 'getAbsoluteLastScrollOffset'
+  > | null>;
+  contentPaddingBottom: number;
   timelineMessages: readonly ChatMessage[];
   renderedData: readonly RenderedMessageItem[];
   onDismissInputSurface: () => void;
@@ -29,6 +33,7 @@ export function useChatBottomFollow({
   enableAssistantMessageSegmentation,
   paused,
   listRef,
+  contentPaddingBottom,
   timelineMessages,
   renderedData,
   onDismissInputSurface,
@@ -51,6 +56,19 @@ export function useChatBottomFollow({
     pendingFollowRef.current = null;
   }, []);
 
+  const followMeasuredBottom = useCallback(() => {
+    if (pausedRef.current || !isFollowingBottomRef.current) return;
+    const list = listRef.current;
+    if (!list) return;
+    const offset = Math.max(0,
+      list.getFirstItemOffset() + list.getChildContainerDimensions().height
+      + contentPaddingBottom - list.getWindowSize().height);
+    // 使用已提交的布局同步滚动；scrollToEnd 内部会再排 timer，导致尾栏先下移、下一帧才拉回。
+    if (offset !== list.getAbsoluteLastScrollOffset()) {
+      list.scrollToOffset({ offset, animated: false });
+    }
+  }, [listRef, contentPaddingBottom]);
+
   const requestBottomFollow = useCallback(() => {
     if (pausedRef.current || !isFollowingBottomRef.current) {
       cancelPendingFollow();
@@ -65,11 +83,9 @@ export function useChatBottomFollow({
       // 排帧之后仍可能开始按压；此时保留请求，交给触摸或滚动结束处理。
       if (isTouchActiveRef.current || isUserDraggingRef.current) return;
       pendingFollowRef.current = null;
-      if (!pausedRef.current && isFollowingBottomRef.current) {
-        listRef.current?.scrollToEnd({ animated: false });
-      }
+      followMeasuredBottom();
     });
-  }, [cancelPendingFollow, listRef]);
+  }, [cancelPendingFollow, followMeasuredBottom]);
 
   useEffect(() => {
     cancelPendingFollow();
@@ -94,14 +110,20 @@ export function useChatBottomFollow({
       // 仅消息事实的 append / 同身份更新触发跟随；局部展开与历史 prepend 保留阅读位置。
       if (committedTimelineRef.current !== timelineMessages
         && (mutation.type === 'append' || mutation.type === 'unchanged')) {
-        requestBottomFollow();
+        if (isTouchActiveRef.current || isUserDraggingRef.current) {
+          requestBottomFollow();
+        } else {
+          // FlashList 的 commit layout effect 已拥有最终尺寸，跟随与消息布局同批提交。
+          cancelPendingFollow();
+          followMeasuredBottom();
+        }
       }
     } else if (mutation.type === 'append' && mutation.appendedMessages.some(isNewMessagePromptEligible)) {
       setShowNewMessagePrompt(true);
     }
     previousSnapshotRef.current = { keys: renderedKeys };
     committedTimelineRef.current = timelineMessages;
-  }, [renderedData, renderedKeys, timelineMessages, requestBottomFollow]);
+  }, [renderedData, renderedKeys, timelineMessages, requestBottomFollow, cancelPendingFollow, followMeasuredBottom]);
 
   const updateFollowState = useCallback((event: ScrollEvent, isUserInteracting: boolean) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;

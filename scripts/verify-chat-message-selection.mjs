@@ -1,4 +1,4 @@
-import { chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /** 验证整轮选择、20 条上限、跨分页删除、原子预览与页面多选行为，不读取用户数据库。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -71,6 +71,7 @@ const selectionPolicy = load(`${domain}ChatMessageSelection.ts`, { './chatMessag
 const { MessageRepository } = load('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts', {
   '@platform/persistence': persistence,
   './ChatMessageMutationSql': chatMessageMutations,
+      '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
   './ChatTimelineSql': load('src/features/chat/messages/infrastructure/ChatTimelineSql.ts'),
   '../domain/MessageTimeSeparator': load(`${domain}MessageTimeSeparator.ts`),
 });

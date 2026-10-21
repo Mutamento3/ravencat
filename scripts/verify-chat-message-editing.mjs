@@ -1,4 +1,4 @@
-import { chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /** 验证真实改写事务、预览、并发冲突与菜单行为，不读取用户数据库。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -71,6 +71,7 @@ const policy = load(`${domain}ChatMessageEditing.ts`, { './chatMessageMetadata':
 const { MessageRepository } = load('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts', {
   '@platform/persistence': persistence,
   './ChatMessageMutationSql': chatMessageMutations,
+      '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
   './ChatTimelineSql': load('src/features/chat/messages/infrastructure/ChatTimelineSql.ts'),
   '../domain/MessageTimeSeparator': load(`${domain}MessageTimeSeparator.ts`),
 });
@@ -201,7 +202,7 @@ const { default: Menu } = load('src/features/chat/presentation/messages/componen
     StyleSheet: { create: (styles) => styles }, useWindowDimensions: () => ({ width: 400, height: 800 }),
   },
   '@expo/vector-icons': { Ionicons: 'Icon' },
-  'lucide-react-native': { Pin: 'Icon', PinOff: 'Icon', Star: 'Icon' },
+  'lucide-react-native': { History: 'Icon', Pin: 'Icon', PinOff: 'Icon', Star: 'Icon' },
   '@shared/theme': { useTheme: () => ({ mode: 'light', colors: { brand: { onPrimary: 'white' }, text: { primary: 'black' }, border: { strong: 'gray' } } }) },
 });
 let rendered;
@@ -213,7 +214,7 @@ await renderer.act(async () => {
   }));
 });
 const buttons = rendered.root.findAllByType('Button');
-const labels = ['复制', '改写', '重写', '删除', '多选', '固定', '转文字', '引用', '翻译', '分享', '收藏'];
+const labels = ['复制', '改写', '重写', '历史版本', '删除', '多选', '固定', '转文字', '引用', '翻译', '分享', '收藏'];
 assert.deepEqual(buttons.map((button) => button.props.accessibilityLabel), labels);
 const menuGeometry = () => rendered.root.findAllByType('View')
   .find((node) => Array.isArray(node.props.style) && node.props.style[1]?.width).props.style[1];

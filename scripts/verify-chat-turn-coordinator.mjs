@@ -1,5 +1,5 @@
 import { prepareConsumedTurnFixture } from './helpers/sqlite-bootstrap-fixture.mjs';
-import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionModuleUrl, chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /**
  * Phase 5A ConversationTurnCoordinator 第一片：当前回合 fixture 与 T1～T4 行为验证。
  *
@@ -79,7 +79,7 @@ const coordinatorStub = `const databaseCoordinator = {
   },
 };`;
 
-const messageRepoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`);
+const messageRepoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`);
 const stubbedMessageRepoSource = messageRepoSource
   .replace(
     /import\s*\{[\s\S]*?\}\s*from\s*['"]@platform\/persistence['"];/,
@@ -91,7 +91,7 @@ const stubbedMessageRepoSource = messageRepoSource
   );
 const messageRepoModuleUrl = transpileToModuleUrl(stubbedMessageRepoSource);
 
-const turnRepoSource = read('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts').replaceAll("from '../../messages/infrastructure/ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`);
+const turnRepoSource = read('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts').replaceAll("from '../../messages/infrastructure/ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from './ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`);
 const stubbedTurnRepoSource = turnRepoSource
   .replace(
     /import\s*\{[\s\S]*?\}\s*from\s*['"]@platform\/persistence['"];/,
@@ -735,6 +735,26 @@ function makeTimelineItem(senderType, text, createdAt) {
     ['s1', 's3'],
     '游标覆盖用户消息后会话不再待回复',
   );
+}
+
+// 迟到或重复的宿主请求不能重新领取失败／取消的同一输入区间。
+for (const status of ['failed', 'cancelled']) {
+  const db = createBaseDatabase();
+  addSession(db, 's1');
+  await prepareConsumedTurnFixture(createExecutor(db));
+  globalThis.__TEST_TURN_COORDINATOR_HOLDER__ = createCoordinator(db);
+  const repo = new ConversationTurnRepository();
+  addMessage(db, { sessionId: 's1', text: '待回复消息', isMe: true, createdAt: '2026-08-01T11:00:00.000Z' });
+  const run = await repo.claimIfIdle('s1', 'user_reply');
+  await repo.revoke(run, status, '请求已结束');
+  const state = getTurnState(db, 's1');
+  for (const claim of ['claimIfIdle', 'takeOverOrphan']) {
+    assert.equal(await repo[claim]('s1', 'user_reply'), null, `${status} 后重复宿主不得通过 ${claim} 重发同一输入`);
+    assert.deepEqual(getTurnState(db, 's1'), state, '拒绝重复领取不能修改持久所有权');
+  }
+  addMessage(db, { sessionId: 's1', text: '新的用户输入', isMe: true, createdAt: '2026-08-01T11:01:00.000Z' });
+  assert.ok(await repo.claimIfIdle('s1', 'user_reply'), '新输入扩大高水位后必须允许回复');
+  db.close();
 }
 
 // 工具包开关随正式回复原子提交；不再按轮数自动到期。

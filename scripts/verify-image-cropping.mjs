@@ -68,6 +68,7 @@ const wallpaper = {
 const sharedTheme = {
   useTheme: () => theme, useThemedStyles: (create) => create(theme), useWallpaper: () => wallpaper,
   getThemeById: () => theme,
+  isPaperNoteTheme: () => false,
   useThemeContext: () => ({ theme, themeId: theme.id, availableThemes: [], chatColorOverrides: {} }),
 };
 const uiDependencies = {
@@ -88,6 +89,7 @@ const { default: ThemePickerView } = load('src/features/miniPrograms/presentatio
   '@shared/ui/ColorPickerModal': { default: 'ColorPicker' },
   '@shared/ui/BackgroundPickerCard': { default: 'BackgroundPickerCard' },
   './GlassBlurSettings': { default: 'GlassBlurSettings' },
+  './PaperNoteChatFooterSettings': { default: 'PaperNoteChatFooterSettings' },
   '@features/assistants': { listAIAssistants: async () => [{ id: 'ai' }] },
   '@features/chat': { getCanonicalChatConversation: async () => ({ id: 'conversation' }), listGroupChats: async () => [{ id: 'group' }] },
 });

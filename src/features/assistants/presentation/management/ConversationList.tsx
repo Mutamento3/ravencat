@@ -95,6 +95,10 @@ const createStyles = (theme: PresentationTheme) =>
       position: 'relative',
       marginRight: theme.spacing.lg,
     },
+    // AvatarImage 默认底是 brand.primary + '15'，列表里不要那块淡蓝，头像直接贴列表背景。
+    listAvatar: {
+      backgroundColor: 'transparent',
+    },
     contentWrapper: {
       flex: 1,
       justifyContent: 'center',
@@ -385,9 +389,9 @@ export default function ConversationList({
         >
           <View style={styles.avatarWrapper}>
             {isGroupChat ? (
-              <GroupAvatar name={name} avatarUrl={avatar} size="small" />
+              <GroupAvatar name={name} avatarUrl={avatar} size="small" style={styles.listAvatar} />
             ) : (
-              <AIAvatar name={name} avatarUrl={avatar} size="small" />
+              <AIAvatar name={name} avatarUrl={avatar} size="small" style={styles.listAvatar} />
             )}
           </View>
 

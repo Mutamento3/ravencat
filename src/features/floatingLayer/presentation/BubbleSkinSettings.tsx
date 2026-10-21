@@ -1,11 +1,10 @@
 /** 设置悬浮球大小与两种形态；整页共用外层的纵向滚动。 */
 import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
-import { Button, ModalSheet, Slider, showAppDialog } from '@shared/ui';
+import { Button, MimeAwareImage, ModalSheet, Slider, showAppDialog } from '@shared/ui';
 import * as DocumentPicker from 'expo-document-picker';
 import { Check, Minus, Pencil, Plus, Trash2, Upload } from 'lucide-react-native';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Image, PixelRatio, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SvgUri } from 'react-native-svg';
+import { ActivityIndicator, PixelRatio, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import {
   deleteBubbleSkin,
@@ -155,7 +154,7 @@ export function BubbleSkinSettings() {
           </>
         )}
       </ThemedSurface>
-      <ModalSheet visible={renamingSkin !== null} onClose={() => setRenamingSkin(null)} title="修改装扮名称">
+      <ModalSheet visible={renamingSkin !== null} onClose={() => setRenamingSkin(null)} title="修改装扮名称" avoidKeyboard>
         <View style={styles.renameSheet}>
           <TextInput style={styles.nameInput} value={nameDraft} onChangeText={setNameDraft} maxLength={30} autoFocus selectTextOnFocus placeholder="输入装扮名称" placeholderTextColor={theme.colors.text.tertiary} />
           <Button title="保存" onPress={() => void saveRename()} disabled={busy || nameDraft.trim().length === 0} />
@@ -170,9 +169,13 @@ function SkinPreview({ skin, docked = false, mirror = false, size = 52 }: { skin
   const mimeType = docked && skin.dockedUri ? skin.dockedMimeType : skin.mimeType;
   return (
     <View style={{ width: size, height: size, transform: [{ scaleX: mirror ? -1 : 1 }] }}>
-      {skin.source === 'builtin' ? (
-        <Image source={require('../../../../assets/yaya.png')} style={{ width: size, height: size }} resizeMode="contain" />
-      ) : mimeType === 'image/svg+xml' ? <SvgUri width={size} height={size} uri={uri!} /> : <Image source={{ uri: uri! }} style={{ width: size, height: size }} resizeMode="contain" />}
+      <MimeAwareImage
+        uri={skin.source === 'builtin' ? null : uri}
+        mimeType={mimeType}
+        fallbackSource={require('../../../../assets/yaya.png')}
+        width={size}
+        height={size}
+      />
     </View>
   );
 }

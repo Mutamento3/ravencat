@@ -32,20 +32,26 @@ class AppUpdatesModule : Module() {
       openInstallSettings(context)
     }.runOnQueue(Queues.MAIN)
 
-    AsyncFunction("verifyDownloadedUpdate") Coroutine { uri: String, sha256: String, size: Double, version: String ->
+    AsyncFunction("prepareDownloadedUpdate") Coroutine { uri: String, sha256: String, size: Double, version: String, compressed: Boolean ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       withContext(Dispatchers.IO) {
         try {
           val parsed = Uri.parse(uri)
-          require(parsed.scheme == "file") { "更新安装包必须是本地文件" }
-          val file = File(requireNotNull(parsed.path)).canonicalFile
+          require(parsed.scheme == "file") { "更新文件必须是本地文件" }
+          val downloaded = File(requireNotNull(parsed.path)).canonicalFile
           val directory = File(context.cacheDir, "app-updates").canonicalFile
-          require(file.parentFile == directory) { "更新文件不在专用缓存目录" }
+          require(downloaded.parentFile == directory) { "更新文件不在专用缓存目录" }
+          val file = if (compressed) {
+            val apk = File(directory, "RavenCat-update.apk")
+            extractUpdateArtifact(downloaded, apk, "RavenCat-$version.apk", size.toLong())
+            apk
+          } else downloaded
           verifyUpdateArtifact(file, sha256, size.toLong())
           val info = context.packageManager.getPackageArchiveInfo(file.path, PackageManager.PackageInfoFlags.of(0L))
           require(info != null && info.packageName == context.packageName && info.versionName == version) {
             "安装包的应用或版本与当前更新不一致"
           }
+          Uri.fromFile(file).toString()
         } catch (error: Exception) {
           throw UpdateException("无法验证更新：${error.message}", error)
         }
@@ -59,7 +65,7 @@ class AppUpdatesModule : Module() {
           openInstallSettings(activity)
           "permission_required"
         } else {
-          // 输入已由 verifyDownloadedUpdate 校验；签名和是否允许覆盖安装由 Android 安装器负责。
+          // 输入已由 prepareDownloadedUpdate 校验；签名和是否允许覆盖安装由 Android 安装器负责。
           val file = File(requireNotNull(Uri.parse(verifiedUri).path))
           val contentUri = FileProvider.getUriForFile(activity,
             "${activity.packageName}.FileSystemFileProvider", file)

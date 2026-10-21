@@ -1,7 +1,6 @@
 /** Backup SQLite 完整性与快照引用修复验证；格式往返由原生单测覆盖。 */
 
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,15 +12,6 @@ import { importTypeScriptModule } from './lib/import-typescript-module.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-function findSqlite3() {
-  const located = spawnSync('where.exe', ['sqlite3.exe'], { encoding: 'utf8' });
-  if (located.status === 0) return located.stdout.trim().split(/\r?\n/u)[0];
-  const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
-  if (sdkRoot) return path.join(sdkRoot, 'platform-tools', 'sqlite3.exe');
-  throw new Error('找不到 sqlite3.exe，无法验证恢复数据库 PRAGMA');
-}
-
-const sqlite3 = findSqlite3();
 const { repairMcpAuthorizationForeignKeys } = await importTypeScriptModule(
   path.join(ROOT, 'src/platform/persistence/sqlite/mcpSchema.ts'),
 );
@@ -72,27 +62,28 @@ const { repairConversationTurnForeignKeys } = await importTypeScriptModule(
   ),
 );
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ravencat-backup-artifact-'));
+const databases = [];
+function openDatabase(name) {
+  const db = new DatabaseSync(path.join(tempRoot, name));
+  databases.push(db);
+  return db;
+}
 try {
-  const validDb = path.join(tempRoot, 'valid.db');
-  execFileSync(sqlite3, [validDb], {
-    input: 'PRAGMA foreign_keys=ON; CREATE TABLE p(id INTEGER PRIMARY KEY); CREATE TABLE c(pid INTEGER REFERENCES p(id)); INSERT INTO p VALUES(1); INSERT INTO c VALUES(1);',
-  });
-  assert.equal(execFileSync(sqlite3, [validDb, 'PRAGMA integrity_check;'], { encoding: 'utf8' }).trim(), 'ok');
-  assert.equal(execFileSync(sqlite3, [validDb, 'PRAGMA foreign_key_check;'], { encoding: 'utf8' }).trim(), '');
+  const validDb = openDatabase('valid.db');
+  validDb.exec('PRAGMA foreign_keys=ON; CREATE TABLE p(id INTEGER PRIMARY KEY); CREATE TABLE c(pid INTEGER REFERENCES p(id)); INSERT INTO p VALUES(1); INSERT INTO c VALUES(1);');
+  assert.equal(validDb.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+  assert.deepEqual(validDb.prepare('PRAGMA foreign_key_check').all(), []);
 
-  const foreignKeyDb = path.join(tempRoot, 'foreign-key.db');
-  execFileSync(sqlite3, [foreignKeyDb], {
-    input: 'PRAGMA foreign_keys=OFF; CREATE TABLE p(id INTEGER PRIMARY KEY); CREATE TABLE c(pid INTEGER REFERENCES p(id)); INSERT INTO c VALUES(99);',
-  });
+  const foreignKeyDb = openDatabase('foreign-key.db');
+  foreignKeyDb.exec('PRAGMA foreign_keys=OFF; CREATE TABLE p(id INTEGER PRIMARY KEY); CREATE TABLE c(pid INTEGER REFERENCES p(id)); INSERT INTO c VALUES(99);');
   assert.notEqual(
-    execFileSync(sqlite3, [foreignKeyDb, 'PRAGMA foreign_key_check;'], { encoding: 'utf8' }).trim(),
-    '',
+    foreignKeyDb.prepare('PRAGMA foreign_key_check').all().length,
+    0,
   );
 
   // 历史会话删除残留：修复只删除失去 conversation identity 的运行时事实。
-  const conversationDb = path.join(tempRoot, 'conversation-turn.db');
-  execFileSync(sqlite3, [conversationDb], {
-    input: `
+  const conversationDb = openDatabase('conversation-turn.db');
+  conversationDb.exec(`
       PRAGMA foreign_keys=OFF;
       CREATE TABLE chat_conversations(id TEXT PRIMARY KEY);
       CREATE TABLE conversation_turn_runs(
@@ -108,51 +99,39 @@ try {
       INSERT INTO conversation_turn_state VALUES('live-session', 'live-run');
       INSERT INTO conversation_turn_runs VALUES('orphan-run', 'deleted-session');
       INSERT INTO conversation_turn_state VALUES('deleted-session', 'orphan-run');
-    `,
-  });
+    `);
+  conversationDb.exec('PRAGMA foreign_keys=ON;');
   const sqliteAdapter = {
     execAsync: async (sql) => {
-      execFileSync(sqlite3, [conversationDb, sql]);
+      conversationDb.exec(sql);
     },
     getAllAsync: async (sql) => {
-      const output = execFileSync(sqlite3, ['-json', conversationDb, sql], {
-        encoding: 'utf8',
-      }).trim();
-      return output ? JSON.parse(output) : [];
+      return conversationDb.prepare(sql).all();
     },
   };
   assert.notEqual(
-    execFileSync(sqlite3, [conversationDb, 'PRAGMA foreign_key_check;'], {
-      encoding: 'utf8',
-    }).trim(),
-    '',
+    conversationDb.prepare('PRAGMA foreign_key_check').all().length,
+    0,
   );
   await repairConversationTurnForeignKeys(sqliteAdapter);
   await repairConversationTurnForeignKeys(sqliteAdapter);
-  assert.equal(
-    execFileSync(sqlite3, [conversationDb, 'PRAGMA foreign_key_check;'], {
-      encoding: 'utf8',
-    }).trim(),
-    '',
+  assert.deepEqual(conversationDb.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.deepEqual(
+    conversationDb.prepare('SELECT run_id FROM conversation_turn_runs').all().map(row => row.run_id),
+    ['live-run'],
   );
-  assert.equal(
-    execFileSync(sqlite3, [conversationDb, 'SELECT run_id FROM conversation_turn_runs;'], {
-      encoding: 'utf8',
-    }).trim(),
-    'live-run',
-  );
-  assert.equal(
-    execFileSync(sqlite3, [conversationDb, 'SELECT session_id FROM conversation_turn_state;'], {
-      encoding: 'utf8',
-    }).trim(),
-    'live-session',
+  assert.deepEqual(
+    conversationDb.prepare('SELECT session_id FROM conversation_turn_state').all().map(row => row.session_id),
+    ['live-session'],
   );
 
   const corruptDb = path.join(tempRoot, 'corrupt.db');
   fs.writeFileSync(corruptDb, crypto.randomBytes(2048));
-  const corruptResult = spawnSync(sqlite3, [corruptDb, 'PRAGMA integrity_check;'], { encoding: 'utf8' });
-  assert.ok(corruptResult.status !== 0 || corruptResult.stdout.trim() !== 'ok');
+  assert.throws(() => openDatabase('corrupt.db').prepare('PRAGMA integrity_check').all(), {
+    code: 'ERR_SQLITE_ERROR',
+  });
 } finally {
+  for (const db of databases) db.close();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 

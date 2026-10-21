@@ -336,36 +336,6 @@ export class SQLiteMomentRepository implements IMomentRepository {
 
   // ==================== AI viewer 读路径 ====================
 
-  async listVisibleMomentsForAgent(
-    viewerAgentId: string,
-    options?: MomentPageRequest
-  ): Promise<Moment[]> {
-    const database = this.#executor('moments.listVisibleMomentsForAgent', 'runtime');
-    const params = [viewerAgentId, viewerAgentId, viewerAgentId];
-    if (!options) {
-      const rows = await database.getAllAsync<MomentRow>(
-        `SELECT ${MOMENT_COLUMNS_QUALIFIED}
-         FROM moments m
-         WHERE ${AGENT_VISIBILITY_PREDICATE}
-         ORDER BY m.created_at DESC, m.id DESC`,
-        params
-      );
-      return rows.map(toMoment);
-    }
-
-    // ACL 与 cursor 条件同时作用在 SQL 上：分页绝不允许先取全量再在 JS 里过滤。
-    const cursor = createMomentCursorWhere(options.cursor, 'm');
-    const rows = await database.getAllAsync<MomentRow>(
-      `SELECT ${MOMENT_COLUMNS_QUALIFIED}
-       FROM moments m
-       WHERE ${AGENT_VISIBILITY_PREDICATE}
-       ${cursor.sql ? `AND ${cursor.sql}` : ''}
-       ORDER BY m.created_at DESC, m.id DESC LIMIT ?`,
-      [...params, ...cursor.params, options.limit]
-    );
-    return rows.map(toMoment);
-  }
-
   async queryVisibleMomentsForAgent(
     viewerAgentId: string,
     options: MomentQueryRequest,

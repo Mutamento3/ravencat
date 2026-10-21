@@ -1,4 +1,4 @@
-import { chatMutationModuleUrl, chatTimelineModuleUrl } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionModuleUrl, chatMutationModuleUrl, chatTimelineModuleUrl } from './chat-timeline-fixture.mjs';
 /**
  * Chat 消息原子提交行为测试。
  *
@@ -368,7 +368,7 @@ for (const sessionId of ['direct-delete', 'group-delete']) {
 // ============================================================================
 // 仓储模块：桩掉 @platform/persistence 依赖，直接驱动事务执行器
 // ============================================================================
-const repoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`);
+const repoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`);
 const stubbedRepoSource = repoSource
   .replace(
     /import\s*\{[\s\S]*?\}\s*from\s*['"]@platform\/persistence['"];/,
@@ -404,6 +404,7 @@ function createFakeDatabase() {
   fake.executor = {
     runAsync: async (source, params = []) => {
       fake.statements.push({ kind: 'run', source, params });
+      if (source.startsWith('UPDATE chat_reply_version_sets')) return { lastInsertRowId: 0, changes: 0 };
       if (source.startsWith('INSERT INTO messages')) {
         const row = { id: fake.nextId };
         INSERT_COLUMNS.forEach((column, index) => {
@@ -422,6 +423,7 @@ function createFakeDatabase() {
     },
     getFirstAsync: async (source, params = []) => {
       fake.statements.push({ kind: 'read', source, params });
+      if (source.includes('FROM chat_regeneration_requests')) return null;
       if (source.includes('SELECT * FROM messages WHERE id = ?')) {
         return fake.messages.get(params[0]) ?? null;
       }

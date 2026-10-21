@@ -49,6 +49,7 @@ function load(relative) {
   const source = fs.readFileSync(filename, 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const requireLocal = (specifier) => {
+    if (specifier === './HttpExchangeCapture') return { beginAIHttpCapture: async () => null };
     if (specifier === '@platform/persistence') return { databaseCoordinator: coordinator };
     if (specifier === 'expo-file-system/legacy') return {};
     if (filename === path.join(root, 'src/platform/persistence/helpers.ts') && specifier === './runtime'
@@ -98,7 +99,7 @@ const retryPending = async (conversationId, level) => {
   await summary.retryTask(conversationId,task.id,new Date().toISOString());
 };
 const buildSummaryInput = (claim) => summaryApplication.buildChatSummaryModelInput({
-  ...claim, part: { index: 1, total: 1 }, earlierAdditionsReadOnly: [],
+  ...claim,
 });
 const { timelineOrderedMessagesCte, timelineProjectionOrderBy } = load('src/features/chat/messages/infrastructure/ChatTimelineSql.ts');
 const now = '2026-10-04T04:00:00.000Z';
@@ -595,7 +596,7 @@ try {
   await summary.delete('call-summary', 'call-segment');
   assert.equal((await summaryApplication.getChatSummaryContext('call-summary')).pendingCalls.length, 0, '用户删段不能重建已消费通话');
 
-  // 5000 字顺序分批；后一分片失败不提前切换原文，成功一次交接所有分片。
+  // 超过 5000 字的完整领取只调用一次模型；失败保留原文，成功一次交接。
   await createCall('long-call', { acceptedAt: later, endedAt: '2026-10-04T06:00:00.000Z' });
   for (let index = 0; index < 24; index++) await calls.appendEvent({ callId: 'long-call', chatSessionId: 'call-summary',
     kind: index % 2 ? 'aiSpeechText' : 'userSpeechText', actorType: index % 2 ? 'ai' : 'user', text: '🐈'.repeat(500),
@@ -603,30 +604,25 @@ try {
   const longContext = await summaryApplication.getChatSummaryContext('call-summary');
   let requests = 0;
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 20, generateAddition: async (input) => {
-    assert.ok(input.messages.reduce((count, item) => count + Array.from(item.content).length, 0) <= 5000);
-    if (++requests === 2) throw new Error('第二分片失败');
-    return '{"content":"第一分片。"}';
+    assert.deepEqual(input.messages, longContext.timeline);
+    requests++;
+    throw new Error('完整摘要请求失败');
   } });
-  await assert.rejects(summaryApplication.processChatSummary('call-summary', signal), /第二分片失败/);
-  assert.deepEqual(withoutTasks(await summaryApplication.getChatSummaryContext('call-summary')), withoutTasks(longContext), '分片失败保留整个尚未交接范围');
+  await assert.rejects(summaryApplication.processChatSummary('call-summary', signal), /完整摘要请求失败/);
+  assert.equal(requests, 1);
+  assert.deepEqual(withoutTasks(await summaryApplication.getChatSummaryContext('call-summary')), withoutTasks(longContext), '失败保留整个尚未交接范围');
   modelInputs = [];
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 20, generateAddition: async (input) => {
     modelInputs.push(input);
-    assert.ok(input.messages.reduce((count, item) => count + Array.from(item.content).length, 0) <= 5000);
-    assert.equal(input.earlierAdditionsReadOnly.length, input.part.index - 1);
-    return '长通话第' + input.part.index + '段。';
+    assert.ok(input.messages.reduce((count, item) => count + Array.from(item.content).length, 0) > 5000);
+    return '长通话完整摘要。';
   } });
   assert.equal(await summaryApplication.processChatSummary('call-summary', signal), true);
-  assert.ok(modelInputs.length > 1);
-  assert.deepEqual(modelInputs.flatMap((input) => input.messages).map((item) => item.content), longContext.timeline.map((item) => item.content), '分批不重排或丢弃原文');
+  assert.equal(modelInputs.length, 1);
+  assert.deepEqual(modelInputs[0].messages, longContext.timeline, '完整输入不重排或丢弃原文');
   const longSegments = (await summaryApplication.getChatSummaryContext('call-summary')).segments.slice(1);
   assert.equal(longSegments.reduce((count, item) => count + item.messageCount, 0), 24);
   assert.equal((await summaryApplication.getChatSummaryContext('call-summary')).pendingCalls.length, 0);
-  const singleLongMessage = { ...longContext.timeline.find((item) => item.kind === 'dialogue'), content: '🐈'.repeat(10_001) };
-  const singleParts = timelineDomain.splitSummaryMessages([singleLongMessage]);
-  assert.deepEqual(singleParts.map((part) => Array.from(part[0].content).length), [5000, 5000, 1]);
-  assert.equal(singleParts.flat().map((item) => item.content).join(''), singleLongMessage.content);
-  assert.deepEqual(singleParts.flat().map((item) => item.continuation.index), [1, 2, 3]);
 
   // 摘要上限前后均按真实时间选取，不抢先消费下一通电话或漏掉电话后的文字。
   const chatItem = (identity, timestamp) => ({ source: 'chat', kind: 'dialogue', speaker: 'user',
@@ -677,7 +673,6 @@ try {
   const clearCallClaim = await summary.claim('call-summary', 1, 'call-clear', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
   await summary.clear('call-summary');
   assert.equal(await appendSummary(clearCallClaim, 'call-zombie', '不能复活', later), false);
-  assert.equal(await summary.renewClaim(clearCallClaim, now, later), false);
   assert.equal((await summaryApplication.getChatSummaryContext('call-summary')).pendingCalls.length, 0);
   const boundaryAt = database.prepare('SELECT cleared_at FROM chat_summary_call_boundary WHERE conversation_id = ?').get('call-summary').cleared_at;
   await createCall('post-clear-call', { state: 'active', endedAt: null });
@@ -832,7 +827,7 @@ try {
   database.exec(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updated_at) VALUES ('secondary-ai','secondary-actor','二级测试','chat','${now}','${now}');
     INSERT INTO chat_conversations VALUES ('secondary-test', 'direct');
     INSERT INTO sessions (id, ai_assistant_id, name, created_at, updated_at) VALUES ('secondary-test', 'secondary-ai', '二级测试', '${now}', '${now}');`);
-  const secondarySettings = { generationEnabled: true, injectEnabled: true, fixedMessageId: null, secondaryEnabled: true, secondaryTokenThreshold: 8000, requestTimeoutSeconds: 300, maxOutputTokens: null, modelConfigId: null, groupTriggerCount: 40 };
+  const secondarySettings = { generationEnabled: true, injectEnabled: true, fixedMessageId: null, secondaryEnabled: true, secondaryTokenThreshold: 8000, requestTimeoutSeconds: 300, maxOutputTokens: null, modelConfigId: null, groupTriggerCount: 40, primaryLimit: null };
   assert.deepEqual(await summary.readSettings('secondary-test'), secondarySettings);
   for (let index = 1; index <= 5; index++) await summary.create('secondary-test', 'primary-' + index,
     '猫'.repeat(index === 5 ? 1599 : 1600), now, 'Asia/Shanghai');
@@ -1068,6 +1063,9 @@ try {
   database.prepare("UPDATE chat_summary_tasks SET status='waiting',next_attempt_at='2099-01-01T00:00:00.000Z' WHERE id=?").run(retryTaskId);
   database.prepare("UPDATE chat_summary_tasks SET status='running' WHERE id=?").run(primaryWhileSecondaryFailed.taskId);
   database.prepare("UPDATE chat_summary_state SET claim_id='old-process',claim_expires_at='2099-01-01T00:00:00.000Z' WHERE conversation_id='retry-summary'").run();
+  assert.deepEqual(await summaryApplication.prepareChatSummaryConversations(['conversation', 'already-deleted']), ['conversation'], '定向维护只返回仍存在的目标会话');
+  assert.deepEqual(await summaryApplication.prepareChatSummaryConversations([]), [], '空范围不能退化为全量扫描');
+  assert.equal((await summary.readContext('retry-summary',[])).tasks.find(task=>task.id===retryTaskId).status, 'waiting', '定向维护不收口范围外任务');
   await summaryApplication.prepareChatSummaryConversations();
   assert.equal((await summary.readContext('retry-summary',[])).tasks.find(task=>task.id===primaryWhileSecondaryFailed.taskId).status,'running','准备阶段不撤销仍有效的在途 claim');
   database.prepare("UPDATE chat_summary_state SET claim_expires_at=? WHERE conversation_id='retry-summary'").run(now);
@@ -1235,7 +1233,7 @@ try {
   assert.deepEqual(await summary.readBackgroundContexts('guest-owner','context-group-a',{privateLimit:0,groupLimit:0}),[]);
 
   // 工具操作同一份二级正文：全文与局部替换、身份隔离及失败原子性。
-  const { GetSecondarySummaryTool, EditSecondarySummaryTool } = load('src/features/chat/summary/aiTools/SecondarySummaryTools.ts');
+  const { GetSecondarySummaryTool, EditSecondarySummaryTool, EditPrimarySummaryTool, DeletePrimarySummaryTool } = load('src/features/chat/summary/aiTools/ChatSummaryTools.ts');
   const { matchesAgentToolInputSchema } = load('src/shared/aiTools/AgentToolInputSchema.ts');
   const editSchema = EditSecondarySummaryTool.definition.parameters;
   assert.equal(matchesAgentToolInputSchema({ mode: 'replace_text', oldText: '原文', newText: '' }, editSchema), true);
@@ -1318,6 +1316,83 @@ try {
   const cancelledToolRead = new AbortController(); cancelledToolRead.abort();
   await assert.rejects(GetSecondarySummaryTool.execute({}, { ...editContext, abortSignal: cancelledToolRead.signal }));
   await assert.rejects(EditSecondarySummaryTool.execute(emptyEdit, { ...editContext, abortSignal: cancelledToolRead.signal }));
+
+  // 一级工具按记录定位；原文比对与归属检查在同一事务内，独立于已有二级正文。
+  const primaryEditSchema = EditPrimarySummaryTool.definition.parameters;
+  const primaryDeleteSchema = DeletePrimarySummaryTool.definition.parameters;
+  assert.equal(matchesAgentToolInputSchema({ segmentId: 'p', mode: 'replace_text', oldText: '旧', newText: '' }, primaryEditSchema), true);
+  assert.equal(matchesAgentToolInputSchema({ segmentId: 'p', mode: 'replace_all', newText: '新' }, primaryEditSchema), false);
+  assert.equal(matchesAgentToolInputSchema({ segmentId: 'p' }, primaryDeleteSchema), false);
+  assert.equal(matchesAgentToolInputSchema({ segmentId: 'p', expectedContent: '旧', assistantId: 'other' }, primaryDeleteSchema), false);
+  const primaryOriginal = (await searchTool.execute({ keywords: ['来源1'] }, editContext)).data.entries.find(item => item.id === 'tool-p1');
+  assert.equal(primaryOriginal.level, 'primary');
+  const secondaryBeforePrimaryTools = (await GetSecondarySummaryTool.execute({}, editContext)).data.content;
+  const stateBeforePrimaryTools = await raw.getFirstAsync('SELECT * FROM chat_summary_state WHERE conversation_id = ?', ['tool-summary']);
+  const primaryFullInput = { segmentId: primaryOriginal.id, mode: 'replace_all', oldText: primaryOriginal.content, newText: '日期待修正，保留偏好，保留偏好' };
+  const expectPrimaryFailure = async (tool, input, context = editContext) => {
+    const before = await summary.readContext('tool-summary', []);
+    assert.equal((await tool.execute(input, context)).status, 'error');
+    assert.deepEqual(await summary.readContext('tool-summary', []), before);
+  };
+  await expectPrimaryFailure(EditPrimarySummaryTool, primaryFullInput, otherAIContext);
+  await expectPrimaryFailure(DeletePrimarySummaryTool, { segmentId: primaryOriginal.id, expectedContent: primaryOriginal.content }, otherAIContext);
+  for (const segmentId of ['missing-primary', 'tool-s1', 'merge-p2']) {
+    await expectPrimaryFailure(EditPrimarySummaryTool, { ...primaryFullInput, segmentId });
+    await expectPrimaryFailure(DeletePrimarySummaryTool, { segmentId, expectedContent: '不能删错目标' });
+  }
+  const primaryFull = await EditPrimarySummaryTool.execute(primaryFullInput, editContext);
+  assert.equal(primaryFull.data.content, primaryFullInput.newText);
+  assert.equal(primaryFull.data.compactionId, primaryOriginal.compactionId);
+  assert.equal(primaryFull.data.createdAt, primaryOriginal.createdAt);
+  assert.equal(primaryFull.data.contextSequence, primaryOriginal.contextSequence);
+  await expectPrimaryFailure(EditPrimarySummaryTool, primaryFullInput);
+  await expectPrimaryFailure(EditPrimarySummaryTool, { ...primaryFullInput, mode: 'replace_text', oldText: '保留偏好' });
+  await expectPrimaryFailure(EditPrimarySummaryTool, { ...primaryFullInput, oldText: '  ' });
+  await expectPrimaryFailure(EditPrimarySummaryTool, { ...primaryFullInput, oldText: primaryFull.data.content, newText: ' ' });
+  await expectPrimaryFailure(DeletePrimarySummaryTool, { segmentId: primaryOriginal.id, expectedContent: primaryOriginal.content });
+  const primaryPatchInput = { segmentId: primaryOriginal.id, mode: 'replace_text', oldText: '日期待修正', newText: '修正日期$&' };
+  const beforePrimaryRollback = await summary.readContext('tool-summary', []);
+  database.exec("CREATE TRIGGER reject_primary_tool_revision BEFORE UPDATE OF revision ON chat_summary_state WHEN OLD.conversation_id='tool-summary' BEGIN SELECT RAISE(ABORT,'一级编辑回滚'); END;");
+  await assert.rejects(EditPrimarySummaryTool.execute(primaryPatchInput, editContext), /一级编辑回滚/);
+  await assert.rejects(DeletePrimarySummaryTool.execute({ segmentId: primaryOriginal.id, expectedContent: primaryFull.data.content }, editContext), /一级编辑回滚/);
+  assert.deepEqual(await summary.readContext('tool-summary', []), beforePrimaryRollback, '正文编辑与删除都随事务失败回滚');
+  database.exec('DROP TRIGGER reject_primary_tool_revision');
+  const primaryEvents = [];
+  const unsubscribePrimaryTools = summaryRuntime.subscribeChatSummaryChanged(id => primaryEvents.push(id));
+  const primaryPatched = await EditPrimarySummaryTool.execute(primaryPatchInput, editContext);
+  assert.equal(primaryPatched.data.content, '修正日期$&，保留偏好，保留偏好');
+  const primaryDeleted = await DeletePrimarySummaryTool.execute({ segmentId: primaryOriginal.id, expectedContent: primaryPatched.data.content }, editContext);
+  assert.deepEqual(primaryDeleted.data, { conversationId: 'tool-summary', segmentId: primaryOriginal.id, deleted: true });
+  assert.deepEqual(primaryEvents, ['tool-summary', 'tool-summary']);
+  unsubscribePrimaryTools();
+  assert.ok(!(await searchTool.execute({}, editContext)).data.entries.some(item => item.id === primaryOriginal.id));
+  assert.equal((await GetSecondarySummaryTool.execute({}, editContext)).data.content, secondaryBeforePrimaryTools);
+  const stateAfterPrimaryTools = await raw.getFirstAsync('SELECT * FROM chat_summary_state WHERE conversation_id = ?', ['tool-summary']);
+  assert.deepEqual({ ...stateAfterPrimaryTools, revision: stateBeforePrimaryTools.revision }, { ...stateBeforePrimaryTools }, '一级维护不改变原文处理进度与执行资格');
+  assert.deepEqual((await summary.readContext('tool-summary', [])).tasks, beforePrimaryRollback.tasks);
+  const deleteWinners = await Promise.all([1, 2].map(() => DeletePrimarySummaryTool.execute({ segmentId: 'tool-p2', expectedContent: '来源2' }, editContext)));
+  assert.equal(deleteWinners.filter(result => result.status === 'success').length, 1);
+  await summary.create('tool-summary', 'tool-pending-primary', '待归纳原正文', now, 'Asia/Shanghai');
+  const primaryInFlight = await summary.claimSecondary('tool-summary', 'primary-tool-inflight', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  const primaryEditWinners = await Promise.all(['新正文甲', '新正文乙'].map(newText => EditPrimarySummaryTool.execute({ segmentId: 'tool-pending-primary', mode: 'replace_all', oldText: '待归纳原正文', newText }, editContext)));
+  assert.equal(primaryEditWinners.filter(result => result.status === 'success').length, 1);
+  assert.equal(await summary.appendSecondary(primaryInFlight, 'stale-primary-edit', '旧归纳不能保存', later), false);
+  await summary.releaseSecondaryClaim(primaryInFlight);
+  const primaryDeleteInFlight = await summary.claimSecondary('tool-summary', 'primary-delete-inflight', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+  const pendingPrimaryContent = primaryEditWinners.find(result => result.status === 'success').data.content;
+  assert.equal((await DeletePrimarySummaryTool.execute({ segmentId: 'tool-pending-primary', expectedContent: pendingPrimaryContent }, editContext)).status, 'success');
+  assert.equal(await summary.appendSecondary(primaryDeleteInFlight, 'stale-primary-delete', '删除后不能提交旧结果', later), false);
+  await summary.releaseSecondaryClaim(primaryDeleteInFlight);
+  const groupPrimary = (await searchTool.execute({}, groupEditContext)).data.entries.find(item => item.level === 'primary');
+  const groupPrimaryEdited = await EditPrimarySummaryTool.execute({ segmentId: groupPrimary.id, mode: 'replace_all', oldText: groupPrimary.content, newText: '群一级修正' }, groupEditContext);
+  assert.equal(groupPrimaryEdited.status, 'success');
+  database.prepare("UPDATE group_chat_members SET enabled=0 WHERE group_id='context-group-a'").run();
+  assert.equal((await EditPrimarySummaryTool.execute({ segmentId: groupPrimary.id, mode: 'replace_text', oldText: '群一级修正', newText: '退出后改写' }, groupEditContext)).status, 'error');
+  assert.equal((await DeletePrimarySummaryTool.execute({ segmentId: groupPrimary.id, expectedContent: '群一级修正' }, groupEditContext)).status, 'error');
+  database.prepare("UPDATE group_chat_members SET enabled=1 WHERE group_id='context-group-a'").run();
+  assert.equal((await DeletePrimarySummaryTool.execute({ segmentId: groupPrimary.id, expectedContent: '群一级修正' }, groupEditContext)).status, 'success');
+  await assert.rejects(EditPrimarySummaryTool.execute(primaryFullInput, { ...editContext, abortSignal: cancelledToolRead.signal }));
+  await assert.rejects(DeletePrimarySummaryTool.execute({ segmentId: 'tool-p2', expectedContent: '来源2' }, { ...editContext, abortSignal: cancelledToolRead.signal }));
 
   const backupGroupId = await commands.addMemoryTrigger('a', '备份绑定词、备份同义词', ['vector-only']);
   await summary.updateSettings('context-group-a', { modelConfigId: 'continuous-reference' });
@@ -1452,6 +1527,65 @@ try {
     assert.equal((await repository.getEntry('pool-a', withSummary.id)).content, '约定每天互道晚安');
     assert.equal((await repository.getEntry('pool-a', transferred.id)).summary, conversionSource.summary);
     assert.equal(await protocols.getById(conversionSource.id), null);
+  }
+
+  // 大积压只读取足够确定本批的原文；分段跨页、通话闭合和无投影行不能改变领取范围。
+  {
+    const conversationId = 'bounded-summary';
+    database.prepare('INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated_at) VALUES (?,?,?,?,?,?)').run('bounded-ai', 'bounded-agent', '分页摘要', 'chat', now, now);
+    database.prepare('INSERT INTO chat_conversations(id,kind) VALUES (?,?)').run(conversationId, 'direct');
+    database.prepare('INSERT INTO sessions(id,ai_assistant_id,name,created_at,updated_at) VALUES (?,?,?,?,?)').run(conversationId, 'bounded-ai', '分页摘要', now, now);
+    database.prepare('INSERT INTO conversation_turn_state(session_id,reply_cursor,revision,updated_at) VALUES (?,?,0,?)').run(conversationId, 2147483647, now);
+    const insert = database.prepare(`INSERT INTO messages(session_id,text,is_me,sender_type,created_at,time,status,logical_message_id)
+      VALUES (?, ?, 0, 'assistant', ?, '', 'sent', ?)`);
+    const at = index => new Date(Date.parse(now) + index * 1000).toISOString();
+    const messageIds = [];
+    database.exec('BEGIN');
+    for (let index = 0; index < 8000; index++) {
+      messageIds.push(Number(insert.run(conversationId, '原文 ' + index, at(index), index < 300 ? 'large-segmented-message' : 'logical-' + index).lastInsertRowid));
+    }
+    database.exec('COMMIT');
+    let callSources = [];
+    let callReads = 0;
+    const bounded = new SQLiteChatSummaryRepository(async () => { callReads++; return callSources; });
+    const expected = timelineDomain.selectSummaryRange((await bounded.readContext(conversationId, [])).timeline, 20);
+    const getAll = raw.getAllAsync;
+    let returnedRows = 0;
+    raw.getAllAsync = async (...args) => { const rows = await getAll(...args); returnedRows += rows.length; return rows; };
+    try {
+      const range = await bounded.claim(conversationId, 20, 'bounded-primary', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+      assert.deepEqual(range.messages, expected);
+      assert.equal(range.messages.length, 319, '同一逻辑消息的三百个分段必须完整领取');
+      assert.ok(returnedRows < 1000, '小批摘要的数据库结果不能随八千条积压全量传回');
+      await bounded.releaseClaim(range);
+      callSources = [{ info: { callId: 'across-pages', mediaMode: 'audio', direction: 'outgoing', state: 'ended',
+        startedAt: at(0), acceptedAt: at(0), endedAt: at(350), endReason: 'user_hangup', durationSeconds: 350 },
+      historyStartsAfter: null, transcripts: [{ eventId: 'crossing-transcript', timestamp: at(100), speaker: 'user', content: '通话内原文' }] }];
+      const completeTimeline = (await bounded.readContext(conversationId, [])).timeline;
+      const withCall = await bounded.claim(conversationId, 1, 'bounded-call', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+      assert.deepEqual(withCall.messages, timelineDomain.selectSummaryRange(completeTimeline, 1), '分页不能在通话结束前封口或漏掉通话内聊天');
+      assert.equal(withCall.messages.at(-1).callBoundary, 'end');
+      await bounded.releaseClaim(withCall);
+      callSources = [];
+      database.prepare("UPDATE messages SET sender_type='reasoning' WHERE id IN (SELECT value FROM json_each(?))").run(JSON.stringify(messageIds.slice(0, 300)));
+      const projected = timelineDomain.selectSummaryRange((await bounded.readContext(conversationId, [])).timeline, 20);
+      const afterReasoning = await bounded.claim(conversationId, 20, 'bounded-non-dialogue', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+      assert.deepEqual(afterReasoning.messages, projected, '没有上下文投影的整页仍需推进数据库游标');
+      await bounded.failTask(afterReasoning, { kind: 'request', message: '冷却中', retryable: true }, now);
+      await bounded.releaseClaim(afterReasoning);
+      returnedRows = 0; callReads = 0;
+      assert.equal(await bounded.claim(conversationId, 20, 'bounded-cooling', now, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai'), null);
+      assert.equal(returnedRows, 0, '冷却任务在读取原文和已有摘要前退出');
+      assert.equal(callReads, 0, '冷却任务不读取通话来源');
+      const retry = await bounded.claim(conversationId, 20, 'bounded-retry', later, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai');
+      assert.ok(retry, '冷却结束仍可正常领取');
+      await bounded.failTask(retry, { kind: 'request', message: '暂停中', retryable: false }, later);
+      await bounded.releaseClaim(retry);
+      returnedRows = 0; callReads = 0;
+      assert.equal(await bounded.claim(conversationId, 20, 'bounded-paused', later, '2099-01-01T00:00:00.000Z', 'Asia/Shanghai'), null);
+      assert.equal(returnedRows, 0);
+      assert.equal(callReads, 0);
+    } finally { raw.getAllAsync = getAll; }
   }
 
   // 同一 JS runtime：恢复出厂后不能沿用“已初始化”缓存，默认记录必须在队列运行前重建。

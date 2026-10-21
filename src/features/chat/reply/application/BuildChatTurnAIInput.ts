@@ -52,10 +52,10 @@ export async function buildChatTurnAIInput(params: {
     if (input.displayText) {
       displayLines.push(input.displayText);
     }
-    turnInputMessages.push({ role: 'user', content: input.modelInput });
+    turnInputMessages.push({ role: 'user', content: input.modelInput, createdAt: message.createdAt });
     // 未消费区间仍含原任务；把已发生结果放在它与“1 / 2”等新输入之间，而非再把原任务追加到结果之后。
     for (const run of contextByInput.get(message.id) ?? []) {
-      turnInputMessages.push({ role: 'assistant', content: run.content });
+      turnInputMessages.push({ role: 'assistant', content: run.content, createdAt: run.createdAt });
     }
   }
 

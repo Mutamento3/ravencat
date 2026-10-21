@@ -44,9 +44,9 @@ const transientHook = load('src/features/chat/presentation/messages/components/u
   '@features/chat/messages/application/AgentTransientTimeline': timeline,
   '../../../reply/delivery/AssistantMessageArrival': arrival,
 });
-function render(sessionId, messages, enabled = true) {
+function render(sessionId, messages) {
   cursor = 0;
-  const complete = transientHook.useAgentTransientTimeline(sessionId, messages, enabled);
+  const complete = transientHook.useAgentTransientTimeline(sessionId, messages);
   return {
     complete,
     visible: complete.messages,
@@ -79,13 +79,12 @@ timeline.applyAgentTransientTimelineSnapshots({ sessionId: 'session-a', snapshot
 assert.equal(render('session-a', messages).visible.at(-1).text, '回复继续', '流式更新不能被缓存吞掉');
 arrival.applyAssistantMessageArrivalSnapshot({ revision: 3, pendingMessageIds: [1], pendingSessionIds: ['session-a'] });
 assert.equal(render('session-a', messages).visible.length, 1, '待到达的持久消息不影响已交付运行片段');
-assert.equal(render('session-a', messages, false).visible.length, 2, '真流式主题不启用 canonical 分段过滤');
 arrival.applyAssistantMessageArrivalSnapshot({ revision: 4, pendingMessageIds: [], pendingSessionIds: [] });
 
 const olderPage = [{ id: 0, text: '更早消息', createdAt: '2026-10-05T07:59:00Z' }, ...messages];
 assert.equal(render('session-a', olderPage).visible[0].text, '更早消息', '历史分页更新立即生效');
-result = render('session-b', messages, false);
+result = render('session-b', messages);
 assert.equal(result.visible.length, 1, '切换会话不沿用旧 transient');
 assert.equal(result.complete.liveRunIds.size, 0);
-assert.equal(render('session-b', messages, false).visible, result.visible, '未启用到达投影时也保持稳定');
+assert.equal(render('session-b', messages).visible, result.visible, '切换会话后无关刷新也保持稳定');
 console.log('chat timeline render stability verification passed');

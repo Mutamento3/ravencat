@@ -29,7 +29,7 @@ const INTERRUPTIBLE_CALL_STATES: [CallState, ...CallState[]] = [
  */
 export async function reconcileInterruptedCallFromPreviousProcess(): Promise<CallSession | null> {
   const runtime = getCallRuntimeDependencies();
-  const activeCall = await runtime.repositories.calls.getActiveSession();
+  const activeCall = await aiCallRuntimeService.restoreActiveCallSnapshot();
   if (activeCall && await runtime.native.execution.isAlive(activeCall.id)) {
     return null;
   }
@@ -63,6 +63,7 @@ export async function reconcileInterruptedCallFromPreviousProcess(): Promise<Cal
   if (!interruptedCall) {
     return null;
   }
+  aiCallRuntimeService.clearActiveCallSnapshot(interruptedCall.id);
 
   await runtime.repositories.calls.appendEvent({
     callId: interruptedCall.id,

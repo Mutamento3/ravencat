@@ -25,6 +25,15 @@ export function preflightCall(
   return aiCallRuntimeService.preflightCall(aiConfig, direction, options);
 }
 
+/** 接通标记由 Calls 生命周期维护，供展示与即时输入判定共享。 */
+export function getActiveCallSnapshot() {
+  return aiCallRuntimeService.getActiveCallSnapshot();
+}
+
+export function subscribeActiveCall(listener: () => void): () => void {
+  return aiCallRuntimeService.subscribeActiveCall(listener);
+}
+
 export function startOutgoingCall(
   params: StartOutgoingCallParams
 ): Promise<StartOutgoingCallResult> {

@@ -1,4 +1,4 @@
-/** 重写只改变展示投影；旧回复直到新回复完整提交才从数据库移除。 */
+/** 生成期间只隐藏旧回复；新回复完整提交后，旧回复转入候选存档。 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ToastAndroid } from 'react-native';
 import { getChatRegenerationState, regenerateChatReply } from '../../../reply/application/RegenerateChatReply';
@@ -7,7 +7,7 @@ import type { ChatRegenerationState } from '../../../reply/domain/ConversationTu
 import type { ChatMessage } from '../../../messages/domain/ChatMessage';
 import { setChatEventBus } from '../../../messages/events/ChatEvents';
 
-const IDLE: ChatRegenerationState = { eligibleRunId: null, sourceRunId: null, hiddenMessageIds: [] };
+const IDLE: ChatRegenerationState = { versionedRunIds: [], eligibleRunId: null, sourceRunId: null, hiddenMessageIds: [] };
 
 export function useChatRegeneration(sessionId: string | undefined, refresh: () => Promise<void>) {
   const [state, setState] = useState(IDLE);
@@ -20,24 +20,35 @@ export function useChatRegeneration(sessionId: string | undefined, refresh: () =
   useEffect(() => {
     let disposed = false;
     let revision = 0;
+    let syncing: Promise<void> | null = null;
     setState(IDLE);
     if (!sessionId) return;
-    const sync = async () => {
-      const expectedRevision = ++revision;
-      try {
-        const next = await getChatRegenerationState(sessionId);
-        if (disposed || expectedRevision !== revision) return;
-        // 替换成功后的数据库刷新先于解除隐藏，避免旧 cache 在交接空窗闪回。
-        const shouldRefresh = Boolean(stateRef.current.sourceRunId && !next.sourceRunId);
-        try {
-          if (shouldRefresh) await refresh();
-        } finally {
-          // refresh 失败不能把投影卡死：隐藏状态以数据库事实为准，宁可短暂闪回旧 cache。
-          if (!disposed && expectedRevision === revision) setState(next);
+    const sync = (): Promise<void> => {
+      revision++;
+      if (syncing) return syncing;
+      // 同批事件共用一次读取；在途发生的新事实只补读最新状态，不把作废查询堆入数据库队列。
+      syncing = Promise.resolve().then(async () => {
+        while (!disposed) {
+          const expectedRevision = revision;
+          try {
+            const next = await getChatRegenerationState(sessionId);
+            if (disposed) return;
+            if (expectedRevision !== revision) continue;
+            // 替换成功后的数据库刷新先于解除隐藏，避免旧 cache 在交接空窗闪回。
+            const shouldRefresh = Boolean(stateRef.current.sourceRunId && !next.sourceRunId);
+            try {
+              if (shouldRefresh) await refresh();
+            } finally {
+              // refresh 失败不能把投影卡死：隐藏状态以数据库事实为准，宁可短暂闪回旧 cache。
+              if (!disposed && expectedRevision === revision) setState(next);
+            }
+          } catch (error) {
+            console.error('[useChatRegeneration] 读取重写状态失败', error);
+          }
+          if (expectedRevision === revision) break;
         }
-      } catch (error) {
-        console.error('[useChatRegeneration] 读取重写状态失败', error);
-      }
+      }).finally(() => { syncing = null; });
+      return syncing;
     };
     const unsubscribe = setChatEventBus({
       emit: async (name, payload) => {
@@ -60,6 +71,7 @@ export function useChatRegeneration(sessionId: string | undefined, refresh: () =
     const request = { sessionId };
     requesting.current = request;
     setState({
+      versionedRunIds: stateRef.current.versionedRunIds,
       eligibleRunId: null,
       sourceRunId: message.turnRunId!,
       hiddenMessageIds: messages.filter((item) => item.turnRunId === message.turnRunId && item.turnItemIndex != null).map((item) => item.id),
@@ -68,7 +80,7 @@ export function useChatRegeneration(sessionId: string | undefined, refresh: () =
       await regenerateChatReply(sessionId, message.id);
     } catch (error) {
       if (activeSession.current !== sessionId || requesting.current !== request) return;
-      setState(IDLE);
+      setState(current => ({ ...IDLE, versionedRunIds: current.versionedRunIds }));
       ToastAndroid.show(error instanceof Error ? error.message : '重写失败，已恢复原消息', ToastAndroid.LONG);
     } finally {
       if (requesting.current === request) requesting.current = null;

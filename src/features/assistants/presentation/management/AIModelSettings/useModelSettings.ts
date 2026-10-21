@@ -20,8 +20,7 @@ export default function useModelSettings({ aiAssistant, onUpdated, onShowAlert }
   });
   const test = useConnectionTest({
     apiBaseUrl: form.apiBaseUrl, apiKey: form.apiKey, selectedModel: form.selectedModel,
-    getConnectionParams: form.getConnectionParams, enableTools: form.enableTools,
-    setEnableTools: form.setEnableTools, onShowAlert,
+    getConnectionParams: form.getConnectionParams, onShowAlert,
   });
   const { resetTestState } = test;
   const { validateAll } = form;

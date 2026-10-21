@@ -698,12 +698,14 @@ assert.equal(
   '不在 selected audience 中的 AI 必须不可见',
 );
 assert.ok(
-  (await repository.listVisibleMomentsForAgent('agent-b')).some((m) => m.id === selectedMoment.id),
-  'listVisibleMomentsForAgent 必须返回可见的 selected Moment',
+  (await repository.queryVisibleMomentsForAgent('agent-b', { limit: 1, keyword: selectedMoment.content }))
+    .some((m) => m.id === selectedMoment.id),
+  'AI 搜索必须返回可见的 selected Moment',
 );
 assert.ok(
-  !(await repository.listVisibleMomentsForAgent('agent-c')).some((m) => m.id === selectedMoment.id),
-  'listVisibleMomentsForAgent 不得返回不可见的 selected Moment',
+  !(await repository.queryVisibleMomentsForAgent('agent-c', { limit: 1, keyword: selectedMoment.content }))
+    .some((m) => m.id === selectedMoment.id),
+  'AI 搜索不得返回不可见的 selected Moment',
 );
 assert.ok(
   await repository.getVisibleMomentForAgent('agent-b', userMoment.id),

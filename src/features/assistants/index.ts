@@ -62,7 +62,7 @@ export type {
   GetAgentRegistrySummaryOptions,
 } from './AgentRegistryService';
 export {
-  detectConnectionParamError, detectToolsSupportByConfig,
+  detectConnectionParamError,
   fetchModelsWithConfig, getAIConnectionErrorInfo,
   normalizeModelConfigInput, runConnectionTestByConfig,
 } from './application/AIModelService';

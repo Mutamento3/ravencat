@@ -43,7 +43,8 @@ function loadTypeScriptModule(relativePath, mocks = {}) {
   return module.exports;
 }
 
-const tokenEstimator = loadTypeScriptModule('src/shared/prompt/estimateTextTokens.ts');
+const tokenEstimator = { ...loadTypeScriptModule('src/shared/prompt/estimateTextTokens.ts'),
+  ...loadTypeScriptModule('src/shared/prompt/messageTimestamp.ts') };
 const tokenBudget = loadTypeScriptModule('src/host/prompt/tokenBudget.ts', {
   '@shared/prompt': tokenEstimator,
 });
@@ -53,7 +54,7 @@ const blockMetadata = loadTypeScriptModule(
 const { PromptPackCompiler } = loadTypeScriptModule(
   'src/host/prompt/compiler/PromptPackCompiler.ts',
   {
-    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW, ...tokenEstimator },
     '../tokenBudget': tokenBudget,
     './promptBlockMetadata': blockMetadata,
   },

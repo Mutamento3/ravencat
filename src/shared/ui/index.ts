@@ -20,6 +20,8 @@ export type { AppTextInputProps } from './AppTextInput';
 export { default as KeyboardAvoidingContainer } from './KeyboardAvoidingContainer';
 export type { KeyboardAvoidingContainerProps } from './KeyboardAvoidingContainer';
 export { default as ListItem } from './ListItem';
+export { default as MimeAwareImage } from './MimeAwareImage';
+export type { MimeAwareImageProps } from './MimeAwareImage';
 export { default as ModalSheet } from './ModalSheet';
 export { default as ModelPickerModal } from './ModelPickerModal';
 export { default as ToggleField } from './ToggleField';

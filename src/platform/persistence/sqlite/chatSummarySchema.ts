@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS chat_summary_request_settings (
   timeout_seconds INTEGER NOT NULL DEFAULT 300,
   max_output_tokens INTEGER,
   model_config_id TEXT,
-  group_trigger_count INTEGER NOT NULL DEFAULT 40
+  group_trigger_count INTEGER NOT NULL DEFAULT 40,
+  primary_limit INTEGER
 );
 CREATE TABLE IF NOT EXISTS chat_summary_tasks (
   id TEXT PRIMARY KEY,
@@ -91,6 +92,10 @@ export async function migrateChatSummaryModels(db: DatabaseWriteExecutor): Promi
 /** 归纳标记是处理进度，不是外键：用户删除二级正文后，不能自动补回或重新注入其原摘要。 */
 export async function migrateSecondaryChatSummary(db: DatabaseWriteExecutor): Promise<void> {
   await db.execAsync("ALTER TABLE chat_summary_segments ADD COLUMN level TEXT NOT NULL DEFAULT 'primary' CHECK(level IN ('primary', 'secondary')); ALTER TABLE chat_summary_segments ADD COLUMN compaction_id TEXT; ALTER TABLE chat_summary_segments ADD COLUMN context_sequence INTEGER;");
+}
+/** 单聊摘要条数默认跟随主视角上限；留空即跟随，手动填写后固定。 */
+export async function migrateChatSummaryPrimaryLimit(db: DatabaseWriteExecutor): Promise<void> {
+  await db.execAsync('ALTER TABLE chat_summary_request_settings ADD COLUMN primary_limit INTEGER;');
 }
 /** 旧总开关映射到生成与注入两个独立开关；起点删除仅清引用，不恢复生成。 */
 export async function migrateFixedChatContext(db: DatabaseWriteExecutor): Promise<void> {

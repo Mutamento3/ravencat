@@ -1,4 +1,4 @@
-import { chatMessageMutations } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionSql, chatMessageMutations } from './chat-timeline-fixture.mjs';
 /** 媒体文件所有权：备份持有、草稿退出、提交失败与 legacy 恢复重定位的行为回归。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -176,7 +176,7 @@ function hookHost() {
       const message = { id: 1, isMe: true, text: '', metadataJson: JSON.stringify({ attachments: [{ mediaAssetId: 'canonical' }] }) };
       return { userMessage: message, userMessages: [message], success: true };
     } },
-    '../../../conversation/application/ChatCallGateway': { getActiveChatCall: async () => null, isChatSendBlockedByCall: () => false },
+    '../../../conversation/application/ChatCallGateway': { getActiveChatCall: () => null, isChatSendBlockedByCall: () => false },
     '../../../conversation/application/ChatTogetherListeningGateway': {},
     '../../../messages/application/UserVoiceMessageRecording': {},
   });
@@ -246,6 +246,7 @@ const persistence = { databaseCoordinator: {
 } };
 const ownerMocks = {
   './ChatMessageMutationSql': chatMessageMutations,
+      '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
   './SQLiteAuxiliaryModelDefaults': {}, './SQLiteAuxiliaryModelRepository': {},
   '@platform/persistence': persistence, '@features/media': {}, '@features/profile': {},
   '@shared': { SELF_USER_ID: 'self', DEFAULT_SELF_NAME: 'user' },

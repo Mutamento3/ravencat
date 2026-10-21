@@ -1,4 +1,4 @@
-/** 自主唤醒复用普通单聊的 Prompt 与历史，输出收进 Chat 行动记录。 */
+/** 自主唤醒复用普通单聊，Chat 保存过程并提交最终正文或静默结果。 */
 
 import type { AIProfile } from '@features/assistants';
 import { createAIClient } from '@platform/ai';
@@ -71,7 +71,7 @@ export async function runHostAutonomousAgent(
       memoryParticipation: 'read_only',
       replyRunId: input.runId,
     },
-    finalAssistantPolicy: 'record_as_activity',
+    finalAssistantPolicy: 'autonomous_reply',
     signal: input.signal,
     prepare: async (signal) => {
       const mcpExposure = assistant.enableTools

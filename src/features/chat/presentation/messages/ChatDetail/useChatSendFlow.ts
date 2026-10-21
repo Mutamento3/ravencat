@@ -244,7 +244,7 @@ export function useChatSendFlow({
 
       setError(null);
 
-      const activeCall = await getActiveChatCall('chat-send-preflight');
+      const activeCall = getActiveChatCall();
       if (isChatSendBlockedByCall(activeCall, sessionId, aiRequestConfig.id)) {
         setError('视频电话期间不可发送普通聊天消息');
         return false;
@@ -550,7 +550,7 @@ export function useChatSendFlow({
 
       setError(null);
 
-      const activeCall = await getActiveChatCall('chat-retry-preflight');
+      const activeCall = getActiveChatCall();
       if (isChatSendBlockedByCall(activeCall, sessionId, aiRequestConfig.id)) {
         setError('视频通话中请先在通话界面继续对话，挂断后再重发聊天消息');
         return;

@@ -1,4 +1,4 @@
-import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionModuleUrl, chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /**
  * deleteChatMessage application-level 的删除编排回归测试。
  *
@@ -53,7 +53,7 @@ function transpileToModuleUrl(sourceText) {
 }
 
 function transpileSource(relativePath) {
-  return ts.transpileModule(read(relativePath).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`), {
+  return ts.transpileModule(read(relativePath).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`), {
     compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
   }).outputText;
 }
@@ -103,7 +103,7 @@ const chatEventsUrl = transpileToModuleUrl(read('src/features/chat/messages/even
 
 const messageRepositorySource = transpileSource(
   'src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts',
-).replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll(
+).replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`).replaceAll(
   `from '@platform/persistence'`,
   `from '${persistenceStubUrl}'`,
 ).replaceAll(

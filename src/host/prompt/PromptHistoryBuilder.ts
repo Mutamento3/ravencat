@@ -134,8 +134,9 @@ export class PromptHistoryBuilder {
     const messages: PromptPackMessage[] = timeline.flatMap((item): PromptPackMessage[] => [{
       role: item.speaker === 'assistant' ? 'assistant' : 'user',
       content: item.source === 'call' && item.callBoundary === undefined
-        ? `[Call transcript][${item.speaker}][${item.callId}][${item.timestamp}] ${item.content}`
+        ? `[Call transcript][${item.speaker}][${item.callId}] ${item.content}`
         : item.sharedRecord ? buildSharedChatRecordText(item.sharedRecord, item.sharedComment!, params.aiConfig.agentId) : item.content,
+      createdAt: item.timestamp,
       ...(item.messageId !== undefined ? { sourceMessageId: item.messageId } : {}),
       ...(item.eventId !== undefined ? { sourceCallEventId: item.eventId } : {}),
       ...(item.logicalIdentity !== null ? { logicalMessageId: item.logicalIdentity } : {}),
@@ -143,6 +144,7 @@ export class PromptHistoryBuilder {
       role: 'assistant' as const,
       // 作为有来源的历史资料提供，不构造缺少配对调用的 role=tool，也不指示重放。
       content: run.content,
+      createdAt: run.createdAt,
       logicalMessageId: `interrupted:${run.runId}`,
     }))]);
     const summaryContent = snapshot.contextSegments.length ? SUMMARY_HISTORY_NOTICE
@@ -299,7 +301,8 @@ export class PromptHistoryBuilder {
         logicalMessageId &&
         lastMessage?.role === 'assistant' &&
         typeof lastMessage.content === 'string' &&
-        lastMessage.logicalMessageId === logicalMessageId
+        lastMessage.logicalMessageId === logicalMessageId &&
+        lastMessage.createdAt === entry.createdAt
       ) {
         lastMessage.content = `${lastMessage.content}\n${content}`.trim();
         continue;
@@ -308,6 +311,7 @@ export class PromptHistoryBuilder {
       messages.push({
         role,
         content,
+        createdAt: entry.createdAt,
         ...(sourceMessageId ? { sourceMessageId } : {}),
         ...(sourceCallEventId ? { sourceCallEventId } : {}),
         ...(logicalMessageId ? { logicalMessageId } : {}),

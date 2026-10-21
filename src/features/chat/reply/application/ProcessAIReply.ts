@@ -162,6 +162,7 @@ export async function processAIReply(
       promptPack.modelMessages,
       runtimeContext.batchModelInput,
       runtimeContext.turnInputMessages,
+      promptPack.messageTimestampsEnabled,
     );
     const agentReplyResult = await runChatAgentReplyFlow({
       sessionId,

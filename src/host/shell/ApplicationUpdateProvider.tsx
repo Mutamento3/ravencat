@@ -53,16 +53,20 @@ export function ApplicationUpdateProvider({ enabled, children }: { enabled: bool
     dialogVersion.current = release.version;
     showAppDialog({
       title: `发现新${release.prerelease ? '预览' : ''}版本 v${release.version}`,
-      message: `${release.notes || '新版本已发布。'}\n\n安装包约 ${(release.apk.size / 1024 / 1024).toFixed(1)} MB，下载进度可在“我 → 检查更新”查看。`,
+      message: `${release.notes || '新版本已发布。'}\n\n安装包约 ${(release.apk.size / 1024 / 1024).toFixed(1)} MB。可选择 GitHub 或 Gitee 国内下载，Gitee 安装包会自动解压，无需手动处理。下载进度可在“我 → 检查更新”查看。`,
       dismissible: false,
       buttons: [
         { text: '跳过此版本', style: 'cancel', onPress: () => {
           dialogVersion.current = null;
           void updates.skip(release).catch((error) => showFailure(error, '无法保存跳过记录'));
         } },
-        { text: '下载更新', onPress: () => {
+        { text: 'GitHub 下载', onPress: () => {
           dialogVersion.current = null;
-          void updates.download(release).catch((error) => showFailure(error, '下载更新失败'));
+          void updates.download(release, 'github').catch((error) => showFailure(error, '下载更新失败'));
+        } },
+        { text: 'Gitee 国内下载', onPress: () => {
+          dialogVersion.current = null;
+          void updates.download(release, 'gitee').catch((error) => showFailure(error, '下载更新失败'));
         } },
       ],
     });

@@ -481,7 +481,8 @@ export function ChatSummarySettingsRouteScreen({ aiId }: { aiId: string }) {
   useSubScreenLifecycle(router.state.setCurrentSubScreen, 'summary', 'summary');
   if (router.unavailableReason) return <ConversationUnavailable reason={router.unavailableReason} onBack={router.returnToConversations} />;
   if (router.preparing || !router.state.currentSession) return <RouteLoading />;
-  return <ChatSummarySettingsScreen key={router.state.currentSession.id} conversationId={router.state.currentSession.id} onBack={router.routeBack} />;
+  return <ChatSummarySettingsScreen key={router.state.currentSession.id} conversationId={router.state.currentSession.id} onBack={router.routeBack}
+    assistantId={aiId} />;
 }
 
 export function ChatModelSettingsRouteScreen({

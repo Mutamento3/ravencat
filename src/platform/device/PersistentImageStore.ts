@@ -10,6 +10,7 @@ export const PERSISTENT_IMAGE_CATEGORY = {
   wallpaper: 'wallpaper',
   callBackground: 'callBackground',
   momentsCover: 'momentsCover',
+  chatFooterIcon: 'chatFooterIcon',
 } as const;
 
 export type PersistentImageCategory =
@@ -236,6 +237,8 @@ export function getPersistentImageCategoryPrefix(category: PersistentImageCatego
       return 'backgrounds/calls/';
     case PERSISTENT_IMAGE_CATEGORY.momentsCover:
       return 'covers/moments/';
+    case PERSISTENT_IMAGE_CATEGORY.chatFooterIcon:
+      return 'chat-footer/';
     default:
       // 前缀白名单派生于本函数：静默返回空串会让 startsWith('') 恒真、校验彻底失效。
       throw new Error(`未定义的 persistent-image category：${String(category)}`);

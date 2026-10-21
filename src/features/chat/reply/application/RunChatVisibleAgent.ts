@@ -60,7 +60,7 @@ export async function runChatVisibleAgent(params: RunChatVisibleAgentParams): Pr
   const replyDependencies = getChatReplyRuntimeDependencies();
   const repository = getChatMessageRuntimeDependencies().messages;
   const cancellation = createProjectionCancellation(params.signal);
-  const recordActivity = params.finalAssistantPolicy === 'record_as_activity';
+  const recordActivity = params.finalAssistantPolicy === 'autonomous_reply';
   let nextItemIndex = 1;
   const allocateItemIndex = () => nextItemIndex++;
   const lifecycle = async (phase: 'started' | 'responded' | 'terminal', text: string, terminalCode?: string) => {
@@ -178,6 +178,7 @@ function createStandaloneTimelineCommit(
       let results;
       const stagedInputs = new Map<string, CreateMessageInput>();
       const stagedSignatures = new Map<string, string>();
+      const newlyVisibleIdentities = new Set<string>();
       try {
         results = await databaseCoordinator.openTaskExecutor({
           name: 'chat.persist-agent-activity', feature: 'chat', priority: 'interactive',
@@ -196,6 +197,8 @@ function createStandaloneTimelineCommit(
             const signature = JSON.stringify(indexedMessage);
             stagedSignatures.set(identity, signature);
             const saved = savedItems.get(identity);
+            // 最终正文沿同一 identity 从过程记录变成真实消息，更新原行也要交付一次。
+            if (ownsDelivery && saved?.message.senderType !== 'assistant') newlyVisibleIdentities.add(identity);
             // 未变化的旧条目无需重复写入，也不能把用户刚读过的媒体再次改成未读。
             if (saved?.signature === signature) {
               committed.push({ message: saved.message, inserted: false });
@@ -230,11 +233,12 @@ function createStandaloneTimelineCommit(
       }
       emitChatMessagesUpdated(params.sessionId);
       for (const { message, inserted } of results) {
-        if (!inserted || message.senderType !== 'assistant') continue;
+        if (message.senderType !== 'assistant'
+          || (!inserted && !newlyVisibleIdentities.has(message.clientMessageId!))) continue;
         await deliverCommittedAssistantSegment({
           sessionId: params.sessionId, text: message.text, metadataJson: message.metadataJson,
           messageId: message.id, logicalMessageId: message.logicalMessageId ?? null,
-          segmentIndex: 0, segmentTotal: 1, aiConfig: params.aiConfig,
+          segmentIndex: message.segmentIndex ?? 0, segmentTotal: message.segmentTotal ?? 1, aiConfig: params.aiConfig,
           runtimeContext: params.runtimeContext ?? {}, callbacks: params.callbacks ?? {},
         });
       }

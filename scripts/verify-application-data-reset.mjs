@@ -317,6 +317,7 @@ function createResetHarness({
   asyncStorageFailure = null,
   mediaFailure = null,
   speechFailure = null,
+  httpDiagnosticsFailure = null,
 } = {}) {
   const calls = [];
   const record = (name) => {
@@ -338,6 +339,17 @@ function createResetHarness({
       '@platform/persistence': {
         clearDB: async () => record('clearDB'),
         cleanupLegacyDatabases: async () => record('cleanupLegacyDatabases'),
+      },
+      '@platform/ai': {
+        aiHttpDiagnostics: {
+          setEnabled: async (enabled) => {
+            assert.equal(enabled, false, '恢复出厂必须关闭 HTTP 捕获并清除记录');
+            record('httpDiagnostics');
+            if (httpDiagnosticsFailure) {
+              throw httpDiagnosticsFailure;
+            }
+          },
+        },
       },
       '@platform/device': {
         withMediaFileLifetime: loadTypeScriptModuleWithMocks('src/platform/device/MediaFileLifetime.ts', {}).withMediaFileLifetime,
@@ -416,6 +428,7 @@ function createResetHarness({
   assert.ok(calls.indexOf('voiceRecordingCache') < clearDb, '原生录音 cache 必须先于 clearDB');
   assert.ok(calls.indexOf('media') > clearDb, 'MediaAsset 私有 backing 必须在数据库清空后删除');
   assert.ok(calls.indexOf('speechCache') > clearDb, '语音 cache 必须在数据库清空后删除');
+  assert.ok(calls.indexOf('httpDiagnostics') > clearDb, '恢复出厂必须关闭 HTTP 诊断并清除缓存');
 }
 
 {
@@ -469,7 +482,31 @@ function createResetHarness({
     true,
     'AsyncStorage.clear 失败不得跳过 speech 临时缓存清理',
   );
+  assert.equal(
+    calls.includes('httpDiagnostics'),
+    true,
+    'AsyncStorage.clear 失败不得跳过 HTTP 诊断关闭及缓存清理',
+  );
   assert.equal(calls.includes('deviceControlResume'), true, '失败后仍必须释放 command gate');
+}
+
+{
+  const httpDiagnosticsError = new Error('HTTP diagnostics cache deletion failed');
+  const { calls, resetApplicationData: runReset } = createResetHarness({
+    httpDiagnosticsFailure: httpDiagnosticsError,
+  });
+
+  await assert.rejects(runReset(), (error) => {
+    assert.ok(error instanceof AggregateError, 'HTTP 诊断清理失败必须向上汇报');
+    assert.equal(error.errors.length, 1);
+    assert.equal(error.errors[0].cause, httpDiagnosticsError, '保留 HTTP 诊断清理失败的原始原因');
+    return true;
+  });
+  assert.equal(calls.includes('asyncStorage'), true);
+  assert.equal(calls.includes('media'), true);
+  assert.equal(calls.includes('speechCache'), true);
+  assert.equal(calls.includes('deviceControlResume'), true, 'HTTP 清理失败后仍必须释放 command gate');
+  assert.equal(calls.includes('timeline'), true, 'HTTP 清理失败后仍必须清空时间线缓存');
 }
 
 {

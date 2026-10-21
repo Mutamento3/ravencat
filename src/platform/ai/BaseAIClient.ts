@@ -8,6 +8,7 @@
 
 import { getErrorDisplayInfo } from './errorMapping';
 import { normalizeAIBaseURL } from './baseUrl';
+import { beginAIHttpCapture } from './HttpExchangeCapture';
 import type {
   AIClientConfig,
   ChatMessage,
@@ -30,6 +31,33 @@ const maxTokensFieldCache = new Map<string, string>();
 /** HTTP 状态保留给调用方分类失败，不要求业务层猜测服务端错误文案。 */
 class AIHttpError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
+}
+
+/** 同一份序列化文本用于发送和诊断，响应先留原文，再交给 Provider 解析。 */
+async function fetchAIResponseText(url: string, requestBody: Record<string, unknown>,
+  apiKey: string, signal?: AbortSignal): Promise<{ response: Response; rawText: string }> {
+  const body = JSON.stringify(requestBody);
+  const capture = await beginAIHttpCapture({ url, requestBody: body,
+    model: String(requestBody.model ?? ''), transport: 'complete' }, apiKey);
+  let failure: unknown;
+  try {
+    const response = await fetch(url, { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }, signal, body });
+    capture?.setResponse(response.status, '');
+    const rawText = await response.text();
+    capture?.setResponse(response.status, rawText);
+    return { response, rawText };
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    await capture?.finish(failure);
+  }
+}
+
+function parseHTTPErrorBody(rawText: string): { error?: { message?: string } } {
+  try { return JSON.parse(rawText); }
+  catch { return {}; }
 }
 
 export class BaseAIClient {
@@ -178,60 +206,73 @@ export class BaseAIClient {
       });
     }
 
-    const response = await fetch(`${this.baseURL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`,
-      },
-      signal: options.signal,
-      body: JSON.stringify(requestBody),
-    });
+    const url = `${this.baseURL}/chat/completions`;
+    const body = JSON.stringify(requestBody);
+    let capture = await beginAIHttpCapture({ url, requestBody: body,
+      model: String(requestBody.model ?? ''), transport: 'stream' }, this.config.apiKey);
+    let failure: unknown;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+        signal: options.signal,
+        body,
+      });
+      capture?.setResponse(response.status, '');
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { error?: { message?: string } };
-      const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-      const fallbackRequestBody = this.buildMaxTokensFallbackRequestBody(requestBody, errorMessage);
+      if (!response.ok) {
+        const rawText = await response.text();
+        capture?.setResponse(response.status, rawText);
+        await capture?.finish();
+        capture = null;
+        const errorData = parseHTTPErrorBody(rawText);
+        const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+        const fallbackRequestBody = this.buildMaxTokensFallbackRequestBody(requestBody, errorMessage);
 
-      if (fallbackRequestBody) {
-        const data = await this.sendStreamingRequestOnce(fallbackRequestBody, options);
-        this.rememberMaxTokensFieldName(getRequestBodyMaxTokensFieldName(fallbackRequestBody) || 'max_tokens');
-        return data;
+        if (fallbackRequestBody) {
+          const data = await this.sendStreamingRequestOnce(fallbackRequestBody, options);
+          this.rememberMaxTokensFieldName(getRequestBodyMaxTokensFieldName(fallbackRequestBody) || 'max_tokens');
+          return data;
+        }
+
+        const responseFormatFallbackRequestBody = this.buildResponseFormatFallbackRequestBody(
+          requestBody,
+          errorMessage
+        );
+
+        if (responseFormatFallbackRequestBody) {
+          return this.sendStreamingRequestOnce(responseFormatFallbackRequestBody, options);
+        }
+
+        throw new AIHttpError(response.status, errorMessage);
       }
 
-      const responseFormatFallbackRequestBody = this.buildResponseFormatFallbackRequestBody(
-        requestBody,
-        errorMessage
-      );
+      this.rememberMaxTokensFieldName(getRequestBodyMaxTokensFieldName(requestBody) || 'max_tokens');
 
-      if (responseFormatFallbackRequestBody) {
-        return this.sendStreamingRequestOnce(responseFormatFallbackRequestBody, options);
-      }
-
-      throw new AIHttpError(response.status, errorMessage);
+      return await readOpenAICompatibleSSE(response, options.onDelta,
+        capture ? (chunk) => capture.appendResponse(chunk) : undefined,
+        (error) => { failure = error; });
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      await capture?.finish(failure);
     }
-
-    this.rememberMaxTokensFieldName(getRequestBodyMaxTokensFieldName(requestBody) || 'max_tokens');
-
-    return readOpenAICompatibleSSE(response, options.onDelta);
   }
 
   private async sendRequestOnce(
     requestBody: Record<string, unknown>,
     options: { signal?: AbortSignal; allowImageContentFallback?: boolean } = {}
   ): Promise<OpenAIChatCompletionResponse> {
-    const response = await fetch(`${this.baseURL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`,
-      },
-      signal: options.signal,
-      body: JSON.stringify(requestBody),
-    });
+    const { response, rawText } = await fetchAIResponseText(
+      `${this.baseURL}/chat/completions`, requestBody, this.config.apiKey, options.signal,
+    );
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { error?: { message?: string } };
+      const errorData = parseHTTPErrorBody(rawText);
       const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
       const fallbackRequestBody = this.buildMaxTokensFallbackRequestBody(requestBody, errorMessage);
 
@@ -280,7 +321,7 @@ export class BaseAIClient {
 
     this.rememberMaxTokensFieldName(getRequestBodyMaxTokensFieldName(requestBody) || 'max_tokens');
 
-    return response.json() as Promise<OpenAIChatCompletionResponse>;
+    return JSON.parse(rawText) as OpenAIChatCompletionResponse;
   }
 
   private rememberMaxTokensFieldName(fieldName: string): void {
@@ -759,7 +800,7 @@ export class BaseAIClient {
     try {
       const response = await this.chat(
         [{ role: 'user', content: 'Hi' }],
-        { includeSystemPrompt: false }
+        { includeSystemPrompt: false, allowReasoningLengthRetry: false }
       );
 
       return {
@@ -1011,19 +1052,31 @@ function normalizeToolCallArgumentsDelta(value: unknown): string {
   }
 }
 
-function sendStreamingRequestWithXMLHttpRequest(params: {
+async function sendStreamingRequestWithXMLHttpRequest(params: {
   url: string;
   apiKey: string;
   requestBody: Record<string, unknown>;
   signal?: AbortSignal;
   onDelta?: (delta: ChatStreamDelta) => void | Promise<void>;
 }): Promise<ChatResponse> {
+  const body = JSON.stringify(params.requestBody);
+  const capture = await beginAIHttpCapture({ url: params.url, requestBody: body,
+    model: String(params.requestBody.model ?? ''), transport: 'stream' }, params.apiKey);
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const parser = createOpenAICompatibleSSEParser(params.onDelta);
     let processedLength = 0;
     let progressChain = Promise.resolve();
     let settled = false;
+    let lastResponseText = '';
+
+    const saveResponse = () => {
+      // Android 取消 XHR 后可能清空 responseText；保留取消前已收到的文本。
+      const rawText = String(xhr.responseText || '');
+      if (rawText) lastResponseText = rawText;
+      if (xhr.status > 0) capture?.setResponse(xhr.status, lastResponseText);
+      else capture?.appendResponse(lastResponseText);
+    };
 
     const cleanup = () => {
       params.signal?.removeEventListener('abort', handleAbort);
@@ -1036,7 +1089,8 @@ function sendStreamingRequestWithXMLHttpRequest(params: {
 
       settled = true;
       cleanup();
-      reject(error);
+      saveResponse();
+      void Promise.resolve(capture?.finish(error)).then(() => reject(error));
     };
 
     const settleResolve = (response: ChatResponse) => {
@@ -1046,11 +1100,13 @@ function sendStreamingRequestWithXMLHttpRequest(params: {
 
       settled = true;
       cleanup();
-      resolve(response);
+      saveResponse();
+      void Promise.resolve(capture?.finish()).then(() => resolve(response));
     };
 
     const consumeNewText = (isFinal = false) => {
       const responseText = String(xhr.responseText || '');
+      lastResponseText = responseText;
       const nextChunk = responseText.slice(processedLength);
       processedLength = responseText.length;
       progressChain = progressChain.then(async () => {
@@ -1059,6 +1115,7 @@ function sendStreamingRequestWithXMLHttpRequest(params: {
     };
 
     function handleAbort() {
+      lastResponseText = String(xhr.responseText || '') || lastResponseText;
       xhr.abort();
       settleReject(new Error('Request aborted'));
     }
@@ -1070,37 +1127,39 @@ function sendStreamingRequestWithXMLHttpRequest(params: {
 
     params.signal?.addEventListener('abort', handleAbort);
 
-    xhr.open('POST', params.url, true);
-    xhr.setRequestHeader('Content-Type', 'application/json');
-    xhr.setRequestHeader('Authorization', `Bearer ${params.apiKey}`);
+    try {
+      xhr.open('POST', params.url, true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Authorization', `Bearer ${params.apiKey}`);
 
-    xhr.onprogress = () => {
-      consumeNewText(false);
-    };
+      xhr.onprogress = () => {
+        consumeNewText(false);
+      };
 
-    xhr.onerror = () => {
-      settleReject(new Error('Network request failed'));
-    };
+      xhr.onerror = () => {
+        settleReject(new Error('Network request failed'));
+      };
 
-    xhr.ontimeout = () => {
-      settleReject(new Error('Network request timed out'));
-    };
+      xhr.ontimeout = () => {
+        settleReject(new Error('Network request timed out'));
+      };
 
-    xhr.onload = () => {
-      consumeNewText(true);
-      progressChain
-        .then(() => {
-          if (xhr.status < 200 || xhr.status >= 300) {
-            settleReject(new AIHttpError(xhr.status, extractXHRStreamingError(xhr)));
-            return;
-          }
+      xhr.onload = () => {
+        consumeNewText(true);
+        progressChain
+          .then(() => {
+            if (xhr.status < 200 || xhr.status >= 300) {
+              settleReject(new AIHttpError(xhr.status, extractXHRStreamingError(xhr)));
+              return;
+            }
 
-          settleResolve(parser.getResponse());
-        })
-        .catch(settleReject);
-    };
+            settleResolve(parser.getResponse());
+          })
+          .catch(settleReject);
+      };
 
-    xhr.send(JSON.stringify(params.requestBody));
+      xhr.send(body);
+    } catch (error) { settleReject(error); }
   });
 }
 
@@ -1289,7 +1348,9 @@ function createOpenAICompatibleSSEParser(
 
 async function readOpenAICompatibleSSE(
   response: Response,
-  onDelta?: (delta: ChatStreamDelta) => void | Promise<void>
+  onDelta?: (delta: ChatStreamDelta) => void | Promise<void>,
+  onRawText?: (chunk: string) => void,
+  onRawError?: (error: unknown) => void,
 ): Promise<ChatResponse> {
   const reader = response.body?.getReader?.();
   if (!reader) {
@@ -1437,19 +1498,37 @@ async function readOpenAICompatibleSSE(
     return done;
   };
 
-  while (true) {
-    const readResult = await reader.read();
-    if (readResult.done) {
-      buffer += decoder.decode().replace(/\r\n/g, '\n');
-      await consumeBufferedEvents(true);
-      break;
+  let modelDone = false;
+  let parseFailure: unknown;
+  let parsingFailed = false;
+  try {
+    while (true) {
+      let readResult: ReadableStreamReadResult<Uint8Array>;
+      try { readResult = await reader.read(); }
+      catch (error) {
+        // DONE 后模型已完整返回，额外诊断读流失败只标记记录，不推翻模型结果。
+        if (!modelDone) throw error;
+        onRawError?.(error);
+        break;
+      }
+      const rawText = readResult.done ? decoder.decode() : decoder.decode(readResult.value, { stream: true });
+      onRawText?.(rawText);
+      if (!modelDone && !parsingFailed) {
+        buffer += rawText.replace(/\r\n/g, '\n');
+        try { modelDone = await consumeBufferedEvents(readResult.done); }
+        catch (error) {
+          if (!onRawText) throw error;
+          parseFailure = error;
+          parsingFailed = true;
+        }
+      }
+      // 开启原文诊断时读取完整 HTTP body，DONE 后不再解析或产生模型事件。
+      if (readResult.done || (modelDone && !onRawText)) break;
     }
-
-    buffer += decoder.decode(readResult.value, { stream: true }).replace(/\r\n/g, '\n');
-    if (await consumeBufferedEvents()) {
-      break;
-    }
+  } finally {
+    reader.releaseLock();
   }
+  if (parsingFailed) throw parseFailure;
 
   const text = contentText;
   const toolCalls = toolCallAccumulator.getToolCalls();

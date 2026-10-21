@@ -2,6 +2,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ChatColorOverrides, PresentationThemeId } from './types';
 import { DEFAULT_THEME_ID, getThemeSelectionDisabledReason, isValidThemeId, THEME_REGISTRY } from './themeRegistry';
 import { parseGlassBlurRadius } from './glassBlur';
+import type { ChatFooterSettings } from './chatFooterSettings';
+import {
+  loadStoredChatFooterBackupState,
+  parseChatFooterSettings,
+  restoreStoredChatFooterBackupState,
+} from './chatFooterSettings';
 
 const STORAGE_KEY = 'presentation.theme.selectedThemeId';
 const CHAT_COLOR_OVERRIDES_KEY_PREFIX = 'presentation.theme.chatColorOverrides.';
@@ -11,6 +17,7 @@ export interface StoredThemeBackupState {
   selectedThemeId: PresentationThemeId;
   chatColorOverrides: Partial<Record<PresentationThemeId, ChatColorOverrides>>;
   glassBlurRadius?: number;
+  paperNoteChatFooter?: ChatFooterSettings;
 }
 
 export async function loadGlassBlurRadius(): Promise<number | undefined> {
@@ -110,9 +117,11 @@ export async function loadStoredThemeBackupState(): Promise<StoredThemeBackupSta
   }));
   const rawBlur = stored.get(GLASS_BLUR_RADIUS_KEY);
   const glassBlurRadius: unknown = rawBlur === null || rawBlur === undefined ? null : JSON.parse(rawBlur);
+  const paperNoteChatFooter = await loadStoredChatFooterBackupState();
   return parseStoredThemeBackupState({
     selectedThemeId, chatColorOverrides,
     ...(glassBlurRadius === null ? {} : { glassBlurRadius }),
+    ...(paperNoteChatFooter === undefined ? {} : { paperNoteChatFooter }),
   });
 }
 
@@ -147,6 +156,9 @@ export function parseStoredThemeBackupState(value: unknown): StoredThemeBackupSt
     selectedThemeId: state.selectedThemeId,
     chatColorOverrides: Object.fromEntries(validatedOverrides),
     ...(glassBlurRadius === undefined ? {} : { glassBlurRadius }),
+    ...(state.paperNoteChatFooter === undefined
+      ? {}
+      : { paperNoteChatFooter: parseChatFooterSettings(state.paperNoteChatFooter) }),
   };
 }
 
@@ -161,4 +173,5 @@ export async function restoreStoredThemeBackupState(value: unknown): Promise<voi
       JSON.stringify(state.chatColorOverrides[themeId] ?? {}),
     ] as [string, string]),
   ]);
+  await restoreStoredChatFooterBackupState(state.paperNoteChatFooter);
 }

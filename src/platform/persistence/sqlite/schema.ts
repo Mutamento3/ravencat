@@ -71,6 +71,7 @@ import { WALLPAPER_SELECTION_SCHEMA } from './wallpaperSelectionSchema';
 
 import { AGENT_RUNS_SCHEMA, AGENT_STEPS_SCHEMA, AGENT_TOOL_RECEIPTS_SCHEMA } from './agentRuntimeSchema';
 import { CHAT_REGENERATION_REQUESTS_SCHEMA } from './chatRegenerationSchema';
+import { CHAT_REPLY_VERSIONS_SCHEMA } from './chatReplyVersionSchema';
 import { MCP_SERVERS_SCHEMA, MCP_TOOL_GRANTS_SCHEMA, MCP_SERVER_ASSISTANTS_SCHEMA, MCP_TOOL_GRANTS_INDEXES } from './mcpSchema';
 import { WEB_SEARCH_SCHEMA } from './webSearchSchema';
 
@@ -347,6 +348,7 @@ export const SCHEMAS: Record<string, string> = {
   chatToolPackageExposure: CHAT_TOOL_PACKAGE_EXPOSURE_SCHEMA,
   chatTurnPresentations: CHAT_TURN_PRESENTATIONS_SCHEMA,
   chatRegenerationRequests: CHAT_REGENERATION_REQUESTS_SCHEMA,
+  chatReplyVersions: CHAT_REPLY_VERSIONS_SCHEMA,
 
   callSessions: `
     CREATE TABLE IF NOT EXISTS call_sessions (

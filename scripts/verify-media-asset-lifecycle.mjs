@@ -52,6 +52,7 @@ const { MEDIA_ASSET_SCHEMA, MEDIA_ASSET_CONTENT_HASH_INDEX } = await loadTypeScr
 );
 const { CALL_BACKGROUND_SELECTION_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callBackgroundSchema.ts');
 const { CHAT_FAVORITES_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatFavoriteSchema.ts');
+const { CHAT_REPLY_VERSIONS_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatReplyVersionSchema.ts');
 const mediaAssetBackingModule = await loadTypeScriptModule(
   'src/features/media/application/MediaAssetBacking.ts',
 );
@@ -107,6 +108,8 @@ function createDatabase() {
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(MEDIA_ASSET_SCHEMA);
   db.exec(CHAT_FAVORITES_SCHEMA);
+  db.exec(CHAT_REPLY_VERSIONS_SCHEMA);
+  db.exec('PRAGMA user_version = 137;');
   db.exec(MEDIA_ASSET_CONTENT_HASH_INDEX);
   db.exec(`
     CREATE TABLE profile_wallpaper_selections (selection_key TEXT PRIMARY KEY, media_asset_id TEXT, legacy_uri TEXT, revision INTEGER);
@@ -217,6 +220,29 @@ function createHarness() {
 }
 
 // 数据库 ready 不代表物理文件存在；显式维护将缺失状态写回，保留仍有业务引用的身份。
+// 只存在于回复历史里的媒体仍是 live 引用，进入备份和会话级联删除候选。
+{
+  const { db, database, repository } = createHarness();
+  db.exec(`CREATE TABLE chat_conversations(id TEXT PRIMARY KEY);
+    CREATE TABLE conversation_turn_runs(run_id TEXT PRIMARY KEY);
+    INSERT INTO chat_conversations VALUES ('version-session');
+    INSERT INTO conversation_turn_runs VALUES ('version-run');`);
+  insertAsset(db, 'archived-audio');
+  db.prepare(`INSERT INTO chat_reply_version_sets(id, session_id, current_run_id, selected_version_id)
+    VALUES ('versions', 'version-session', 'version-run', 'original')`).run();
+  db.prepare(`INSERT INTO chat_reply_versions VALUES ('original', 'versions', '2026-10-20', ?)`).run(
+    JSON.stringify([{ metadata: { voice: { mediaAssetId: 'archived-audio' } } }]),
+  );
+  assert.deepEqual((await repository.listBackupAssets(database)).map(asset => asset.id), ['archived-audio']);
+  assert.deepEqual(await repository.listChatSessionMediaAssetIds(['version-session'], database), ['archived-audio']);
+  assert.deepEqual(await repository.releaseUnreferencedAssetsInTransaction(database, ['archived-audio']), []);
+  db.prepare("DELETE FROM chat_reply_version_sets WHERE id = 'versions'").run();
+  assert.deepEqual((await repository.releaseUnreferencedAssetsInTransaction(database, ['archived-audio'])).map(asset => asset.id), ['archived-audio']);
+  db.exec('DROP TABLE chat_reply_versions; DROP TABLE chat_reply_version_sets; PRAGMA user_version = 136;');
+  assert.deepEqual(await repository.listBackupAssets(database), [], '旧备份的媒体预检不要求尚未迁移的版本表');
+  db.close();
+}
+
 {
   const { db, writer, lifecycle } = createHarness();
   insertAsset(db, 'lost-backing');

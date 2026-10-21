@@ -24,6 +24,8 @@
             └── settings.tsx
         ├── _layout.tsx
         ├── add-ai.tsx
+        ├── ai-request-diagnostics
+            └── index.tsx
         ├── appearance.tsx
         ├── auxiliary-models
             ├── capabilities
@@ -292,8 +294,6 @@
                 ├── index.ts
                 └── styles.ts
         ├── chat
-            ├── aiTools
-                └── SendMessageTool.ts
             ├── ChatAssistantDirectory.ts
             ├── composition.ts
             ├── conversation
@@ -462,6 +462,8 @@
                         ├── chatMessagePresentation.ts
                         ├── chatMessageRenderUtils.ts
                         ├── chatPresentationRun.ts
+                        ├── ChatRegenerationConfirm.tsx
+                        ├── ChatReplyVersionSheet.tsx
                         ├── ChatSelectionBars.tsx
                         ├── ChatShareSheet.tsx
                         ├── chatStyles.ts
@@ -473,6 +475,7 @@
                         ├── ChatVoiceReviewPanel.tsx
                         ├── ChatWallpaperSettings.tsx
                         ├── MoonKimiComposer.tsx
+                        ├── PaperNoteChatFooter.tsx
                         ├── reasoningExpansionState.ts
                         ├── sessionTimelineCache.ts
                         ├── SharedChatRecordView.tsx
@@ -546,6 +549,7 @@
                     ├── AssistantReplyPersistence.ts
                     ├── AssistantReplySegmentation.ts
                     ├── AssistantTurnCommit.ts
+                    ├── AutonomousReplyContract.ts
                     ├── BuildChatBatchAIInput.ts
                     ├── BuildChatTurnAIInput.ts
                     ├── ChatImageModels.ts
@@ -556,6 +560,7 @@
                     ├── ChatReplyRuntimeDependencies.ts
                     ├── ChatReplyTypes.ts
                     ├── ChatReplyUtils.ts
+                    ├── ChatReplyVersions.ts
                     ├── ChatRunMutationFence.ts
                     ├── ChatTurnPresentationRuntime.ts
                     ├── CommittedAssistantSegmentDelivery.ts
@@ -576,19 +581,21 @@
                     └── ChatForegroundContext.ts
                 ├── domain
                     ├── ChatImageSettingsRepository.ts
+                    ├── ChatReplyVersion.ts
                     ├── ChatTurnPresentation.ts
                     ├── ChatTurnPresentationRepository.ts
                     ├── ConversationTurn.ts
                     └── ConversationTurnRepository.ts
                 └── infrastructure
+                    ├── ChatReplyVersionSql.ts
                     ├── ChatTurnPresentationSql.ts
                     ├── SQLiteChatImageSettingsRepository.ts
                     ├── SQLiteChatTurnPresentationRepository.ts
                     └── SQLiteConversationTurnRepository.ts
             ├── summary
                 ├── aiTools
-                    ├── SearchChatSummariesTool.ts
-                    └── SecondarySummaryTools.ts
+                    ├── ChatSummaryTools.ts
+                    └── SearchChatSummariesTool.ts
                 ├── application
                     ├── ChatSummary.ts
                     ├── ChatSummaryPrompt.ts
@@ -843,8 +850,12 @@
             ├── index.ts
             └── presentation
                 ├── GlassBlurSettings.tsx
+                ├── httpDiagnostics
+                    ├── AIRequestDiagnosticsScreen.styles.ts
+                    └── AIRequestDiagnosticsScreen.tsx
                 ├── index.ts
                 ├── MiniProgramsTab.tsx
+                ├── PaperNoteChatFooterSettings.tsx
                 ├── phoneTools
                     ├── PhoneToolsDirectoryModel.ts
                     ├── PhoneToolsScreen.tsx
@@ -1339,6 +1350,8 @@
             ├── baseUrl.ts
             ├── connectionTest.ts
             ├── errorMapping.ts
+            ├── HttpExchangeCapture.ts
+            ├── HttpExchangeDiagnostics.ts
             ├── index.ts
             ├── KimiClient.ts
             ├── modelDiscovery.ts
@@ -1417,6 +1430,7 @@
                 ├── callBackgroundSchema.ts
                 ├── chatFavoriteSchema.ts
                 ├── chatRegenerationSchema.ts
+                ├── chatReplyVersionSchema.ts
                 ├── chatSummarySchema.ts
                 ├── chatToolPackageSchema.ts
                 ├── chatTurnObservabilitySchema.ts
@@ -1481,6 +1495,7 @@
             ├── contextWindowLimits.ts
             ├── estimateTextTokens.ts
             ├── index.ts
+            ├── messageTimestamp.ts
             ├── readingFlow.ts
             └── types.ts
         ├── runtime
@@ -1488,6 +1503,7 @@
             ├── ConversationListReadySignal.ts
             └── RuntimeSlot.ts
         ├── theme
+            ├── chatFooterSettings.ts
             ├── components
                 ├── GlassScene.tsx
                 ├── GlassSurface.tsx
@@ -1543,6 +1559,7 @@
             ├── InputField.tsx
             ├── KeyboardAvoidingContainer.tsx
             ├── ListItem.tsx
+            ├── MimeAwareImage.tsx
             ├── ModalSheet.tsx
             ├── ModelPickerModal.tsx
             ├── modelSelectionTypes.ts

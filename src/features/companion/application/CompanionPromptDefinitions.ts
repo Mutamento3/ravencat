@@ -8,7 +8,7 @@ import {
 export const COMPANION_PROMPT_DEFINITIONS = [
   {
     id: 'scenario.raven_cat_ai_schedule',
-    version: 1,
+    version: 2,
     name: 'RavenCat AI 日程触发',
     description: '说明 AI Schedule 到期后 autonomous run 的行动与输出边界。',
     owner: 'companion',
@@ -17,7 +17,7 @@ export const COMPANION_PROMPT_DEFINITIONS = [
     defaultSlot: 'output_contract',
     placement: 'system',
     protection: 'locked',
-    protectionReason: '自主唤醒不得伪装成新用户消息，过程输出不等于已发送消息。',
+    protectionReason: '自主唤醒不得伪装成新用户消息；最终正文与静默信号必须遵守 Chat 提交契约。',
     contentKind: 'static',
     content: COMPANION_AI_SCHEDULE_TRIGGER_RULES,
     sourcePath: 'src/features/companion/application/CompanionPromptBlocks.ts',

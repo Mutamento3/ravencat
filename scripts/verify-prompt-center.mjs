@@ -236,7 +236,8 @@ assert.deepEqual(
 );
 
 // 安全预览必须展示模型真正收到的静态正文，并与运行时共用同一份占位符解析。
-const tokenEstimator = loadTypeScriptModule('src/shared/prompt/estimateTextTokens.ts', {});
+const tokenEstimator = { ...loadTypeScriptModule('src/shared/prompt/estimateTextTokens.ts', {}),
+  ...loadTypeScriptModule('src/shared/prompt/messageTimestamp.ts', {}) };
 const previewTokenBudget = loadTypeScriptModule('src/host/prompt/tokenBudget.ts', {
   '@shared/prompt': tokenEstimator,
 });
@@ -247,7 +248,7 @@ const previewBlockMetadata = loadTypeScriptModule(
 const { PromptPackCompiler } = loadTypeScriptModule(
   'src/host/prompt/compiler/PromptPackCompiler.ts',
   {
-    '@shared/prompt': { CHAT_PROMPT_READING_FLOW }, '../tokenBudget': previewTokenBudget, './promptBlockMetadata': previewBlockMetadata },
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW, ...tokenEstimator }, '../tokenBudget': previewTokenBudget, './promptBlockMetadata': previewBlockMetadata },
 );
 const previewSystemPresets = loadTypeScriptModule(
   'src/host/prompt/compiler/systemPromptPresets.ts',

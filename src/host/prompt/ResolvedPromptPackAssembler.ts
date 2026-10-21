@@ -125,13 +125,21 @@ async function resolveParams(
     aiConfig: {
       ...params.aiConfig,
       promptDefinitionOverrides: assistantConfiguration.overrides,
-      disabledPromptDefinitionIds: assistantConfiguration.disabledDefinitionIds,
+      disabledPromptDefinitionIds: [
+        ...assistantConfiguration.disabledDefinitionIds,
+        // 对应内容是受保护定义，通用禁用过滤不覆盖 locked 条目，这里显式传给 Host 组装层。
+        ...(assistantConfiguration.userStateEnabled ? [] : ['context.together_listening_runtime'] as const),
+        ...(assistantConfiguration.socialEnabled ? [] : ['context.moments_social_inbox'] as const),
+      ],
+      messageTimestampsEnabled: assistantConfiguration.messageTimestampsEnabled,
       agentRegistryExcludedAssistantIds: assistantConfiguration.agentRegistryExcludedAssistantIds,
     },
     preset: {
       ...resolved.preset,
       items: resolved.preset.items.map((item) => (
         (item.definitionId === 'context.time_awareness' && !assistantConfiguration.timeEnabled)
+          || (item.definitionId === 'context.together_listening_runtime' && !assistantConfiguration.userStateEnabled)
+          || (item.definitionId === 'context.moments_social_inbox' && !assistantConfiguration.socialEnabled)
           || (assistantConfiguration.disabledDefinitionIds.includes(item.definitionId)
             && item.protection !== 'locked')
           ? { ...item, enabled: false }

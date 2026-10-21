@@ -13,26 +13,33 @@ import { getAssistantMessageArrivalSnapshot } from '../../reply/delivery/Assista
 export default function useAIAssistants() {
   const [aiList, setAiList] = useState<AIProfile[]>([]);
   const [aiListReady, setAiListReady] = useState(false);
-  const loadFlightRef = useRef<{ arrival: ReturnType<typeof getAssistantMessageArrivalSnapshot>; promise: Promise<AIProfile[]> } | null>(null);
+  const loadFlightRef = useRef<Promise<AIProfile[]> | null>(null);
+  const profilesRevisionRef = useRef(0);
 
   const loadAIAssistants = useCallback(() => {
-    const arrival = getAssistantMessageArrivalSnapshot();
-    const existingFlight = loadFlightRef.current;
-    if (existingFlight?.arrival === arrival) {
-      return existingFlight.promise;
-    }
+    if (loadFlightRef.current) return loadFlightRef.current;
 
-    const loadFlight = listAIAssistants().then(async (profiles) => {
-      const list = await Promise.all(profiles.map((profile) => withArrivedConversationPreview(profile, profile.canonicalConversationId)));
-      if (loadFlightRef.current?.promise === loadFlight && arrival === getAssistantMessageArrivalSnapshot()) {
+    const loadFlight = (async () => {
+      let profilesRevision = profilesRevisionRef.current;
+      let profiles = await listAIAssistants();
+      while (true) {
+        // 到达进度只影响预览；只有已提交的助手资料变化才作废包含头像解析的完整列表读取。
+        if (profilesRevision !== profilesRevisionRef.current) {
+          profilesRevision = profilesRevisionRef.current;
+          profiles = await listAIAssistants();
+          continue;
+        }
+        const arrival = getAssistantMessageArrivalSnapshot();
+        const list = await Promise.all(profiles.map((profile) => withArrivedConversationPreview(profile, profile.canonicalConversationId)));
+        if (profilesRevision !== profilesRevisionRef.current || arrival !== getAssistantMessageArrivalSnapshot()) continue;
         setAiList(list);
         setAiListReady(true);
+        return list;
       }
-      return list;
-    });
-    loadFlightRef.current = { arrival, promise: loadFlight };
+    })();
+    loadFlightRef.current = loadFlight;
     const clearFlight = () => {
-      if (loadFlightRef.current?.promise === loadFlight) {
+      if (loadFlightRef.current === loadFlight) {
         loadFlightRef.current = null;
       }
     };
@@ -42,7 +49,7 @@ export default function useAIAssistants() {
 
   useEffect(() => subscribeAIAssistantUpdated(() => {
     // 已提交的资料让旧列表读取失效，新读取继续复用消息到达快照的既有投影。
-    loadFlightRef.current = null;
+    profilesRevisionRef.current++;
     void loadAIAssistants().catch(error => console.error('[Chat] 助手资料更新后列表刷新失败：', error));
   }), [loadAIAssistants]);
 

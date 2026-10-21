@@ -23,6 +23,8 @@ const SCREEN_HEIGHT = Dimensions.get('window').height;
 export interface ModalSheetProps {
   visible: boolean;
   onClose: () => void;
+  /** 入场动画完成且窗口可交互后调用，供表单请求焦点；内容更新不会重新触发。 */
+  onOpened?: () => void;
   title?: string;
   children: ReactNode;
   style?: ViewStyle;
@@ -73,14 +75,18 @@ const createStyles = (theme: PresentationTheme) =>
 export default function ModalSheet({
   visible,
   onClose,
+  onOpened,
   title,
   children,
   style,
   avoidKeyboard = false,
 }: ModalSheetProps) {
   const [internalVisible, setInternalVisible] = useState(visible);
+  const [windowShown, setWindowShown] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+  const onOpenedRef = useRef(onOpened);
+  onOpenedRef.current = onOpened;
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
@@ -88,9 +94,9 @@ export default function ModalSheet({
   useEffect(() => {
     if (visible) {
       setInternalVisible(true);
-      fadeAnim.stopAnimation();
-      slideAnim.stopAnimation();
-      Animated.parallel([
+      // 等原生 Modal 窗口显示后再入场；完成回调可据此安全请求键盘焦点。
+      if (!windowShown) return;
+      const animation = Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
           duration: 250,
@@ -101,11 +107,13 @@ export default function ModalSheet({
           duration: 300,
           useNativeDriver: true,
         }),
-      ]).start();
-    } else {
-      fadeAnim.stopAnimation();
-      slideAnim.stopAnimation();
-      Animated.parallel([
+      ]);
+      animation.start(({ finished }) => {
+        if (finished) onOpenedRef.current?.();
+      });
+      return () => animation.stop();
+    } else if (windowShown) {
+      const animation = Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 0,
           duration: 200,
@@ -116,13 +124,16 @@ export default function ModalSheet({
           duration: 250,
           useNativeDriver: true,
         }),
-      ]).start(({ finished }) => {
+      ]);
+      animation.start(({ finished }) => {
         if (finished) {
           setInternalVisible(false);
+          setWindowShown(false);
         }
       });
+      return () => animation.stop();
     }
-  }, [fadeAnim, slideAnim, visible]);
+  }, [fadeAnim, slideAnim, visible, windowShown]);
 
   if (!internalVisible) {
     return null;
@@ -135,12 +146,13 @@ export default function ModalSheet({
       statusBarTranslucent
       navigationBarTranslucent
       animationType="none"
+      onShow={() => setWindowShown(true)}
       onRequestClose={onClose}
     >
       <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
         <KeyboardAvoidingContainer
           style={styles.keyboardContainer}
-          enabled={avoidKeyboard}
+          enabled={avoidKeyboard && visible}
         >
           <TouchableWithoutFeedback onPress={onClose}>
             <View style={StyleSheet.absoluteFill} />

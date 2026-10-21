@@ -74,11 +74,11 @@ assert.match(detailTool.definition.description, /Social Inbox/, '主动读取指
 inboxes.set('agent-ordinary', emptyInbox);
 assert.equal((await realFactory.createMomentSocialInboxBlock(...inboxParams)).status, 'omitted');
 inboxes.set('agent-ordinary', unreadInbox);
-const estimator = load('src/shared/prompt/estimateTextTokens.ts');
+const estimator = { ...load('src/shared/prompt/estimateTextTokens.ts'), ...load('src/shared/prompt/messageTimestamp.ts') };
 const budget = load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': estimator });
 const metadata = load('src/host/prompt/compiler/promptBlockMetadata.ts');
 const { promptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
-    '@shared/prompt': { CHAT_PROMPT_READING_FLOW }, '../tokenBudget': budget, './promptBlockMetadata': metadata });
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW, ...estimator }, '../tokenBudget': budget, './promptBlockMetadata': metadata });
 const presets = load('src/host/prompt/compiler/systemPromptPresets.ts');
 const block = (key, content = key) => ({ key, title: key, content, required: false, status: 'ready', placement: 'system' });
 const providerKeys = {
@@ -97,7 +97,6 @@ const { promptPackAssembler: assembler } = load('src/host/prompt/PromptPackAssem
     createVisualGroundingRulesBlock: () => block('visual_grounding_rules'), createScenarioContextBlock: () => null,
     createInteractionEnvironmentBlock: () => block('interaction_environment'),
     createRecentChatWindowBlock: () => ({ ...block('recent_chat_window'), placement: 'history' }),
-    createRecentMomentsBlock: async () => block('recent_moments_summary'),
     createGroupMemberReplyConfidentialityBlock: () => ({ ...block('group_chat_context', '群输出要求'),
       definitionId: 'output.group_member_reply_confidentiality', slot: 'output_contract', protection: 'locked' }),
   } },

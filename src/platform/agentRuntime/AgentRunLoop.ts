@@ -146,7 +146,7 @@ export class AgentRunLoop {
       if (turn.toolCalls.length === 0) {
         markStepCompleted(step, this.dependencies.clock.now());
         await emitStepCompleted(state, step, context);
-        if (turn.assistantText.length === 0 && !hasToolProducedUserVisibleOutput(state)) {
+        if (turn.assistantText.length === 0 && turn.reasoningText.length === 0 && !hasToolProducedUserVisibleOutput(state)) {
           throw new AgentRuntimeTerminalError('MODEL_PROTOCOL_ERROR');
         }
       } else {
@@ -189,9 +189,9 @@ export class AgentRunLoop {
         }
       }
 
-      // 正文结束与工具声明结束共用完成入口，不能绕过调用方的完成前检查。
+      // 正文结束与工具声明结束共用完成入口；截断只保存已有内容，不触发补充生成。
       state.finalText = turn.assistantText;
-      const decision = await context.beforeComplete?.({
+      const decision = turn.finishReason === 'length' ? undefined : await context.beforeComplete?.({
         runId: state.runId,
         task: state.task,
         history: state.history,

@@ -426,6 +426,7 @@ console.log('模型自动保存：失焦确认、立即字段隔离、增量、�
 // 网络边界验证真实请求正文：四种传输入口与连接测试使用相同关闭参数。
 const baseURLModule = load('src/platform/ai/baseUrl.ts');
 const baseClientModule = load('src/platform/ai/BaseAIClient.ts', {
+  './HttpExchangeCapture': { beginAIHttpCapture: async () => null },
   './baseUrl': baseURLModule,
   './errorMapping': { getErrorDisplayInfo: (error) => ({ message: String(error) }) },
 });
@@ -488,7 +489,47 @@ global.fetch = async (_url, options) => {
     : Response.json(answer);
 };
 try {
-  // 留空与未配置均使用服务商默认；各传输入口、连接测试及工具探测不得补值或发送 null。
+  // 一次按钮操作只验证连接，不额外请求工具探测，也不改变用户授予的权限。
+  const modelService = load('src/features/assistants/application/AIModelService.ts', { '@platform/ai': {
+    ...factory, ...connection,
+    detectParamError: () => ({ isParamError: false }),
+    getErrorDisplayInfo: (error) => ({ message: String(error) }),
+  } });
+  const useConnectionTest = load(`${directory}management/AIModelSettings/useConnectionTest.ts`, {
+    react: { useState: (initial) => [initial, () => {}], useCallback: (callback) => callback },
+    '../../../application/AIModelService': modelService,
+    '../sharedModelConfig': load(`${directory}management/sharedModelConfig.ts`, { '../../application/AIModelService': modelService }),
+  }).default;
+  for (const enabled of [false, true]) {
+    let permission = enabled;
+    const alerts = [];
+    const before = requests.length;
+    await useConnectionTest({
+      apiBaseUrl: profile.apiBaseUrl, apiKey: profile.apiKey, selectedModel: profile.model,
+      getConnectionParams: () => ({ maxTokens: 300 }),
+      enableTools: enabled, setEnableTools: value => { permission = value; },
+      onShowAlert: (...args) => alerts.push(args),
+    }).handleTestConnection();
+    assert.equal(requests.length, before + 1, '测试连接按钮只能发出一次生成请求');
+    assert.equal(permission, enabled, '连接测试不能替用户改变工具权限');
+    assert.equal(requests.at(-1).tools, undefined);
+    assert.equal(requests.at(-1).max_tokens, 300);
+    assert.equal(alerts[0][0], '连接成功');
+  }
+  // 连通性测试已经取得合法响应，思考截断不能成为第二次付费生成的理由。
+  const normalFetch = global.fetch;
+  global.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return Response.json({ choices: [{ message: { content: '', reasoning_content: '未完成的思考' }, finish_reason: 'length' }] });
+  };
+  try {
+    const before = requests.length;
+    const result = await connection.testAPIConnection(profile.apiBaseUrl, profile.apiKey, profile.model, { maxTokens: 300 });
+    assert.equal(result.success, true);
+    assert.equal(requests.length, before + 1, '连通性测试不能为思考截断而重发');
+    assert.equal(requests.at(-1).max_tokens, 300, '连接测试不能擅自扩大用户设定的输出额度');
+  } finally { global.fetch = normalFetch; }
+  // 留空与未配置均使用服务商默认；各传输入口与连接测试不得补值或发送 null。
   for (const sampling of [
     { temperature: null, topP: null }, {},
     { temperature: 0, topP: 0 }, { temperature: 0.6, topP: 0.95 },
@@ -504,7 +545,6 @@ try {
         () => client.chat(messages), () => client.chatWithTools(messages, []),
         () => client.chatStream(messages), () => client.chatStreamWithTools(messages, []),
         () => connection.testAPIConnection(baseURL, 'test-key', model, options),
-        () => connection.detectToolsSupport(baseURL, 'test-key', model, options),
       ]) {
         const result = await invoke();
         assert.equal(typeof result === 'boolean' ? result : result.success, true);

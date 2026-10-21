@@ -44,11 +44,9 @@ export function createStyles(theme: PresentationTheme) {
     sectionBlock: {
       marginTop: theme.spacing.lg,
     },
-    sectionHint: {
-      fontSize: 13,
-      color: theme.colors.text.secondary,
+    // 选择控件与下方模型列表保持同一条左右边界。
+    selectionBlock: {
       marginHorizontal: theme.spacing.lg,
-      lineHeight: 20,
     },
     headerIconBtn: {
       padding: theme.spacing.sm,

@@ -1,10 +1,9 @@
-import { chatMessageMutations } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /** 验证有限 SQLite 查询及 Host 消息同步，不读取用户数据库，也不锁定源码形状。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
-import { installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 
 function load(relative, dependencies = {}) {
   const output = ts.transpileModule(fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8'), {
@@ -43,6 +42,7 @@ const { MessageRepository } = load(`${messagesRoot}infrastructure/SQLiteMessageR
     runAsync: async (sql, params) => db.prepare(sql).run(...params),
   }) } },
   './ChatMessageMutationSql': chatMessageMutations,
+      '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
       './ChatTimelineSql': load(`${messagesRoot}infrastructure/ChatTimelineSql.ts`),
   '../domain/MessageTimeSeparator': load(`${messagesRoot}domain/MessageTimeSeparator.ts`),
 });

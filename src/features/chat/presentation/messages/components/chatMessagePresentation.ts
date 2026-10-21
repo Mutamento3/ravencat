@@ -71,21 +71,6 @@ export function collapseAssistantSegmentsForPresentation(
   return collapsedMessages;
 }
 
-/**
- * 非流式多气泡主题（daylight / night / Liquid 等 default profile）下，assistant
- * 最终正文的展示权归 canonical committed segments + paced reveal：
- *
- * - canonical T3 仍然一次性落库完整事实（不为了 UI 动画退回逐泡独立事务）；
- * - transient assistant 不得先展示完整正文，否则正文会被展示两次；
- * - 真流式主题与 Moon Kimi / Paper Note 不进入这条路径。
- */
-export function ownsCanonicalSegmentedAssistantPresentation(
-  interactionProfile: ChatInteractionProfile
-): boolean {
-  return interactionProfile.enableAssistantMessageSegmentation
-    && !interactionProfile.preferStreamingReply;
-}
-
 export function getAssistantPresentationGroupKey(message: ChatMessage): string {
   const metadata = parseMessageMetadata(message);
   const logicalMessageId = message.logicalMessageId as string;

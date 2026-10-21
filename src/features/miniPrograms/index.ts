@@ -4,4 +4,5 @@ export {
   ThemePickerView,
   PhoneToolsScreen,
   ToolPackageScreen,
+  AIRequestDiagnosticsScreen,
 } from './presentation';

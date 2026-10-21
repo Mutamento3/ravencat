@@ -4,7 +4,6 @@ import type { CallSummarySource } from '@features/calls';
 import type { ConversationContextItem } from './ChatSummaryTimeline';
 /** 包含首次请求，真正失败后只允许一次自动重试；取消不消耗失败预算。 */
 export const CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS = 2;
-export const CHAT_SUMMARY_INPUT_MAX_CHARACTERS = 5000;
 export interface ChatSummarySegment {
   id: string; conversationId: string; sequence: number; content: string;
   level: 'primary' | 'secondary'; compactionId: string | null; contextSequence: number;
@@ -26,12 +25,14 @@ export interface ChatSummarySettings {
   requestTimeoutSeconds: number; maxOutputTokens: number | null;
   /** null 明确选择当前聊天模型／群管理员；非空值持续引用通用资产。 */
   modelConfigId: string | null; groupTriggerCount: number;
+  /** 单聊每次整理的对话条数；null 跟随 AI 的单聊主视角条数，手动设置后固定不再跟随。 */
+  primaryLimit: number | null;
 }
 export type ChatSummarySettingsPatch = Partial<Omit<ChatSummarySettings, 'fixedMessageId'>>;
 export const DEFAULT_CHAT_SUMMARY_SETTINGS: ChatSummarySettings = {
   generationEnabled: true, injectEnabled: true, secondaryEnabled: true, secondaryTokenThreshold: 8000, fixedMessageId: null,
   requestTimeoutSeconds: 300, maxOutputTokens: null,
-  modelConfigId: null, groupTriggerCount: 40,
+  modelConfigId: null, groupTriggerCount: 40, primaryLimit: null,
 };
 export type ChatSummaryLevel = 'primary' | 'secondary';
 export interface ChatSummaryRequestSettings { requestTimeoutSeconds: number; maxOutputTokens: number | null; modelConfigId: string | null }
@@ -41,7 +42,7 @@ export interface ChatSummaryCallDiagnostics {
   promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; cachedTokens: number | null;
   finishReason: string | null; contentCharacters: number; reasoningCharacters: number; serverError: string | null;
 }
-export interface ChatSummaryFailure { kind: 'timeout' | 'request' | 'output_limit' | 'empty_output' | 'invalid_output'; message: string; retryable: boolean }
+export interface ChatSummaryFailure { kind: 'timeout' | 'request' | 'output_limit' | 'empty_output' | 'invalid_output' | 'context_overflow' | 'commit_lost'; message: string; retryable: boolean }
 export interface ChatSummaryTask {
   id: string; conversationId: string; level: ChatSummaryLevel;
   status: 'running' | 'waiting' | 'failed' | 'completed';
@@ -67,10 +68,23 @@ export interface ChatSummarySearchPage {
   entries: ChatSummarySegment[]; nextOffset: number | null;
 }
 export interface ChatSecondarySummary { conversationId: string; content: string }
-export interface ChatSecondarySummaryEdit {
+export interface ChatSummaryTextEdit {
   mode: 'replace_text' | 'replace_all'; oldText: string; newText: string;
 }
 export class ChatSummaryEditError extends Error {}
+/** 原文匹配在持久化事务的当前正文上执行，两级使用相同的精确替换语义。 */
+export function editChatSummaryText(original: string, input: ChatSummaryTextEdit): string {
+  const index = original.indexOf(input.oldText);
+  if (index < 0 || (input.mode === 'replace_all' && original !== input.oldText)) {
+    throw new ChatSummaryEditError('摘要原文不匹配或已变化，请重新读取后再编辑');
+  }
+  if (input.mode === 'replace_text' && original.indexOf(input.oldText, index + 1) !== -1) {
+    throw new ChatSummaryEditError('原文片段有多处匹配，请提供更长且唯一的片段');
+  }
+  const content = original.slice(0, index) + input.newText + original.slice(index + input.oldText.length);
+  if (!content.trim()) throw new ChatSummaryEditError('编辑后的摘要正文不能为空');
+  return content;
+}
 export interface ChatSummaryClaim {
   requestSettings: ChatSummaryRequestSettings;
   taskId: string;
@@ -86,8 +100,6 @@ export interface ChatSummaryAddition {
 export interface ChatSummaryModelInput {
   conversationId: string; timeZone: string; previous: ChatSummarySegment[];
   messages: ConversationContextItem[]; calls: CallSummarySource[];
-  part: { index: number; total: number };
-  earlierAdditionsReadOnly: string[];
 }
 export interface ChatBackgroundContextOptions {
   privateLimit: number; groupLimit: number;
@@ -101,24 +113,25 @@ export interface ChatSummaryRepository {
   invalidateModelReferencesInTransaction(transaction: import('@platform/persistence').DatabaseTransactionExecutor, modelConfigId: string): Promise<void>;
   readBackgroundContexts(assistantId: string, currentConversationId: string, options: ChatBackgroundContextOptions): Promise<ChatBackgroundContext[]>;
   readContext(conversationId: string, protectedMessageIds: readonly number[]): Promise<ChatSummarySnapshot>;
-  prepareConversations(now: string): Promise<{ conversationIds: string[]; pausedConversationIds: string[] }>;
+  prepareConversations(now: string, conversationIds?: readonly string[]): Promise<{ conversationIds: string[]; pausedConversationIds: string[] }>;
   getNextWakeAt(): Promise<string | null>;
   claim(conversationId: string, batchSize: number, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<ChatSummaryClaim | null>;
-  renewClaim(claim: ChatSummaryClaim | SecondaryChatSummaryClaim, now: string, expiresAt: string): Promise<boolean>;
   appendClaim(claim: ChatSummaryClaim, additions: readonly ChatSummaryAddition[], now: string): Promise<boolean>;
   releaseClaim(claim: ChatSummaryClaim): Promise<void>;
   readSettings(conversationId: string): Promise<ChatSummarySettings>;
   updateSettings(conversationId: string, patch: ChatSummarySettingsPatch): Promise<void>;
   setFixedStart(conversationId: string, messageId: number | null): Promise<void>;
   recordInvocation(claim: ChatSummaryTaskClaim, diagnostics: ChatSummaryCallDiagnostics, now: string): Promise<void>;
-  failTask(claim: ChatSummaryTaskClaim, failure: ChatSummaryFailure, now: string): Promise<boolean>;
+  failTask(claim: ChatSummaryTaskClaim, failure: ChatSummaryFailure, now: string): Promise<'failed' | 'waiting' | null>;
   retryTask(conversationId: string, taskId: string, now: string): Promise<void>;
   claimSecondary(conversationId: string, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<SecondaryChatSummaryClaim | null>;
   appendSecondary(claim: SecondaryChatSummaryClaim, segmentId: string, content: string, now: string): Promise<boolean>;
   releaseSecondaryClaim(claim: SecondaryChatSummaryClaim): Promise<void>;
   search(assistantId: string, input: ChatSummarySearchInput): Promise<ChatSummarySearchPage>;
   readSecondaryForAssistant(assistantId: string, conversationId: string): Promise<ChatSecondarySummary>;
-  editSecondaryForAssistant(assistantId: string, conversationId: string, input: ChatSecondarySummaryEdit, now: string): Promise<ChatSecondarySummary>;
+  editSecondaryForAssistant(assistantId: string, conversationId: string, input: ChatSummaryTextEdit, now: string): Promise<ChatSecondarySummary>;
+  editPrimaryForAssistant(assistantId: string, conversationId: string, segmentId: string, input: ChatSummaryTextEdit, now: string): Promise<ChatSummarySegment>;
+  deletePrimaryForAssistant(assistantId: string, conversationId: string, segmentId: string, expectedContent: string): Promise<void>;
   create(conversationId: string, segmentId: string, content: string, now: string, timeZone: string): Promise<void>;
   edit(conversationId: string, segmentId: string, content: string, now: string): Promise<void>;
   replaceSecondary(conversationId: string, expected: readonly ChatSummarySegment[], content: string | null, now: string): Promise<void>;

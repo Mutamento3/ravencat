@@ -114,7 +114,7 @@ export function createMessageListPartsStyles(theme: PresentationTheme) {
   return StyleSheet.create({
     paperNoteSpeakerSeparator: {
       paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
+      paddingVertical: theme.spacing.xl,
     },
     paperNoteSpeakerSeparatorText: {
       color: theme.colors.text.secondary,

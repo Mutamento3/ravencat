@@ -8,9 +8,12 @@
 - `OpenAIClient.ts` / `KimiClient.ts`：Provider 客户端与创建工厂；
 - `moonshotEndpoint.ts` / `MoonshotToolsClient.ts`：识别 Moonshot 官方 OpenAI 根地址，执行搜索／网页抓取 REST 请求与 mew Formula 调用，验证响应及官方参数声明；工具权限和模型续轮由 Host 与统一 Runtime 持有；
 - `modelDiscovery.ts`：发现模型列表；
-- `connectionTest.ts`：连接测试与工具支持探测；
+- `connectionTest.ts`：单次连接测试，不额外发起工具支持探测；
 - `errorMapping.ts`：把外部错误转换为稳定的展示信息；
 - `types.ts`：请求、响应、流式增量和错误契约。
+- `HttpExchangeDiagnostics.ts` / `HttpExchangeCapture.ts`：用户主动开启的本机 HTTP 原文诊断，入口在「小程序 → AI 工具 → AI 请求诊断」。记录 `BaseAIClient` 实际发送的对话请求正文和解析前响应文本，非流式、Fetch SSE、Android XHR SSE 共用；每次参数重试独立记录，不触发额外模型请求，也不修改模型输出。向量、模型列表和其他工具 HTTP 不在采集范围内。
+
+HTTP 诊断默认关闭，仅保留最近 10 次已结束请求，完整正文保存在应用私有缓存，不自动上传、不进入备份；系统清理缓存后开关也恢复关闭。鉴权头不进入采集接口，已知 API key 和 URL 凭据在保存前脱敏；因此这是「正文原文（凭据除外）」而非含鉴权的完整网络报文。用户可查看和复制整条记录，正文仍可能含提示词、思考、聊天与工具内容。流式记录保留客户端实际收到的 SSE 原文，取消时保留取消前文本；已丢失的历史响应不会补录。清空、关闭以及全局数据重置会失效在途捕获，迟到响应不能重新填入已清空的记录。诊断写入失败在页面显示，不把旁路存储错误升级为聊天失败。
 
 业务代码统一从 `@platform/ai` 导入。TTS、STT 客户端属于 `@features/speech`，不与文本模型客户端混放。
 

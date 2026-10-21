@@ -31,7 +31,6 @@ const BLOCK_METADATA: Partial<Record<PromptPackBlock['key'], PromptBlockMetadata
   mcp_services: { definitionId: 'context.mcp_services', slot: 'capabilities', protection: 'locked' },
   ledger_reply_rules: { definitionId: 'scenario.ledger_reply', slot: 'output_contract', protection: 'locked' },
   user_identity_summary: { definitionId: 'context.user_identity', slot: 'persona', protection: 'overridable' },
-  recent_moments_summary: { definitionId: 'context.recent_moments', slot: 'dynamic_context', protection: 'overridable' },
   passive_memory: { definitionId: 'context.passive_memory', slot: 'dynamic_context', protection: 'locked' },
   conversation_summary: { definitionId: 'context.conversation_summary', slot: 'dynamic_context', protection: 'locked' },
   recent_chat_window: { definitionId: 'history.recent_chat', slot: 'history', protection: 'locked' },

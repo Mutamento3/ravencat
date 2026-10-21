@@ -134,6 +134,7 @@ export class ChatAgentRunProjector {
           params.replyRunId,
           params.timelineSink,
           params.policy,
+          params.finalAssistantPolicy,
         )
       : null;
     this.toolTimeline = isCanonical
@@ -192,8 +193,8 @@ export class ChatAgentRunProjector {
     if (this.canonicalTimeline) {
       this.canonicalTimeline.closeRun(result.terminalCode);
       // 自主执行的行动记录是已经发生的事实；失败、取消也不能像未提交回复一样丢弃。
-      if (this.finalAssistantPolicy === 'record_as_activity') {
-        await this.commitActivityTimeline();
+      if (this.finalAssistantPolicy === 'autonomous_reply') {
+        await this.commitActivityTimeline(true, result.terminalCode === 'COMPLETED');
         return;
       }
       // 通话提交后由投影层停止模型续轮；这次内部停止不能丢弃已完成的工具记录。
@@ -289,7 +290,7 @@ export class ChatAgentRunProjector {
   async failRun(result: AgentRunTerminalResult): Promise<void> {
     if (this.canonicalTimeline) {
       this.canonicalTimeline.closeRun(result.terminalCode);
-      if (this.finalAssistantPolicy === 'record_as_activity') {
+      if (this.finalAssistantPolicy === 'autonomous_reply') {
         await this.commitActivityTimeline();
         return;
       }
@@ -316,12 +317,13 @@ export class ChatAgentRunProjector {
     await this.commitActivityTimeline(false);
   }
 
-  private async commitActivityTimeline(terminal = true): Promise<void> {
+  private async commitActivityTimeline(terminal = true, commitAutonomousReply = false): Promise<void> {
     const timeline = this.canonicalTimeline!;
     const lastStepIndex = [...this.modelTurns.keys()].at(-1) ?? 0;
     const items = timeline.buildCommitItems({
       sessionId: this.sessionId, aiConfig: this.aiConfig, runtimeContext: this.runtimeContext,
-      policy: this.policy, finalAssistantPolicy: 'record_as_activity', finalStepIndex: lastStepIndex,
+      policy: this.policy, finalAssistantPolicy: 'autonomous_reply', finalStepIndex: lastStepIndex,
+      commitAutonomousReply,
     });
     const turn = this.modelTurns.get(lastStepIndex);
     try {

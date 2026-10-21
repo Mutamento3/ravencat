@@ -125,7 +125,7 @@ export interface AIReplyRuntimeContext {
   companionScheduleRevision?: number;
 }
 
-export type ChatContextMessage = InfrastructureChatMessage;
+export type ChatContextMessage = InfrastructureChatMessage & { createdAt?: string };
 
 export interface AIResponse {
   success: boolean;

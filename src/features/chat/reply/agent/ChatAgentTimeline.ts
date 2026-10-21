@@ -30,6 +30,7 @@ import {
   buildMessageMetadata,
 } from '../application/ChatReplyMetadata';
 import { normalizeAssistantResponseText } from '../application/AssistantReplyPersistence';
+import { autonomousActivityText, isAutonomousSilentReply } from '../application/AutonomousReplyContract';
 import { buildAssistantTurnItems } from '../application/AssistantTurnCommit';
 import { formatMessageTime } from '../application/ChatReplyUtils';
 import type { ConversationTurnCommitItem } from '../domain/ConversationTurn';
@@ -46,7 +47,7 @@ import {
 } from './SendVoiceMessageTool';
 import { buildChatVoiceMessageMetadata } from '../../messages/domain/chatMessageMetadata';
 
-export type FinalAssistantPolicy = 'commit_as_reply' | 'record_as_activity';
+export type FinalAssistantPolicy = 'commit_as_reply' | 'autonomous_reply';
 
 export type AgentTimelineItemKind = 'reasoning' | 'assistant' | 'tool';
 
@@ -151,6 +152,8 @@ export interface BuildAgentTimelineItemsParams {
   policy: Pick<AIReplyPolicy, 'bubbleDeliveryMode'>;
   finalAssistantPolicy: FinalAssistantPolicy;
   finalStepIndex: number;
+  /** 仅正常终态允许把自主执行的最终正文物化为消息；增量与失败只存过程。 */
+  commitAutonomousReply?: boolean;
 }
 
 export class ChatAgentTimeline {
@@ -168,6 +171,7 @@ export class ChatAgentTimeline {
     private readonly runId: string,
     private readonly sink: AgentTimelineTransientSink = {},
     private readonly presentationPolicy?: Pick<AIReplyPolicy, 'bubbleDeliveryMode'>,
+    private readonly finalAssistantPolicy: FinalAssistantPolicy = 'commit_as_reply',
   ) {}
 
   /** model_turn_started 是所有 delta 的前置事件，先建立 step 所有权。 */
@@ -371,6 +375,10 @@ export class ChatAgentTimeline {
   private snapshotItems(items: readonly AgentTimelineItem[]): AgentTimelineItemSnapshot[] {
     return items.flatMap(item => {
       const snapshot = toSnapshot(item);
+      if (this.finalAssistantPolicy === 'autonomous_reply' && item.kind === 'assistant') {
+        const text = autonomousActivityText(item.text);
+        return text ? [{ ...snapshot, text }] : [];
+      }
       // 多气泡正文以本次模型 turn 的分段结果建立稳定 identity，避免流式整段
       // 曾被确认后在拆段时缩短或重复；后续轮次的过程事件不受此等待影响。
       if (this.presentationPolicy?.bubbleDeliveryMode === 'multi-bubble'
@@ -404,11 +412,17 @@ export class ChatAgentTimeline {
     for (const step of this.steps.values()) {
       const reasoningItem = step.reasoningItem;
       const assistantItem = step.assistantItem;
+      const autonomous = params.finalAssistantPolicy === 'autonomous_reply';
+      const isFinalReply = autonomous && params.commitAutonomousReply === true
+        && step.stepIndex === params.finalStepIndex
+        && step.turn!.toolCalls.length === 0
+        && !isAutonomousSilentReply(assistantItem?.text ?? '');
+      const activityText = autonomous && assistantItem ? autonomousActivityText(assistantItem.text) : '';
       if (reasoningItem || assistantItem) {
         const response = toAIResponseForStep(step);
         const normalized = assistantItem
-          ? params.finalAssistantPolicy === 'record_as_activity'
-            ? { text: assistantItem.text, segments: [assistantItem.text] }
+          ? autonomous && !isFinalReply
+            ? { text: activityText, segments: activityText ? [activityText] : [] }
             : normalizeAssistantResponseText(assistantItem.text, params.policy)
           : { text: '', segments: [] };
         const built = buildAssistantTurnItems({
@@ -436,9 +450,9 @@ export class ChatAgentTimeline {
             item: target,
             commitItem: {
               message: this.withStableIdentity(
-                params.finalAssistantPolicy === 'record_as_activity'
+                autonomous && (entry.message.senderType === 'reasoning' || !isFinalReply)
                   ? { ...entry.message,
-                      text: target.text,
+                      text: entry.message.senderType === 'reasoning' ? target.text : activityText,
                       senderType: entry.message.senderType === 'assistant' ? 'system' : 'reasoning',
                       status: target.status === 'failed' ? 'failed'
                         : target.status === 'running' || target.status === 'streaming' ? 'streaming' : 'sent',

@@ -466,17 +466,12 @@ function userMessage(id = 20) {
   assert.deepEqual(Array.from(merge()), [user], 'run 清理后不保留展示阻挡状态');
 }
 
-// 主题只决定气泡呈现方式，不拥有另一套到达计时器。
-assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.getChatInteractionProfile({ id: 'daylight' })), true);
-assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.getChatInteractionProfile({ id: 'liquid-glass' })), true);
-assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.getChatInteractionProfile({ id: 'moon-kimi' })), false);
-assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.getChatInteractionProfile({ id: 'paper-note' })), false);
-
 // 原生列表只模拟布局完成、尺寸变化和滚动命令；跟随决策使用真实组件。
 {
   let scrolls = 0;
   const anchorTargets = [];
   let offset = 600;
+  let nativeViewportHeight = 600;
   let scrollContainerMounts = 0;
   let scrollContainerUnmounts = 0;
   const ScrollView = React.forwardRef(function ScrollView(props, ref) {
@@ -520,9 +515,20 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     const { CompatScrollView } = useSecondaryProps(props);
     React.useImperativeHandle(ref, () => ({
       scrollToEnd: () => { scrolls++; offset = 1000; },
+      scrollToOffset: ({ offset: target }) => { scrolls++; offset = target; },
+      getChildContainerDimensions: () => ({ width: 400, height: measuredContentHeight - 32 }),
+      getFirstItemOffset: () => 16,
+      getWindowSize: () => ({ width: 400, height: nativeViewportHeight }),
+      getAbsoluteLastScrollOffset: () => offset,
       scrollToIndex: ({ index }) => { anchorTargets.push(props.data[index].msg.id); },
     }), [props.data]);
-    return React.createElement('FlashList', props, React.createElement(CompatScrollView, props));
+    const observedProps = { ...props, onLayout: (event) => {
+      nativeViewportHeight = event.nativeEvent.layout.height;
+      props.onLayout(event);
+    } };
+    return React.createElement('FlashList', observedProps, React.createElement(CompatScrollView, props,
+      props.data.map((item, index) => React.createElement(React.Fragment, { key: props.keyExtractor(item) },
+        props.renderItem({ item, index, target: 'Cell' })))));
   });
   const toolStatus = loadModule(
     'src/features/chat/presentation/messages/components/chatToolStatusPresentation.ts',
@@ -554,11 +560,12 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     './chatToolStatusPresentation': toolStatus,
     './chatActionGrouping': actionGrouping,
     './chatPresentationRun': presentationRun,
-    './chatStyles': { createMessageListStyles: () => ({}) },
+    './chatStyles': { createMessageListStyles: () => ({ contentContainer: { paddingVertical: 16 } }) },
     './useAgentTransientTimeline': transientTimeline,
     '@features/chat/messages/application/AgentTransientTimeline': transientStore,
     '@shared/theme': { ...themes, useTheme: () => theme },
     './chatMessageListState': state,
+    './PaperNoteChatFooter': { __esModule: true, default: 'PaperNoteFooter' },
     './useChatBottomFollow': loadModule(
       'src/features/chat/presentation/messages/components/useChatBottomFollow.ts',
       (name) => {
@@ -587,14 +594,18 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   let renderer;
   act(() => { renderer = create(React.createElement(List, props)); });
   const list = () => renderer.root.findByType('FlashList');
-  const commit = (height) => {
+  const messageData = () => Array.from(list().props.data).filter(item => 'msg' in item);
+  let measuredContentHeight = 1200;
+  const commit = (height, afterLayout = () => {}) => {
     act(() => {
+      measuredContentHeight = height;
       // 模拟 FlashList 自带贴底配置的行为，覆盖第二条滚动入口。
       if (list().props.maintainVisibleContentPosition.autoscrollToBottomThreshold != null) {
         scrolls++; offset = 1000;
       }
       list().props.onContentSizeChange(400, height);
       list().props.onCommitLayoutEffect();
+      afterLayout();
     });
     flushFrames();
   };
@@ -607,13 +618,13 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   update({ messages: [messages[0], usageMessage], aiAssistant: { id: 'ai', showTokenUsage: true } });
   assert.equal(scrollContainerMounts, 1, '消息或设置更新不能重建滚动容器');
   assert.equal(scrollContainerUnmounts, 0, '消息或设置更新保留正在使用的原生滚动视图');
-  assert.equal(list().props.data.at(-1).displayTokensUsed, 120, '开启选择后实际列表提供用量提示');
+  assert.equal(messageData().at(-1).displayTokensUsed, 120, '开启选择后实际列表提供用量提示');
   update({ aiAssistant: { id: 'ai', showTokenUsage: false } });
-  assert.equal(list().props.data.at(-1).displayTokensUsed, 0, '关闭选择后实际列表隐藏所有用量提示');
+  assert.equal(messageData().at(-1).displayTokensUsed, 0, '关闭选择后实际列表隐藏所有用量提示');
   assert.equal(usageMessage.tokensUsed, 120, '关闭展示不会修改消息用量事实');
   assert.equal(JSON.parse(usageMessage.metadataJson).cachedTokens, 80);
   update({ aiAssistant: { id: 'ai', showTokenUsage: true } });
-  assert.equal(list().props.data.at(-1).displayTokensUsed, 120, '重新开启立即显示已有消息用量');
+  assert.equal(messageData().at(-1).displayTokensUsed, 120, '重新开启立即显示已有消息用量');
   update({ messages, aiAssistant: undefined });
   commit(1200);
   scrolls = 0; offset = 600;
@@ -649,7 +660,7 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
   messages = messages.filter((message) => message.id !== 602);
   update({ messages }); commit(1900);
   assert.equal(scrolls, 2, '阅读历史时删除消息不能跳到底部');
-  assert.deepEqual(list().props.data.map((item) => item.msg.id), keptIds, '删除只移除目标，保留其余历史');
+  assert.deepEqual(messageData().map((item) => item.msg.id), keptIds, '删除只移除目标，保留其余历史');
   act(() => list().props.onScrollEndDrag({ nativeEvent: { ...away.nativeEvent, contentOffset: { y: 1500 }, contentSize: { height: 2100 } } }));
   update({ pauseAutoScroll: true, messages: [...messages, message({ id: 605 })] });
   commit(2200);
@@ -788,10 +799,44 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     theme = { ...theme, id: themeId };
     props = { ...props, sessionId: 'same-text-session', messages: sameTextMessages, anchorMessageId: null };
     act(() => { renderer = create(React.createElement(List, props)); });
-    assert.deepEqual(list().props.data.map(item => item.msg.id), themeId === 'paper-note' ? [7901] : [7900, 7901]);
+    assert.deepEqual(messageData().map(item => item.msg.id), themeId === 'paper-note' ? [7901] : [7900, 7901]);
     act(() => renderer.unmount());
     flushFrames();
   }
+
+  // 底栏身份独立于末条消息：追加、流式和历史 prepend 不能把图标卸载后重新读取。
+  theme = { ...theme, id: 'paper-note' };
+  nativeViewportHeight = 600;
+  measuredContentHeight = 800;
+  offset = 200;
+  props = { ...props, sessionId: 'footer-continuity', messages: [message({ id: 7950 })], anchorMessageId: null };
+  act(() => { renderer = create(React.createElement(List, props)); });
+  commit(800);
+  const footer = renderer.root.findByType('PaperNoteFooter');
+  const footerKey = list().props.keyExtractor(list().props.data.at(-1));
+  for (const [messages, height] of [
+    [[message({ id: 7950 }), message({ id: 7951, text: '开始输出' })], 900],
+    [[message({ id: 7950 }), message({ id: 7951, text: '继续流式输出' })], 1000],
+  ]) {
+    update({ messages });
+    commit(height, () => {
+      assert.equal(height - offset, nativeViewportHeight, '消息布局提交时底栏已保持视口底部，不能先下跳再等下一帧修正');
+    });
+    assert.equal(renderer.root.findAllByType('PaperNoteFooter').length, 1, '始终只显示一个底栏');
+    assert.equal(renderer.root.findByType('PaperNoteFooter'), footer, '消息更新保留底栏实例');
+    assert.equal(list().props.keyExtractor(list().props.data.at(-1)), footerKey, '底栏始终位于列表末尾并保留身份');
+    assert.deepEqual(messageData().map(item => item.msg.id), messages.map(item => item.id), '底栏不伪造或吞掉业务消息');
+  }
+  const beforeSameLine = scrolls;
+  update({ messages: [message({ id: 7950 }), message({ id: 7951, text: '同一行继续输出' })] });
+  commit(1000);
+  assert.equal(scrolls, beforeSameLine, '文字增长未改变高度时不重复下发滚动');
+  update({ messages: [message({ id: 7949 }), ...props.messages] });
+  commit(1100);
+  assert.equal(scrolls, beforeSameLine, '历史 prepend 仍交给列表阅读锚点');
+  assert.equal(renderer.root.findByType('PaperNoteFooter'), footer, '历史 prepend 保留底栏实例');
+  act(() => renderer.unmount());
+  flushFrames();
 
   // 使用真实到达订阅、运行片段 merge 与确认 effect，覆盖 native 到达通知晚于 SQLite 读回的交接。
   theme = { ...theme, id: 'daylight' };
@@ -817,26 +862,41 @@ assert.equal(presentation.ownsCanonicalSegmentedAssistantPresentation(themes.get
     clientMessageId: canonical.clientMessageId, createdAt: canonical.createdAt, time: canonical.time,
   }] }));
   commit(180);
-  const deliveredKey = list().props.data.at(-1).key;
-  assert.equal(list().props.data.at(-1).msg.text, canonical.text, '持久交付的运行片段立即可见');
+  const deliveredKey = messageData().at(-1).key;
+  assert.equal(messageData().at(-1).msg.text, canonical.text, '持久交付的运行片段立即可见');
   for (let read = 0; read < 3; read++) {
     update({ messages: [user, { ...canonical }, { ...later }] });
     commit(180);
-    assert.equal(list().props.data.length, 2, 'SQLite 先读回时，已显示片段不消失，未到达尾段不泄漏');
-    assert.equal(list().props.data.at(-1).key, deliveredKey, '延迟的到达通知不能改变气泡身份');
+    assert.equal(messageData().length, 2, 'SQLite 先读回时，已显示片段不消失，未到达尾段不泄漏');
+    assert.equal(messageData().at(-1).key, deliveredKey, '延迟的到达通知不能改变气泡身份');
+  }
+  // 到达通知尚未同步时往返切换主题，不能清掉仍在承接显示的运行片段。
+  for (const themeId of ['paper-note', 'default-light']) {
+    theme = { ...theme, id: themeId };
+    update({ messages: [...props.messages] });
+  }
+  assert.equal(messageData().at(-1).msg.text, canonical.text,
+    '纸条切回普通主题后，已显示正文不能消失');
+  for (const themeId of ['paper-note', 'moon-kimi', 'default-dark', 'liquid-glass', 'default-light']) {
+    theme = { ...theme, id: themeId };
+    update({ messages: [...props.messages] });
+    commit(180);
+    assert.equal(messageData().at(-1).msg.text, canonical.text, `${themeId} 保留已交付正文`);
+    assert.equal(messageData().at(-1).key, deliveredKey, '切换主题不改变消息身份');
+    assert.equal(messageData().length, 2, `${themeId} 不提前展示未到达尾段`);
   }
   setPending([later.id]);
   commit(180);
-  assert.equal(list().props.data.at(-1).msg.id, canonical.id, '到达资格同步后由 canonical 连续接管');
-  assert.equal(list().props.data.at(-1).key, deliveredKey);
+  assert.equal(messageData().at(-1).msg.id, canonical.id, '到达资格同步后由 canonical 连续接管');
+  assert.equal(messageData().at(-1).key, deliveredKey);
   assert.equal(transientStore.snapshotAgentTransientTimelineWithReplacements(sessionId).length, 0,
     '交接结束清理运行片段，不长期堆积第二份消息');
   act(() => transientStore.reconcileAgentTransientTimelineCommit(sessionId, runId, [canonical, later]));
   commit(180);
-  assert.equal(list().props.data.length, 2, 'committed replacement 同样不能提前展示未到达尾段');
+  assert.equal(messageData().length, 2, 'committed replacement 同样不能提前展示未到达尾段');
   setPending([]);
   commit(260);
-  assert.deepEqual(list().props.data.map(item => item.msg.id), [user.id, canonical.id, later.id],
+  assert.deepEqual(messageData().map(item => item.msg.id), [user.id, canonical.id, later.id],
     '尾段到达后各显示一次，不重放已经显示的气泡');
   act(() => renderer.unmount());
   flushFrames();

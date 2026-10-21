@@ -33,6 +33,8 @@ export {
   restoreStoredThemeBackupState,
 } from './themeStorage';
 export type { StoredThemeBackupState } from './themeStorage';
+export type { ChatFooterImageRef, ChatFooterSettings } from './chatFooterSettings';
+export { CHAT_FOOTER_IMAGE_MIME_TYPES, DEFAULT_CHAT_FOOTER_SETTINGS } from './chatFooterSettings';
 
 export type { ChatInteractionProfile, ChatPresentationVariant } from './themeVariants';
 

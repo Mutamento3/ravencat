@@ -1,4 +1,5 @@
 import type { ApplicationRelease } from '@platform/updates/GitHubReleases';
+import type { ApplicationUpdateDownloadSource } from '@platform/updates/DownloadApplicationUpdate';
 
 interface Version {
   numbers: number[];
@@ -46,7 +47,8 @@ interface Dependencies {
   fetchReleases(): Promise<ApplicationRelease[]>;
   loadSkippedVersion(): Promise<string | null>;
   saveSkippedVersion(version: string): Promise<void>;
-  downloadRelease(release: ApplicationRelease, onProgress: (progress: number) => void): Promise<string>;
+  downloadRelease(release: ApplicationRelease, source: ApplicationUpdateDownloadSource,
+    onProgress: (progress: number) => void): Promise<string>;
 }
 
 /** 每个前台宿主实例持有一份状态；跳过只影响弹窗，不移除可下载更新。 */
@@ -101,7 +103,7 @@ export function createApplicationUpdates(dependencies: Dependencies) {
       return () => { listeners.delete(listener); };
     },
     check,
-    download: (release: ApplicationRelease): Promise<string> => {
+    download: (release: ApplicationRelease, source: ApplicationUpdateDownloadSource): Promise<string> => {
       if (downloading) return downloading;
       if (state.download?.release.version === release.version && state.download.uri) {
         return Promise.resolve(state.download.uri);
@@ -109,7 +111,7 @@ export function createApplicationUpdates(dependencies: Dependencies) {
       update({ ...state, download: { release, progress: 0, uri: null } });
       downloading = (async () => {
         try {
-          const uri = await dependencies.downloadRelease(release, (progress) => {
+          const uri = await dependencies.downloadRelease(release, source, (progress) => {
             update({ ...state, download: { release, progress, uri: null } });
           });
           update({ ...state, download: { release, progress: 1, uri } });

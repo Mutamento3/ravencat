@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
-import { chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const require = createRequire(import.meta.url);
@@ -65,7 +65,7 @@ function load(relative) {
     if (id.endsWith('/ChatGroupRuntime') || id === './ChatGroupRuntime') return { getChatGroupRuntimeDependencies: () => groupRuntime };
     if (id.endsWith('/ChatPresentation')) return { getChatDetailAvailableAssistants: async () => assistants, getChatDetailCurrentUser: async () => ({ name: '枫渡' }) };
     if (id.endsWith('/ResolveCanonicalConversation')) return { resolveCanonicalConversation: async ({ aiId }) => ({ id: `direct:${aiId}` }) };
-    if (id.endsWith('/ChatCallGateway')) return { getActiveChatCall: async () => null, isChatSendBlockedByCall: () => false };
+    if (id.endsWith('/ChatCallGateway')) return { getActiveChatCall: () => null, isChatSendBlockedByCall: () => false };
     if (id.endsWith('/GroupChatManagement')) return { getGroupChat: async (groupId) => groupId === 'missing' ? null : {}, listGroupChats: async () => [{ id: 'target-group', name: '目标群' }] };
     if (id.endsWith('/AgentTransientTimeline')) return { clearAgentTransientTimelineRun() {} };
     if (id === '@shared/runtime/abortSignal') return load('src/shared/runtime/abortSignal.ts');
@@ -74,6 +74,7 @@ function load(relative) {
     if (id === './GroupChatMessaging') return { invokeGroupChat() {} };
     if (id === './ResolveChatImageModelInput') return { resolveChatImageModelInput: async (params) => { imageInputs.push(params); return { parts: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }] }; } };
     if (id === './ChatMessageMutationSql') return chatMessageMutations;
+    if (id === '../../reply/infrastructure/ChatReplyVersionSql') return chatReplyVersionSql;
     if (id === './ChatSummaryRuntime') return { emitChatSummaryChanged() {}, getChatSummaryRuntime: () => ({}) };
     if (id === '@features/chat/messages/domain') return load('src/features/chat/messages/domain/chatMessageMetadata.ts');
     if (id.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(filename), `${id}.ts`)));
@@ -216,6 +217,7 @@ assert.match(context.content, /A 的发言/); assert.match(context.content, /age
 const timeline = load('src/features/chat/summary/domain/ChatSummaryTimeline.ts').buildConversationTimeline([context], []);
 snapshot = { timeline, segments: [], contextSegments: [], settings: { generationEnabled: true, fixedMessageId: null } };
 boundaries.set('@features/chat', { ...metadata, ...sharedDomain, ...inputBuilder, getChatInterruptedTurnContext: async () => [], getChatSummaryContext: async () => snapshot });
+boundaries.set('@shared/prompt', load('src/shared/prompt/messageTimestamp.ts'));
 const history = load('src/host/prompt/PromptHistoryBuilder.ts').promptHistoryBuilder;
 for (const agentId of ['agent-a', 'agent-b']) {
   const result = await history.loadPrivateSummaryContext({ sessionId: 'test', aiConfig: { id: agentId, agentId }, runtimeContext: { forceAppendUserText: true } });
@@ -393,32 +395,37 @@ boundaries.set('@shopify/flash-list', { useRecyclingState: (initial) => React.us
 boundaries.set('../MessageBubble/AttachmentCard', { default: 'Attachment', __esModule: true });
 boundaries.set('../MessageBubble/StickerMessageCard', { default: 'Sticker', __esModule: true });
 const keyboardListeners = new Map();
+let keyboardMetrics = { screenY: 500, screenX: 0, width: 400, height: 300 };
 boundaries.set('react-native', { ActivityIndicator: 'Loading', ScrollView: 'Scroll',
-  Keyboard: { isVisible: () => true, addListener: (event, callback) => {
+  Keyboard: { metrics: () => keyboardMetrics, addListener: (event, callback) => {
     if (!keyboardListeners.has(event)) keyboardListeners.set(event, new Set());
     keyboardListeners.get(event).add(callback);
     return { remove: () => { const listeners = keyboardListeners.get(event); listeners.delete(callback); if (!listeners.size) keyboardListeners.delete(event); } };
   } },
-  StyleSheet: { create: (styles) => styles, hairlineWidth: 1 }, KeyboardAvoidingView: 'KeyboardAvoid', Text: 'Text', TextInput: 'Input', TouchableOpacity: 'Button', View: 'View',
+  StyleSheet: { create: (styles) => styles, compose: (a, b) => [a, b], hairlineWidth: 1 }, Text: 'Text', TextInput: 'Input', TouchableOpacity: 'Button', View: 'View',
   Modal: ({ visible, children, ...rest }) => visible ? React.createElement('Modal', rest, children) : null,
 });
+const ShareKeyboardContainer = load('src/shared/ui/KeyboardAvoidingContainer.tsx').default;
 boundaries.set('@shared/ui', {
   AppTextInput: load('src/shared/ui/AppTextInput.tsx').default,
-  KeyboardAvoidingContainer: load('src/shared/ui/KeyboardAvoidingContainer.tsx').default,
+  KeyboardAvoidingContainer: props => React.createElement(ShareKeyboardContainer, { ...props, testID: 'share-window' }),
 });
 const Sheet = load('src/features/chat/presentation/messages/components/ChatShareSheet.tsx').default;
 let confirmed = 0;
 const previewState = { visible: true, record: full, target: destinations[0], targets: destinations, comment: '附言', error: null, loading: false, sending: false,
   close() {}, choose() {}, setComment() {}, send: async () => confirmed++ };
 const commentNative = { focused: true, blur() { this.focused = false; } };
-await renderer.act(async () => { rendered = renderer.create(React.createElement(Sheet, { share: previewState, onPreviewFile() {} }), { createNodeMock: (element) => element.type === 'Input' ? commentNative : null }); });
+await renderer.act(async () => { rendered = renderer.create(React.createElement(Sheet, { share: previewState, onPreviewFile() {} }), { createNodeMock: (element) => element.type === 'Input' ? commentNative : { measureInWindow: callback => callback(0, 0, 400, 800) } }); });
 assert.equal(rendered.root.findAllByType('Text').filter((item) => /^第 \d+ 条$/.test(item.props.children)).length, 20);
+keyboardMetrics = undefined;
 await renderer.act(async () => { for (const listener of keyboardListeners.get('keyboardDidHide')) listener(); });
 assert.equal(commentNative.focused, false, '输入法主动收起后解除附言框焦点');
 assert.equal(rendered.root.findByType('Input').props.value, '附言', '收起键盘不丢弃附言');
-assert.equal(rendered.root.findByType('KeyboardAvoid').props.enabled, false, '收起键盘后清除窗口避让');
-await renderer.act(async () => { for (const listener of keyboardListeners.get('keyboardDidShow')) listener(); });
-assert.equal(rendered.root.findByType('KeyboardAvoid').props.enabled, true, '再次输入时恢复避让');
+const shareBottom = () => Object.assign({}, ...rendered.root.findAllByType('View').find(node => node.props.testID === 'share-window').props.style).paddingBottom;
+assert.equal(shareBottom(), 0, '收起键盘后清除窗口避让');
+keyboardMetrics = { screenY: 500, screenX: 0, width: 400, height: 300 };
+await renderer.act(async () => { for (const listener of keyboardListeners.get('keyboardDidShow')) listener({ endCoordinates: keyboardMetrics }); });
+assert.equal(shareBottom(), 300, '再次输入时只避让实际重叠');
 assert.equal(rendered.root.findByType('Input').props.value, '附言', '切换键盘不重建输入草稿');
 const confirm = rendered.root.findAllByType('Button').find((button) => button.findAllByType('Text').some((item) => item.props.children === '确认分享'));
 await renderer.act(async () => confirm.props.onPress()); assert.equal(confirmed, 1);

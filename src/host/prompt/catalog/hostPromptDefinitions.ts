@@ -175,6 +175,25 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
     contentDescription: 'Host 读取一次网易云 MediaSession，与 Activity 形成一致快照；仅 active 时注入，邀请待回应或结束后省略。',
     sourcePath: 'src/host/prompt/TogetherListeningPromptBlock.ts',
   }),
+  // 纯开关定义：不生成 Prompt Block，状态行只决定对应运行时块是否参与本轮组装。
+  define({
+    id: 'context.user_state', name: '用户状态与一起听', owner: 'host',
+    description: '按 AI 控制一起听期间的用户运行时状态、输出设备与当前歌词是否注入，默认开启。',
+    category: 'context', supportedScenarios: ['chat.private_reply', 'chat.group_member_reply', 'raven_cat.ai_schedule_trigger'],
+    defaultSlot: 'dynamic_context', placement: 'system', protection: 'overridable',
+    contentKind: 'static',
+    contentDescription: '开关定义，无独立正文；关闭时 context.together_listening_runtime 块不参与本轮组装。',
+    sourcePath: FACTORY_SOURCE,
+  }),
+  define({
+    id: 'context.social', name: '时刻社交信息', owner: 'host',
+    description: '按 AI 控制未读时刻社交事件是否注入，默认开启。',
+    category: 'context', supportedScenarios: ['chat.private_reply', 'chat.group_member_reply'],
+    defaultSlot: 'dynamic_context', placement: 'system', protection: 'overridable',
+    contentKind: 'static',
+    contentDescription: '开关定义，无独立正文；关闭时时刻 Social Inbox 不参与本轮组装。',
+    sourcePath: FACTORY_SOURCE,
+  }),
   define({
     id: 'context.device_battery', name: '手机电量', owner: 'host',
     description: '提供本轮设备电量百分比与充电状态，按 AI 控制读取和注入。', category: 'context',
@@ -190,10 +209,12 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
     contentKind: 'provider', providerId: 'runtime.current_time', contentDescription: '组装时读取设备当前本地时间。', sourcePath: FACTORY_SOURCE,
   }),
   define({
-    id: 'context.recent_moments', name: '近期时刻背景', owner: 'host',
-    description: '以轻量背景形式提供近期对当前 AI 可见的时刻。', category: 'context',
-    supportedScenarios: ['chat.group_member_reply'], defaultSlot: 'dynamic_context', placement: 'system', protection: 'overridable',
-    contentKind: 'provider', providerId: 'moments.recent', contentDescription: '从 Moment Repository 动态读取，当前群聊分支最多两条。', sourcePath: FACTORY_SOURCE,
+    id: 'context.message_timestamps', name: '消息时间戳', owner: 'host',
+    description: '按 AI 独立控制消息时间元数据，默认关闭；开启增加输入 Token，部分模型可能模仿时间格式。',
+    category: 'context', supportedScenarios: ['chat.private_reply', 'chat.group_member_reply', 'ledger.reply', 'call.live_reply', 'call.outgoing_decision'],
+    defaultSlot: 'dynamic_context', placement: 'system', protection: 'overridable',
+    contentKind: 'provider', providerId: 'runtime.message_timestamps', contentDescription: '消息时间通过独立 system 元数据提供，保留原正文和角色，不计算时间差。',
+    sourcePath: 'src/shared/prompt/messageTimestamp.ts',
   }),
   define({
     id: 'context.conversation_summary', name: '聊天摘要', owner: 'chat',

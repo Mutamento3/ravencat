@@ -1,9 +1,11 @@
 /** AI Provider 技术能力公共出口。 */
 export { BaseAIClient } from './BaseAIClient';
+export { aiHttpDiagnostics } from './HttpExchangeDiagnostics';
+export type { AIHttpExchange, AIHttpDiagnosticsSnapshot } from './HttpExchangeDiagnostics';
 export { KimiClient } from './KimiClient';
 export { OpenAIClient, createAIClient } from './OpenAIClient';
 export { fetchModelList } from './modelDiscovery';
-export { testAPIConnection, detectToolsSupport } from './connectionTest';
+export { testAPIConnection } from './connectionTest';
 export {
   detectParamError,
   detectQuotaError,

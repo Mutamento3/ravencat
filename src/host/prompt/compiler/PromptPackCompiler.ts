@@ -10,7 +10,7 @@ import type {
   PromptPresetDefinition,
   PromptToolInstructionsSlot,
 } from '@shared/prompt';
-import { CHAT_PROMPT_READING_FLOW } from '@shared/prompt';
+import { CHAT_PROMPT_READING_FLOW, renderPromptMessageWithTimestamp } from '@shared/prompt';
 import { applyTokenBudget, estimateTokens } from '../tokenBudget';
 import { resolvePromptBlockMetadata } from './promptBlockMetadata';
 
@@ -19,6 +19,7 @@ interface CompilePromptPackParams {
   blocks: PromptPackBlock[];
   recentMessages: PromptPackMessage[];
   currentInput: PromptPackTextMessage | null;
+  messageTimestampsEnabled?: boolean;
   preset: PromptPresetDefinition;
 }
 
@@ -100,6 +101,7 @@ function blockAssemblyOrder(block: PromptPackBlock): number {
 
 export class PromptPackCompiler {
   compile(params: CompilePromptPackParams): PromptPack {
+    const messageTimestampsEnabled = params.messageTimestampsEnabled === true;
     if (params.preset.scenarioId !== params.scenario) {
       throw new Error(`提示词预设场景不匹配：${params.preset.id}`);
     }
@@ -113,7 +115,8 @@ export class PromptPackCompiler {
       blocksWithTokens,
       params.recentMessages,
       params.currentInput,
-      params.preset.tokenBudget
+      params.preset.tokenBudget,
+      messageTimestampsEnabled,
     );
     const stableSystemPrompt = renderSystemSegment(budgetResult.blocks, 'stable-prefix');
     const summaryPrompt = renderSystemSegment(budgetResult.blocks, 'conversation-summary');
@@ -125,6 +128,7 @@ export class PromptPackCompiler {
     );
     return {
       scenario: params.scenario,
+      messageTimestampsEnabled,
       blocks: budgetResult.blocks,
       systemPrompt: [stableSystemPrompt, summaryPrompt].filter(Boolean).join('\n\n'),
       toolInstructionsSlot,
@@ -134,7 +138,7 @@ export class PromptPackCompiler {
       recentMessages: budgetResult.recentMessages,
       currentInput: params.currentInput,
       modelMessages: [
-        ...budgetResult.recentMessages,
+        ...budgetResult.recentMessages.flatMap((message) => renderPromptMessageWithTimestamp(message, messageTimestampsEnabled)),
         ...(currentContext ? [{
           role: 'system' as const,
           content: currentContext,

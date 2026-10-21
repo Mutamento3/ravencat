@@ -103,6 +103,7 @@ function load(relativePath) {
   }).outputText;
   const requireModule = (specifier) => {
     if (boundaries[specifier]) return boundaries[specifier];
+    if (specifier === '@shared/prompt') return load('src/shared/prompt/messageTimestamp.ts');
     if (specifier === './ChatTurnPresentationRuntime') return { getChatInterruptedTurnContext: async () => [] };
     if (specifier === '@features/chat/messages/domain') return load('src/features/chat/messages/domain/chatMessageMetadata.ts');
     if (specifier.endsWith('/ChatMessageRuntime') || specifier === './ChatMessageRuntime') {
@@ -160,6 +161,9 @@ const modelInput = await buildChatTurnAIInput({
   sessionId: 's1', replyCursorAtClaim: 0, inputHighWatermark: result.userMessage.id, assistantId: 'ai-1',
 });
 assert.equal(modelInput.turnInputMessages.length, 3, '同一回合模型输入同时包含图片和文字');
+for (const [index, message] of modelInput.turnInputMessages.entries()) {
+  assert.equal(message.createdAt, modelInput.userMessages[index].createdAt, '本轮输入将原时间与正文分开传递');
+}
 assert.ok(modelInput.turnInputMessages.slice(0, 2).every((message) => message.content.some((part) => part.type === 'image_url')));
 assert.match(modelInput.turnInputMessages[2].content, /看看这两张/);
 
@@ -265,7 +269,7 @@ const hookMocks = {
   '../../../messages/application/MessageTimeline': timeline,
   '../../../messages/application/SendUserMessage': { sendUserMessage: params => new Promise((resolve, reject) => pendingSubmissions.push({ params, resolve, reject })) },
   '../../../conversation/application/ChatCallGateway': {
-    getActiveChatCall: async () => activeCall,
+    getActiveChatCall: () => activeCall,
     isChatSendBlockedByCall: load('src/features/chat/conversation/application/ChatCallGateway.ts').isChatSendBlockedByCall,
   },
   '../../../messages/domain/chatMessageMetadata': metadata,

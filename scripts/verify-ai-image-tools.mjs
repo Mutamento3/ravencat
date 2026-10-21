@@ -42,6 +42,7 @@ const processingModule = load('src/features/stickers/infrastructure/SQLiteAIStic
   }),
 });
 const { ConversationTurnRepository } = load('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts', {
+  './ChatReplyVersionSql': load('src/features/chat/reply/infrastructure/ChatReplyVersionSql.ts'),
   '@platform/persistence': {}, '../../messages/infrastructure/ChatMessageMutationSql': load('src/features/chat/reply/infrastructure/ChatTurnPresentationSql.ts'),
   '../../messages/infrastructure/SQLiteMessageRepository': {}, '../domain/ConversationTurn': {}, '../../messages/domain': {},
 });
@@ -452,6 +453,7 @@ assert.deepEqual(await imagePreparation.readVisionImageAsBase64('file:///wrong-e
 
 // HTTP 图片拒绝只降级一次；覆盖 complete、fetch stream 与 Android XHR stream，含工具入口。
 const { BaseAIClient } = load('src/platform/ai/BaseAIClient.ts', {
+  './HttpExchangeCapture': { beginAIHttpCapture: async () => null },
   './baseUrl': { normalizeAIBaseURL: value => value },
   './errorMapping': { getErrorDisplayInfo: error => ({ message: String(error) }) },
 });

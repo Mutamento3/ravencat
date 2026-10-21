@@ -839,7 +839,7 @@ function createSendFlowDeps({ voiceModule }) {
       },
       sendUserMessage: async () => ({ success: true, userMessage: { id: 1 } }),
       chatCallGateway: {
-        getActiveChatCall: async () => null,
+        getActiveChatCall: () => null,
         startOutgoingChatCall: async () => ({ status: 'ok' }),
       },
       chatMessageMetadata: {
@@ -1798,6 +1798,7 @@ function loadChatAgentTimelineModule() {
   };
   const metadataModule = loadChatMessageMetadataModule();
   const timeline = loadTypeScriptModule('src/features/chat/reply/agent/ChatAgentTimeline.ts', {
+    '../application/AutonomousReplyContract': loadTypeScriptModule('src/features/chat/reply/application/AutonomousReplyContract.ts'),
     '@platform/ai': {},
     '@platform/agentRuntime': {},
     '@features/stickers': stickerModule,

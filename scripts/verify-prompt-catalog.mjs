@@ -48,6 +48,7 @@ compile('src/features/chat/reply/application/ReplyTaskPromptBlocks.ts');
 compile('src/features/chat/summary/domain/ChatSummaryRepository.ts');
 
 compile('src/features/companion/application/CompanionPromptBlocks.ts');
+write('node_modules/@features/chat/index.js', `module.exports = require(${JSON.stringify(compile('src/features/chat/reply/application/AutonomousReplyContract.ts'))});`);
 compile('src/features/togetherListening/application/TogetherListeningPromptBlocks.ts');
 
 const definitions = definitionModules.flatMap(([relativePath, exportName]) => {

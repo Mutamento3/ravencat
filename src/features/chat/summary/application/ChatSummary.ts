@@ -2,8 +2,7 @@
 import { randomUUID } from 'expo-crypto';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { emitChatSummaryChanged, getChatSummaryRuntime } from './ChatSummaryRuntime';
-import { ChatSummaryEditError, type ChatSecondarySummaryEdit, ChatSummaryGenerationError, type ChatSummaryTaskClaim, type ChatSummaryAddition, type ChatSummaryModelInput, type ChatSummarySettingsPatch, type ChatSummarySearchInput, type ChatSummarySegment , ChatBackgroundContextOptions } from '../domain/ChatSummaryRepository';
-import { splitSummaryMessages } from '../domain/ChatSummaryTimeline';
+import { ChatSummaryEditError, type ChatSummaryTextEdit, ChatSummaryGenerationError, type ChatSummaryTaskClaim, type ChatSummaryModelInput, type ChatSummarySettingsPatch, type ChatSummarySearchInput, type ChatSummarySegment , ChatBackgroundContextOptions } from '../domain/ChatSummaryRepository';
 import { buildSharedChatRecordText } from '../../messages/domain/SharedChatRecord';
 import type { DatabaseTransactionExecutor } from '@platform/persistence';
 
@@ -42,11 +41,22 @@ export async function deleteCombinedSecondarySummary(conversationId: string, exp
 export function getSecondarySummaryForAssistant(assistantId: string, conversationId: string) {
   return getChatSummaryRuntime().repository.readSecondaryForAssistant(assistantId, conversationId);
 }
-export async function editSecondarySummaryForAssistant(assistantId: string, conversationId: string, input: ChatSecondarySummaryEdit) {
+export async function editSecondarySummaryForAssistant(assistantId: string, conversationId: string, input: ChatSummaryTextEdit) {
   if (!input.oldText.trim()) throw new ChatSummaryEditError('oldText 必须包含要替换的原文');
   const result = await getChatSummaryRuntime().repository.editSecondaryForAssistant(assistantId, conversationId, input, new Date().toISOString());
   emitChatSummaryChanged(conversationId);
   return result;
+}
+export async function editPrimarySummaryForAssistant(assistantId: string, conversationId: string, segmentId: string, input: ChatSummaryTextEdit) {
+  if (!input.oldText.trim()) throw new ChatSummaryEditError('oldText 必须包含要替换的原文');
+  const result = await getChatSummaryRuntime().repository.editPrimaryForAssistant(assistantId, conversationId, segmentId, input, new Date().toISOString());
+  emitChatSummaryChanged(conversationId);
+  return result;
+}
+export async function deletePrimarySummaryForAssistant(assistantId: string, conversationId: string, segmentId: string, expectedContent: string) {
+  await getChatSummaryRuntime().repository.deletePrimaryForAssistant(assistantId, conversationId, segmentId, expectedContent);
+  emitChatSummaryChanged(conversationId);
+  return { conversationId, segmentId, deleted: true };
 }
 export async function deleteChatSummary(conversationId: string, segmentId: string) {
   await getChatSummaryRuntime().repository.delete(conversationId, segmentId);
@@ -77,8 +87,10 @@ async function recordFailure(claim: ChatSummaryTaskClaim, error: unknown, signal
   if (signal.aborted) return false;
   if (!(error instanceof ChatSummaryGenerationError)) throw error;
   const failure = error.failure;
-  const changed = await getChatSummaryRuntime().repository.failTask(claim, failure, new Date().toISOString());
-  if (changed) emitChatSummaryChanged(claim.conversationId, 'task');
+  const now = new Date().toISOString();
+  const outcome = await getChatSummaryRuntime().repository.failTask(claim, failure, now);
+  if (outcome) emitChatSummaryChanged(claim.conversationId, 'task',
+    outcome === 'failed' ? { finalFailure: { ...failure, occurredAt: now } } : undefined);
   return false;
 }
 export async function searchChatSummaries(assistantId: string, input: ChatSummarySearchInput) {
@@ -116,28 +128,23 @@ async function processPrimaryChatSummary(conversationId: string, batchSize: numb
   if (!claim) return false;
   // 请求选择与generation必须来自领取事务的同一快照，不能沿用领取前的旧设置。
   const settings = claim.requestSettings;
-  const leaseMs = settings.requestTimeoutSeconds * 1000 + 60_000;
   emitChatSummaryChanged(conversationId, 'task');
   try {
-    const batches = splitSummaryMessages(claim.messages);
-    const additions: ChatSummaryAddition[] = [];
-    for (const [index, messages] of batches.entries()) {
-      throwIfAbortSignalAborted(signal);
-      const started = new Date();
-      // 每次请求都有原有的时限；下一分片开始前续租，不能让长通话突破 claim 生命周期。
-      if (!await runtime.repository.renewClaim(claim, started.toISOString(), new Date(started.getTime() + leaseMs).toISOString())) return false;
-      const callIds = new Set(messages.map((message) => message.callId));
-      const input: ChatSummaryModelInput = { conversationId, timeZone, previous: claim.previous, messages,
-        calls: claim.calls.filter((call) => callIds.has(call.info.callId)), part: { index: index + 1, total: batches.length },
-        earlierAdditionsReadOnly: additions.map((addition) => addition.content) };
-      const content = await runtime.generateAddition(input, signal,
-        (diagnostics) => runtime.repository.recordInvocation(claim, diagnostics, new Date().toISOString()), settings);
-      additions.push({ id: randomUUID(), content, messages });
-    }
+    // 一次领取只调用一次模型：正文、游标与已处理通话标记在 appendClaim 同事务交接。
+    const callIds = new Set(claim.messages.map((message) => message.callId));
+    const input: ChatSummaryModelInput = { conversationId, timeZone, previous: claim.previous, messages: claim.messages,
+      calls: claim.calls.filter((call) => callIds.has(call.info.callId)) };
+    const content = await runtime.generateAddition(input, signal,
+      (diagnostics) => runtime.repository.recordInvocation(claim, diagnostics, new Date().toISOString()), settings);
     throwIfAbortSignalAborted(signal);
-    const appended = await runtime.repository.appendClaim(claim, additions, new Date().toISOString());
-    if (appended) emitChatSummaryChanged(conversationId);
-    return appended;
+    const appended = await runtime.repository.appendClaim(claim,
+      [{ id: randomUUID(), content, messages: claim.messages }], new Date().toISOString());
+    // 领取被 settings/clear 递增 generation 撤销时 failTask 同样不落账（状态已易主）；租约过期等
+    // 状态仍引用本 claim 的失效必须记账，否则任务被静默放回 waiting 并用同范围无限重试。
+    if (!appended) throw new ChatSummaryGenerationError({ kind: 'commit_lost',
+      message: '摘要交接时领取已失效或租约已过期，本次结果未保存。', retryable: true });
+    emitChatSummaryChanged(conversationId);
+    return true;
   } catch (error) { return await recordFailure(claim, error, signal); }
   finally { await runtime.repository.releaseClaim(claim); emitChatSummaryChanged(conversationId, 'task'); }
 }
@@ -152,27 +159,26 @@ async function processSecondaryChatSummary(conversationId: string, signal: Abort
   emitChatSummaryChanged(conversationId, 'task');
   try {
     const request = claim.requestSettings;
-    const started = new Date();
-    if (!await runtime.repository.renewClaim(claim, started.toISOString(), new Date(started.getTime() + request.requestTimeoutSeconds * 1000 + 60_000).toISOString())) return false;
     const content = await runtime.generateSecondary(claim, signal,
       (diagnostics) => runtime.repository.recordInvocation(claim, diagnostics, new Date().toISOString()), request);
     throwIfAbortSignalAborted(signal);
     const committed = await runtime.repository.appendSecondary(claim, randomUUID(), content, new Date().toISOString());
-    if (committed) emitChatSummaryChanged(conversationId);
-    return committed;
+    if (!committed) throw new ChatSummaryGenerationError({ kind: 'commit_lost',
+      message: '二级摘要交接时领取已失效或来源已变化，本次结果未保存。', retryable: true });
+    emitChatSummaryChanged(conversationId);
+    return true;
   } catch (error) { return await recordFailure(claim, error, signal); }
   finally { await runtime.repository.releaseSecondaryClaim(claim); emitChatSummaryChanged(conversationId, 'task'); }
 }
-export async function prepareChatSummaryConversations() {
-  const { conversationIds, pausedConversationIds } = await getChatSummaryRuntime().repository.prepareConversations(new Date().toISOString());
+export async function prepareChatSummaryConversations(requestedConversationIds?: readonly string[]) {
+  const { conversationIds, pausedConversationIds } = await getChatSummaryRuntime().repository.prepareConversations(new Date().toISOString(), requestedConversationIds);
   for (const id of pausedConversationIds) emitChatSummaryChanged(id, 'task');
   return conversationIds;
 }
 export function getNextChatSummaryWakeAt() { return getChatSummaryRuntime().repository.getNextWakeAt(); }
 export function buildChatSummaryModelInput(input: ChatSummaryModelInput, currentAgentId?: string): string {
-  return JSON.stringify({ sourceKind: 'conversation', currentAgentId, timeZone: input.timeZone, part: input.part,
+  return JSON.stringify({ sourceKind: 'conversation', currentAgentId, timeZone: input.timeZone,
     calls: input.calls.map((call) => ({ ...call.info, historyStartsAfter: call.historyStartsAfter })),
-    earlierAdditionsReadOnly: input.earlierAdditionsReadOnly,
     previousSummariesReadOnly: input.previous.map((segment) => ({
     content: segment.content, discussionStart: segment.sourceStartAt, discussionEnd: segment.sourceEndAt, timeZone: segment.timeZone,
   })), newMessagesOnly: input.messages.map((message) => ({
@@ -180,6 +186,5 @@ export function buildChatSummaryModelInput(input: ChatSummaryModelInput, current
     source: message.source, callId: message.callId, speaker: message.speaker,
     content: message.sharedRecord ? buildSharedChatRecordText(message.sharedRecord, message.sharedComment!, currentAgentId) : message.content,
     ...(message.actor ? { actor: message.actor } : {}),
-    continuation: message.continuation,
   })) });
 }

@@ -86,6 +86,7 @@ compileProductionModule('src/features/speech/application/SpeechText.ts');
 compileProductionModule('src/features/speech/application/SpeechProviderCatalog.ts');
 compileProductionModule('src/features/chat/messages/infrastructure/ChatMessageMutationSql.ts');
 compileProductionModule('src/features/chat/reply/infrastructure/ChatTurnPresentationSql.ts');
+compileProductionModule('src/features/chat/reply/infrastructure/ChatReplyVersionSql.ts');
 
 for (const relativePath of [
   'src/features/calls/application/CallPromptBlocks.ts',
@@ -653,6 +654,10 @@ function createStrictMessageDatabase() {
           const transaction = {
             async runAsync(source, params = []) {
               operations.push({ kind: 'run', source, params });
+              // 本 fixture 没有回复候选；通话状态写入经过候选锁定 SQL 时没有匹配行。
+              if (/^UPDATE chat_reply_version_sets/.test(source)) {
+                return { changes: 0, lastInsertRowId: 0 };
+              }
               if (/^INSERT INTO messages/.test(source)) {
                 const id = nextId++;
                 transactionMessages.set(id, {
@@ -714,6 +719,7 @@ function createStrictMessageDatabase() {
             },
             async getFirstAsync(source, params = []) {
               operations.push({ kind: 'read', source, params });
+              if (source.includes('FROM chat_regeneration_requests')) return null;
               if (source.includes('client_message_id')) {
                 const row = Array.from(transactionMessages.values()).find((item) => (
                   item.session_id === params[0] && item.client_message_id === params[1]
@@ -1212,6 +1218,7 @@ scenario('页面重新初始化保留仍由原生宿主持有的通话与快照'
   });
   for (let remount = 0; remount < 2; remount += 1) {
     assert.equal(await reconcileInterruptedCallFromPreviousProcess(), null);
+    assert.equal(aiCallRuntimeService.getActiveCallSnapshot().id, call.id, '恢复存活通话时补齐接通标记');
   }
   assert.equal((await repository.getSessionById(call.id)).state, 'active');
   assert.equal(snapshotReads, 0, '存活执行期不能当作上一进程删除摄像头快照');
@@ -1237,6 +1244,7 @@ scenario('冷启动只收口遗留通话并更新原状态气泡', async () => {
 
   const reconciled = await reconcileInterruptedCallFromPreviousProcess();
   assert.equal(reconciled.state, 'failed');
+  assert.equal(aiCallRuntimeService.getActiveCallSnapshot(), null, '故障终态提交后释放接通标记');
   assert.equal(reconciled.endReason, 'runtimeError');
   assert.ok(reconciled.endedAt);
   assert.deepEqual(callRepository.eventInputs, [{
@@ -2198,8 +2206,15 @@ scenario('重复接听不会重复写入通话状态消息', async () => {
     chat: fakeRuntime.chat,
   });
 
+  const snapshots = [];
+  const unsubscribe = service.subscribeActiveCall(() => snapshots.push(service.getActiveCallSnapshot()));
+  assert.equal(service.getActiveCallSnapshot(), null, '响铃不设置接通标记');
+
   const first = await service.acceptCall(ringingCall.id);
   const second = await service.acceptCall(ringingCall.id);
+  assert.equal(service.getActiveCallSnapshot(), first.call);
+  assert.deepEqual(snapshots, [first.call], '重复接听不重复发布接通标记');
+  unsubscribe();
 
   assert.equal(first.call.state, 'active');
   assert.equal(first.visibleMessages.length, 1);
@@ -2211,6 +2226,78 @@ scenario('重复接听不会重复写入通话状态消息', async () => {
     callRepository.events.filter((event) => event.kind === 'stateChanged').length,
     1
   );
+});
+
+scenario('接通标记跟随提交与终态，读取标记不访问数据库', async () => {
+  const call = createCall({ direction: 'incoming', state: 'ringing', acceptedAt: null, endedAt: null });
+  const repository = createCallRepository([call]);
+  resetRuntime(repository);
+  const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+  const commit = deferred();
+  const updating = deferred();
+  const update = repository.updateSessionIfState;
+  repository.updateSessionIfState = async (...args) => {
+    updating.resolve();
+    await commit.promise;
+    return update(...args);
+  };
+  const snapshots = [];
+  const unsubscribe = service.subscribeActiveCall(() => snapshots.push(service.getActiveCallSnapshot()));
+  const accepting = service.acceptCall(call.id);
+  await updating.promise;
+  assert.equal(service.getActiveCallSnapshot(), null, '接通事务尚未提交时不阻断聊天');
+  commit.resolve();
+  const accepted = await accepting;
+  assert.equal(service.getActiveCallSnapshot(), accepted.call);
+  repository.getActiveSession = () => { throw new Error('输入判定不应查询数据库'); };
+  assert.equal(service.getActiveCallSnapshot(), accepted.call);
+
+  const cleanup = deferred();
+  const cleaning = deferred();
+  fakeRuntime.callAudioPlayback.endSession = async () => { cleaning.resolve(); await cleanup.promise; };
+  const ending = service.endCall(call.id);
+  await cleaning.promise;
+  assert.equal(service.getActiveCallSnapshot(), null, '终态已提交时不等待媒体清理就释放标记');
+  assert.deepEqual(snapshots, [accepted.call, null]);
+  cleanup.resolve();
+  await ending;
+  unsubscribe();
+  await service.endCall(call.id);
+  assert.deepEqual(snapshots, [accepted.call, null], '重复挂断不重复通知');
+});
+
+scenario('冷启动查询晚到不能覆盖接听或挂断后的标记', async () => {
+  const call = createCall({ direction: 'incoming', state: 'ringing', acceptedAt: null, endedAt: null });
+  const repository = createCallRepository([call]);
+  resetRuntime(repository);
+  const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+  const staleRinging = deferred();
+  repository.getActiveSession = () => staleRinging.promise;
+  const firstRestore = service.restoreActiveCallSnapshot();
+  const accepted = await service.acceptCall(call.id);
+  staleRinging.resolve(call);
+  await firstRestore;
+  assert.equal(service.getActiveCallSnapshot(), accepted.call, '旧响铃查询不得抹掉新接通标记');
+
+  const staleActive = deferred();
+  repository.getActiveSession = () => staleActive.promise;
+  const secondRestore = service.restoreActiveCallSnapshot();
+  await service.endCall(call.id);
+  staleActive.resolve(accepted.call);
+  await secondRestore;
+  assert.equal(service.getActiveCallSnapshot(), null, '旧 active 查询不得复活已挂断标记');
+});
+
+scenario('旧通话的迟到挂断不能清除下一通电话的标记', async () => {
+  const oldCall = createCall({ id: 'old-call', state: 'ended' });
+  const newCall = createCall({ id: 'new-call', direction: 'incoming', state: 'ringing', acceptedAt: null, endedAt: null });
+  const repository = createCallRepository([oldCall, newCall]);
+  resetRuntime(repository);
+  const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+  const accepted = await service.acceptCall(newCall.id);
+  await service.endCall(oldCall.id);
+  assert.equal(service.getActiveCallSnapshot(), accepted.call);
+  await service.endCall(newCall.id);
 });
 
 scenario('已有通话时再次拨号只返回占线，不挂断或替换通话', async () => {
@@ -2253,6 +2340,36 @@ scenario('去电决策晚到不能复活已挂断会话', async () => {
     assert.equal(result.call.state, 'ended');
     assert.equal((await repository.getSessionById(callId)).state, 'ended');
     assert.deepEqual(runtime.startedAudioCalls, [], '晚到决策不能启动 Telecom');
+  }
+});
+
+scenario('去电只在 AI 接听后设置接通标记，拒接不设置', async () => {
+  for (const decision of ['accept', 'reject']) {
+    const repository = createCallRepository([]);
+    resetRuntime(repository);
+    const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+    const response = deferred();
+    const deciding = deferred();
+    const snapshots = [];
+    const unsubscribe = service.subscribeActiveCall(() => snapshots.push(service.getActiveCallSnapshot()));
+    fakeRuntime.assembleChatPromptPack = async () => ({ systemPrompt: 'call', modelMessages: [] });
+    fakeRuntime.createAIClient = () => ({ async chat() { deciding.resolve(); return response.promise; } });
+    const starting = service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
+    await deciding.promise;
+    assert.equal(service.getActiveCallSnapshot(), null, '拨号等待决策时尚未接通');
+    response.resolve({ success: true, text: JSON.stringify(decision === 'accept'
+      ? { decision, spokenText: '接通' }
+      : { decision, rejectionReason: '稍后再聊' }) });
+    const result = await starting;
+    if (decision === 'accept') {
+      assert.equal(service.getActiveCallSnapshot(), result.call);
+      await service.endCall(result.call.id);
+      assert.deepEqual(snapshots, [result.call, null]);
+    } else {
+      assert.equal(service.getActiveCallSnapshot(), null);
+      assert.deepEqual(snapshots, []);
+    }
+    unsubscribe();
   }
 });
 

@@ -16,6 +16,8 @@ import ChatMessageList from '../components/ChatMessageList';
 import ChatInputArea from '../components/ChatInputArea';
 import ChatMessageActionMenu from '../components/ChatMessageActionMenu';
 import ChatMessageEditor from '../components/ChatMessageEditor';
+import ChatRegenerationConfirm, { shouldConfirmChatRegeneration } from '../components/ChatRegenerationConfirm';
+import ChatReplyVersionSheet from '../components/ChatReplyVersionSheet';
 import { getChatSelectionKey } from '../../../messages/domain/ChatMessageSelection';
 import { canEditChatMessage } from '../../../messages/domain/ChatMessageEditing';
 import { copyTextToClipboard } from '@platform/device';
@@ -111,6 +113,14 @@ export default function ChatDetailModule({
   const [replyTo, setReplyTo] = useState<ChatReplyTarget | null>(null);
   const [actionMenuVisible, setActionMenuVisible] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
+  const [regenerationPrompt, setRegenerationPrompt] = useState<ChatMessage | null>(null);
+  const [historyRunId, setHistoryRunId] = useState<string | null>(null);
+  const activeConversation = useRef({ sessionId, isActive });
+  activeConversation.current = { sessionId, isActive };
+  useEffect(() => {
+    setRegenerationPrompt(null);
+    setHistoryRunId(null);
+  }, [sessionId, isActive]);
   const [summarySettings, setSummarySettings] = useState<ChatSummarySettings | null>(null);
   useEffect(() => {
     setSummarySettings(null);
@@ -231,7 +241,7 @@ export default function ChatDetailModule({
     loadMore,
     refresh,
     retrySend,
-  } = useChatDetail(sessionId, aiAssistant, onCallCreated, isActive);
+  } = useChatDetail(sessionId, aiAssistant, onCallCreated);
   const regeneration = useChatRegeneration(sessionId, refresh);
   const executionStatus = useChatTurnExecutionStatus(sessionId ?? null);
 
@@ -261,7 +271,12 @@ export default function ChatDetailModule({
   const handleRegenerateMessage = useCallback(() => {
     dismissInputSurface();
     void voiceMessagePlaybackCoordinator.stop();
-    void regeneration.regenerate(selectedMessage!, messages);
+    const message = selectedMessage!;
+    void shouldConfirmChatRegeneration().then(confirm => {
+      if (activeConversation.current.sessionId !== message.sessionId || !activeConversation.current.isActive) return;
+      if (confirm) setRegenerationPrompt(message);
+      else void regeneration.regenerate(message, messages);
+    }).catch(error => showAppDialog({ title: '无法读取重写提示设置', message: error instanceof Error ? error.message : '请重试', tone: 'error' }));
   }, [dismissInputSurface, regeneration, selectedMessage, messages]);
 
   const handleTogetherListeningInvite = useCallback(async () => {
@@ -578,6 +593,20 @@ export default function ChatDetailModule({
         />
       )}
 
+      {regenerationPrompt ? <ChatRegenerationConfirm
+        onClose={() => setRegenerationPrompt(null)}
+        onConfirm={() => {
+          const message = regenerationPrompt;
+          setRegenerationPrompt(null);
+          void regeneration.regenerate(message, messages);
+        }}
+      /> : null}
+      {historyRunId && sessionId ? <ChatReplyVersionSheet
+        key={`${sessionId}:${historyRunId}`} sessionId={sessionId} runId={historyRunId}
+        blocked={isTyping || isChatSendBlockedByActiveCall}
+        onClose={() => setHistoryRunId(null)}
+        onPreviewFile={params => { setHistoryRunId(null); onOpenFilePreview?.(params); }}
+      /> : null}
       <ChatMessageActionMenu
         visible={actionMenuVisible}
         onClose={handleCloseActionMenu}
@@ -588,6 +617,9 @@ export default function ChatDetailModule({
           && selectedMessage.turnItemIndex != null
           && selectedMessage.turnRunId === regeneration.eligibleRunId
           && !isTyping && !isChatSendBlockedByActiveCall ? handleRegenerateMessage : undefined}
+        onHistory={selectedMessage?.senderType === 'assistant' && selectedMessage.turnItemIndex != null
+          && selectedMessage.turnRunId && regeneration.versionedRunIds.includes(selectedMessage.turnRunId)
+          ? () => { dismissInputSurface(); setHistoryRunId(selectedMessage.turnRunId!); } : undefined}
         onDelete={handleDeleteMessage}
         onFixedStart={summarySettings && selectedMessage && projectChatContextMessage(selectedMessage,
           [selectedMessage.createdAt, selectedMessage.id, 0, selectedMessage.id])?.kind === 'dialogue' ? handleFixedStart : undefined}

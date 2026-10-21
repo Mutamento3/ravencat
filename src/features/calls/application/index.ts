@@ -39,6 +39,8 @@ export {
   acceptCall,
   rejectCall,
   markIncomingCallMissed,
+  getActiveCallSnapshot,
+  subscribeActiveCall,
 } from './lifecycle';
 export { getActiveCall, getCallSession, listCallEvents } from './queries/GetCallSession';
 export { shouldRestoreCallScreen } from './queries/CallScreenRestore';

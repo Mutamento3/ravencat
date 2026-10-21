@@ -208,7 +208,7 @@ const beforePreparationFailure = durableMessages.length;
 await assert.rejects(module.exports.runChatVisibleAgent({
   sessionId: 'session-visible', runId: 'preparation-failure',
   aiConfig: { id: 'host-ai', agentId: 'host-agent', name: 'Raven' },
-  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'record_as_activity',
+  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'autonomous_reply',
   prepare: async () => {
     assert.equal(JSON.parse(durableMessages.at(-1).metadataJson).phase, 'started');
     throw new Error('准备失败');
@@ -225,7 +225,7 @@ const beforeActivity = durableMessages.length;
 await module.exports.runChatVisibleAgent({
   sessionId: 'session-visible', runId: 'activity-visible',
   aiConfig: { id: 'host-ai', agentId: 'host-agent', name: 'Raven' },
-  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'record_as_activity',
+  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'autonomous_reply',
   prepare: async () => ({ request: { task: { allowedToolNames: [], modelTransport: 'complete' } },
     modelGateway: { takeCompletedTurn: () => modelTurn }, createLegacyContext: () => ({}) }),
 });
@@ -262,7 +262,7 @@ runtimeDependencies.agent.run = async (request) => {
 await module.exports.runChatVisibleAgent({
   sessionId: 'session-visible', runId: 'voice-activity',
   aiConfig: { id: 'host-ai', agentId: 'host-agent', name: 'Raven' },
-  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'record_as_activity',
+  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'autonomous_reply',
   prepare: async () => ({ request: { task: { allowedToolNames: ['send_voice_message'], modelTransport: 'stream' } },
     modelGateway: { takeCompletedTurn: () => modelTurn }, createLegacyContext: () => ({}) }),
 });
@@ -289,7 +289,7 @@ runtimeDependencies.agent.run = async (request) => {
 await assert.rejects(module.exports.runChatVisibleAgent({
   sessionId: 'session-visible', runId: 'rollback-activity',
   aiConfig: { id: 'host-ai', agentId: 'host-agent', name: 'Raven' },
-  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'record_as_activity',
+  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'autonomous_reply',
   prepare: async () => ({ request: { task: { allowedToolNames: ['send_voice_message'], modelTransport: 'stream' } },
     modelGateway: { takeCompletedTurn: () => modelTurn }, createLegacyContext: () => ({}) }),
 }), /媒体事务失败/);
@@ -309,10 +309,38 @@ runtimeDependencies.agent.run = async (request) => {
 await module.exports.runChatVisibleAgent({
   sessionId: 'session-visible', runId: 'partial-tool-response',
   aiConfig: { id: 'host-ai', agentId: 'host-agent', name: 'Raven' },
-  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'record_as_activity',
+  runtimeContext: { triggerReason: 'self_wake' }, finalAssistantPolicy: 'autonomous_reply',
   prepare: async () => ({ request: { task: { allowedToolNames: ['send_voice_message'], modelTransport: 'stream' } },
     modelGateway: { takeCompletedTurn: () => modelTurn }, createLegacyContext: () => ({}) }),
 });
 assert.ok(durableMessages.some((message) => message.turnRunId === 'partial-tool-response'
   && JSON.parse(message.metadataJson).phase === 'responded'));
-console.log('Chat-visible Agent：无页面持久化、开始先于准备、准备失败和零工具执行记录通过。');
+// 流式正文先存为过程，结束时复用原行并只交付一次；后续分段沿用真实分段信息。
+const beforePromotion = durableMessages.length;
+const beforeTextDelivery = deliveredMessages.length;
+const draftText = { ...message('system', '今天过得怎么样？\n\n我想你了。', 'promoted-text:0'), isRead: true };
+runtimeDependencies.agent.run = async (request) => {
+  mediaItems = [{ message: draftText }];
+  await request.eventSink({ type: 'model_turn_started', stepIndex: 1 });
+  await request.eventSink({ type: 'assistant_text_delta', stepIndex: 1, text: draftText.text });
+  await request.eventSink({ type: 'model_turn_completed', stepIndex: 1 });
+  assert.equal(deliveredMessages.length, beforeTextDelivery, '过程存档不能发送消息');
+  mediaItems = [
+    { message: { ...draftText, senderType: 'assistant', isRead: false, text: '今天过得怎么样？', segmentIndex: 0, segmentTotal: 2, logicalMessageId: 'text-logical' } },
+    { message: { ...message('assistant', '我想你了。', 'promoted-text:1'), segmentIndex: 1, segmentTotal: 2, logicalMessageId: 'text-logical' } },
+  ];
+  return terminal;
+};
+await module.exports.runChatVisibleAgent({
+  sessionId: 'session-visible', runId: 'promoted-text',
+  aiConfig: { id: 'host-ai', agentId: 'host-agent', name: 'Raven' },
+  runtimeContext: { triggerReason: 'ai_schedule' }, finalAssistantPolicy: 'autonomous_reply',
+  prepare: async () => ({ request: { task: { allowedToolNames: [], modelTransport: 'stream' } },
+    modelGateway: { takeCompletedTurn: () => modelTurn }, createLegacyContext: () => ({}) }),
+});
+assert.equal(durableMessages.filter((message) => message.clientMessageId === draftText.clientMessageId).length, 1);
+assert.deepEqual(durableMessages.slice(beforePromotion).filter((message) => message.senderType === 'assistant').map((message) => message.text), ['今天过得怎么样？', '我想你了。']);
+assert.deepEqual(deliveredMessages.slice(beforeTextDelivery).map((item) => [item.segmentIndex, item.segmentTotal]), [[0, 2], [1, 2]]);
+assert.ok(durableMessages.find((message) => message.clientMessageId === draftText.clientMessageId).isRead === false);
+mediaItems = null;
+console.log('Chat-visible Agent：无页面存档、执行证据、正文转换、分段和一次交付通过。');

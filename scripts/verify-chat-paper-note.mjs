@@ -5,6 +5,7 @@ import path from 'node:path';
 import React from 'react';
 import { act, create } from 'react-test-renderer';
 import ts from 'typescript';
+import './verify-chat-footer.mjs';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const root = path.resolve(import.meta.dirname, '..');

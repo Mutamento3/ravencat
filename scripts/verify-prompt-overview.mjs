@@ -24,11 +24,11 @@ function load(relative, mocks = {}) {
   return module.exports;
 }
 
-const estimator = load('src/shared/prompt/estimateTextTokens.ts');
+const estimator = { ...load('src/shared/prompt/estimateTextTokens.ts'), ...load('src/shared/prompt/messageTimestamp.ts') };
 const budget = load('src/host/prompt/tokenBudget.ts', { '@shared/prompt': estimator });
 const metadata = load('src/host/prompt/compiler/promptBlockMetadata.ts');
 const { PromptPackCompiler } = load('src/host/prompt/compiler/PromptPackCompiler.ts', {
-    '@shared/prompt': { CHAT_PROMPT_READING_FLOW }, '../tokenBudget': budget, './promptBlockMetadata': metadata });
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW, ...estimator }, '../tokenBudget': budget, './promptBlockMetadata': metadata });
 const { getSystemPromptPreset } = load('src/host/prompt/compiler/systemPromptPresets.ts');
 const preset = getSystemPromptPreset('chat.private_reply');
 const draft = (key, content) => ({ key, title: content, content, required: false, status: 'ready', placement: 'system' });
@@ -51,11 +51,25 @@ const disabledTime = new PromptPackCompiler().compile({ scenario: 'chat.private_
 assert.ok(!disabledTime.dynamicSystemPrompt.includes('2026'));
 assert.deepEqual(disabledTime.recentMessages, history);
 
-const { applyRuntimeModelInput } = load('src/features/chat/reply/application/ChatReplyUtils.ts');
+const { applyRuntimeModelInput } = load('src/features/chat/reply/application/ChatReplyUtils.ts', { '@shared/prompt': estimator });
 const batched = [{ role: 'user', content: '第一条' }, { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }] }];
 const request = applyRuntimeModelInput(pack.modelMessages, undefined, batched);
 assert.deepEqual(request.slice(0, -2), pack.modelMessages.slice(0, -1));
 assert.deepEqual(request.slice(-2), batched);
+const timedInput = [{ role: 'user', content: '第一条', createdAt: '2026-10-20T23:59:59.987+08:00' },
+  { role: 'assistant', content: '此前执行结果', createdAt: '2026-10-21T00:00:01+08:00' },
+  { role: 'user', content: batched[1].content, createdAt: '2026-10-21T00:00:02+08:00' }];
+const withoutTimes = applyRuntimeModelInput(pack.modelMessages, undefined, timedInput, false);
+assert.deepEqual(withoutTimes.slice(-3), timedInput.map(({ createdAt, ...message }) => message));
+const withTimes = applyRuntimeModelInput(pack.modelMessages, undefined, timedInput, true);
+assert.deepEqual(withTimes.slice(-6).map((message) => message.role), ['system', 'user', 'system', 'assistant', 'system', 'user']);
+assert.match(withTimes.at(-6).content, /2026-10-20T15:59:59Z/);
+assert.equal(withTimes.at(-3).content, '此前执行结果');
+assert.deepEqual(withTimes.at(-1).content, batched[1].content, '时间不能混进图片内容');
+const timesWithoutNow = new PromptPackCompiler().compile({ scenario: 'chat.private_reply', blocks, recentMessages: timedInput.slice(0, 2), currentInput,
+  messageTimestampsEnabled: true, preset: { ...preset, items: preset.items.map((item) => item.definitionId === 'context.time_awareness' ? { ...item, enabled: false } : item) } });
+assert.ok(!timesWithoutNow.dynamicSystemPrompt.includes('现在是'));
+assert.equal(timesWithoutNow.modelMessages[0].role, 'system', '时间戳开关独立于当前时间开关');
 const { buildAgentModelMessages } = load('src/platform/agentRuntime/BaseAIClientAgentModelGateway.ts', {
   '@platform/ai': {}, '@shared/diagnostics/TurnTimelineLog': {},
 });
@@ -202,6 +216,7 @@ const { assembleResolvedChatPromptPack: assembleRegistryPack } = load('src/host/
   './PromptPackAssembler': { promptPackAssembler: { assembleChatPromptPack: async (params) => new PromptPackCompiler().compile({
     scenario: 'chat.private_reply', preset: { ...params.preset, items: params.preset.items.filter((item) => item.definitionId === 'context.agent_registry') },
     blocks: [await registryFactory.createAgentRegistrySummaryBlock(params.aiConfig)], recentMessages: [],
+    messageTimestampsEnabled: params.aiConfig.messageTimestampsEnabled,
   }) } },
   './compiler': {}, './DeviceBatteryPromptBlock': { createDeviceBatteryPromptBlocks: async () => [] },
   './PromptPackBlockFactory': {},
@@ -214,6 +229,12 @@ let registryPack = await assembleRegistryPack(registryParams);
 assert.match(registryPack.systemPrompt, /入选 AI.*底层模型：model-one/);
 assert.doesNotMatch(registryPack.systemPrompt, /隐藏 AI|agent-2|model-hidden/);
 assert.match(registryPack.systemPrompt, /身份池内共有 1 个 AI/);
+const isolatedRegistryParams = { aiConfig: { id: 'ai-2', agentId: 'agent-2', isHostAI: true }, currentInput: '' };
+assert.equal((await assembleRegistryPack(isolatedRegistryParams)).systemPrompt, '', '未入池的 AI 即使是主理 AI，也不接收身份池信息');
+assert.equal((await assembleRegistryPack({ ...isolatedRegistryParams, aiConfig: { id: 'ai-2' } })).systemPrompt, '', '隔离按 Assistant 实体键判断，不依赖 agentId');
+const isolatedRegistryBlock = await registryFactory.createAgentRegistrySummaryBlock({ id: 'ai-2', agentRegistryExcludedAssistantIds: ['ai-2'] });
+assert.equal(isolatedRegistryBlock.status, 'omitted');
+assert.equal(isolatedRegistryBlock.content, '', '隔离时不输出名单、模型名、人数或主理状态');
 const selfExcluded = await registry.getSummary({ currentAgentId: 'agent-2', excludedAssistantIds: ['ai-2'] });
 assert.equal(selfExcluded.entries.length, 1, '当前 AI 自己也不能绕过排除名单');
 assert.equal(selfExcluded.totalCount, 1);
@@ -230,6 +251,7 @@ await registryManagement.setAgentRegistryAssistantIncluded('ai-1', true);
 await registryManagement.setAgentRegistryAssistantIncluded('ai-2', true);
 registryPack = await assembleRegistryPack(registryParams);
 assert.match(registryPack.systemPrompt, /隐藏 AI.*底层模型：model-hidden/);
+assert.match((await assembleRegistryPack(isolatedRegistryParams)).systemPrompt, /入选 AI.*底层模型：model-updated/, '重新入池后恢复接收其他入池 AI 的信息');
 registryAssistants = [];
 const scopedManagement = load('src/features/prompting/application/ManageAssistantPrompts.ts', {
   './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => ({
@@ -248,12 +270,18 @@ const scopedManagement = load('src/features/prompting/application/ManageAssistan
 });
 await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'context.time_awareness', enabled: false });
 await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'context.device_battery', enabled: false });
+assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-1', scenarioId: 'chat.private_reply' })).messageTimestampsEnabled, false);
+await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'context.message_timestamps', enabled: true });
 await scopedManagement.saveAssistantDefinitionOverride({ assistantId: 'ai-1', definitionId: 'foundation.default_core', locale: 'zh-CN', content: '只属于第一位 AI' });
 const exclusive = await scopedManagement.createAssistantUserPrompt({ assistantId: 'ai-1', name: '专属片段', content: '只注入第一位', condition: 'always', enabled: true, sortOrder: 10 });
 const one = await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-1', scenarioId: 'chat.private_reply' });
 const two = await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-2', scenarioId: 'chat.private_reply' });
 assert.equal(one.timeEnabled, false); assert.equal(two.timeEnabled, true);
 assert.equal(one.batteryEnabled, false); assert.equal(two.batteryEnabled, true);
+assert.equal(one.messageTimestampsEnabled, true); assert.equal(two.messageTimestampsEnabled, false);
+assert.equal((await assembleRegistryPack(registryParams)).messageTimestampsEnabled, true, '持久配置必须传入实际装配');
+await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'context.message_timestamps', enabled: false });
+assert.equal((await assembleRegistryPack(registryParams)).messageTimestampsEnabled, false);
 assert.equal(one.overrides['foundation.default_core'], '只属于第一位 AI');
 assert.equal(two.overrides['foundation.default_core'], undefined);
 assert.ok(one.userPrompts.some((prompt) => prompt.content === '只注入第一位'));
@@ -331,8 +359,8 @@ const otherAI = { id: 'ai-2', name: '另一位 AI', persona: '另一份人设', 
 let assistantOptions = [];
 let optionListError = false;
 const aiReads = [];
-const aiDetails = { overrides: [], userPrompts: [], tools: [], directToolNames: [], timeEnabled: true, batteryEnabled: true };
-const otherDetails = { overrides: [], userPrompts: [], tools: [], directToolNames: [], timeEnabled: true, batteryEnabled: true };
+const aiDetails = { overrides: [], userPrompts: [], tools: [], directToolNames: [], timeEnabled: true, batteryEnabled: true, messageTimestampsEnabled: false, userStateEnabled: true, socialEnabled: true };
+const otherDetails = { overrides: [], userPrompts: [], tools: [], directToolNames: [], timeEnabled: true, batteryEnabled: true, messageTimestampsEnabled: false, userStateEnabled: true, socialEnabled: true };
 const detailsFor = (id) => id === ai.id ? aiDetails : otherDetails;
 const globalSnapshots = [];
 let definitionSaveGate;
@@ -343,7 +371,7 @@ const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx'
   'react-native': native, 'lucide-react-native': { ChevronDown: 'ChevronDown', ChevronRight: 'ChevronRight', Square: 'Square', SquareCheck: 'SquareCheck', Star: 'Star' },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
   '@shared/theme': { ThemedSurface: 'View', useTheme: () => ({ effects: { glass: { enabled: false } }, colors: { text: { tertiary: '#666' }, brand: { primary: '#f90' } } }), useThemedStyles: () => ({}) },
-  '@shared/ui/NavigationHeader': { default: ({ title, onGoBack, rightButton }) => React.createElement('Header', { title, onGoBack }, rightButton), __esModule: true },
+  '@shared/ui/NavigationHeader': { default: ({ title, onGoBack, rightButton, help }) => React.createElement('Header', { title, onGoBack, help }, rightButton), __esModule: true },
   '@shared/ui/ModalSheet': { default: ({ children, onClose }) => React.createElement('ModalSheet', { onClose }, children), __esModule: true },
   '../application/GetPromptCenterSnapshot': { getPromptCenterSnapshot: () => ({ definitions: [
     { id: 'foundation.default_core', defaultContent: '代码默认规则' }, { id: 'foundation.visual_grounding', defaultContent: '视觉默认规则' },
@@ -373,7 +401,7 @@ const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx'
     },
     getAssistantPromptEditorDetails: async (id) => { aiReads.push(['details', id]); return { ...detailsFor(id) }; },
     saveAssistantDefinitionState: async ({ assistantId, definitionId, enabled }) => {
-      detailsFor(assistantId)[definitionId === 'context.device_battery' ? 'batteryEnabled' : 'timeEnabled'] = enabled;
+      detailsFor(assistantId)[{ 'context.device_battery': 'batteryEnabled', 'context.time_awareness': 'timeEnabled', 'context.message_timestamps': 'messageTimestampsEnabled', 'context.user_state': 'userStateEnabled', 'context.social': 'socialEnabled' }[definitionId]] = enabled;
     },
     saveAssistantDefinitionOverride: async (override) => { detailsFor(override.assistantId).overrides = [override]; },
     resetAssistantDefinitionOverride: async ({ assistantId }) => { detailsFor(assistantId).overrides = []; },
@@ -461,8 +489,9 @@ assert.equal(stackState.routes.at(-1).name, 'profile');
 await systemBack();
 assert.equal(currentTitle(), '提示词中心');
 const overviewLabels = ['系统基础规则', '人设', '协议空间常驻提示词', 'AI 身份池', '群聊身份背景', '自定义提示词', '工具调用', 'MCP',
-  '历史聊天', '工具运行上下文', '用户状态与一起听', '时刻社交信息', '环境信息', 'AI 当前身份状态', '被动记忆', '手机电量', '当前时间', '本轮回应要求', '当前聊天'];
+  '历史聊天', '工具运行上下文', '用户状态与一起听', '时刻社交信息', '环境信息', 'AI 当前身份状态', '被动记忆', '手机电量', '当前时间', '消息时间戳', '本轮回应要求', '当前聊天'];
 const overviewText = text(activeScreen());
+assert.ok(overviewText.includes('增加输入 Token') && overviewText.includes('模仿时间格式'), '开关旁明确说明开销和模仿风险');
 const overviewPositions = overviewLabels.map((label) => overviewText.indexOf(label));
 assert.ok(overviewPositions.every((position, index) => position >= 0 && (index === 0 || position > overviewPositions[index - 1])),
   '页面真实阅读顺序必须与聊天请求的身份、能力、历史和本轮状态契约对应');
@@ -573,6 +602,8 @@ assert.equal(stackState.routes.at(-1).params?.assistantId, undefined, '全局名
 const registryCheckboxes = () => activeScreen().findAllByType('TouchableOpacity').filter((node) => node.props.accessibilityRole === 'checkbox');
 assert.deepEqual(registryCheckboxes().map((node) => node.props.accessibilityState.checked), [true, true]);
 assert.ok(text(activeScreen()).includes('底层模型：model-one'));
+const registryHelp = activeScreen().findByType('Header').props.help;
+assert.ok(registryHelp?.sections.some((section) => section.body.includes('也不会收到其他 AI 的身份池信息')), '身份池规则说明由标题后的问号承载');
 await renderer.act(async () => registryCheckboxes()[0].props.onPress());
 assert.deepEqual(registryCheckboxes().map((node) => node.props.accessibilityState.checked), [false, true]);
 await systemBack();
@@ -598,6 +629,10 @@ assert.equal(stackState.routes.at(-1).name, 'chat/[aiId]/protocol');
 assert.equal(stackState.routes.at(-1).params.aiId, ai.id);
 await systemBack();
 // 时间只保存当前对象；切换后没有继承上一位 AI 的开关。
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入消息时间戳' }).props.value, false);
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '注入消息时间戳' }).props.onValueChange(true));
+assert.equal(aiDetails.messageTimestampsEnabled, true);
+assert.equal(otherDetails.messageTimestampsEnabled, false);
 await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '注入当前时间' }).props.onValueChange(false));
 assert.equal(aiDetails.timeEnabled, false);
 assert.equal(otherDetails.timeEnabled, true);
@@ -605,6 +640,15 @@ assert.deepEqual(actions, [], '绑定 AI 的时间开关不能写入全局默认
 await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '注入手机电量' }).props.onValueChange(false));
 assert.equal(aiDetails.batteryEnabled, false);
 assert.equal(otherDetails.batteryEnabled, true);
+// 第 11、12 项注入开关同样只保存当前对象，默认开启。
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入用户状态与一起听' }).props.value, true);
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '注入用户状态与一起听' }).props.onValueChange(false));
+assert.equal(aiDetails.userStateEnabled, false);
+assert.equal(otherDetails.userStateEnabled, true);
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入时刻社交信息' }).props.value, true);
+await renderer.act(async () => activeScreen().findByProps({ accessibilityLabel: '注入时刻社交信息' }).props.onValueChange(false));
+assert.equal(aiDetails.socialEnabled, false);
+assert.equal(otherDetails.socialEnabled, true);
 await renderer.act(async () => button('工具调用').props.onPress());
 await renderer.act(async () => button('主理 AI 专属').props.onPress());
 assert.equal(button('手机工具'), undefined, '主理 AI 同样直接在包内管理工具');
@@ -613,7 +657,10 @@ await renderer.act(async () => button('编辑对象').props.onPress());
 await renderer.act(async () => button('另一位 AI').props.onPress());
 assert.equal(stackState.routes.at(-1).params.assistantId, otherAI.id);
 assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入当前时间' }).props.value, true);
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入消息时间戳' }).props.value, false);
 assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入手机电量' }).props.value, true);
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入用户状态与一起听' }).props.value, true);
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入时刻社交信息' }).props.value, true);
 assert.ok(text(activeScreen()).includes('另一位 AI'));
 const globalBefore = JSON.stringify(fixture);
 await renderer.act(async () => button('系统基础规则').props.onPress());
@@ -671,6 +718,8 @@ await renderer.act(async () => button('编辑对象').props.onPress());
 await renderer.act(async () => button('测试 AI').props.onPress());
 assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入当前时间' }).props.value, false);
 assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入手机电量' }).props.value, false);
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入用户状态与一起听' }).props.value, false);
+assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入时刻社交信息' }).props.value, false);
 assert.equal(stackState.routes.at(-1).params.assistantId, ai.id);
 assert.equal(JSON.stringify(fixture), globalBefore);
 // 曾在无 AI 页面添加的内容，在默认绑定主理后仍有明确的管理入口。

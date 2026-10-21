@@ -1,9 +1,9 @@
 /** 设置与正文列表分开；离开设置页先确认草稿，模型执行不占用页面 busy。 */
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAvoidingContainer, NavigationHeader, ConfiguredModelPicker } from '@shared/ui';
-import { getAuxiliaryModelSelection, requireAuxiliaryModel, subscribeAuxiliaryModelsChanged } from '@features/assistants';
+import { aiAssistantRepository, getAuxiliaryModelSelection, requireAuxiliaryModel, subscribeAuxiliaryModelsChanged } from '@features/assistants';
 import { useAutoSaveNavigation } from '@shared/ui/useAutoSaveDraft';
 import { useTheme, useThemedStyles } from '@shared/theme';
 import { estimateTextTokens } from '@shared/prompt';
@@ -14,12 +14,22 @@ import ChatSummarySettingsPanel, { type ChatSummarySettingsEditor } from './Chat
 import { useChatSummarySnapshot } from './useChatSummarySnapshot';
 import { createChatSummaryStyles } from './chatSummaryStyles';
 
-export default function ChatSummarySettingsScreen({ conversationId, onBack, group = false }: { conversationId: string; onBack(): void; group?: boolean }) {
+export default function ChatSummarySettingsScreen({ conversationId, onBack, group = false, assistantId }: { conversationId: string; onBack(): void; group?: boolean; assistantId?: string }) {
   const theme = useTheme(), styles = useThemedStyles(createChatSummaryStyles);
   const { snapshot, error } = useChatSummarySnapshot(conversationId);
   const editor = useRef<ChatSummarySettingsEditor>(null);
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  const [followPrimaryLimit, setFollowPrimaryLimit] = useState<number | null>(null);
+  // 跟随值只是展示；真正解析在领取时按当时的主视角上限读取，无需订阅同步。
+  useEffect(() => {
+    if (group || !assistantId) return;
+    let alive = true;
+    void aiAssistantRepository.getById(assistantId).then((assistant) => {
+      if (alive && assistant) setFollowPrimaryLimit(assistant.privateContextPrimaryLimit);
+    });
+    return () => { alive = false; };
+  }, [group, assistantId, snapshot?.settings.primaryLimit]);
   const getModels = useCallback(async () => getAuxiliaryModelSelection({
     modelConfigId: (await getChatSummarySettings(conversationId)).modelConfigId, capabilityKind: 'general',
   }), [conversationId]);
@@ -48,6 +58,7 @@ export default function ChatSummarySettingsScreen({ conversationId, onBack, grou
         unconfiguredLabel={group ? '群聊管理员' : '当前聊天模型'} clearSelectionLabel={group ? '使用群聊管理员' : '使用当前聊天模型'}
         getSettings={getModels} onSelect={selectModel} subscribeChanged={subscribeModels} />}
       {snapshot && <ChatSummarySettingsPanel ref={editor} settings={snapshot.settings} busy={busy} onSave={save} group={group}
+        followPrimaryLimit={followPrimaryLimit}
         pendingTokens={snapshot.segments.filter((segment) => segment.level === 'primary' && segment.compactionId === null).reduce((sum, segment) => sum + estimateTextTokens(segment.content), 0)} />}
     </ScrollView>
   </KeyboardAvoidingContainer></SafeAreaView>;

@@ -1,6 +1,5 @@
 import {
   detectParamError,
-  detectToolsSupport,
   fetchModelList,
   getErrorDisplayInfo,
   testAPIConnection,
@@ -142,15 +141,6 @@ export async function runConnectionTestByConfig({
       errorInfo: getErrorDisplayInfo(error as Error | string) as ErrorDisplayInfo,
     };
   }
-}
-
-export async function detectToolsSupportByConfig(
-  apiBaseUrl: string,
-  apiKey: string,
-  selectedModel: string,
-  requestOptions: ConnectionTestOptions = {}
-): Promise<boolean> {
-  return detectToolsSupport(apiBaseUrl, apiKey, selectedModel, requestOptions);
 }
 
 export function detectConnectionParamError(message: string): ParamErrorInfo {

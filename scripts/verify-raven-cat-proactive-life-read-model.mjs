@@ -1,5 +1,5 @@
 import * as legacyWakeSchema from './legacy-self-wake-schema-fixture.mjs';
-import { chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -240,6 +240,7 @@ const messageRepositoryModule = loadTypeScriptModule(
   {
     '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => chatExecutor } },
     './ChatMessageMutationSql': chatMessageMutations,
+      '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
       './ChatTimelineSql': loadTypeScriptModule('src/features/chat/messages/infrastructure/ChatTimelineSql.ts'),
     '../domain/MessageTimeSeparator': { shouldShowTimeSeparatorBefore: () => false },
   },

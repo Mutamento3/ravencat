@@ -1,6 +1,6 @@
 /** Chat 拥有摘要生命周期；Host 仅提供模型与批次设置查询端口。 */
 import { createRuntimeSlot } from '@shared/runtime/RuntimeSlot';
-import type { ChatSummaryModelInput, ChatSummaryRepository, SecondaryChatSummaryClaim, ChatSummaryCallDiagnostics, ChatSummaryRequestSettings } from '../domain/ChatSummaryRepository';
+import type { ChatSummaryModelInput, ChatSummaryRepository, SecondaryChatSummaryClaim, ChatSummaryCallDiagnostics, ChatSummaryRequestSettings, ChatSummaryFailure } from '../domain/ChatSummaryRepository';
 export interface ChatSummaryRuntime {
   repository: ChatSummaryRepository;
   getBatchSize(conversationId: string): Promise<number | null>;
@@ -12,11 +12,13 @@ export interface ChatSummaryRuntime {
 const slot = createRuntimeSlot<ChatSummaryRuntime>('ChatSummary');
 export function configureChatSummaryRuntime(runtime: ChatSummaryRuntime): void { slot.configure(runtime); }
 export function getChatSummaryRuntime(): ChatSummaryRuntime { return slot.get(); }
-const listeners = new Set<(conversationId: string, kind: 'summary' | 'task') => void>();
-export function subscribeChatSummaryChanged(listener: (conversationId: string, kind: 'summary' | 'task') => void): () => void {
+/** 任务彻底失败（不再自动重试）时携带最终错误，供宿主决定是否需要提醒用户。 */
+export interface ChatSummaryChangedDetail { finalFailure?: ChatSummaryFailure & { occurredAt: string } }
+const listeners = new Set<(conversationId: string, kind: 'summary' | 'task', detail?: ChatSummaryChangedDetail) => void>();
+export function subscribeChatSummaryChanged(listener: (conversationId: string, kind: 'summary' | 'task', detail?: ChatSummaryChangedDetail) => void): () => void {
   listeners.add(listener); return () => { listeners.delete(listener); };
 }
 /** 任务状态通知供页面刷新；调度只响应摘要事实和用户设置，避免自身状态形成重试循环。 */
-export function emitChatSummaryChanged(conversationId: string, kind: 'summary' | 'task' = 'summary'): void {
-  for (const listener of listeners) listener(conversationId, kind);
+export function emitChatSummaryChanged(conversationId: string, kind: 'summary' | 'task' = 'summary', detail?: ChatSummaryChangedDetail): void {
+  for (const listener of listeners) listener(conversationId, kind, detail);
 }

@@ -1,29 +1,20 @@
 /** 协调单聊详情页的消息历史、实时同步、发送流程与通话阻断状态。 */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import {
   buildAIRequestConfig,
   type ChatDetailAIAssistantLike,
 } from '../components/chatTypes';
 import { useMessageHistoryState } from '../components/useMessageHistoryState';
 import { useChatTimelineSync } from '../components/useChatTimelineSync';
-import { useIsAppActive } from '../components/useIsAppActive';
 import { useChatSendFlow } from './useChatSendFlow';
 import {
   getActiveChatCall,
+  subscribeActiveChatCall,
   isChatSendBlockedByCall,
   type ChatCallSession,
 } from '../../../conversation/application/ChatCallGateway';
 import { getChatInteractionProfile, useTheme } from '@shared/theme';
-
-/**
- * 活动通话阻断状态的轮询间隔。
- *
- * Calls 目前只对外发布“某一通电话的回合相位 / 字幕播放”事件，没有可订阅的通话生命周期
- * 事件源，聊天页无法事件驱动地知道“通话开始 / 挂断”。因此这里保留轮询作为 UI 提示手段
- * （发送动作本身仍会在 useChatSendFlow 内重新确认一次，不受轮询影响）。
- */
-const ACTIVE_CALL_BLOCK_POLL_INTERVAL_MS = 1500;
 
 /**
  * 聊天详情页核心逻辑 Hook
@@ -43,15 +34,12 @@ export function useChatDetail(
   sessionId?: string | null,
   aiAssistant?: ChatDetailAIAssistantLike | null,
   onCallCreated?: (call: ChatCallSession) => void,
-  isActive = true,
 ) {
   const theme = useTheme();
   const interactionProfile = getChatInteractionProfile(theme);
   // 对方是否正在输入的状态（由实时同步模块更新）
   const [isTyping, setIsTyping] = useState(false);
-  const [isChatSendBlockedByActiveCall, setIsChatSendBlockedByActiveCall] = useState(false);
-  const isAppActive = useIsAppActive();
-  const isPresentationActive = isActive && isAppActive;
+  const activeCall = useSyncExternalStore(subscribeActiveChatCall, getActiveChatCall);
 
   // 根据 AI 助手配置生成请求参数（如 API 端点、认证头等）
   const aiRequestConfig = useMemo(() => {
@@ -72,49 +60,7 @@ export function useChatDetail(
   ]);
   const aiRequestConfigId = aiRequestConfig?.id;
 
-  useEffect(() => {
-    if (!isPresentationActive) {
-      setIsChatSendBlockedByActiveCall(false);
-      return undefined;
-    }
-
-    let isMounted = true;
-
-    const refreshActiveCallBlock = async (
-      source: 'chat-detail-mount' | 'chat-detail-poll',
-    ) => {
-      if (!sessionId || !aiRequestConfigId) {
-        if (isMounted) {
-          setIsChatSendBlockedByActiveCall(false);
-        }
-        return;
-      }
-
-      try {
-        const activeCall = await getActiveChatCall(source);
-        if (!isMounted) {
-          return;
-        }
-
-        setIsChatSendBlockedByActiveCall(
-          isChatSendBlockedByCall(activeCall, sessionId, aiRequestConfigId)
-        );
-      } catch (error) {
-        console.warn('[useChatDetail] Failed to check active call state:', error);
-      }
-    };
-
-    // 页面重新可见时立即补查；不可见期间 effect cleanup 会停止轮询。
-    void refreshActiveCallBlock('chat-detail-mount');
-    const timer = setInterval(() => {
-      void refreshActiveCallBlock('chat-detail-poll');
-    }, ACTIVE_CALL_BLOCK_POLL_INTERVAL_MS);
-
-    return () => {
-      isMounted = false;
-      clearInterval(timer);
-    };
-  }, [sessionId, aiRequestConfigId, isPresentationActive]);
+  const isChatSendBlockedByActiveCall = isChatSendBlockedByCall(activeCall, sessionId, aiRequestConfigId);
 
   // 消息历史状态管理：消息列表、加载状态、分页加载、刷新等
   const {

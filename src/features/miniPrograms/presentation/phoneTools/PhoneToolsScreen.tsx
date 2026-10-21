@@ -141,11 +141,11 @@ export default function PhoneToolsScreen({
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <NavigationHeader title="手机工具" onGoBack={onBack} help={{ sections: [
-        { title: '调用权限', body: '开关与提示词中心共用主理 AI 的单项调用权限；授权系统权限不会自动打开调用开关。' },
-        { title: '系统状态', body: '权限就绪不保证每次调用成功，目标应用、当前页面和播放会话由工具执行时判断。返回页面后刷新系统权限状态。' },
+        { title: '调用权限', body: `开关与提示词中心共用主理 AI${settings.hostName ? `「${settings.hostName}」` : ''}的单项调用权限；授权系统权限不会自动打开调用开关。` },
+        { title: '系统状态', body: '权限就绪只表示系统前提已满足，目标应用、当前页面、受保护应用及执行时状态仍共同决定调用结果。返回页面后刷新系统权限状态。' },
       ] }} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.guidance}>{settings.description}</Text>
+        {settings.notice && <Text style={styles.guidance}>{settings.notice}</Text>}
         {PHONE_TOOL_SECTIONS.map((section) => (
           <View key={section.id}>
             <Text style={styles.categoryTitle}>{section.title}</Text>

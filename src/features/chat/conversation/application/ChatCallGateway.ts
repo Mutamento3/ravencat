@@ -24,16 +24,10 @@ export type StartChatCallResult =
   | { status: 'failed'; call: ChatCallSession | null; errorMessage: string; visibleMessages: ChatMessage[] };
 
 interface ChatCallGateway {
-  getActiveCall: () => Promise<ChatCallSession | null>;
+  getActiveCallSnapshot: () => ChatCallSession | null;
+  subscribeActiveCall: (listener: () => void) => () => void;
   startOutgoingCall: (params: StartChatCallParams) => Promise<StartChatCallResult>;
 }
-
-export type ChatActiveCallQuerySource =
-  | 'chat-detail-mount'
-  | 'chat-detail-poll'
-  | 'chat-detail-foreground-resume'
-  | 'chat-send-preflight'
-  | 'chat-retry-preflight';
 
 let gateway: ChatCallGateway | null = null;
 
@@ -51,9 +45,7 @@ function getGateway(): ChatCallGateway {
 /**
  * 判断当前通话是否阻断这个聊天会话的普通消息发送。
  *
- * Calls 目前不发布可订阅的通话生命周期事件，聊天页只能轮询 + 在真正发送前再确认一次，
- * 因此这条判定必须只有一份实现：UI 的输入框阻断提示与发送前的真实拦截共用它，
- * 否则会出现“输入框已放行但发送仍被拒”或反向的不一致。
+ * 输入框与发送动作共享 Calls 生命周期持有的接通标记，避免展示状态与即时输入判定分叉。
  */
 export function isChatSendBlockedByCall(
   activeCall: ChatCallSession | null,
@@ -66,18 +58,12 @@ export function isChatSendBlockedByCall(
   return activeCall.chatSessionId === sessionId || activeCall.aiAssistantId === aiAssistantId;
 }
 
-export async function getActiveChatCall(
-  source: ChatActiveCallQuerySource,
-): Promise<ChatCallSession | null> {
-  const startedAtMs = Date.now();
-  try {
-    return await getGateway().getActiveCall();
-  } finally {
-    const durationMs = Date.now() - startedAtMs;
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && durationMs > 100) {
-      console.info('[ChatActiveCallQuery]', { source, durationMs });
-    }
-  }
+export function getActiveChatCall(): ChatCallSession | null {
+  return getGateway().getActiveCallSnapshot();
+}
+
+export function subscribeActiveChatCall(listener: () => void): () => void {
+  return getGateway().subscribeActiveCall(listener);
 }
 
 export function startOutgoingChatCall(params: StartChatCallParams): Promise<StartChatCallResult> {

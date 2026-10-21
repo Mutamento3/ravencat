@@ -86,6 +86,7 @@ for (const relativePath of [
   'src/features/chat/messages/application/UpsertStatefulTimelineEntry.ts',
   'src/features/chat/messages/application/UpsertTogetherListeningTimelineEntry.ts',
   'src/features/chat/messages/infrastructure/ChatTimelineSql.ts',
+  'src/features/chat/reply/infrastructure/ChatReplyVersionSql.ts',
   'src/features/chat/messages/infrastructure/ChatMessageMutationSql.ts',
   'src/features/chat/reply/infrastructure/ChatTurnPresentationSql.ts',
   'src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts',
@@ -681,7 +682,27 @@ try {
   assert.equal(reloadedMetadata.endReason, 'user_left');
   assert.equal(reloadedTimelineCard.id, tlPending.message.id);
 
-  console.log('Stateful timeline entry 契约检查通过（稳定 key、更新、隔离、preview、回滚与 UI 事件）。');
+  // 自主正文在正常终态沿稳定身份从已读过程转成未读消息，SQLite 重读不能留下旧角色。
+  const draft = createMessage({ sessionId: 'session-b', clientMessageId: 'autonomous:final',
+    text: '正在生成', senderType: 'system', isRead: true,
+    createdAt: '2026-10-21T08:00:00.000Z', metadata: { type: 'agentActivity' } });
+  const draftResult = await repository.upsertStatefulTimelineEntry({ message: draft, previewText: null });
+  const finalMessage = { ...draft, senderType: 'assistant', isRead: false, text: '今天过得怎么样？',
+    logicalMessageId: 'autonomous:logical', segmentIndex: 0, segmentTotal: 2,
+    metadataJson: JSON.stringify({ kind: 'reply' }), deliveryStatus: 'delivered' };
+  const finalResult = await repository.upsertStatefulTimelineEntry({ message: finalMessage, previewText: finalMessage.text });
+  assert.equal(finalResult.inserted, false);
+  assert.equal(finalResult.message.id, draftResult.message.id);
+  const reloadedFinal = await new MessageRepository().getMessageById(draftResult.message.id);
+  assert.equal(reloadedFinal.senderType, 'assistant');
+  assert.equal(reloadedFinal.isRead, false);
+  assert.equal(reloadedFinal.logicalMessageId, 'autonomous:logical');
+  assert.equal(reloadedFinal.segmentTotal, 2);
+  assert.equal(reloadedFinal.deliveryStatus, 'delivered');
+  assert.equal(readSessionPreview('session-b'), finalMessage.text);
+  assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS count FROM messages WHERE client_message_id = 'autonomous:final'").get().count, 1);
+
+  console.log('Stateful timeline entry 契约检查通过（稳定 key、更新、隔离、preview、回滚与自主正文提交）。');
 } finally {
   removeBus();
   database.sqlite.close();

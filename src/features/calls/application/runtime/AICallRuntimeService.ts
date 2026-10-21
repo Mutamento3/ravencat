@@ -60,6 +60,9 @@ interface AICallRuntimeServiceDeps {
 }
 
 export class AICallRuntimeService {
+  private activeCallSnapshot: CallSession | null = null;
+  private activeCallRevision = 0;
+  private readonly activeCallListeners = new Set<() => void>();
   private readonly callRepoOverride?: ICallRepository;
   private readonly chatOverride?: CallChatWritePort;
   private readonly failureRecorder: CallFailureRecorder;
@@ -81,6 +84,37 @@ export class AICallRuntimeService {
 
   private getChat(): CallChatWritePort {
     return this.chatOverride ?? getCallRuntimeDependencies().chat;
+  }
+
+  getActiveCallSnapshot(): CallSession | null {
+    return this.activeCallSnapshot;
+  }
+
+  subscribeActiveCall(listener: () => void): () => void {
+    this.activeCallListeners.add(listener);
+    return () => { this.activeCallListeners.delete(listener); };
+  }
+
+  /** 接通标记只投影已提交的生命周期，不承担持久占用裁决。 */
+  private setActiveCallSnapshot(call: CallSession | null): void {
+    this.activeCallRevision += 1;
+    const next = call?.state === 'active' ? call : null;
+    if (this.activeCallSnapshot?.id === next?.id) return;
+    this.activeCallSnapshot = next;
+    for (const listener of this.activeCallListeners) listener();
+  }
+
+  clearActiveCallSnapshot(callId: string): void {
+    // 迟到的旧通话清理不得清除下一通电话的标记。
+    this.setActiveCallSnapshot(this.activeCallSnapshot?.id === callId ? null : this.activeCallSnapshot);
+  }
+
+  /** 冷启动复用现有恢复查询；查询期间的新生命周期提交优先于旧快照。 */
+  async restoreActiveCallSnapshot(): Promise<CallSession | null> {
+    const revision = this.activeCallRevision;
+    const call = await this.getCallRepository().getActiveSession();
+    if (revision === this.activeCallRevision) this.setActiveCallSnapshot(call);
+    return call;
   }
 
   async preflightCall(
@@ -235,6 +269,7 @@ export class AICallRuntimeService {
       if (!current) throw new Error(`Call ${call.id} disappeared while accepting`);
       return { call: current, visibleMessages: [] };
     }
+    this.setActiveCallSnapshot(activeCall);
     await this.beginAudioSession(activeCall);
     await this.getCallRepository().appendEvent({
       callId: call.id,
@@ -554,6 +589,7 @@ export class AICallRuntimeService {
     });
     if (!connectedCall) return this.readEndedOutgoingCall(call.id);
     call = connectedCall;
+    this.setActiveCallSnapshot(call);
     await this.beginAudioSession(call);
     visibleMessages.push(await saveCallStatusMessage(this.getChat(), {
       sessionId: chatSessionId,
@@ -714,6 +750,7 @@ export class AICallRuntimeService {
       if (!terminalCall) {
         throw new Error(`Call ${call.id} disappeared while ending`);
       }
+      this.clearActiveCallSnapshot(call.id);
       // 终态可能由启动恢复或另一入口提交；挂断仍须释放媒体并结束执行任务。
       // 重复动作只补齐资源释放，不重写结束原因、状态气泡或终态跟进。
       try {
@@ -726,6 +763,7 @@ export class AICallRuntimeService {
         visibleMessages: [],
       };
     }
+    this.clearActiveCallSnapshot(call.id);
     // 终态先提交，再 abort 去电决策，取消消费者回读时不会看到仍在拨号的旧事实。
     this.outgoingDecisions.get(call.id)?.abort();
     try {

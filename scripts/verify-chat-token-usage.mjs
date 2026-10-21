@@ -19,6 +19,7 @@ function load(file, mocks = {}) {
 }
 
 const { BaseAIClient } = load('src/platform/ai/BaseAIClient.ts', {
+  './HttpExchangeCapture': { beginAIHttpCapture: async () => null },
   './errorMapping': load('src/platform/ai/errorMapping.ts'),
   './baseUrl': load('src/platform/ai/baseUrl.ts'),
 });

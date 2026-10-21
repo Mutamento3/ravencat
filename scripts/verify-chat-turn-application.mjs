@@ -1,5 +1,5 @@
 import { prepareConsumedTurnFixture } from './helpers/sqlite-bootstrap-fixture.mjs';
-import { chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
+import { chatReplyVersionModuleUrl, chatMutationModuleUrl, chatTimelineModuleUrl, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 import { arrivalModuleUrl, arrival } from './chat-message-arrival-fixture.mjs';
 /**
  * Phase 5A ConversationTurnCoordinator 第二片：Chat 应用层行为验证。
@@ -86,7 +86,7 @@ const coordinatorStub = `const databaseCoordinator = {
   },
 };`;
 
-const messageRepoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`);
+const messageRepoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`);
 const stubbedMessageRepoSource = messageRepoSource
   .replace(
     /import\s*\{[\s\S]*?\}\s*from\s*['"]@platform\/persistence['"];/,
@@ -99,7 +99,7 @@ const stubbedMessageRepoSource = messageRepoSource
 const messageRepoModuleUrl = transpileToModuleUrl(stubbedMessageRepoSource);
 const { MessageRepository } = await import(messageRepoModuleUrl);
 
-const turnRepoSource = read('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts').replaceAll("from '../../messages/infrastructure/ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`);
+const turnRepoSource = read('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts').replaceAll("from '../../messages/infrastructure/ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from './ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`);
 const stubbedTurnRepoSource = turnRepoSource
   .replace(
     /import\s*\{[\s\S]*?\}\s*from\s*['"]@platform\/persistence['"];/,
@@ -190,7 +190,9 @@ const {
 } = await import(chatReplyAbortModuleUrl);
 
 const chatReplyUtilsModuleUrl = transpileToModuleUrl(
-  read('src/features/chat/reply/application/ChatReplyUtils.ts'),
+  read('src/features/chat/reply/application/ChatReplyUtils.ts').replace(
+    "from '@shared/prompt'", `from '${transpileToModuleUrl(read('src/shared/prompt/messageTimestamp.ts'))}'`,
+  ),
 );
 
 const assistantReplyPersistenceSource = read('src/features/chat/reply/application/AssistantReplyPersistence.ts');
@@ -681,6 +683,30 @@ async function setupTurnFixture() {
 }
 
 // ============================================================================
+// 仅收到部分思考时仍通过 T3 保存，并消费输入，避免后续宿主重新请求模型。
+{
+  const { db, turns, messages } = await setupTurnFixture();
+  const run = await turns.claimIfIdle('s1', 'user_reply');
+  const persistence = createSingleTransactionTurnCommit(run, 'ai1');
+  let committed = 0;
+  await persistence.persistCompletedAssistantReply({
+    sessionId: 's1',
+    response: { success: true, text: '', reasoningText: '尚未想完的内容' },
+    repository: messages,
+    aiConfig: { id: 'ai1', agentId: 'agent1', name: 'AI' },
+    runtimeContext: { triggerSource: 'chat' },
+    policy: { bubbleDeliveryMode: 'multi-bubble' },
+    callbacks: { onReplyCommitted: () => { committed++; } },
+  });
+  assert.equal(persistence.turnCommitOutcome(), 'committed');
+  assert.equal(getRun(db, run.runId).status, 'committed');
+  assert.equal(getTurnState(db, 's1').reply_cursor, run.inputHighWatermark);
+  assert.equal(await turns.claimIfIdle('s1', 'user_reply'), null, '思考已保存后不能重复领取同一输入');
+  assert.equal(committed, 1);
+  assert.deepEqual(db.prepare("SELECT sender_type, text FROM messages WHERE turn_run_id = ? ORDER BY turn_item_index")
+    .all(run.runId).map(row => ({ ...row })), [{ sender_type: 'reasoning', text: '尚未想完的内容' }]);
+}
+
 // 测试 6：语音媒体 materializer 与消息同 T3，且 presentation 回调不泄漏 transcript
 // ============================================================================
 {

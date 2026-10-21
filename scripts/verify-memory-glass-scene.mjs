@@ -41,7 +41,7 @@ const native = {
   Animated: {
     Value: AnimatedValue, View: 'AnimatedView',
     timing: (value, { toValue }) => ({ start: () => { value.value = toValue; } }),
-    parallel: animations => ({ start: callback => { animations.forEach(animation => animation.start()); callback?.({ finished: true }); } }),
+    parallel: animations => ({ start: callback => { animations.forEach(animation => animation.start()); callback?.({ finished: true }); }, stop() {} }),
   },
 };
 const glass = { LiquidGlassBackdrop: 'NativeBackdrop', LiquidGlassEffect: 'NativeGlass' };
@@ -53,12 +53,17 @@ const themes = Object.fromEntries(['defaultLight', 'defaultDark', 'liquidGlass']
 let theme = themes['liquid-glass'];
 const themed = { ...scene, useTheme: () => theme, useThemedStyles: factory => factory(theme), getThemeById: id => themes[id] };
 const surface = load('src/shared/theme/components/GlassSurface.tsx', {
+  'react-native-reanimated': { default: { createAnimatedComponent: component => component } },
   'react-native': native, '../../../../modules/liquid-glass': glass, '../useTheme': themed, './GlassScene': scene,
 });
 Object.assign(themed, load('src/shared/theme/components/ThemedSurface.tsx', {
   'react-native': native, '../useTheme': themed, './GlassSurface': surface,
 }));
 const safeArea = { SafeAreaView: 'SafeAreaView', useSafeAreaInsets: () => ({ bottom: 0 }) };
+native.Modal = function Modal(props) {
+  React.useEffect(() => { props.onShow?.(); }, []);
+  return props.visible ? React.createElement('Modal', props, props.children) : null;
+};
 const ModalSheet = load('src/shared/ui/ModalSheet.tsx', {
   'react-native': native, '@shared/theme': themed, 'react-native-safe-area-context': safeArea,
   './KeyboardAvoidingContainer': { default: 'KeyboardAvoidingContainer' },

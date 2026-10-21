@@ -95,6 +95,7 @@ const chatMetadata = loadTypeScriptModule('src/features/chat/messages/domain/cha
 const { PromptHistoryBuilder } = loadTypeScriptModule(
   'src/host/prompt/PromptHistoryBuilder.ts',
   {
+    '@shared/prompt': loadTypeScriptModule('src/shared/prompt/messageTimestamp.ts', {}),
     '@features/chat': {
       getChatSummaryContext: async () => ({
         settings: { generationEnabled: false, fixedMessageId: null }, contextSegments: [],
@@ -324,10 +325,11 @@ assert.match(ai2Timeline[0].content, /这是历史消息中持久化的 Markdown
 assert.match(ai2Timeline[1].content, /当前需要回应的“橙子”发来的消息/);
 assert.match(ai2Timeline[1].content, /这是本轮文件的 Markdown 正文/);
 assert.ok(Array.isArray(ai2Timeline[2].content), '本轮图片必须保留在原用户消息的位置');
-assert.match(ai2Timeline[2].content[0].text, /当前需要回应的“橙子”发来的消息/);
+assert.equal(ai2Timeline[2].createdAt, '2026-08-13T09:01:00.000Z');
+assert.ok(ai2Timeline[2].content.some((part) => part.type === 'text' && part.text.includes('当前需要回应的“橙子”发来的消息')));
 assert.equal(ai2Timeline[2].content.filter((part) => part.type === 'image_url').length, 1);
 assert.equal(ai2Timeline[3].role, 'user');
-assert.match(ai2Timeline[3].content, /^同名成员：AI1 已经回复/);
+assert.equal(ai2Timeline[3].content, '同名成员：AI1 已经回复');
 assert.ok(!ai2Timeline.some((message) => message.sourceMessageId === 13), '快照之后的新用户消息不得进入本轮');
 
 const manyCurrentMessages = Array.from({ length: 35 }, (_, index) => ({
@@ -448,10 +450,11 @@ assert.deepEqual(
 );
 
 // 用真实编译器与模型网关检查最终请求，防止群身份说明与已提供的函数参数相互冲突。
-const budget = loadTypeScriptModule('src/host/prompt/tokenBudget.ts', { '@shared/prompt': { estimateTextTokens: (text) => text.length } });
+const timestampRenderer = loadTypeScriptModule('src/shared/prompt/messageTimestamp.ts', {});
+const budget = loadTypeScriptModule('src/host/prompt/tokenBudget.ts', { '@shared/prompt': { ...timestampRenderer, estimateTextTokens: (text) => text.length } });
 const metadata = loadTypeScriptModule('src/host/prompt/compiler/promptBlockMetadata.ts', {});
 const { PromptPackCompiler } = loadTypeScriptModule('src/host/prompt/compiler/PromptPackCompiler.ts', {
-    '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
+    '@shared/prompt': { CHAT_PROMPT_READING_FLOW, ...timestampRenderer },
   '../tokenBudget': budget, './promptBlockMetadata': metadata,
 });
 const { getSystemPromptPreset } = loadTypeScriptModule('src/host/prompt/compiler/systemPromptPresets.ts', {});
@@ -489,7 +492,7 @@ for (const tools of [[], [search]]) {
   // 群成员身份属于固定背景；本轮环境独立放在历史之后。
   assert.ok(request.messages[0].content.includes(summaryBlock.content));
   assert.ok(request.messages[0].content.includes(contextBlock.content), '群身份背景放在前置 system');
-  assert.deepEqual(request.messages.slice(1, 1 + perspectiveHistory.length), perspectiveHistory, '群环境不能改写历史及其角色');
+  assert.deepEqual(request.messages.slice(1, 1 + perspectiveHistory.length), perspectiveHistory.map(({ createdAt, ...message }) => message), '群环境不能改写历史及其角色');
   const currentContext = request.messages[1 + perspectiveHistory.length];
   assert.equal(currentContext.role, 'system');
   assert.ok(!currentContext.content.includes(contextBlock.content), '群身份背景不重复进入本轮动态状态');
@@ -518,7 +521,30 @@ const privateHistory = await historyBuilder.loadRecentMessages('chat.private_rep
   runtimeContext: {},
 });
 assert.deepEqual(privateHistory.map((message) => message.role), ['user', 'assistant']);
-assert.deepEqual(privateHistory.map((message) => message.content), ['私聊用户', '私聊 AI']);
+assert.deepEqual(privateHistory.map((message) => message.content), [
+  '私聊用户', '私聊 AI',
+]);
+
+// 时区归一、跨日与逻辑消息分段合并后，仍须保留每段的原始时间。
+globalThis.__GROUP_PROMPT_TIMELINE__ = [
+  { id: 41, createdAt: '2026-08-14T07:59:59.987+08:00', text: '之前的用户消息', isMe: true, senderType: 'user', metadataJson: null },
+  { id: 42, createdAt: '2026-08-14T08:00:01.123+08:00', text: '第一段', isMe: false, senderType: 'assistant', logicalMessageId: 'reply', metadataJson: null },
+  { id: 43, createdAt: '2026-08-14T08:00:02.456+08:00', text: '第二段', isMe: false, senderType: 'assistant', logicalMessageId: 'reply', metadataJson: null },
+];
+const segmentedHistory = await historyBuilder.loadRecentMessages('chat.private_reply', {
+  sessionId: 'private-session', aiConfig: { id: 'private-ai' }, toolContext: {}, runtimeContext: {},
+});
+assert.deepEqual(segmentedHistory.map(({ role, content, createdAt }) => ({ role, content, createdAt })), [
+  { role: 'user', content: '之前的用户消息', createdAt: '2026-08-14T07:59:59.987+08:00' },
+  { role: 'assistant', content: '第一段', createdAt: '2026-08-14T08:00:01.123+08:00' },
+  { role: 'assistant', content: '第二段', createdAt: '2026-08-14T08:00:02.456+08:00' },
+]);
+const timedSegments = segmentedHistory.flatMap((message) => timestampRenderer.renderPromptMessageWithTimestamp(message, true));
+assert.match(timedSegments[0].content, /2026-08-13T23:59:59Z/);
+assert.match(timedSegments[2].content, /2026-08-14T00:00:01Z/);
+assert.match(timedSegments[4].content, /2026-08-14T00:00:02Z/);
+assert.ok(timedSegments.filter((message) => message.role === 'assistant').every((message) => !message.content.includes('Z]')));
+assert.deepEqual(globalThis.__GROUP_PROMPT_TIMELINE__.map(({ text }) => text), ['之前的用户消息', '第一段', '第二段']);
 
 // 单聊与通话的摘要／完整原文契约由 verify-memory-v3-prompt 验证，退休旧 over-fetch 窗口断言。
 

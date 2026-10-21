@@ -15,6 +15,7 @@ import {
   loadStoredThemeBackupState,
   parseStoredThemeBackupState,
   restoreStoredThemeBackupState,
+  type StoredThemeBackupState,
 } from '@shared/theme';
 import type { BackupSourceGateway } from '../application/CreateLocalBackup';
 import {
@@ -81,7 +82,8 @@ export class ApplicationBackupSourceGateway implements BackupSourceGateway {
   ): Promise<void> {
     await this.validateDatabaseMedia(databaseUri, mediaRootUri);
     const settings = parseStableSettingsBackupJson(json);
-    parseStoredThemeBackupState(settings.theme);
+    const themeState = parseStoredThemeBackupState(settings.theme);
+    await this.validateChatFooterImage(themeState, mediaRootUri);
 
     await validateBubbleSkinBackupSettings(
       JSON.stringify(settings.bubbleSkins),
@@ -104,6 +106,8 @@ export class ApplicationBackupSourceGateway implements BackupSourceGateway {
       loadStoredThemeBackupState(),
       getBubbleSkinBackupSource(),
     ]);
+    // create 侧同样校验底栏图标真实存在，避免产出引用缺失文件的“缩水”备份。
+    await this.validateChatFooterImage(theme, getPersistentMediaRootUri());
 
     const json = JSON.stringify({
       schemaVersion: STABLE_SETTINGS_BACKUP_SCHEMA_VERSION,
@@ -116,5 +120,18 @@ export class ApplicationBackupSourceGateway implements BackupSourceGateway {
     parseStableSettingsBackupJson(json);
 
     return { bubbleSkinRootUri: bubbleSkins.rootUri, json };
+  }
+
+  /** 底栏图标文件位于 persistent-media 根内，随媒体根归档；引用必须能真实命中。 */
+  private async validateChatFooterImage(
+    themeState: StoredThemeBackupState,
+    mediaRootUri: string,
+  ): Promise<void> {
+    const image = themeState.paperNoteChatFooter?.image;
+    if (!image) return;
+    const info = await getPersistentImageInfoInRoot(mediaRootUri, image.storageKey);
+    if (!info.exists || info.isDirectory) {
+      throw new Error(`备份引用的聊天底栏图标缺失：${image.storageKey}`);
+    }
   }
 }

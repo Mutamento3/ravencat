@@ -1,5 +1,6 @@
 /** GitHub 公共发布信息的网络边界；应用内不携带 GitHub 凭据。 */
 export interface ApplicationRelease {
+  tag: string;
   version: string;
   prerelease: boolean;
   notes: string;
@@ -41,6 +42,7 @@ export async function fetchApplicationReleases(): Promise<ApplicationRelease[]> 
         throw new Error('发布安装包缺少有效的下载地址、大小或 SHA-256');
       }
       releases.push({
+        tag: item.tag_name,
         version: item.tag_name.replace(/^v/, ''),
         prerelease: item.prerelease,
         notes: item.body === null ? '' : item.body as string,

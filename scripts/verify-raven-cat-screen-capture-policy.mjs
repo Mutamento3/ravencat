@@ -54,7 +54,6 @@ assert.match(deviceModule, /AsyncFunction\("clearInstalledAppIconCache"\)/);
 
 assert.match(blacklistScreen, /搜索应用名称或包名/);
 assert.match(blacklistScreen, /<Image/);
-assert.match(blacklistScreen, /<Switch/);
 assert.match(blacklistScreen, /已卸载应用/);
 assert.match(blacklistScreen, /!protectedPackages\.has\(normalizePackageName\(app\.packageName\)\)/);
 assert.doesNotMatch(blacklistScreen, /新增应用包名|请输入 Android 应用包名|加入黑名单/);

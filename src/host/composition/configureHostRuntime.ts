@@ -1,6 +1,6 @@
 /** 只执行一次的前台宿主运行时装配入口。 */
 import { configureChatCallGateway } from '@features/chat/composition';
-import { getActiveCall, startOutgoingCall } from '@features/calls';
+import { getActiveCallSnapshot, subscribeActiveCall, startOutgoingCall } from '@features/calls';
 import { configureWalletRuntime } from '@features/wallet';
 
 import { createWalletChatReplyGateway } from './createWalletChatReplyGateway';
@@ -49,7 +49,8 @@ export function configureHostRuntime(): void {
   configureStickerAnnotationQueue();
   configureStickerEmbeddingQueue();
   configureChatCallGateway({
-    getActiveCall,
+    getActiveCallSnapshot,
+    subscribeActiveCall,
     startOutgoingCall: (params) => startOutgoingCall({
       ...params,
       onCallCreated: params.onCallCreated

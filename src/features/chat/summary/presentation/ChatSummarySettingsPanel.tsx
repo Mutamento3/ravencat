@@ -11,13 +11,16 @@ import { createChatSummaryStyles } from './chatSummaryStyles';
 export interface ChatSummarySettingsEditor { flush(): Promise<boolean> }
 export default forwardRef<ChatSummarySettingsEditor, {
   settings: ChatSummarySettings; pendingTokens: number; busy: boolean; group?: boolean;
+  /** 单聊主视角当前条数；留空跟随时的展示值，仅单聊设置页提供。 */
+  followPrimaryLimit?: number | null;
   onSave(patch: ChatSummarySettingsPatch): Promise<void>;
-}>(function ChatSummarySettingsPanel({ settings, pendingTokens, busy, onSave, group = false }, ref) {
+}>(function ChatSummarySettingsPanel({ settings, pendingTokens, busy, onSave, group = false, followPrimaryLimit = null }, ref) {
   const theme = useTheme();
   const styles = useThemedStyles(createChatSummaryStyles);
   const initial = useMemo(() => ({ threshold: String(settings.secondaryTokenThreshold), timeout: String(settings.requestTimeoutSeconds),
-    maxTokens: settings.maxOutputTokens === null ? '' : String(settings.maxOutputTokens), trigger: String(settings.groupTriggerCount) }),
-  [settings.secondaryTokenThreshold, settings.requestTimeoutSeconds, settings.maxOutputTokens, settings.groupTriggerCount]);
+    maxTokens: settings.maxOutputTokens === null ? '' : String(settings.maxOutputTokens), trigger: String(settings.groupTriggerCount),
+    primaryLimit: settings.primaryLimit === null ? '' : String(settings.primaryLimit) }),
+  [settings.secondaryTokenThreshold, settings.requestTimeoutSeconds, settings.maxOutputTokens, settings.groupTriggerCount, settings.primaryLimit]);
   const thresholdEditor = useAutoSaveDraft<typeof initial, ChatSummarySettingsPatch>({
     initial,
     parse(draft, changed) {
@@ -25,14 +28,19 @@ export default forwardRef<ChatSummarySettingsEditor, {
       const accepted: (keyof typeof initial)[] = [];
       for (const field of changed) {
         const text = draft[field], value = Number(text);
-        if (field === 'maxTokens' && text === '') { patch.maxOutputTokens = null; accepted.push(field); continue; }
+        if ((field === 'maxTokens' || field === 'primaryLimit') && text === '') {
+          if (field === 'maxTokens') patch.maxOutputTokens = null; else patch.primaryLimit = null;
+          accepted.push(field); continue;
+        }
         if (!/^\d+$/.test(text) || !Number.isSafeInteger(value) || value <= 0 || (field === 'timeout' && value > 3600)) {
-          errors[field] = field === 'threshold' ? '请填写正整数 token 阈值' : field === 'trigger' ? '请填写正整数群触发条数' : field === 'timeout' ? '请填写 1～3600 秒最长等待时间' : '请填写正整数输出 token，或留空跟随总结模型';
+          errors[field] = field === 'threshold' ? '请填写正整数 token 阈值' : field === 'trigger' ? '请填写正整数群触发条数'
+            : field === 'primaryLimit' ? '请填写正整数整理条数，或留空跟随单聊主视角' : field === 'timeout' ? '请填写 1～3600 秒最长等待时间' : '请填写正整数输出 token，或留空跟随总结模型';
           continue;
         }
         if (field === 'threshold') patch.secondaryTokenThreshold = value;
         else if (field === 'timeout') patch.requestTimeoutSeconds = value;
         else if (field === 'trigger') patch.groupTriggerCount = value;
+        else if (field === 'primaryLimit') patch.primaryLimit = value;
         else patch.maxOutputTokens = value;
         accepted.push(field);
       }
@@ -60,8 +68,14 @@ export default forwardRef<ChatSummarySettingsEditor, {
       onValueChange={(generationEnabled) => { void saveSwitch({ generationEnabled }); }} /></View>
     <Text style={styles.subtitle}>{settings.fixedMessageId !== null
       ? '已固定消息起点，自动生成暂停。取消固定后仍保持关闭，需手动开启，从原来的总结进度继续。'
-      : group ? '开启后按群触发条数与处理进度分批总结，一级达到 token 阈值后生成二级。关闭时使用各成员的主·群聊窗口，已有摘要按上方开关注入。'
-        : '开启后按原进度分批总结聊天与通话，一级达到 token 阈值后生成二级。关闭时仅保留近期消息窗口，已有摘要按上方开关注入。'}</Text>
+      : group ? '开启后按群触发条数与处理进度总结，一级达到 token 阈值后生成二级。关闭时使用各成员的主·群聊窗口，已有摘要按上方开关注入。'
+        : '开启后按下方整理条数与处理进度总结聊天与通话，一级达到 token 阈值后生成二级。关闭时仅保留近期消息窗口，已有摘要按上方开关注入。'}</Text>
+    {!group && <><View style={styles.row}><Text style={styles.body}>每次整理条数</Text><AppTextInput accessibilityLabel="每次整理条数"
+      style={styles.thresholdInput} keyboardType="number-pad" editable={!busy} value={thresholdEditor.draft.primaryLimit}
+      placeholder={followPrimaryLimit === null ? '跟随单聊主视角' : `跟随主视角（${followPrimaryLimit}）`}
+      onChangeText={(primaryLimit) => { void thresholdEditor.change({ primaryLimit }); }} onBlur={() => { void thresholdEditor.commit(); }} /></View>
+      {thresholdEditor.errors.primaryLimit && <Text accessibilityRole="alert" style={styles.danger}>{thresholdEditor.errors.primaryLimit}</Text>}
+      <Text style={styles.subtitle}>每次自动整理多少条新对话。留空跟随该 AI 的单聊主视角条数，改主视角会同步变化；手动填写后固定为填写值，不再跟随。</Text></>}
     <View style={styles.row}><Text style={styles.body}>开启二级摘要</Text><Toggle accessibilityLabel="开启二级摘要"
       value={settings.secondaryEnabled} disabled={busy} onValueChange={(secondaryEnabled) => { void saveSwitch({ secondaryEnabled }); }} /></View>
     <Text style={styles.subtitle}>只归纳已形成的一级摘要，保留重要事件与实体。关闭二级摘要时恢复注入现存一级摘要，暂停新的归纳。</Text>

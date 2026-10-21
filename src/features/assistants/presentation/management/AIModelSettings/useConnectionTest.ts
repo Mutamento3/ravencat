@@ -1,10 +1,9 @@
-// 连接测试、错误分类与工具支持探测逻辑
+// 连接测试与错误分类；工具权限由独立开关拥有。
 
 import { type AppDialogButton, type AppDialogTone } from '@shared/ui';
 import { useState, useCallback } from 'react';
 import {
   detectConnectionParamError,
-  detectToolsSupportByConfig,
   getAIConnectionErrorInfo,
 } from '../../../application/AIModelService';
 import type { ParamErrorInfo, ErrorDisplayInfo } from '../../../application/modelTypes';
@@ -16,8 +15,6 @@ interface UseConnectionTestProps {
   apiKey: string;
   selectedModel: string;
   getConnectionParams: () => ConnectionParams;
-  enableTools: boolean;
-  setEnableTools: (value: boolean) => void;
   onShowAlert?: (title: string, message: string, buttons?: AppDialogButton[], tone?: AppDialogTone) => void;
 }
 
@@ -34,8 +31,6 @@ export default function useConnectionTest({
   apiKey,
   selectedModel,
   getConnectionParams,
-  enableTools,
-  setEnableTools,
   onShowAlert,
 }: UseConnectionTestProps): UseConnectionTestReturn {
   const [isTesting, setIsTesting] = useState(false);
@@ -65,33 +60,11 @@ export default function useConnectionTest({
       });
 
       if (result.success) {
-        const supportsTools = await detectToolsSupportByConfig(
-          apiBaseUrl,
-          apiKey,
-          selectedModel,
-          connectionParams
+        onShowAlert?.(
+          '连接成功',
+          `模型 "${selectedModel}" 连接正常。`,
+          [{ text: '知道了', style: 'default' }], 'success'
         );
-
-        if (supportsTools && !enableTools) {
-          setEnableTools(true);
-          onShowAlert?.(
-            '已自动开启工具调用',
-            `检测到模型 "${selectedModel}" 支持工具调用功能，已自动为您开启。`,
-            [{ text: '知道了', style: 'default' }], 'success'
-          );
-        } else if (supportsTools && enableTools) {
-          onShowAlert?.(
-            '连接成功',
-            `模型 "${selectedModel}" 连接正常，工具调用功能已开启。`,
-            [{ text: '知道了', style: 'default' }], 'success'
-          );
-        } else {
-          onShowAlert?.(
-            '连接成功',
-            `模型 "${selectedModel}" 连接正常。`,
-            [{ text: '知道了', style: 'default' }], 'success'
-          );
-        }
 
         setTestResult('success');
         return;
@@ -155,8 +128,6 @@ export default function useConnectionTest({
     apiKey,
     selectedModel,
     getConnectionParams,
-    enableTools,
-    setEnableTools,
     onShowAlert,
     resetTestState,
   ]);

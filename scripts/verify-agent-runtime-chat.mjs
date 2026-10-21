@@ -199,9 +199,11 @@ const timelineAssistantTurnCommitModule = loadTypeScriptModule(
 const agentTimelineIdentityModule = loadTypeScriptModule(
   'src/features/chat/messages/domain/AgentTimelineIdentity.ts',
 );
+const autonomousReplyContract = loadTypeScriptModule('src/features/chat/reply/application/AutonomousReplyContract.ts');
 const timelineModule = loadTypeScriptModule(
   'src/features/chat/reply/agent/ChatAgentTimeline.ts',
   {
+    '../application/AutonomousReplyContract': autonomousReplyContract,
     '@features/stickers': {
       isStickerSendIntent: (value) => value?.discriminator === 'ravencat.sticker.send.v1',
     },
@@ -692,8 +694,8 @@ assert.equal(plain.projectionLog.persistedReplies[0].policy.bubbleDeliveryMode, 
 assert.equal(plain.projectionLog.persistedReplies[0].response.messageId, 'message-1');
 assert.equal(
   plain.provider.requests[0].options.allowReasoningLengthRetry,
-  true,
-  'Chat complete 必须保留 Provider 的单次 reasoning-length retry',
+  false,
+  'Chat complete 必须保留 Runtime 禁止隐藏重发的契约',
 );
 
 const noToolsComplete = await runChatCase({
@@ -721,15 +723,28 @@ await assert.rejects(
 );
 assert.equal(capturedRunResult.terminalCode, 'MODEL_PROTOCOL_ERROR');
 
-await assert.rejects(
-  () => runChatCase({
-    responses: [response({ text: '', reasoningText: '只有推理' })],
-    enableTools: false,
-  }),
-  /Chat Agent run failed/,
-  'reasoning-only 不得作为成功回复',
-);
-assert.equal(capturedRunResult.terminalCode, 'MODEL_PROTOCOL_ERROR');
+for (const modelTransport of ['complete', 'stream']) {
+  for (const finishReason of ['stop', 'length']) {
+    for (const text of ['', '尚未写完的正文']) {
+      const commits = [];
+      const partial = await runChatCase({
+        modelTransport,
+        responses: [response({ text, reasoningText: '已经返回的思考', finishReason })],
+        enableTools: false,
+        persistence: { persistsIntermediates: false, commitAgentTimeline: async (params) => {
+          commits.push(params);
+          return { outcome: 'committed', messages: params.items.map(({ message }, index) => ({ ...message, id: index + 1 })) };
+        } },
+      });
+      assert.equal(partial.result.terminalCode, 'COMPLETED');
+      assert.equal(partial.provider.requests.length, 1, '已有思考或部分正文时不能重新请求模型');
+      assert.equal(commits.length, 1, '模型已返回的内容必须进入原有提交链');
+      assert.deepEqual(commits[0].items.map(({ message }) => [message.senderType, message.text]).sort(),
+        [['reasoning', '已经返回的思考'], ...(text ? [['assistant', text]] : [])].sort(),
+        '只返回思考或正文被截断时都保留已收到的内容，不补空正文或错误气泡');
+    }
+  }
+}
 
 let disabledToolExecutions = 0;
 await assert.rejects(
@@ -1625,7 +1640,7 @@ for (const [toolName, data, expectedText] of [
 }
 }
 
-// 自主执行即使不发消息，也保留结论；失败/取消保留此前已发生的模型与工具记录。
+// 自主正文只在正常终态成为消息；失败/取消保留原文，不能补发。
 for (const terminalCode of ['COMPLETED', 'MODEL_REQUEST_FAILED', 'CANCELLED_BY_USER']) {
   const activityProjectorModule = loadTypeScriptModule('src/features/chat/reply/agent/ChatAgentRunProjector.ts', {
     '../application/ChatReplyAbort': replyAbortMock,
@@ -1642,19 +1657,71 @@ for (const terminalCode of ['COMPLETED', 'MODEL_REQUEST_FAILED', 'CANCELLED_BY_U
       return { outcome: 'committed', messages: committed.map((message, index) => ({ ...message, id: index + 1 })) };
     } } },
     stopRuntime: () => {}, replyRunId: 'activity-run',
-    finalAssistantPolicy: 'record_as_activity',
+    finalAssistantPolicy: 'autonomous_reply',
   });
   await projector.handleEvent({ type: 'model_turn_started', stepIndex: 1 });
   await projector.handleEvent({ type: 'reasoning_delta', stepIndex: 1, text: '检查了当前' });
   await projector.checkpointActivityTimeline();
   assert.equal(committed[0].text, '检查了当前', '模型尚未完成时，收到的半段思考已经可以持久化');
   assert.equal(committed[0].status, 'streaming');
-  await projector.projectModelTurn(1, createTimelineTurn({ reasoningText: '检查了当前情况', assistantText: '这次暂不联系用户' }));
+  await projector.projectModelTurn(1, createTimelineTurn({ reasoningText: '检查了当前情况', assistantText: '考试结束了吗？\n\n想听你说说。' }));
   if (terminalCode === 'MODEL_REQUEST_FAILED') await projector.failRun({ terminalCode, steps: [] });
   else await projector.completeRun({ terminalCode, steps: [{ stepIndex: 1, toolCalls: [] }] });
-  assert.deepEqual(committed.map((message) => message.senderType), ['reasoning', 'system']);
-  assert.deepEqual(committed.map((message) => message.text), ['检查了当前情况', '这次暂不联系用户']);
-  assert.ok(committed.every((message) => JSON.parse(message.metadataJson).type === 'agentActivity'));
+  if (terminalCode === 'COMPLETED') {
+    assert.deepEqual(committed.map((message) => message.senderType), ['reasoning', 'assistant', 'assistant']);
+    assert.deepEqual(committed.map((message) => message.text), ['检查了当前情况', '考试结束了吗？', '想听你说说。']);
+    assert.deepEqual(committed.slice(1).map((message) => [message.segmentIndex, message.segmentTotal]), [[0, 2], [1, 2]]);
+    assert.equal(JSON.parse(committed[0].metadataJson).type, 'agentActivity');
+    assert.ok(committed.slice(1).every((message) => JSON.parse(message.metadataJson).kind === 'reply'));
+  } else {
+    assert.deepEqual(committed.map((message) => message.senderType), ['reasoning', 'system']);
+    assert.deepEqual(committed.map((message) => message.text), ['检查了当前情况', '考试结束了吗？\n\n想听你说说。']);
+    assert.ok(committed.every((message) => JSON.parse(message.metadataJson).type === 'agentActivity'));
+  }
 }
+
+// 静默仅由最终正文的完整控制信号决定，含标记的普通句子照常发送。
+for (const [text, shouldSend] of [
+  [autonomousReplyContract.AUTONOMOUS_SILENT_REPLY, false],
+  [` \n${autonomousReplyContract.AUTONOMOUS_SILENT_REPLY}\n `, false],
+  ['本次无需打扰用户', true],
+  [`这是标记 ${autonomousReplyContract.AUTONOMOUS_SILENT_REPLY} 的说明`, true],
+]) {
+  const timeline = new timelineModule.ChatAgentTimeline('autonomous-contract', {}, { bubbleDeliveryMode: 'multi-bubble' }, 'autonomous_reply');
+  timeline.startStep(1);
+  timeline.reconcileModelTurn(1, createTimelineTurn({ assistantText: text }));
+  const params = { sessionId: 'session-1', aiConfig: { id: 'assistant-1', agentId: 'agent-1', name: 'Kimi' },
+    policy: { bubbleDeliveryMode: 'multi-bubble' }, finalAssistantPolicy: 'autonomous_reply', finalStepIndex: 1 };
+  assert.ok(timeline.buildCommitItems(params).every(({ message }) => message.senderType !== 'assistant'), '结束前只保存过程');
+  const items = timeline.buildCommitItems({ ...params, commitAutonomousReply: true });
+  assert.equal(items.some(({ message }) => message.senderType === 'assistant'), shouldSend);
+  if (!shouldSend) {
+    assert.deepEqual(items.map(({ message }) => message.text), ['本次选择不发送消息']);
+    assert.ok(timeline.snapshots().every((item) => !item.text.includes('[[NO_MESSAGE]]')), '控制信号不出现在展示中');
+  }
+}
+
+// 前言只留在过程；后续最终正文才是聊天消息，静默不能撤回已提交的表情。
+const autonomousTimeline = new timelineModule.ChatAgentTimeline('autonomous-prelude', {}, {}, 'autonomous_reply');
+autonomousTimeline.startStep(1);
+autonomousTimeline.reconcileModelTurn(1, createTimelineTurn({ assistantText: '先检查一下', toolCalls: [modelToolCall('prelude', 'select_sticker')] }));
+autonomousTimeline.startToolStatus(1);
+autonomousTimeline.completeToolCall(1, 'prelude', { status: 'success', data: {
+  discriminator: 'ravencat.sticker.send.v1', sticker: JSON.parse(stickerItems[1].message.metadataJson).sticker,
+}, modelContent: '已发送' });
+const autonomousCommitParams = {
+  sessionId: 'session-1', aiConfig: { id: 'assistant-1', agentId: 'agent-1', name: 'Kimi' },
+  policy: { bubbleDeliveryMode: 'multi-bubble' }, finalAssistantPolicy: 'autonomous_reply', commitAutonomousReply: true,
+};
+assert.ok(!autonomousTimeline.buildCommitItems({ ...autonomousCommitParams, finalStepIndex: 1 })
+  .some(({ message }) => message.senderType === 'assistant' && message.text), '媒体工具直接结束时也不能发送工具前言');
+autonomousTimeline.startStep(2);
+autonomousTimeline.reconcileModelTurn(2, createTimelineTurn({ assistantText: autonomousReplyContract.AUTONOMOUS_SILENT_REPLY }));
+const silentAfterToolItems = autonomousTimeline.buildCommitItems({
+  sessionId: 'session-1', aiConfig: { id: 'assistant-1', agentId: 'agent-1', name: 'Kimi' },
+  policy: { bubbleDeliveryMode: 'multi-bubble' }, finalAssistantPolicy: 'autonomous_reply', finalStepIndex: 2, commitAutonomousReply: true,
+});
+assert.ok(!silentAfterToolItems.some(({ message }) => message.senderType === 'assistant' && message.text), '工具前言和静默结论均不发正文');
+assert.equal(silentAfterToolItems.filter(({ message }) => message.senderType === 'assistant').length, 1, '静默保留已经准备的表情消息');
 
 console.log('Agent Runtime Chat 验证通过：回复投影、自主行动记录、失败与取消保留、预算和工具行为符合契约。');

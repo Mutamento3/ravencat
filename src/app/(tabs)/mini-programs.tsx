@@ -5,6 +5,7 @@ import { MiniProgramsTab } from '@features/miniPrograms';
 const MINI_PROGRAM_ROUTES: Record<string, Href> = {
   wallet: '/wallet',
   auxiliaryModels: '/auxiliary-models',
+  aiRequestDiagnostics: '/ai-request-diagnostics' as Href,
   mcpTools: '/mcp-tools',
   webSearch: '/web-search' as Href,
   memory: '/memory' as Href,

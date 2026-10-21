@@ -20,7 +20,8 @@ export type MediaAssetReferenceKind =
   | 'chat_thumbnail'
   | 'chat_voice'
   | 'chat_sticker'
-  | 'chat_favorite';
+  | 'chat_favorite'
+  | 'chat_reply_version';
 
 /**
  * 一条真实业务引用。ownerId 只用于诊断，不承担级联删除语义。

@@ -343,12 +343,13 @@ assert.match(unavailableActiveBlock.content, /暂不可用/);
 write('node_modules/@shared/prompt/index.js', `
 exports.CHAT_PROMPT_READING_FLOW = ${JSON.stringify(CHAT_PROMPT_READING_FLOW)};
 exports.estimateTextTokens = (text) => Math.ceil(text.length / 4);
+exports.renderPromptMessageWithTimestamp = require('../../../src/shared/prompt/messageTimestamp').renderPromptMessageWithTimestamp;
 `);
 write('node_modules/@features/prompting/index.js', `
 exports.listPromptCustomBlocks = async () => [];
 exports.resolveLegacyPromptPreset = async ({ scenarioId }) => ({ preset: globalThis.__listenGetPreset(scenarioId) });
 exports.resolveAssistantPromptConfiguration = async () => ({
-  overrides: {}, disabledDefinitionIds: [], userPrompts: [], timeEnabled: true, batteryEnabled: false,
+  overrides: {}, disabledDefinitionIds: [], userPrompts: [], timeEnabled: true, batteryEnabled: false, userStateEnabled: true, socialEnabled: true,
 });
 `);
 write('src/host/prompt/DeviceBatteryPromptBlock.js', `exports.createDeviceBatteryPromptBlocks = async () => [];`);
@@ -375,7 +376,6 @@ exports.promptPackBlockFactory = {
   createToolsDescriptionBlock: () => block('tools_description', 'context.tools_description', 'tools', { slot: 'capabilities' }),
   createGroupChatContextBlock: () => block('group_chat_context', 'context.group_chat', 'group', { slot: 'scenario' }),
   createGroupMemberReplyConfidentialityBlock: () => block('persona', 'output.group_member_reply_confidentiality', 'private', { slot: 'output_contract' }),
-  createRecentMomentsBlock: async () => block('recent_moments_summary', 'context.recent_moments', 'moments', { protection: 'overridable' }),
 };
 `);
 write('src/host/prompt/PromptHistoryBuilder.js', `exports.promptHistoryBuilder = { loadPrivateSummaryContext: async () => ({ messages: [], summaryContent: "" }), loadGroupSummaryContext: async () => ({ messages: [], summaryContent: "" }), loadBackgroundContext: async () => "", loadRecentMessages: async () => [] };`);
@@ -397,6 +397,7 @@ exports.renderHostPromptProviderBlock = async (id) => ({
 }[id]);
 `);
 for (const relativePath of [
+  'src/shared/prompt/messageTimestamp.ts',
   'src/host/prompt/compiler/promptBlockMetadata.ts',
   'src/host/prompt/tokenBudget.ts',
   'src/host/prompt/compiler/PromptPackCompiler.ts',

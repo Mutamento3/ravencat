@@ -1,4 +1,4 @@
-/** 普通主题的球体、凹槽与球内图标共用一个位移，主题只负责配色。 */
+/** 普通主题的悬浮图标与凹槽共用一个位移，主题只负责配色。 */
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
@@ -10,7 +10,10 @@ import { ActiveTabGlyph, TabBarItems, TABS, useTabMotion, type BottomTabBarVaria
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const HEIGHT = 78;
-const RADIUS = 24;
+const GLYPH_SIZE = 25;
+// 悬浮图标中心落在凹槽内并轻微探出栏顶（凹槽深 20–52，中心 36）：
+// 纯图标不需要像原球体那样大半探出栏外，挂太高会显得飘。
+const FLOAT_CENTER_Y = 32;
 
 export default function FloatingBallTabBar(props: BottomTabBarVariantProps) {
   const theme = useTheme();
@@ -23,13 +26,16 @@ export default function FloatingBallTabBar(props: BottomTabBarVariantProps) {
   const path = useAnimatedProps(() => ({
     d: buildScoopedBarPath((position.value + 0.5) * itemWidth, width, height, Math.min(44, itemWidth * 0.48)),
   }));
-  const ballStyle = useAnimatedStyle(() => ({
+  const floatStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: position.value * itemWidth }],
   }));
 
   return (
-    <View style={{ paddingLeft: insets.left, paddingRight: insets.right, backgroundColor: tokens.backgroundColor }}>
-      <View style={[styles.container, { height, backgroundColor: theme.colors.background.screen }]}
+    // 悬浮在页面内容之上（与 MeltingGlass 变体一致）：栏顶条带与凹槽透明，
+    // 悬浮图标直接浮在页面内容前；四个 Tab 场景已用 useFloatingTabBarScrollPadding 预留底部空间。
+    <View pointerEvents="box-none"
+      style={[styles.dock, { height, paddingLeft: insets.left, paddingRight: insets.right }]}>
+      <View style={styles.container}
         onLayout={event => setWidth(event.nativeEvent.layout.width)}>
         {width > 0 && (
           <>
@@ -39,10 +45,10 @@ export default function FloatingBallTabBar(props: BottomTabBarVariantProps) {
             </Svg>
             <Animated.View pointerEvents="none" accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
-              style={[styles.ball, theme.shadow.sm, { left: itemWidth / 2 - RADIUS,
-                backgroundColor: theme.colors.brand.primary }, ballStyle]}>
+              style={[styles.floatIcon, { left: itemWidth / 2 - GLYPH_SIZE / 2,
+                top: FLOAT_CENTER_Y - GLYPH_SIZE / 2 }, floatStyle]}>
               <ActiveTabGlyph activeTab={props.activeTab} unreadCount={props.unreadCount ?? 0}
-                color={theme.colors.brand.onPrimary} />
+                color={theme.colors.brand.primary} />
             </Animated.View>
           </>
         )}
@@ -52,6 +58,7 @@ export default function FloatingBallTabBar(props: BottomTabBarVariantProps) {
   );
 }
 const styles = StyleSheet.create({
-  container: { position: 'relative' },
-  ball: { position: 'absolute', top: 0, width: RADIUS * 2, height: RADIUS * 2, borderRadius: RADIUS },
+  dock: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  container: { flex: 1 },
+  floatIcon: { position: 'absolute', width: GLYPH_SIZE, height: GLYPH_SIZE },
 });

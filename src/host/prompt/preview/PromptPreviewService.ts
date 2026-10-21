@@ -90,6 +90,7 @@ export const promptPreviewService: PromptPreviewGateway = {
       aiConfig: {
         ...toPromptAIConfig(assistant),
         promptDefinitionOverrides: effectivePromptConfig.overrides,
+        messageTimestampsEnabled: effectivePromptConfig.messageTimestampsEnabled,
       },
       toolContext,
       runtimeContext,
@@ -125,22 +126,22 @@ function buildScenarioBlocks(scenarioId: string): PromptPackBlock[] {
 async function resolveEffectivePromptConfig(
   assistant: AIProfile | null,
   scenarioId: PromptScenarioId
-): Promise<{ overrides: Record<string, string> }> {
+): Promise<{ overrides: Record<string, string>; messageTimestampsEnabled: boolean }> {
   if (!assistant) {
-    return { overrides: {} };
+    return { overrides: {}, messageTimestampsEnabled: false };
   }
   const configuration = await resolveAssistantPromptConfiguration({
     assistantId: assistant.id,
     scenarioId,
     toolsEnabled: assistant.enableTools === true,
   });
-  return { overrides: configuration.overrides };
+  return { overrides: configuration.overrides, messageTimestampsEnabled: configuration.messageTimestampsEnabled };
 }
 
 function buildSafePreview(
   input: Parameters<PromptPreviewGateway['preview']>[0],
   assistant: AIProfile | null,
-  effective: { overrides: Record<string, string> }
+  effective: { overrides: Record<string, string>; messageTimestampsEnabled: boolean }
 ) {
   const customById = new Map(input.customBlocks.map((block) => [block.id, block]));
   // 安全预览不读用户资料，用户显示名回落默认称呼；其余占位符按运行时同一规则展开。
@@ -192,6 +193,7 @@ function buildSafePreview(
     blocks,
     recentMessages: [],
     currentInput: { role: 'user', content: input.exampleInput },
+    messageTimestampsEnabled: effective.messageTimestampsEnabled,
     preset: input.preset,
   });
 }

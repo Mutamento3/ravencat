@@ -11,7 +11,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Pin, PinOff, Star } from 'lucide-react-native';
+import { History, Pin, PinOff, Star } from 'lucide-react-native';
 import { useTheme } from '@shared/theme';
 
 interface ChatMessageActionMenuProps {
@@ -22,6 +22,7 @@ interface ChatMessageActionMenuProps {
   onForward?: () => void;
   onRewrite?: () => void;
   onRegenerate?: () => void;
+  onHistory?: () => void;
   onDelete?: () => void;
   onMultiSelect?: () => void;
   onQuote?: () => void;
@@ -52,6 +53,7 @@ function ChatMessageActionMenu({
   onForward,
   onRewrite,
   onRegenerate,
+  onHistory,
   onDelete,
   onMultiSelect,
   onQuote,
@@ -70,6 +72,7 @@ function ChatMessageActionMenu({
     { key: 'copy', label: '复制', icon: 'copy-outline', onPress: onCopy },
     { key: 'rewrite', label: '改写', icon: 'pencil-outline', onPress: onRewrite },
     { key: 'rewriteAI', label: '重写', icon: 'reload-outline', onPress: onRegenerate },
+    { key: 'history', label: '历史版本', icon: 'time-outline', onPress: onHistory },
     { key: 'delete', label: '删除', icon: 'trash-outline', onPress: onDelete },
     { key: 'multi', label: '多选', icon: 'list-outline', onPress: onMultiSelect },
     { key: 'fixedStart', label: isFixedStart ? '取消固定' : '固定', icon: 'pin-outline', onPress: onFixedStart },
@@ -136,7 +139,7 @@ function ChatMessageActionMenu({
         disabled={!action}
         onPress={action ? () => { action(); onClose(); } : undefined}
       >
-        {item.key === 'favorite' ? <Star size={22} color={theme.colors.brand.onPrimary} /> : item.key === 'fixedStart'
+        {item.key === 'history' ? <History size={22} color={theme.colors.brand.onPrimary} /> : item.key === 'favorite' ? <Star size={22} color={theme.colors.brand.onPrimary} /> : item.key === 'fixedStart'
           ? (isFixedStart ? <PinOff size={22} color={theme.colors.brand.onPrimary} /> : <Pin size={22} color={theme.colors.brand.onPrimary} />)
           : <Ionicons name={item.icon} size={22} color={theme.colors.brand.onPrimary} />}
         <Text style={[styles.actionLabel, { color: theme.colors.brand.onPrimary }]}>{item.label}</Text>
