@@ -12,7 +12,9 @@ Beyond text chat, it includes configurable voice and video calls, floating-windo
 
 RavenCat is maintained by one person and is still in active development. Some background behavior and cross-device restoration need more testing on real devices; reliability across all phones has not been established.
 
-Public APKs are released as **Preview / Pre-release** builds. Download them from [GitHub Releases](https://github.com/skylucky163/ravencat/releases). **Pinning a message as the context starting point is experimental**: all original message text from the pinned message through the latest message is included in the context, and automatic summary generation pauses. As the conversation grows, this can increase token usage and exceed the model's context limit. After unpinning, automatic summary generation must be re-enabled manually. See the current preview notes for [v2.1.5](docs/releases/v2.1.5.md).
+Download public APKs from [GitHub Releases](https://github.com/skylucky163/ravencat/releases); each release page shows its release status. See the release notes for [v2.1.6](docs/releases/v2.1.6.md).
+
+Pinning a message as the context starting point includes all original message text from the pinned message through the latest message in the context, and pauses automatic summary generation. As the conversation grows, this can increase token usage and exceed the model's context limit. After unpinning, automatic summary generation must be re-enabled manually.
 
 ## What you can do
 
@@ -48,7 +50,7 @@ You are solely responsible for your use of this software and its consequences. P
 
 ## Build from source
 
-Prepare Node.js 22 (`>=22.13.0 <23`), an Android development environment, and an Android 13+ phone or emulator. Install the locked dependencies:
+Prepare Node.js 22 (`>=22.23.4 <23`), an Android development environment, and an Android 13+ phone or emulator. Install the locked dependencies:
 
 ```powershell
 npm ci

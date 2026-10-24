@@ -4,7 +4,7 @@ import { ThemedSurface } from '@shared/theme';
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BookOpen, HeartHandshake } from 'lucide-react-native';
+import { BookOpen, HeartHandshake, History } from 'lucide-react-native';
 
 interface MenuItemData {
   key: string;
@@ -82,6 +82,14 @@ export function StatisticsIcon({ color }: IconProps) {
   return (
     <View style={{ width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}>
       <HeartHandshake size={22} color={color} />
+    </View>
+  );
+}
+
+export function CallHistoryIcon({ color }: IconProps) {
+  return (
+    <View style={{ width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}>
+      <History size={22} color={color} />
     </View>
   );
 }

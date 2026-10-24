@@ -329,6 +329,7 @@ export function SpeechConfigurationTest({
       )}
       {error ? (
         <Text
+          selectable
           accessibilityRole="alert"
           style={{ color: theme.colors.feedback.error, marginTop: theme.spacing.sm }}
         >

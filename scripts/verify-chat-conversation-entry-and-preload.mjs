@@ -820,6 +820,7 @@ function createPreloadHarness() {
     '../../conversation/application/ConversationPin': {},
     '../../conversation/application/ChatPresentation': { getCanonicalChatConversation: () => { readCount++; return pendingRead; } },
     '../../reply/delivery/AssistantMessageArrival': {},
+    '../../messages/events/ChatEvents': {},
     '@shared/runtime/ConversationListReadySignal': {},
     '@features/profile': { DEFAULT_USER_PROFILE: {}, subscribeUserProfileUpdated: () => () => {} },
   });

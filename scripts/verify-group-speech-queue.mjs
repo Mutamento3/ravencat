@@ -10,6 +10,7 @@
  *   目标不追加，单成员失败标 failed 后继续下一项，fence 拒绝不覆盖终态。
  */
 
+import { SCHEMAS } from './helpers/sqlite-bootstrap-fixture.mjs';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import fs from 'node:fs';
@@ -136,6 +137,12 @@ function createSpeechPlanDatabase() {
     );
     CREATE TABLE group_chats (id TEXT PRIMARY KEY, last_message TEXT, last_time TEXT, last_message_id INTEGER, updated_at TEXT);
   `);
+  db.exec('PRAGMA foreign_keys=OFF');
+  db.exec(SCHEMAS.groupChatMembers);
+  for (const id of [...'123456789ABCDEFGH'.split('').map(letter => `ai-${letter}`)]) {
+    db.prepare(`INSERT INTO group_chat_members (id, group_id, ai_assistant_id, agent_id, enabled, created_at, updated_at)
+      VALUES (?, 'g1', ?, ?, 1, '2026-08-01', '2026-08-01')`).run(`fixture-${id}`, id, `agent-${id.slice(3)}`);
+  }
   return db;
 }
 
@@ -251,6 +258,9 @@ async function buildGroupTurnCommitUrl(groupRuntimeUrl) {
       return {
         messages: {
           async commitMessageInTransaction(transaction, { message }) {
+            if (message.text === globalThis.__GROUP_QUEUE_STATE__?.failCommitText) {
+              throw new Error('后续气泡提交失败');
+            }
             const result = await transaction.runAsync(
               'INSERT INTO messages (session_id, text, metadata_json) VALUES (?, ?, ?)',
               [message.sessionId, message.text, message.metadataJson ?? null],
@@ -313,6 +323,9 @@ async function loadGroupTaskExecution(groupRuntimeUrl, turnCommitUrl) {
       state.thinkingSettings.push([aiConfig.id, aiConfig.disableThinking]);
       const scripts = state.replyScripts[aiConfig.id] || [{ text: '好的。' }];
       const script = scripts.length > 1 ? scripts.shift() : scripts[0];
+      persistence.observeRunEvent?.({ type: 'run_completed', result: {
+        steps: [{ modelTurn: { finishReason: script.finishReason ?? 'stop' } }],
+      } });
       try {
         if (script.beforeCommit) {
           script.beforeCommit();
@@ -324,13 +337,20 @@ async function loadGroupTaskExecution(groupRuntimeUrl, turnCommitUrl) {
           return;
         }
         const result = await persistence.commitAgentTimeline({
-          items: [{ message: { sessionId: _sessionId, text: script.text, senderType: 'assistant',
-            metadataJson: JSON.stringify({ groupChat: {} }) } }], repository: _repo,
+          items: [
+            ...(script.reasoningText ? [{ message: { sessionId: _sessionId, text: script.reasoningText,
+              senderType: 'reasoning', metadataJson: JSON.stringify({ groupChat: {} }) } }] : []),
+            ...(script.segments ?? (script.text ? [script.text] : [])).map((text) => ({
+              message: { sessionId: _sessionId, text, senderType: 'assistant',
+                metadataJson: JSON.stringify({ groupChat: {} }) },
+            })),
+          ], repository: _repo,
           runtimeContext, callbacks, aiConfig,
         });
-        const message = result.messages[0];
-        state.commits.push({ text: script.text, mentions: JSON.parse(message.metadataJson).groupChat.mentions });
-        state.observePreview?.(script.text);
+        for (const message of result.messages.filter((message) => message.senderType === 'assistant')) {
+          state.commits.push({ text: message.text, mentions: JSON.parse(message.metadataJson).groupChat.mentions });
+          state.observePreview?.(message.text);
+        }
       } catch (error) {
         // 与真实 processAIReply 一致：取消错误安静收尾，不写错误消息。
         if (error && error.name === 'ChatReplyRunCancelledError') {
@@ -564,7 +584,7 @@ function buildGroupTestBed(db, GroupChatRepository) {
   ];
   for (const [assistantId, agentId, order] of memberRows) {
     db.prepare(`
-      INSERT INTO group_chat_members (
+      INSERT OR REPLACE INTO group_chat_members (
         id, group_id, ai_assistant_id, agent_id, display_order, enabled, created_at, updated_at
       ) VALUES (?, 'g1', ?, ?, ?, 1, ?, ?)
     `).run(`g1_${assistantId}`, assistantId, agentId, order, now, now);
@@ -590,6 +610,7 @@ function buildGroupTestBed(db, GroupChatRepository) {
   db.prepare('INSERT INTO group_chats (id) VALUES (?)').run('g1');
   globalThis.__GROUP_QUEUE_GROUP_DEPS__ = {
     groups: {
+      getById: async () => ({ group: { id: 'g1', name: 'test' }, members: await repository.getMembers('g1') }),
       getMembers: (...args) => repository.getMembers(...args),
       claimNextQueuedSpeechTask: (...args) => repository.claimNextQueuedSpeechTask(...args),
       // AI @ AI 调度后果与 mention 所在 fence 事务裁决。
@@ -749,6 +770,54 @@ async function verifyDynamicQueueExecution(GroupChatRepository, executeGroupSpee
   db.close();
 }
 
+async function verifyReplyOutputStates(GroupChatRepository, executeGroupSpeechTasks) {
+  const cases = [
+    { script: { text: '完整回复' }, status: 'completed', detail: null },
+    { script: { text: '已收到的正文', finishReason: 'length' }, status: 'partial', detail: '输出长度上限' },
+    { script: { text: '过滤前的正文', finishReason: 'content_filter' }, status: 'partial', detail: '内容过滤' },
+    { script: { reasoningText: '只有思考' }, status: 'partial', detail: '未发出正文' },
+    { script: { reasoningText: '思考耗尽额度', finishReason: 'length' }, status: 'partial', detail: '输出长度上限' },
+    { script: { finishReason: 'length' }, status: 'failed', detail: '输出长度上限' },
+    { script: {}, status: 'failed', detail: '未生成可见回复' },
+    { script: { segments: ['首泡已发出', '第二泡提交失败'] }, failCommitText: '第二泡提交失败',
+      status: 'partial', detail: '已保留发出的部分回复' },
+  ];
+  for (const testCase of cases) {
+    const db = createSpeechPlanDatabase();
+    const testBed = buildGroupTestBed(db, GroupChatRepository);
+    const now = '2026-08-14T11:00:00.000Z';
+    insertPlan(db, { id: 'output-plan', groupId: 'g1', status: 'running', createdAt: now });
+    for (const [index, aiAssistantId] of ['ai-A', 'ai-B'].entries()) {
+      insertTask(db, { id: `output-${index}`, planId: 'output-plan', groupId: 'g1', aiAssistantId,
+        agentId: `agent-${index}`, sequenceOrder: index, source: 'admin', createdAt: now });
+    }
+    globalThis.__GROUP_QUEUE_STATE__ = {
+      executions: [], commits: [], failCommitText: testCase.failCommitText,
+      replyScripts: { 'ai-A': [testCase.script], 'ai-B': [{ text: '下一位继续' }] },
+    };
+    await executeGroupSpeechTasks({
+      planId: 'output-plan', details: testBed.details,
+      currentUserMessages: [{ id: 42, text: '大家好', isMe: true, senderType: 'user' }],
+      inputUpperBoundMessageId: 42, memberProfiles: testBed.memberProfiles,
+    });
+    const [first, next] = await testBed.repository.listSpeechPlanTasks('output-plan');
+    assert.equal(first.status, testCase.status, JSON.stringify(testCase.script));
+    assert.ok(first.completedAt, '所有输出终态都记录完成时间');
+    assert.equal(first.visibleReplyCommitted,
+      Boolean(testCase.script.text || testCase.script.segments), '只有正文实际提交才算已发言');
+    if (testCase.detail) assert.ok(first.errorMessage.includes(testCase.detail), first.errorMessage);
+    else assert.equal(first.errorMessage, null);
+    assert.equal(next.status, 'completed', '部分回复（含仅思考）与无输出均不阻塞后续成员');
+    if (testCase.failCommitText) {
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages WHERE text = ?').get('首泡已发出').n,
+        1, '后续气泡失败保留已提交正文');
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages WHERE text = ?').get(testCase.failCommitText).n,
+        0, '失败气泡事务回滚');
+    }
+    db.close();
+  }
+}
+
 async function verifyFutureCoverageConversation(GroupChatRepository, executeGroupSpeechTasks) {
   const db = createSpeechPlanDatabase();
   const testBed = buildGroupTestBed(db, GroupChatRepository);
@@ -900,6 +969,7 @@ const { executeGroupSpeechTasks } = await loadGroupTaskExecution(
 );
 await verifyPersistentQueueRepository(GroupChatRepository);
 await verifyDynamicQueueExecution(GroupChatRepository, executeGroupSpeechTasks);
+await verifyReplyOutputStates(GroupChatRepository, executeGroupSpeechTasks);
 await verifyFutureCoverageConversation(GroupChatRepository, executeGroupSpeechTasks);
 await verifyCommitFenceAndSkips(GroupChatRepository, executeGroupSpeechTasks);
 

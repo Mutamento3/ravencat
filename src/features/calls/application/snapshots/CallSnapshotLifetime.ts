@@ -1,4 +1,4 @@
-/** 快照仅服务当前 lookAtUser；文件删除成功后清空 URI，历史文本与 OCR 事实保留。 */
+/** 视觉临时快照只服务当前 lookAtUser；独立归档副本不依赖这里的 URI。 */
 import { createRandomUUID, persistentMediaStore, getPersistentMediaCategoryPrefix, PERSISTENT_MEDIA_CATEGORY } from '@platform/device';
 import { getCallRuntimeDependencies } from '../runtime/CallRuntimeDependencies';
 

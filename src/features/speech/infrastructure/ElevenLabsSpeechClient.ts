@@ -1,3 +1,4 @@
+import { readSpeechHttpError } from './SpeechHttpError';
 import type {
   SpeechConnectionConfig,
   SpeechDelivery,
@@ -43,10 +44,7 @@ export async function synthesizeElevenLabs(
     },
   );
   if (!response.ok) {
-    const body = await response.json();
-    throw new Error(
-      `ElevenLabs HTTP ${response.status}: ${typeof body.detail === 'string' ? body.detail : (body.detail?.message ?? JSON.stringify(body.detail))}`,
-    );
+    throw await readSpeechHttpError(response, 'ElevenLabs TTS', config.apiKey);
   }
   const audio = await response.arrayBuffer();
   if (!audio.byteLength) throw new Error('ElevenLabs 返回了空音频');

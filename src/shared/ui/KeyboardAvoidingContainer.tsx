@@ -18,6 +18,11 @@ export default function KeyboardAvoidingContainer({
   const keyboardFrameRef = useRef(Keyboard.metrics());
   const measurementState = useRef({ revision: 0 }).current;
   const [bottom, setBottom] = useState(0);
+  const setNativeView = useCallback((view: View | null) => {
+    // 原生窗口可先于 React effect 退场；ref 的接入/脱离就是测量的有效期边界。
+    measurementState.revision++;
+    viewRef.current = view;
+  }, [measurementState]);
 
   const updateOverlap = useCallback(() => {
     const revision = ++measurementState.revision;
@@ -28,7 +33,9 @@ export default function KeyboardAvoidingContainer({
     }
     // 键盘提供屏幕坐标；不能拿 onLayout 的父容器局部 y 与之相减。
     // 原生窗口可能已缩小，只补实际重叠量，避免再加一整份键盘高度。
-    viewRef.current!.measureInWindow((_x, y, _width, height) => {
+    const view = viewRef.current;
+    if (view === null) return;
+    view.measureInWindow((_x, y, _width, height) => {
       if (revision !== measurementState.revision) return;
       setBottom(Math.max(0, y + height - keyboard.screenY + keyboardVerticalOffset));
     });
@@ -59,6 +66,6 @@ export default function KeyboardAvoidingContainer({
     onLayout?.(event);
   }, [onLayout, updateOverlap]);
 
-  return <View {...props} ref={viewRef} collapsable={false} onLayout={handleLayout}
+  return <View {...props} ref={setNativeView} collapsable={false} onLayout={handleLayout}
     style={StyleSheet.compose(style, { paddingBottom: enabled ? bottom : 0 })} />;
 }

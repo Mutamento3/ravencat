@@ -94,6 +94,7 @@ const nativeDependencies = {
     },
   },
   repositories: { calls: {
+    async appendHistoryEntry() {},
     async getSessionById() { return call; },
     async appendEvent(event) {
       const committed = { ...event, id: `event-${committedEvents.length}`, createdAt: new Date().toISOString() };
@@ -116,13 +117,20 @@ assert.deepEqual(nativeStarts, [{
   callId: 'call-1', name: 'AI', avatarUri: 'file:///ai-avatar.jpg', direction: 'outgoing', returnUri: 'kimiphone://calls/call-1',
 }], '通话宿主的展示契约携带当前 AI 头像，不使用全屏通话背景代替');
 const transcriptWriter = load('src/features/calls/application/events/AppendCallTranscriptEvent.ts', {
+  '../CallHistory': { async saveCallHistoryAudio() {} },
   '../runtime/CallRuntimeDependencies': dependenciesModule,
   './CallTranscriptFacts': transcriptFacts,
 });
+const systemEvents = load('src/features/calls/application/events/AppendCallSystemEvent.ts', {
+  '../runtime/CallRuntimeDependencies': dependenciesModule,
+  './CallTranscriptFacts': transcriptFacts,
+});
+let synthesisFailure = null;
 const { CallTTSPlaybackQueue } = load('src/features/calls/application/runtime/CallTTSPlaybackQueue.ts', {
-  '@platform/device': { temporarySpeechAudioStore: { async deleteIfExists() {} } },
-  '@features/speech': { async synthesizeTextToSpeech() { return { success: true, audioUri: 'file:///sentence.wav' }; } },
-  '../events/AppendCallSystemEvent': { async appendCallErrorEvent() {} },
+  '@platform/device': { createRandomUUID: () => `sentence-${committedEvents.length}`, temporarySpeechAudioStore: { async deleteIfExists() {} } },
+  '../CallHistory': { async saveCallHistoryAudio() {} },
+  '@features/speech': { async synthesizeTextToSpeech() { return synthesisFailure ?? { success: true, audioUri: 'file:///sentence.wav' }; } },
+  '../events/AppendCallSystemEvent': systemEvents,
   '../events/CallTranscriptFacts': transcriptFacts,
   './CallRuntimeDependencies': dependenciesModule,
 });
@@ -140,7 +148,7 @@ const application = {
   async loadCallBackgroundUri(assistantId) { backgroundReads.push(assistantId); return backgroundUri; },
   subscribeCallBackgroundChanged: listener => { backgroundChanged = listener; return () => { backgroundChanged = null; }; },
   async appendCallCameraStateEvent() {},
-  async appendCallErrorEvent() {},
+  appendCallErrorEvent: systemEvents.appendCallErrorEvent,
   async attachCallSnapshot() { return { callId: call.id }; },
   getCallReplyRunPhase: () => 'idle',
   subscribeCallReplyRunPhase: () => () => {},
@@ -176,11 +184,13 @@ const runtimeModule = load('src/features/calls/application/runtime/CallMediaRunt
       } };
     },
   },
-  '@platform/device': { realtimeSpeechAudioSource: {
+  '@platform/device': { temporarySpeechAudioStore: { async deleteIfExists() {} }, realtimeSpeechAudioSource: {
     async start(options) {
       microphoneStarts += 1;
       audioCallbacks = options;
-      return { echoCancellationEnabled: true, async stop() { microphoneStops += 1; cleanupOrder.push('microphone'); } };
+      return { echoCancellationEnabled: true,
+        async exportSegment(start, end) { assert.equal(start, 0); assert.equal(end, 2300); return { uri: 'file:///user.wav', durationMs: 2300 }; },
+        async stop() { microphoneStops += 1; cleanupOrder.push('microphone'); } };
     },
   } },
   '../lifecycle': application,
@@ -288,6 +298,15 @@ try {
   assert.equal(currentRuntime.availableAudioRoutes.length, 2);
   await act(async () => { routeListener({ ...routeState, revision: 1, route: 'speaker' }); });
   assert.equal(currentRuntime.audioRoute, 'earpiece', '晚到的旧快照不能覆盖最新实际设备');
+  synthesisFailure = { success: false, audioUri: null, modelConfigName: '测试声音', rawError: 'HTTP 429: TTS quota limit',
+    errorInfo: { message: 'HTTP 429: TTS quota limit' } };
+  await act(async () => { await new CallTTSPlaybackQueue().enqueueAISpeech({ callId: call.id, assistantId: 'ai-1', text: '你好。' }); });
+  assert.match(currentRuntime.errorMessage, /语音合成失败.*TTS.*测试声音.*HTTP 429.*quota limit/);
+  assert.equal(currentRuntime.events.at(-1).kind, 'error', 'TTS 失败提交后立即投影，无需下一轮 refresh');
+  synthesisFailure = null;
+  await act(async () => { speechCallbacks.onError({ title: '语音识别失败', message: 'STT provider code=limit: concurrency exceeded' }); });
+  assert.match(currentRuntime.errorMessage, /语音识别失败.*STT.*code=limit.*concurrency exceeded/);
+
   assert.equal(currentRuntime.isListening, true);
   assert.equal(currentRuntime.cameraEnabled, true);
   assert.equal(currentRuntime.isCameraReady, true);
@@ -314,7 +333,7 @@ try {
   assert.deepEqual(selectedRoutes, ['speaker', 'earpiece', 'speaker'], '切换展示端不能重新设置默认路由');
   assert.deepEqual(releasedCalls, []);
 
-  await act(async () => { speechCallbacks.onFinalTranscript({ index: 0, text: '收起后继续说话' }); });
+  await act(async () => { speechCallbacks.onFinalTranscript({ index: 0, text: '收起后继续说话', startTime: 0, endTime: 2300 }); });
   assert.deepEqual(transcripts, ['收起后继续说话']);
   assert.equal(currentRuntime.pendingUserSpeechText, null, '用户文本提交后立即替换临时行，无需等待模型回复');
   await act(async () => { lyrics = create(renderLyrics()); });

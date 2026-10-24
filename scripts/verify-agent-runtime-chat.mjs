@@ -215,6 +215,7 @@ const timelineModule = loadTypeScriptModule(
     },
     '../application/ChatReplyMetadata': metadataMock,
     '../application/AssistantReplyPersistence': timelineAssistantReplyPersistenceMock,
+    '../application/AssistantReplySegmentation': assistantReplySegmentationModule,
     '../application/AssistantTurnCommit': timelineAssistantTurnCommitModule,
     '../application/ChatReplyUtils': { formatMessageTime: () => '12:00' },
     '../../messages/domain/AgentTimelineIdentity': agentTimelineIdentityModule,
@@ -727,16 +728,24 @@ for (const modelTransport of ['complete', 'stream']) {
   for (const finishReason of ['stop', 'length']) {
     for (const text of ['', '尚未写完的正文']) {
       const commits = [];
+      const terminalEvents = [];
       const partial = await runChatCase({
         modelTransport,
         responses: [response({ text, reasoningText: '已经返回的思考', finishReason })],
         enableTools: false,
-        persistence: { persistsIntermediates: false, commitAgentTimeline: async (params) => {
+        persistence: { persistsIntermediates: false,
+          observeRunEvent(event) {
+            if (event.type === 'run_completed') terminalEvents.push(event);
+          },
+          commitAgentTimeline: async (params) => {
           commits.push(params);
           return { outcome: 'committed', messages: params.items.map(({ message }, index) => ({ ...message, id: index + 1 })) };
         } },
       });
       assert.equal(partial.result.terminalCode, 'COMPLETED');
+      assert.equal(terminalEvents.length, 1, '提交层必须收到真实 Runtime 的唯一结束事实');
+      assert.equal(terminalEvents[0].result.steps.at(-1).modelTurn.finishReason, finishReason,
+        '模型结束原因必须经 complete/stream 适配器和 Runtime 传至提交层，供群队列区分完整与部分回复');
       assert.equal(partial.provider.requests.length, 1, '已有思考或部分正文时不能重新请求模型');
       assert.equal(commits.length, 1, '模型已返回的内容必须进入原有提交链');
       assert.deepEqual(commits[0].items.map(({ message }) => [message.senderType, message.text]).sort(),

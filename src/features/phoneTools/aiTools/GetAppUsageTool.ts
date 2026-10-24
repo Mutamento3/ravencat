@@ -12,7 +12,7 @@ interface Args {
 
 export const definition = {
   name: 'get_app_usage',
-  description: '【主理 AI 专属】读取 Android 应用前台使用时长（按时长降序），可按精确包名查询。需用户授予使用情况权限。系统聚合区间可能扩展，须按每项真实统计起止时间解释，不能说是精确时间切片。',
+  description: '读取 Android 应用前台使用时长（按时长降序），可按精确包名查询。需用户授予使用情况权限。系统聚合区间可能扩展，非精确时间切片。',
   parameters: {
     type: 'object',
     properties: {

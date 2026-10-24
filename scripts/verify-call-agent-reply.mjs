@@ -8,6 +8,7 @@ import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-depende
 const root = path.resolve(import.meta.dirname, '..');
 const cache = new Map();
 const boundaries = { ...agentToolSchemaDependencies };
+boundaries['../CallHistory'] = { async saveCallHistoryAudio() {}, async saveCallHistorySnapshot() {} };
 function load(relative) {
   if (cache.has(relative)) return cache.get(relative);
   const module = { exports: {} };
@@ -37,7 +38,7 @@ let client;
 boundaries['@platform/ai'] = {
   ...load('src/platform/ai/agent/AgentModelGateway.ts'),
   createAIClient: () => client,
-  getErrorDisplayInfo: error => ({ message: error.message }),
+  ...load('src/platform/ai/errorMapping.ts'),
 };
 boundaries['@platform/agentRuntime'] = load('src/platform/agentRuntime/index.ts');
 const { AgentRuntime, AgentToolRegistry } = boundaries['@platform/agentRuntime'];
@@ -67,6 +68,7 @@ function reset(turns, names = ['lookup']) {
     const turn = turns[index++];
     assert.ok(turn, '不得意外请求额外模型回合');
     if (turn.before) await turn.before();
+    if (turn.error) throw turn.error;
     await options.onDelta({ type: 'reasoning_delta', text: '不应朗读的思考' });
     for (const text of turn.chunks ?? [turn.result.text]) {
       if (text) await options.onDelta({ type: 'answer_delta', text });
@@ -143,6 +145,42 @@ reset([{ result: response('先查一下', [toolCall('end-check', 'lookup')]) }, 
 const ended = await run();
 assert.equal(ended.callEnded, true, '模型续轮仍识别结束标记');
 assert.deepEqual(spoken, ['先查一下', '晚安。']);
+
+// 挂断是 Calls 控制信号，出现在告别语之后也不能泄漏到 Speech 的标签校验。
+for (const text of ['[[END_CALL]]晚安。', '晚安。[[END_CALL]]', '好，[[END_CALL]]晚安。']) {
+  for (const chunks of [[text], [...text], []]) {
+    reset([{ chunks, result: response(text) }]);
+    const reply = await run();
+    assert.equal(reply.status, 'completed', JSON.stringify(reply));
+    assert.equal(reply.callEnded, true);
+    assert.equal(reply.text, text.replace('[[END_CALL]]', ''));
+    assert.equal(spoken.join(''), reply.text);
+    assert.equal(events.some(event => event.kind === 'error'), false);
+  }
+}
+
+reset([{ result: response('晚安。[[END_CALL]]') }]);
+assert.equal((await run({ aiConfig: { ...aiConfig, enableTools: false } })).callEnded, true);
+assert.deepEqual(requests[0].tools, [], '挂断信号不依赖工具开关');
+assert.deepEqual(spoken, ['晚安。']);
+// 网络/Provider 失败、模型输出不适合通话、语音标签解析失败分别保留原因。
+for (const [turn, expected] of [
+  [{ result: { ...response(''), success: false, error: 'HTTP 429: code=1302，请求并发数超限' }, chunks: [] }, /HTTP 429.*1302/],
+  [{ error: new Error('Network request failed: connection reset') }, /connection reset/],
+  [{ result: { ...response(''), finishReason: 'length' } }, /耗尽输出额度/],
+  [{ result: { ...response(''), finishReason: 'content_filter' } }, /内容审核.*content_filter/],
+  [{ result: response('') }, /没有返回可朗读正文/],
+  [{ result: response('晚安。[invalid_voice_tag]') }, /回复语音文本解析失败.*不支持该标记/],
+]) {
+  reset([turn]);
+  const failure = await run();
+  assert.equal(failure.status, 'failed');
+  assert.match(failure.errorMessage, expected);
+  assert.ok(failure.errorMessage.includes(aiConfig.model));
+  assert.doesNotMatch(failure.errorMessage, /模型服务暂时无法完成回复|RUNTIME_UNAVAILABLE/);
+  assert.equal(events.at(-1).text, failure.errorMessage, '通话事实保留与页面相同的具体错误');
+  assert.equal(requests.length, 1, '报错不得暗中重试模型');
+}
 
 // lookAtUser 本身负责把本次快照转成观察，不再从历史中猜测“最新”图片。
 let imageRoute = 'direct_vision';

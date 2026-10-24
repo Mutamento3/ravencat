@@ -6,7 +6,8 @@ export type SpeechProviderId =
   | 'openaiCompatible'
   | 'openrouter'
   | 'minimaxT2aV2'
-  | 'elevenlabs';
+  | 'elevenlabs'
+  | 'fishAudio';
 export type SpeechKind = 'stt' | 'tts';
 export type SpeechOptionValue = string | number | boolean | null;
 export interface SpeechMetadata {

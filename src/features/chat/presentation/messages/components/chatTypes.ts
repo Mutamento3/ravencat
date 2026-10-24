@@ -32,8 +32,9 @@ export interface ChatDetailAIAssistantLike {
   systemPrompt?: string;
   enableTools?: boolean;
   allowMultipleBubbles?: boolean;
+  streamingReply?: boolean | null;
   showTokenUsage?: boolean;
-  enableStreamingReply?: boolean;
+  showActionSteps?: boolean;
   isHostAI?: boolean;
   isBlocked?: boolean;
 }
@@ -112,7 +113,7 @@ export function buildAIRequestConfig(
     systemPrompt: aiAssistant.systemPrompt,
     enableTools: aiAssistant.enableTools,
     allowMultipleBubbles: aiAssistant.allowMultipleBubbles,
-    enableStreamingReply: aiAssistant.enableStreamingReply,
+    enableStreamingReply: aiAssistant.streamingReply ?? undefined,
     isHostAI: aiAssistant.isHostAI,
     isBlocked: aiAssistant.isBlocked,
   };

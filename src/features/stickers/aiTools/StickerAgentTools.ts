@@ -5,6 +5,7 @@
  * 事务中转换成 assistant Sticker 消息，避免 tool 执行与消息提交形成第二条写入路径。
  */
 
+import { COMPLETION_INTENT_PARAMETER } from '@shared/aiTools';
 import type {
   AgentToolExecutionContext,
   AgentToolExecutionResult,
@@ -202,8 +203,7 @@ export const selectStickerDefinition = {
   name: 'select_sticker',
   description: [
     '选择一张 Sticker 作为本轮 assistant 回复的一部分；stickerId 可以来自 search_stickers 或 list_stickers_in_group 的结果。',
-    '这一步只产生结构化发送意图，不直接写入聊天记录；成功后不要再次调用其他消息写入能力发送同一张 Sticker。',
-    '表情包本身可以构成完整回复；用 on_success 声明成功后结束或继续。失败会返回错误供你处理。',
+    '表情包本身可以构成完整回复。失败会返回错误供你处理。',
   ].join(''),
   parameters: {
     type: 'object',
@@ -214,11 +214,7 @@ export const selectStickerDefinition = {
         minLength: 1,
         maxLength: 120,
       },
-      on_success: {
-        type: 'string',
-        enum: ['finish', 'continue'],
-        description: '成功后意图：本次回复已完整选 finish，系统将结束本轮，不再请求你；还要发送语音、表情包、补充文字或执行其他操作选 continue。同批多个工具按顺序执行，仅最后一个工具的 finish 决定结束；任何工具失败都会继续请求你。仅补充“表情包已发送”等状态说明不构成继续的理由，无需为可能失败选择 continue。',
-      },
+      on_success: COMPLETION_INTENT_PARAMETER,
     },
     required: ['sticker_id', 'on_success'],
     additionalProperties: false,

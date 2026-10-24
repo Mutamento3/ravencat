@@ -1,6 +1,6 @@
 {
   "name": "kimiphone",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "license": "MIT",
   "main": "index.js",
   "scripts": {
@@ -11,6 +11,7 @@
     "verify:chat-image-loading": "node scripts/verify-chat-image-loading.mjs",
     "verify:ai-image-tools": "node --no-warnings scripts/verify-ai-image-tools.mjs",
     "typecheck": "tsc --noEmit",
+    "verify:wallet-reply-queue": "node --no-warnings scripts/verify-wallet-reply-queue.mjs",
     "verify:ai-http-diagnostics": "node scripts/verify-http-exchange-diagnostics.mjs && node scripts/verify-ai-http-capture.mjs",
     "verify:ui-slider": "node --no-warnings scripts/verify-ui-slider.mjs",
     "verify:ui-toggle": "node --no-warnings scripts/verify-ui-toggle.mjs",
@@ -49,6 +50,7 @@
     "verify:call-background-assets": "node scripts/verify-call-background-assets.mjs",
     "verify:backup-coverage": "node scripts/verify-backup-coverage.mjs",
     "verify:startup-recovery": "node scripts/verify-startup-recovery-coordinator.mjs",
+    "verify:headless-runtime-composition": "node --no-warnings scripts/verify-headless-runtime-composition.mjs",
     "postinstall": "node ./scripts/patch-expo-keep-awake.cjs && node ./scripts/patch-expo-shared-object-registry.cjs && node ./scripts/patch-expo-sqlite-teardown.cjs && node ./scripts/patch-expo-activity-results.cjs && node ./scripts/patch-expo-image-picker-diagnostics.cjs && node ./scripts/patch-react-native-font-scaling.cjs && node ./scripts/patch-react-native-scroll-component.cjs && node ./scripts/patch-flash-list-scroll-settle.cjs",
     "verify:chat-image-selection": "node scripts/verify-chat-image-selection.mjs",
     "verify:expo-activity-results": "cd android && gradlew.bat :expo-modules-core:testDebugUnitTest --tests expo.modules.kotlin.AppContextActivityRecreationTest -I ../scripts/verify-expo-activity-results.gradle --console=plain",
@@ -100,7 +102,8 @@
     "verify:chat-token-usage": "node --no-warnings scripts/verify-chat-token-usage.mjs",
     "verify:chat-history-continuous-load": "node scripts/verify-chat-history-continuous-load.mjs",
     "verify:chat-scroll-settle": "node --no-warnings scripts/verify-chat-scroll-settle.mjs",
-    "verify:chat": "npm run verify:chat-turn-display && npm run verify:chat-statistics && npm run verify:chat-attachment-migration && node scripts/verify-chat-single-conversation.mjs && npm run verify:database-baseline && node scripts/verify-chat-runtime-contracts.mjs && node scripts/verify-chat-message-commit.mjs && npm run verify:chat-image-submission && node scripts/verify-chat-message-list-state.mjs && npm run verify:chat-history-continuous-load && npm run verify:chat-scroll-settle && node scripts/verify-chat-presentation-run.mjs && npm run verify:chat-reasoning-state && npm run verify:chat-composer-surface && npm run verify:stateful-timeline && node scripts/verify-chat-external-assistant-command.mjs && npm run verify:chat-canonical-source && node scripts/verify-chat-proactive-command.mjs && node scripts/verify-chat-reply-policy.mjs && node scripts/verify-chat-zero-tools-model-gateway.mjs && npm run verify:chat-voice-message && node scripts/verify-group-conversation-identity.mjs && node scripts/verify-group-speech-claim.mjs && npm run verify:group-speech-queue && npm run verify:group-speech-supersede && node scripts/verify-group-attachments.mjs && npm run verify:group-mentions && node scripts/verify-group-auto-invocation.mjs && node scripts/verify-assistant-identity.mjs && npm run verify:auxiliary-model-runtime && node scripts/verify-chat-turn-coordinator.mjs && node scripts/verify-chat-turn-application.mjs && node scripts/verify-chat-turn-host-coordinator.mjs && node scripts/verify-chat-agent-transient-reconciliation.mjs && node scripts/verify-chat-visible-agent.mjs && node scripts/verify-chat-turn-execution-host.mjs && node scripts/verify-chat-background-execution-invariant.mjs && node scripts/verify-conversation-list-ready-signal.mjs && node scripts/verify-chat-conversation-preparation.mjs && node scripts/verify-chat-visible-latest-message.mjs && node scripts/verify-chat-delete-preview-boundary.mjs && npm run verify:chat-message-selection && npm run verify:chat-favorites && npm run verify:chat-message-share && npm run verify:chat-message-editing && npm run verify:chat-regeneration && node scripts/verify-chat-message-typography.mjs && node scripts/verify-conversation-list-ordering.mjs && node scripts/verify-conversation-pin.mjs && node scripts/verify-chat-conversation-entry-and-preload.mjs && node scripts/verify-session-timeline-cache-lru.mjs",
+    "verify:chat-touch-coordinates": "node --no-warnings scripts/verify-chat-touch-coordinates.mjs",
+    "verify:chat": "npm run verify:chat-turn-display && npm run verify:chat-statistics && npm run verify:chat-attachment-migration && node scripts/verify-chat-single-conversation.mjs && npm run verify:database-baseline && node scripts/verify-chat-runtime-contracts.mjs && node scripts/verify-chat-message-commit.mjs && npm run verify:chat-image-submission && node scripts/verify-chat-message-list-state.mjs && npm run verify:chat-history-continuous-load && npm run verify:chat-scroll-settle && npm run verify:chat-touch-coordinates && node scripts/verify-chat-presentation-run.mjs && npm run verify:chat-reasoning-state && npm run verify:chat-composer-surface && npm run verify:stateful-timeline && node scripts/verify-chat-external-assistant-command.mjs && npm run verify:chat-canonical-source && node scripts/verify-chat-proactive-command.mjs && node scripts/verify-chat-reply-policy.mjs && node scripts/verify-chat-zero-tools-model-gateway.mjs && npm run verify:chat-voice-message && node scripts/verify-group-conversation-identity.mjs && node scripts/verify-group-speech-claim.mjs && npm run verify:group-speech-queue && npm run verify:group-speech-supersede && node scripts/verify-group-attachments.mjs && npm run verify:group-mentions && node scripts/verify-group-auto-invocation.mjs && node scripts/verify-assistant-identity.mjs && npm run verify:auxiliary-model-runtime && node scripts/verify-chat-turn-coordinator.mjs && node scripts/verify-chat-turn-application.mjs && node scripts/verify-chat-turn-host-coordinator.mjs && node scripts/verify-chat-agent-transient-reconciliation.mjs && node scripts/verify-chat-visible-agent.mjs && node scripts/verify-chat-turn-execution-host.mjs && node scripts/verify-chat-background-execution-invariant.mjs && node scripts/verify-conversation-list-ready-signal.mjs && node scripts/verify-chat-conversation-preparation.mjs && node scripts/verify-chat-visible-latest-message.mjs && node scripts/verify-chat-delete-preview-boundary.mjs && npm run verify:chat-message-selection && npm run verify:chat-favorites && npm run verify:chat-message-share && npm run verify:chat-message-editing && npm run verify:chat-regeneration && node scripts/verify-chat-message-typography.mjs && node scripts/verify-conversation-list-ordering.mjs && node scripts/verify-conversation-pin.mjs && node scripts/verify-chat-conversation-entry-and-preload.mjs && node scripts/verify-session-timeline-cache-lru.mjs",
     "verify:chat-image-submission": "node --no-warnings scripts/verify-chat-image-submission.mjs",
     "verify:chat-attachment-migration": "node scripts/verify-chat-attachment-migration.mjs",
     "verify:conversation-list-ordering": "node scripts/verify-conversation-list-ordering.mjs",
@@ -125,7 +128,8 @@
     "verify:stateful-timeline": "node --no-warnings scripts/verify-stateful-timeline-entry.mjs",
     "verify:group-conversation-identity": "node scripts/verify-group-conversation-identity.mjs",
     "verify:speech": "node scripts/verify-tencent-realtime-asr-signature.mjs && node scripts/verify-speech-providers.mjs",
-    "verify:calls": "node scripts/verify-calls-runtime-contracts.mjs && node scripts/verify-call-agent-reply.mjs && node scripts/verify-call-execution-host.mjs && node scripts/verify-call-media-lifecycle.mjs && node scripts/verify-call-navigation.mjs && node scripts/verify-call-snapshot-lifetime.mjs",
+    "verify:call-history": "node --no-warnings scripts/verify-call-history.mjs && node --no-warnings scripts/verify-call-history-playback.mjs",
+    "verify:calls": "node scripts/verify-calls-runtime-contracts.mjs && node scripts/verify-call-agent-reply.mjs && node scripts/verify-call-execution-host.mjs && node scripts/verify-call-media-lifecycle.mjs && node scripts/verify-call-navigation.mjs && node scripts/verify-call-snapshot-lifetime.mjs && npm run verify:call-history",
     "verify:together-listening-system-presentation": "node --no-warnings scripts/verify-together-listening-system-presentation.mjs",
     "verify:together-listening-system-actions": "node --no-warnings scripts/verify-together-listening-system-actions.mjs",
     "verify:floating-together-listening": "node --no-warnings scripts/verify-floating-together-listening.mjs",
@@ -199,7 +203,7 @@
     "react-native-worklets": "0.5.1"
   },
   "engines": {
-    "node": ">=22.13.0 <23"
+    "node": ">=22.23.4 <23"
   },
   "private": true,
   "expo": {

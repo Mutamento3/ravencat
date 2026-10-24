@@ -30,6 +30,7 @@ import {
   buildMessageMetadata,
 } from '../application/ChatReplyMetadata';
 import { normalizeAssistantResponseText } from '../application/AssistantReplyPersistence';
+import { segmentAssistantReplyProgress } from '../application/AssistantReplySegmentation';
 import { autonomousActivityText, isAutonomousSilentReply } from '../application/AutonomousReplyContract';
 import { buildAssistantTurnItems } from '../application/AssistantTurnCommit';
 import { formatMessageTime } from '../application/ChatReplyUtils';
@@ -69,6 +70,8 @@ export interface AgentTimelineItemSnapshot {
   readonly stepIndex: number;
   readonly segmentIndex?: number;
   readonly pendingDelivery?: boolean;
+  /** 本版本来自生成中的正文，闭合气泡也不另等完整回复的分段间隔。 */
+  readonly streamingDelivery?: boolean;
   readonly toolExecutionStarted?: boolean;
   readonly toolExecutions?: readonly ChatToolExecutionSnapshot[];
   readonly kind: AgentTimelineItemKind;
@@ -160,10 +163,20 @@ export class ChatAgentTimeline {
   private readonly steps = new Map<number, TimelineStep>();
   private readonly items: AgentTimelineItem[] = [];
   private readonly dirtyItems = new Map<number, AgentTimelineItem>();
+  private readonly emittedAssistantSnapshots = new Map<string, AgentTimelineItemSnapshot>();
   private readonly readChanges = () => {
     const items = [...this.dirtyItems.values()];
     this.dirtyItems.clear();
-    return this.snapshotItems(items);
+    return this.snapshotItems(items).filter(snapshot => {
+      if (snapshot.kind !== 'assistant') return true;
+      const previous = this.emittedAssistantSnapshots.get(snapshot.clientMessageId);
+      this.emittedAssistantSnapshots.set(snapshot.clientMessageId, snapshot);
+      return !previous || previous.text !== snapshot.text || previous.status !== snapshot.status
+        || previous.streamingDelivery !== snapshot.streamingDelivery
+        || previous.apiMessageId !== snapshot.apiMessageId || previous.tokensUsed !== snapshot.tokensUsed
+        || previous.promptTokens !== snapshot.promptTokens || previous.completionTokens !== snapshot.completionTokens
+        || previous.cachedTokens !== snapshot.cachedTokens;
+    });
   };
   private nextSequence = 1;
 
@@ -374,23 +387,20 @@ export class ChatAgentTimeline {
 
   private snapshotItems(items: readonly AgentTimelineItem[]): AgentTimelineItemSnapshot[] {
     return items.flatMap(item => {
-      const snapshot = toSnapshot(item);
+      let snapshot = toSnapshot(item);
       if (this.finalAssistantPolicy === 'autonomous_reply' && item.kind === 'assistant') {
         const text = autonomousActivityText(item.text);
         return text ? [{ ...snapshot, text }] : [];
       }
-      // 多气泡正文以本次模型 turn 的分段结果建立稳定 identity，避免流式整段
-      // 曾被确认后在拆段时缩短或重复；后续轮次的过程事件不受此等待影响。
-      if (this.presentationPolicy?.bubbleDeliveryMode === 'multi-bubble'
-        && item.kind === 'assistant' && item.status === 'streaming') {
-        return [{ ...snapshot, pendingDelivery: true }];
-      }
-      if (!this.presentationPolicy || item.kind !== 'assistant' || item.status === 'streaming') return [snapshot];
-      const normalized = normalizeAssistantResponseText(item.text, this.presentationPolicy);
-      return normalized.segments.map((text, segmentIndex) => ({ ...snapshot, text, segmentIndex,
+      if (item.kind === 'assistant' && item.status === 'streaming') snapshot = { ...snapshot, streamingDelivery: true };
+      if (!this.presentationPolicy || item.kind !== 'assistant'
+        || (item.status === 'streaming' && this.presentationPolicy.bubbleDeliveryMode === 'single-bubble')) return [snapshot];
+      const segments = segmentAssistantReplyProgress(item.text, this.presentationPolicy.bubbleDeliveryMode, item.status !== 'streaming');
+      return segments.map((segment, segmentIndex) => ({ ...snapshot, text: segment.text, segmentIndex,
+        status: item.status === 'streaming' && segment.completed ? 'sent' as const : item.status,
         clientMessageId: buildAgentTimelineClientMessageId(this.runId, item.sequence, segmentIndex),
         // 与正式消息相同：每次模型请求的统计随尾段交付，不等整轮工具 Loop 的 T3。
-        ...(segmentIndex < normalized.segments.length - 1 ? {
+        ...(segmentIndex < segments.length - 1 ? {
           tokensUsed: 0, promptTokens: 0, completionTokens: 0, cachedTokens: undefined,
         } : {}),
       }));
@@ -514,6 +524,7 @@ export class ChatAgentTimeline {
     }
     this.items.length = 0;
     this.steps.clear();
+    this.emittedAssistantSnapshots.clear();
     this.nextSequence = 1;
     this.sink.onCleared?.({ runId: this.runId, reason });
   }
@@ -526,6 +537,7 @@ export class ChatAgentTimeline {
     this.sink.onCommitted?.({ runId: this.runId, messages, outcome });
     this.items.length = 0;
     this.steps.clear();
+    this.emittedAssistantSnapshots.clear();
     this.nextSequence = 1;
   }
 

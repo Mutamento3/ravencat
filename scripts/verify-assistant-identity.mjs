@@ -328,6 +328,14 @@ const { migrateAssistantIdentityContract } = migrationModule;
   });
   await repository.insert(newProfile);
   assert.equal((await repository.getById(newProfile.id)).showTokenUsage, true, '新增角色默认保存为显示 Token');
+  assert.equal((await repository.getById(newProfile.id)).showActionSteps, true, '新增角色默认显示行动步骤');
+  assert.equal((await repository.getById(newProfile.id)).streamingReply, null, '新增角色默认跟随主题');
+  for (const streamingReply of [true, false, null]) {
+    await updateSettings('assistant-a', { streamingReply });
+    assert.equal((await new assistantRepositoryModule.AIAssistantRepository().getById('assistant-a')).streamingReply,
+      streamingReply, '回复方式经真实 SQLite 保存和重读后保留');
+    assert.equal((await repository.getById(newProfile.id)).streamingReply, null, '回复方式不影响其他 AI');
+  }
   assert.deepEqual(
     {
       ...db.prepare(`
@@ -358,6 +366,12 @@ const { migrateAssistantIdentityContract } = migrationModule;
   assert.equal((await new assistantRepositoryModule.AIAssistantRepository().getById('assistant-a')).showTokenUsage, false,
     '关闭 Token 展示经过真实 SQLite 写入与重读后保留');
   assert.equal((await repository.getById(newProfile.id)).showTokenUsage, true, '展示开关不影响其他角色');
+  assert.equal(existing.showActionSteps, true);
+  await updateSettings('assistant-a', { showActionSteps: false });
+  assert.equal((await new assistantRepositoryModule.AIAssistantRepository().getById('assistant-a')).showActionSteps, false,
+    '行动步骤选择经过 SQLite 保存与重读后保留');
+  assert.equal((await repository.getById(newProfile.id)).showActionSteps, true, '行动步骤开关不影响其他 AI');
+  assert.equal((await repository.getById('assistant-a')).showTokenUsage, false, '行动步骤开关不覆盖 Token 选择');
   assert.equal(existing.temperature, 0.7);
   assert.equal(existing.topP, 1);
   await repository.updateModelSettings('assistant-a', { temperature: 0, topP: 0 });
@@ -387,7 +401,9 @@ const { migrateAssistantIdentityContract } = migrationModule;
     groupSecondary: conversationSettings.groupContextSecondaryLimit,
     allowMultipleBubbles: conversationSettings.allowMultipleBubbles,
   }, { privatePrimary: 48, privateSecondary: 12, groupPrimary: 60, groupSecondary: 8, allowMultipleBubbles: false }, '对话设置命令持久保存四项上下文与气泡选择');
+  await updateSettings('assistant-a', { streamingReply: false });
   await repository.updateModelSettings('assistant-a', { model: 'model-b', temperature: 1.2, disableThinking: true });
+  assert.equal((await repository.getById('assistant-a')).streamingReply, false, '模型设置更新不覆盖手动非流式选择');
   assert.equal((await repository.getById('assistant-a')).disableThinking, true, '关闭思考选择必须经过 SQLite 增量写入并在重新读取后保留');
   assert.equal((await repository.getById('assistant-a')).privateContextPrimaryLimit, 48, '模型更新保留对话上下文设置');
   assert.equal((await repository.getById('assistant-a')).allowMultipleBubbles, false, '模型更新保留对话气泡设置');

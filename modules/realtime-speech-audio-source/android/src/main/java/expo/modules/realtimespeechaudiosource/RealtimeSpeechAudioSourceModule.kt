@@ -15,6 +15,8 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlin.math.abs
 import kotlin.math.max
+import java.io.File
+import android.net.Uri
 
 private class MicrophonePermissionRequiredException :
   CodedException("Microphone permission is required for realtime speech audio")
@@ -31,6 +33,7 @@ class RealtimeSpeechAudioSourceModule : Module() {
   private var chunkIndex = 0
   private var lastSpeechDetectedAt = 0L
   private var consecutiveSpeechChunks = 0
+  private var segmentArchive: SpeechSegmentArchive? = null
 
   override fun definition() = ModuleDefinition {
     Name("RealtimeSpeechAudioSource")
@@ -47,8 +50,23 @@ class RealtimeSpeechAudioSourceModule : Module() {
 
       val sampleRate = (options["sampleRate"] as? Number)?.toInt() ?: 16000
       val chunkDurationMs = (options["chunkDurationMs"] as? Number)?.toInt() ?: 40
-      startRecording(sampleRate, chunkDurationMs)
-      mapOf("echoCancellationEnabled" to echoCancellationEnabled)
+      if (options["archiveSegments"] == true) {
+        val root = File(context.cacheDir, "call-speech-source")
+        // 没有活动录音时，只清除此模块上次异常退出留下的原始采集暂存。
+        root.listFiles()?.forEach { it.delete() }
+        segmentArchive = SpeechSegmentArchive(root, sampleRate)
+      }
+      try { startRecording(sampleRate, chunkDurationMs) }
+      catch (error: Exception) { segmentArchive?.close(); segmentArchive = null; throw error }
+      mapOf("echoCancellationEnabled" to echoCancellationEnabled, "archiveId" to segmentArchive?.id)
+    }.runOnQueue(Queues.DEFAULT)
+
+    AsyncFunction("exportSegment") { archiveId: String, startMs: Double, endMs: Double ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      val archive = segmentArchive
+      require(archive != null && archive.id == archiveId) { "录音会话已经结束" }
+      val (file, durationMs) = archive.export(startMs, endMs, File(context.cacheDir, "speech"))
+      mapOf("uri" to Uri.fromFile(file).toString(), "durationMs" to durationMs)
     }.runOnQueue(Queues.DEFAULT)
 
     AsyncFunction("stop") {
@@ -118,6 +136,11 @@ class RealtimeSpeechAudioSourceModule : Module() {
       while (recording) {
         val read = recorder.read(buffer, 0, buffer.size)
         if (read > 0) {
+          try { segmentArchive?.append(buffer, read) }
+          catch (error: Exception) {
+            sendEvent("onError", mapOf("message" to "通话录音写入失败：${error.message}"))
+            break
+          }
           emitAudioChunk(buffer, read, sampleRate, bytesPerSample)
         } else if (read < 0) {
           sendEvent("onError", mapOf("message" to "Android AudioRecord read failed: $read"))
@@ -203,6 +226,8 @@ class RealtimeSpeechAudioSourceModule : Module() {
 
     recordThread?.join(500)
     recordThread = null
+    segmentArchive?.close()
+    segmentArchive = null
   }
 
   private fun createAcousticEchoCanceler(audioSessionId: Int): AcousticEchoCanceler? {

@@ -105,6 +105,14 @@ export async function searchChatSummaries(assistantId: string, input: ChatSummar
   return getChatSummaryRuntime().repository.search(assistantId, { ...input, from, to });
 }
 export async function processChatSummary(conversationId: string, signal: AbortSignal): Promise<boolean> {
+  const repository = getChatSummaryRuntime().repository;
+  const revision = await repository.readQueuedRevision(conversationId);
+  const processed = await processQueuedChatSummary(conversationId, signal);
+  // 成功后继续消费积压；取消或本地故障不确认，重启仍能从持久队列恢复。
+  if (!processed && !signal.aborted && revision !== null) await repository.acknowledgeQueuedRevision(conversationId, revision);
+  return processed;
+}
+async function processQueuedChatSummary(conversationId: string, signal: AbortSignal): Promise<boolean> {
   const runtime = getChatSummaryRuntime();
   const batchSize = await runtime.getBatchSize(conversationId);
   if (batchSize === null) return false;

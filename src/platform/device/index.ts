@@ -98,6 +98,7 @@ export {
   type LocalAudioPlaybackState,
 } from './LocalAudioPlayback';
 export { readLocalAudioMetadata, type LocalAudioMetadata } from './LocalAudioMetadata';
+export { localAudioPlaybackCoordinator } from './LocalAudioPlaybackCoordinator';
 export {
   selectChatImage,
   captureChatPhoto,

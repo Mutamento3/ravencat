@@ -16,7 +16,7 @@ export const definition = {
   name: 'invite_listening_together',
   description: [
     'RavenCat 已有的 Together Listening 能力：向用户发起一起听网易云音乐的邀请。',
-    '当前网易云暂时不可用时，工具会返回 typed unavailable。',
+    '当前网易云不可用时，工具会明确报告不可用。',
     '网易云一起听功能是当前软件特有的能力，通过安卓的原生功能实现。',
     '想跟用户一起听歌的时候即可发起。',
     '邀请成功后只是等待用户回应，不要声称已经开始一起听。',

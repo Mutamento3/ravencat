@@ -73,8 +73,8 @@ async function verifyChatEnvelope() {
   const sentenceSegments = segmentation.segmentAssistantReplyText(longParagraph, 'multi-bubble');
   assert.ok(sentenceSegments.length > 1, '超过 100 字符的单段必须按句末标点二次切分');
   assert.ok(
-    sentenceSegments.every((segment) => segment.length <= 100),
-    '二次切分后每段不得超过 100 字符'
+    sentenceSegments.slice(0, -1).every((segment) => segment.length >= 100 && /[。！？!?；;…]["'”’）)]*$/.test(segment)),
+    '长段达到阈值后在完整句末闭合，不回头挪动已经显示的句子'
   );
   assert.equal(sentenceSegments.join(''), longParagraph, '二次切分不得丢失正文');
   const noPunctuation = '无标点长句'.repeat(100);
@@ -83,6 +83,26 @@ async function verifyChatEnvelope() {
     [noPunctuation],
     '无句末标点可切的超长段必须整段保留，不得按阈值硬切成半句话'
   );
+  for (const text of [
+    '  第一泡\n\n第二泡\n \n第三泡  ',
+    '长'.repeat(99) + '！？”)下一句。\n\n再说一句。',
+    '短句。'.repeat(60) + '没有句末的尾巴',
+    noPunctuation,
+  ]) {
+    let previous = [];
+    for (let end = 1; end <= text.length; end++) {
+      const segments = segmentation.segmentAssistantReplyProgress(text.slice(0, end), 'multi-bubble', false);
+      for (const [index, segment] of previous.entries()) {
+        assert.ok(segments[index].text.startsWith(segment.text), '任意 delta 边界下已显示文字不能缩短或搬家');
+        if (segment.completed) assert.deepEqual(segments[index], segment, '闭合气泡后续不能再改写');
+      }
+      previous = segments;
+    }
+    const final = segmentation.segmentAssistantReplyProgress(text, 'multi-bubble', true);
+    assert.deepEqual(final.map(segment => segment.text), segmentation.segmentAssistantReplyText(text, 'multi-bubble'));
+    assert.ok(final.every(segment => segment.completed), '终态关闭所有气泡');
+    for (const [index, segment] of previous.entries()) assert.equal(final[index].text, segment.text, '最终提交不重新排段');
+  }
   console.log('Prompt chat segmentation 检查通过（单气泡、多气泡与长文本切分不丢正文）。');
 }
 

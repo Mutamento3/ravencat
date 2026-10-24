@@ -43,9 +43,12 @@ export function configureWalletRuntime(gateway: WalletChatReplyGateway): void {
 
 const queueDeps = {
   getLedgerAI: () => aiAssistantRepository.getLedgerAI(),
+  getRecords: (ids: readonly string[]) => ledgerRepository.getRecords({ ids, limit: ids.length }),
   triggerReply: (params: TriggerLedgerAIReplyParams) =>
     triggerLedgerAIReply(params),
 };
+
+export { stopLedgerAIReplyQueueForReset, resumeLedgerAIReplyQueueAfterReset } from './application/QueueLedgerAIReply';
 
 const presentationDeps = {
   assistantRepository: aiAssistantRepository,

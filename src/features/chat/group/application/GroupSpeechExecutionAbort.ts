@@ -11,6 +11,7 @@
 
 const controllersByPlanId = new Map<string, Set<AbortController>>();
 const invocationCountsByGroupId = new Map<string, number>();
+const controllersByTaskId = new Map<string, AbortController>();
 
 /** 从读取/claim 前登记 owner，冷启动恢复不能把本进程的准备阶段误判为孤儿。 */
 export function registerGroupSpeechInvocation(groupId: string): () => void {
@@ -30,7 +31,9 @@ export function listActiveGroupSpeechGroupIds(): string[] {
 export function registerGroupSpeechAbort(
   planId: string,
   controller: AbortController,
+  taskId?: string,
 ): () => void {
+  if (taskId) controllersByTaskId.set(taskId, controller);
   let controllers = controllersByPlanId.get(planId);
   if (!controllers) {
     controllers = new Set();
@@ -38,11 +41,17 @@ export function registerGroupSpeechAbort(
   }
   controllers.add(controller);
   return () => {
+    if (taskId) controllersByTaskId.delete(taskId);
     controllers.delete(controller);
     if (controllers.size === 0) {
       controllersByPlanId.delete(planId);
     }
   };
+}
+
+/** 成员变更只中止被撤销的任务，其他成员继续使用原 plan。 */
+export function abortGroupSpeechTasks(taskIds: readonly string[]): void {
+  for (const taskId of taskIds) controllersByTaskId.get(taskId)?.abort();
 }
 
 export function abortGroupSpeechPlanExecution(planId: string): void {

@@ -7,13 +7,14 @@ import { Camera, ChevronRight, Pencil } from 'lucide-react-native';
 import { useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
-import { AIAvatar, GroupAvatar, showAppDialog } from '@shared/ui';
+import { GroupAvatar, showAppDialog } from '@shared/ui';
 import {
   PERSISTENT_IMAGE_CATEGORY,
   usePersistentAvatarDraft,
   type PersistentAvatarDraft,
 } from '@platform/device/DeviceMediaService';
 import ChatWallpaperSettings from '../messages/components/ChatWallpaperSettings';
+import GroupMembersSection from './GroupMembersSection';
 import type {
   GroupChatDetails,
   GroupChat,
@@ -87,32 +88,6 @@ const createStyles = (theme: PresentationTheme) =>
       color: theme.colors.text.primary,
       textAlign: 'center',
     },
-    section: {
-      backgroundColor: theme.colors.surface.default,
-      marginBottom: theme.spacing.md,
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
-    },
-    sectionTitle: {
-      fontSize: 13,
-      color: theme.colors.text.secondary,
-      marginBottom: theme.spacing.md,
-    },
-    memberGrid: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-    },
-    memberItem: {
-      width: '25%',
-      alignItems: 'center',
-      marginBottom: theme.spacing.md,
-    },
-    memberName: {
-      marginTop: 6,
-      fontSize: 12,
-      color: theme.colors.text.secondary,
-      maxWidth: '90%',
-    },
     menuItem: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -156,7 +131,6 @@ export default function GroupOptions({
   const styles = useThemedStyles(createStyles);
 
   const group = groupDetails?.group;
-  const members = (groupDetails?.members ?? []).filter((member) => member.enabled);
   const groupName = group?.name || '群聊';
 
   const {
@@ -334,23 +308,7 @@ export default function GroupOptions({
           )}
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>群成员</Text>
-          <View style={styles.memberGrid}>
-            {members.map((member) => (
-              <View key={member.aiAssistantId} style={styles.memberItem}>
-                <AIAvatar
-                  name={member.nickname ?? member.name ?? member.model ?? 'AI'}
-                  avatarUrl={member.avatar}
-                  size="medium"
-                />
-                <Text style={styles.memberName} numberOfLines={1}>
-                  {member.nickname ?? member.name ?? member.model ?? 'AI'}
-                </Text>
-              </View>
-            ))}
-          </View>
-        </View>
+        <GroupMembersSection groupId={groupId} members={groupDetails?.members ?? []} />
 
         <TouchableOpacity
           style={styles.menuItem}

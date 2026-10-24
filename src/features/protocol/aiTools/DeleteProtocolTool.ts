@@ -27,11 +27,11 @@ interface DeleteProtocolResult {
  */
 export const definition = {
   name: 'deleteProtocol',
-  description: '删除协议空间中不再需要的条目。',
+  description: '删除当前 AI 协议空间中不再需要的条目。使用查询或添加工具返回的真实 ID，不要猜测 ID。',
   parameters: {
     type: 'object',
     properties: {
-      protocolId: { type: 'string', description: '要删除的协议ID' },
+      protocolId: { type: 'string', description: '查询或添加协议工具返回条目的 id' },
     },
     required: ['protocolId'],
   },
@@ -47,7 +47,12 @@ export async function execute(
   args: DeleteProtocolArgs,
   context: ProtocolToolContext
 ): Promise<DeleteProtocolResult> {
+  const aiAssistantId = context.getAIId();
   const { protocolId } = args;
+
+  if (!aiAssistantId) {
+    return { success: false, error: '未指定AI助手' };
+  }
 
   if (!protocolId) {
     return { success: false, error: '缺少协议ID' };
@@ -55,8 +60,11 @@ export async function execute(
 
   try {
     throwIfAbortSignalAborted(context.abortSignal);
-    await context.repositories.protocol!.delete(protocolId);
-    return { success: true, message: '已删除协议' };
+    const deleted = await context.repositories.protocol!.delete(aiAssistantId, protocolId);
+    if (!deleted) {
+      return { success: false, error: '协议不存在或不属于当前 AI，未执行删除。请查询协议空间取得真实 ID。' };
+    }
+    return { success: true, message: `已删除协议，protocolId: ${protocolId}` };
   } catch (error) {
     throwIfAbortSignalAborted(context.abortSignal);
     console.error('[DeleteProtocolTool] Failed:', error);

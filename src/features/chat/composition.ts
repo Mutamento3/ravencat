@@ -140,10 +140,12 @@ export interface ChatRuntimeDependencies {
     messages: ChatMessageRuntimeDependencies['messages'];
     sessions: ChatConversationRuntimeDependencies['sessions'];
     groups: ChatGroupRuntimeDependencies['groups'];
+    membership: ChatGroupRuntimeDependencies['membership'];
     turns: ChatMessageRuntimeDependencies['turns'];
   };
   assistantDirectory: ChatAssistantDirectory;
   currentUserDirectory: ChatGroupRuntimeDependencies['currentUserDirectory'];
+  captureGroupHistory: ChatGroupRuntimeDependencies['captureHistory'];
   canonicalUserMessage?: ChatMessageRuntimeDependencies['canonicalUserMessage'];
   regeneration?: ChatMessageRuntimeDependencies['regeneration'];
   turnPresentation: ChatMessageRuntimeDependencies['turnPresentation'];
@@ -178,6 +180,8 @@ export function configureChatRuntimeDependencies(
   });
   configureChatGroupRuntime({
     groups: dependencies.repositories.groups,
+    membership: dependencies.repositories.membership,
+    captureHistory: dependencies.captureGroupHistory,
     assistantDirectory: dependencies.assistantDirectory,
     currentUserDirectory: dependencies.currentUserDirectory,
   });
@@ -260,6 +264,7 @@ export { configureChatFavoriteRuntime } from './favorites/application/ChatFavori
 export { SQLiteChatFavoriteRepository } from './favorites/infrastructure/SQLiteChatFavoriteRepository';
 export { sessionRepository } from './conversation/infrastructure/SQLiteSessionRepository';
 export { groupChatRepository } from './group/infrastructure/SQLiteGroupChatRepository';
+export { groupMembershipRepository } from './group/infrastructure/SQLiteGroupMembershipRepository';
 export { conversationTurnRepository } from './reply/infrastructure/SQLiteConversationTurnRepository';
 
 export { configureChatImageModels, resolveChatRecognitionModel, notifyChatImageModelsChanged } from './reply/application/ChatImageModels';

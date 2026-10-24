@@ -1,4 +1,4 @@
-/** 通话 delta 按句进入统一 Speech 文本边界，控制标记只交给合成，正文交给字幕和提交。 */
+/** 通话控制信号先由 Calls 提取，语音标签交给 Speech，正文交给字幕和提交。 */
 import { hasSpeechPause, prepareSpeechText, readSpeechMetadata, type ResolvedSpeechModel } from '@features/speech';
 import { CALL_END_MARKER } from '../CallPromptBlocks';
 
@@ -24,8 +24,7 @@ export function createCallSpeechSentenceStream(
 ): CallSpeechSentenceStream {
   const metadata = modelSnapshot ? readSpeechMetadata(modelSnapshot.metadataJson) : null;
   let sentenceBuffer = '';
-  let markerPrefixBuffer = '';
-  let markerDecided = false;
+  let markerBuffer = '';
   let endCallDetected = false;
   const sentences: string[] = [];
 
@@ -63,35 +62,35 @@ export function createCallSpeechSentenceStream(
   };
 
   const pushWithMarkerDetection = (chunk: string) => {
-    let text = chunk;
-    if (!markerDecided) {
-      markerPrefixBuffer += chunk;
-      const trimmedPrefix = markerPrefixBuffer.trimStart();
-      if (trimmedPrefix.length < CALL_END_MARKER.length && CALL_END_MARKER.startsWith(trimmedPrefix)) return;
-      markerDecided = true;
-      if (trimmedPrefix.startsWith(CALL_END_MARKER)) {
+    markerBuffer += chunk;
+    for (;;) {
+      const markerIndex = markerBuffer.indexOf(CALL_END_MARKER);
+      if (markerIndex !== -1) {
         endCallDetected = true;
-        text = trimmedPrefix.slice(CALL_END_MARKER.length);
-      } else {
-        text = markerPrefixBuffer;
+        pushSpeechText(markerBuffer.slice(0, markerIndex));
+        markerBuffer = markerBuffer.slice(markerIndex + CALL_END_MARKER.length);
+        continue;
       }
-      markerPrefixBuffer = '';
+      // Calls 控制信号先于 Speech 解析；只暂存可能跨 delta 的精确标记前缀。
+      let pendingLength = Math.min(markerBuffer.length, CALL_END_MARKER.length - 1);
+      while (pendingLength > 0 && !CALL_END_MARKER.startsWith(markerBuffer.slice(-pendingLength))) pendingLength--;
+      const speechText = markerBuffer.slice(0, markerBuffer.length - pendingLength);
+      markerBuffer = markerBuffer.slice(markerBuffer.length - pendingLength);
+      if (speechText) pushSpeechText(speechText);
+      return;
     }
-    if (text) pushSpeechText(text);
   };
 
   return {
     push: pushWithMarkerDetection,
     pushSegment(text: string) {
-      markerDecided = false;
-      markerPrefixBuffer = '';
+      markerBuffer = '';
       pushWithMarkerDetection(text);
     },
     flush() {
-      if (!markerDecided && markerPrefixBuffer) {
-        markerDecided = true;
-        const pendingPrefix = markerPrefixBuffer;
-        markerPrefixBuffer = '';
+      if (markerBuffer) {
+        const pendingPrefix = markerBuffer;
+        markerBuffer = '';
         pushSpeechText(pendingPrefix);
       }
       drainSentences(true);

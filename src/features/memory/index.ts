@@ -6,7 +6,7 @@ export { rememberMemory, editMemory, forgetMemory, retryMemoryEmbedding, selectM
 export * from './application/MemoryQueries';
 export { releaseMemoryRecallRun } from './application/RecallMemory';
 export { subscribeMemoryChanged } from './application/MemorySignals';
-export { RememberMemoryTool, RecallMemoryTool, UpdateMemoryTool, ForgetMemoryTool } from './aiTools/MemoryAgentTools';
+export { RememberMemoryTool, RecallMemoryTool, UpdateMemoryTool, ForgetMemoryTool, ConvertExitedGroupHistoryTool } from './aiTools/MemoryAgentTools';
 export { default as MemoryScreen } from './presentation/MemoryScreen';
 export { default as MemorySettingsScreen } from './presentation/MemorySettingsScreen';
 export { default as MemoryEditorScreen } from './presentation/MemoryEditorScreen';

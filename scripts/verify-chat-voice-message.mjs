@@ -815,6 +815,7 @@ function loadUseChatSendFlow({ react, voiceModule, deps }) {
     'src/features/chat/presentation/messages/ChatDetail/useChatSendFlow.ts',
     {
       react,
+      '@shared/ui': { showAppDialog() {} },
       './ChatAttachmentDraftFiles': { retainChatAttachmentDraftFiles: () => () => {} },
       '../../../messages/application/MessageTimeline': deps.messageTimeline,
       '../../../messages/application/SendUserMessage': deps.sendUserMessage,
@@ -1603,6 +1604,13 @@ await scenario('JS stop() 的 native 失败仍释放订阅并报告录音错误'
 // 5) 播放状态契约
 // ============================================================================
 
+function playbackDevice(player) {
+  const { localAudioPlaybackCoordinator } = loadTypeScriptModule('src/platform/device/LocalAudioPlaybackCoordinator.ts', {
+    './LocalAudioPlayback': { localAudioPlaybackPort: player },
+  });
+  return { localAudioPlaybackCoordinator };
+}
+
 await scenario('markVoiceMessagePlayed 幂等：已写入后不再重复更新', () => {
   const source = read(
     'src/features/chat/messages/application/MarkVoiceMessagePlayed.ts',
@@ -1620,7 +1628,7 @@ await scenario('只有原生播放器确认开始后才标记原消息已播放'
   const marked = [];
   const { voiceMessagePlaybackCoordinator: coordinator } = loadTypeScriptModule('src/features/chat/messages/application/VoiceMessagePlaybackCoordinator.ts', {
     '@features/media': { resolveMediaAsset: async () => ({ localUri: 'file:///audio.wav' }) },
-    '@platform/device': { localAudioPlaybackPort: { play: () => pending } },
+    '@platform/device': playbackDevice({ play: () => pending }),
     './MarkVoiceMessagePlayed': { markVoiceMessagePlayed: async id => { marked.push(id); } },
   });
   const playback = coordinator.toggle({ kind: 'message', id: 42, isIncoming: true }, 'audio', 1000);
@@ -1636,7 +1644,7 @@ await scenario('引用语音使用独立播放身份，不改写原消息已播�
   const marked = [], played = [];
   const { voiceMessagePlaybackCoordinator: coordinator, getVoicePlaybackKey } = loadTypeScriptModule('src/features/chat/messages/application/VoiceMessagePlaybackCoordinator.ts', {
     '@features/media': { resolveMediaAsset: async id => { assert.equal(id, 'quoted-audio'); return { localUri: 'file:///quoted.wav' }; } },
-    '@platform/device': { localAudioPlaybackPort: { play: async uri => { played.push(uri); return { subscribe: () => () => {}, stop: async () => {} }; } } },
+    '@platform/device': playbackDevice({ play: async uri => { played.push(uri); return { subscribe: () => () => {}, stop: async () => {} }; } }),
     './MarkVoiceMessagePlayed': { markVoiceMessagePlayed: async id => { marked.push(id); } },
   });
   const target = { kind: 'quote', id: '42' };
@@ -1661,7 +1669,7 @@ await scenario('媒体解析或播放失败时保持原消息未播放状态', a
     const marked = [], states = [];
     const { voiceMessagePlaybackCoordinator: coordinator } = loadTypeScriptModule('src/features/chat/messages/application/VoiceMessagePlaybackCoordinator.ts', {
       '@features/media': { resolveMediaAsset: async () => { if (failResolve) throw new Error('媒体缺失'); return { localUri: 'file:///audio.wav' }; } },
-      '@platform/device': { localAudioPlaybackPort: { play: async () => { throw new Error('播放失败'); } } },
+      '@platform/device': playbackDevice({ play: async () => { throw new Error('播放失败'); } }),
       './MarkVoiceMessagePlayed': { markVoiceMessagePlayed: async id => { marked.push(id); } },
     });
     const unsubscribe = coordinator.subscribe(42, 1000, state => states.push(state));
@@ -1816,6 +1824,7 @@ function loadChatAgentTimelineModule() {
     '../application/AssistantReplyPersistence': {
       normalizeAssistantResponseText: (text) => ({ text, segments: [] }),
     },
+    '../application/AssistantReplySegmentation': loadTypeScriptModule('src/features/chat/reply/application/AssistantReplySegmentation.ts'),
     '../application/AssistantTurnCommit': { buildAssistantTurnItems: () => [] },
     '../application/ChatReplyUtils': { formatMessageTime: () => '12:00' },
     '../domain/ConversationTurn': {},
@@ -2016,6 +2025,7 @@ await scenario('send_voice_message 空文本直接失败不合成 TTS', async ()
       },
     },
     '@platform/device': {},
+    '@shared/aiTools': loadTypeScriptModule('src/shared/aiTools/ToolCompletionIntent.ts'),
     '@shared/runtime/abortSignal': { throwIfAbortSignalAborted: () => undefined },
   });
   for (const text of ['', ' \t\n ']) {
@@ -2046,6 +2056,7 @@ await scenario('AI 语音成功转交 finish / continue 意图，合成失败不
       readLocalAudioMetadata: async () => ({ durationMs: 1200 }),
       temporarySpeechAudioStore: { deleteIfExists: async (uri) => deletedAudio.push(uri) },
     },
+    '@shared/aiTools': loadTypeScriptModule('src/shared/aiTools/ToolCompletionIntent.ts'),
     '@shared/runtime/abortSignal': loadTypeScriptModule('src/shared/runtime/abortSignal.ts'),
   });
   const tool = await createConfiguredVoiceMessageTool('assistant-1');
@@ -2112,24 +2123,37 @@ await scenario('Moon Kimi：语音消息有独立可达的 transcript action cap
   assert.equal(paperNote.enableVoiceMessageLongPressMenu, true, 'paper-note 语音长按同样可达');
 });
 
-await scenario('VoiceMessageCard 显式处理 long press，不再依赖外层 Touchable 冒泡', () => {
-  const source = read(
-    'src/features/chat/presentation/messages/MessageBubble/VoiceMessageCard.tsx',
-  );
-  assert.ok(source.includes('onLongPress'), '语音卡必须自己声明 onLongPress');
-  assert.ok(source.includes('delayLongPress'), '语音卡必须显式声明长按阈值');
-  assert.ok(
-    source.includes('longPressHandledRef'),
-    '长按触发后必须吞掉随之而来的 onPress，避免长按又播放一次',
-  );
-  const handledGuard = source.indexOf('if (longPressHandledRef.current)');
-  const toggleCall = source.indexOf('voiceMessagePlaybackCoordinator.toggle');
-  assert.ok(
-    handledGuard >= 0 && handledGuard < toggleCall,
-    'handlePress 必须在播放前先检查长按标记',
-  );
+await scenario('语音条长按只打开菜单，普通点击才播放，保留原始点击坐标', async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let pressed = 0;
+  const positions = [];
+  const Bar = loadTypeScriptModule('src/shared/ui/AudioPlaybackBar.tsx', {
+    react: { ...React, default: React },
+    'react-native': { View: 'view', Text: 'text', Pressable: 'button', StyleSheet: { create: value => value } },
+    'lucide-react-native': { AlertCircle: 'error', Pause: 'pause', Play: 'play' },
+    '@shared/theme': { useTheme: () => ({ colors: { text: { primary: 'black' }, border: { default: 'grey' }, feedback: { error: 'red' } } }) },
+  }).default;
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(Bar, {
+      playbackKey: 'voice', durationMs: 1000,
+      coordinator: { subscribe: (_key, _duration, listener) => { listener({ state: 'idle', positionMs: 0, durationMs: 1000 }); return () => {}; } },
+      onPress: () => { pressed++; }, onLongPress: position => positions.push(position),
+    })); });
+    const button = renderer.root.findByType('button');
+    await act(async () => {
+      button.props.onPressIn({ nativeEvent: { pageX: 24, pageY: 88 } });
+      button.props.onLongPress(); button.props.onPress();
+    });
+    assert.deepEqual(positions, [{ x: 24, y: 88 }]);
+    assert.equal(pressed, 0);
+    await act(async () => { button.props.onPressIn({ nativeEvent: { pageX: 25, pageY: 89 } }); button.props.onPress(); });
+    assert.equal(pressed, 1);
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
 });
-
 await scenario('TouchableMessageBubble 把语音长按走独立 capability 与回调，不复用通用长按判断', () => {
   const source = read(
     'src/features/chat/presentation/messages/components/ChatMessageListParts.tsx',

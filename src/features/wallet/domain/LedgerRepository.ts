@@ -2,6 +2,7 @@
 import type { QuickAction, WalletRecord, WalletRecordType } from './WalletRecord';
 
 export interface LedgerRecordFilters {
+  ids?: readonly string[];
   year?: number;
   month?: number;
   day?: number;

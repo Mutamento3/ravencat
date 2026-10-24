@@ -3,9 +3,10 @@ import type { AIProfile } from '@features/assistants';
 import { listAIAssistants, subscribeAIAssistantUpdated } from '@features/assistants';
 import { getCurrentUserProfile, subscribeUserProfileUpdated, type UserProfile } from '@features/profile';
 import { startRealtimeSpeechToText, type RealtimeSpeechToTextSession } from '@features/speech';
-import { realtimeSpeechAudioSource, type RealtimeSpeechAudioSourceSession } from '@platform/device';
+import { realtimeSpeechAudioSource, temporarySpeechAudioStore, type RealtimeSpeechAudioSourceSession } from '@platform/device';
 import type { CallSession } from '../../domain/CallSession';
 import type { CallEvent } from '../../domain/CallEvent';
+import type { CallInputAudio } from '../../domain/CallHistory';
 import { acceptCall, endCall, rejectCall } from '../lifecycle';
 import { getCallSession, listCallEvents } from '../queries/GetCallSession';
 import { loadCallBackgroundUri, subscribeCallBackgroundChanged } from '../CallBackgroundSettings';
@@ -285,13 +286,16 @@ export function createCallMediaRuntime(callId: string) {
   };
 
   const pendingInputs = new Set<Promise<void>>();
-  const sendCallText = (text: string): Promise<void> => {
-    const operation = processCallText(text);
+  const sendCallText = (text: string, audio?: Promise<CallInputAudio | null>): Promise<void> => {
+    const operation = processCallText(text, audio).finally(async () => {
+      const segment = await audio;
+      if (segment) await temporarySpeechAudioStore.deleteIfExists(segment.uri);
+    });
     pendingInputs.add(operation);
     void operation.then(() => pendingInputs.delete(operation), () => pendingInputs.delete(operation));
     return operation;
   };
-  const processCallText = async (text: string) => {
+  const processCallText = async (text: string, audio?: Promise<CallInputAudio | null>) => {
       const normalizedText = text.trim();
       const currentCall = call;
       if (
@@ -314,6 +318,7 @@ export function createCallMediaRuntime(callId: string) {
         const result = await submitCallUserInput({
           callId: currentCall.id,
           userText: normalizedText,
+          userAudio: audio,
           aiConfig: {
             id: aiProfile.id,
             agentId: aiProfile.agentId,
@@ -512,7 +517,20 @@ export function createCallMediaRuntime(callId: string) {
 
           // 与文字同权：直接进统一输入入口，由相位机决定打断/新回合；
           // 不得在此串行排队，否则新语音会等上一回合 TTS 全部播完才生效。
-          void sendCallText(finalText).catch((error) => {
+          // 原生 start 回执可能晚于第一条识别结果；导出只等待本次采集就绪。
+          const exporting = realtimeAudioSession
+            ? realtimeAudioSession.exportSegment(result.startTime, result.endTime)
+            : speechStart!.then(() => {
+              if (!realtimeAudioSession) throw new Error('语音采集已停止，无法导出录音');
+              return realtimeAudioSession.exportSegment(result.startTime, result.endTime);
+            });
+          const audio = exporting
+            .catch(async error => {
+              await appendRealtimeSpeechError(`通话录音保存失败：${error instanceof Error ? error.message : String(error)}`, 'audioArchive');
+              return null;
+            });
+          // 先提交文本并取得回合所有权；导出失败也不能丢掉已识别的用户发言。
+          void sendCallText(finalText, audio).catch((error) => {
             const message = error instanceof Error ? error.message : '语音回复处理失败';
             setErrorMessage(message);
           });
@@ -521,8 +539,9 @@ export function createCallMediaRuntime(callId: string) {
           if (!isCurrentRun()) {
             return;
           }
-          setErrorMessage(errorInfo.message);
-          void appendRealtimeSpeechError(errorInfo.message, 'realtimeAsr');
+          const message = `${errorInfo.title}（STT）：${errorInfo.message}`;
+          setErrorMessage(message);
+          void appendRealtimeSpeechError(message, 'realtimeAsr');
         },
       });
 
@@ -533,8 +552,9 @@ export function createCallMediaRuntime(callId: string) {
         if (!isCurrentRun()) {
           return;
         }
-        setErrorMessage(speechResult.errorInfo.message);
-        await appendRealtimeSpeechError(speechResult.errorInfo.message, 'realtimeAsr');
+        const message = `${speechResult.errorInfo.title}（STT）：${speechResult.errorInfo.message}`;
+        setErrorMessage(message);
+        await appendRealtimeSpeechError(message, 'realtimeAsr');
         return;
       }
       if (!isCurrentRun()) {
@@ -548,6 +568,7 @@ export function createCallMediaRuntime(callId: string) {
       realtimeSpeechSession = speechResult.session;
       try {
         const audioSession = await realtimeSpeechAudioSource.start({
+          archiveSegments: true,
           onAudioChunk: (chunk) => {
             if (!isCurrentRun()) {
               return;
@@ -694,6 +715,7 @@ export function createCallMediaRuntime(callId: string) {
       if (stopped || event.callId !== callId) return;
       // 晚到的查询不能覆盖刚收到的 commit；事件身份用于与历史读取去重。
       refreshVersion++;
+      if (event.kind === 'error') errorMessage = event.text;
       if (event.kind === 'userSpeechText' && event.text === pendingUserSpeechText) pendingUserSpeechText = null;
       if (!events.some(current => current.id === event.id)) events = [...events, event].slice(-200);
       publish();

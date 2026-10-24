@@ -28,8 +28,9 @@ export const CALL_VISUAL_SNAPSHOT_PROMPT = [
 ].join('\n\n');
 
 export const CALL_END_CONTROL_PROMPT = [
-  `如果你此刻自然地决定结束通话，请以 ${CALL_END_MARKER} 开始回复，写下你想说的话。`,
-  `如果你想继续交谈，就不要包含 ${CALL_END_MARKER}。`,
+  `你可以主动挂断当前通话。决定结束通话（包括回应用户的挂断请求）时，在本轮回复中输出 ${CALL_END_MARKER}，并说一句自然的告别语。`,
+  `这是应用的通话控制指令，不是工具调用或语音标签；无论是否启用工具都可使用。${CALL_END_MARKER} 可放在口语正文前或后，不会被朗读，应用会在本轮语音播放结束后挂断。`,
+  `仅说“挂了”“再见”不会触发挂断；要继续交谈就不要输出 ${CALL_END_MARKER}。`,
 ].join('\n\n');
 
 export const OUTGOING_CALL_DECISION_PROMPT = [

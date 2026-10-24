@@ -87,9 +87,9 @@ export async function execute(
 
     return {
       success: true,
-      message: protocol.alreadyExists
+      message: (protocol.alreadyExists
         ? '这条协议已经存在，无需重复添加'
-        : '已添加常驻提示词，将在后续请求中自动注入',
+        : '已添加常驻提示词，将在后续请求中自动注入') + `（id 用作 protocolId）:\n${JSON.stringify(protocol)}`,
       data: protocol
     };
   } catch (error) {

@@ -17,7 +17,7 @@ export interface NetEaseSearchPublicPlaylistsArgs {
 
 export const netEaseSearchPublicPlaylistsDefinition = {
   name: 'netease_search_public_playlists',
-  description: '【主理 AI 专属】搜索网易云公开歌单候选；只返回候选，不自动读取第一项歌单详情。',
+  description: '搜索网易云公开歌单候选。',
   parameters: {
     type: 'object',
     properties: {

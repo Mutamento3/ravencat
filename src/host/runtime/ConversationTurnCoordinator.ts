@@ -524,7 +524,7 @@ async function resolveSessionAIConfig(sessionId: string): Promise<AIConfig | nul
     enableTools: assistant.enableTools,
     allowMultipleBubbles: interactionProfile.enableAssistantMessageSegmentation
       ? assistant.allowMultipleBubbles : false,
-    enableStreamingReply: interactionProfile.preferStreamingReply,
+    enableStreamingReply: assistant.streamingReply ?? interactionProfile.preferStreamingReply,
     isHostAI: assistant.isHostAI,
     isBlocked: assistant.isBlocked,
   };

@@ -8,6 +8,7 @@ import {
   type Dispatch,
   type SetStateAction,
 } from 'react';
+import { showAppDialog } from '@shared/ui';
 import { retainChatAttachmentDraftFiles } from './ChatAttachmentDraftFiles';
 import { messageTimeline } from '../../../messages/application/MessageTimeline';
 import { sendUserMessage } from '../../../messages/application/SendUserMessage';
@@ -634,10 +635,11 @@ export function useChatSendFlow({
       }
 
       if (result.status === 'failed') {
-        setError(result.errorMessage);
+        // 拨号可能已经切到通话页；全局详情在终态退出后仍可见，不走历史加载错误通道。
+        showAppDialog({ title: '视频通话未接通', message: result.errorMessage, tone: 'error' });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '发起视频电话失败');
+      showAppDialog({ title: '视频通话未接通', message: err instanceof Error ? err.message : String(err), tone: 'error' });
     } finally {
       setIsTyping(false);
     }

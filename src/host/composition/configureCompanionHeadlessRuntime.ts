@@ -3,6 +3,7 @@
 import { configureAIRuntime } from './configureAIRuntime';
 import { configureChatRuntime } from './configureChatRuntime';
 import { configureMemoryRuntime } from './configureMemoryRuntime';
+import { configureChatSummary } from './configureChatSummaryRuntime';
 import { configureCompanionRuntime } from './configureCompanionRuntime';
 import { configurePromptingRuntime } from './configurePromptingRuntime';
 import { configureMcpToolsRuntime } from './configureMcpToolsRuntime';
@@ -16,6 +17,7 @@ import { configureTogetherListeningRuntime } from './configureTogetherListeningR
 import { configureStickerRuntime } from '@features/stickers/composition';
 import { recognizeSticker } from './StickerAnnotationModelGateway';
 import { assertImageToolRunCurrent } from './agent/assertImageToolRunCurrent';
+import { configureWebToolsRuntime, sqliteSearchSettingsRepository, secureSearchCredentialStore } from '@features/webTools/composition';
 
 let configured = false;
 
@@ -25,6 +27,7 @@ export function configureCompanionHeadlessRuntime(): void {
   }
   configured = true;
 
+  configureWebToolsRuntime({ settings: sqliteSearchSettingsRepository, credentials: secureSearchCredentialStore });
   configurePhoneToolsRuntime();
   configureTogetherListeningRuntime();
   configureDeviceControlRuntime();
@@ -40,6 +43,8 @@ export function configureCompanionHeadlessRuntime(): void {
   configureChatRuntime();
   configureAIRuntime();
   configureMemoryRuntime();
+  // 后台也读取摘要；生成队列仍只由前台状态激活，不依赖页面先加载。
+  configureChatSummary();
   configureCompanionRuntime();
   // 统一交付策略随每个 runtime 注册：Headless execution host 落库后也能发系统通知。
   configureAIMessageDeliveryCoordinator();

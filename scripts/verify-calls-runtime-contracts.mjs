@@ -90,6 +90,8 @@ compileProductionModule('src/features/chat/reply/infrastructure/ChatReplyVersion
 
 for (const relativePath of [
   'src/features/calls/application/CallPromptBlocks.ts',
+  'src/features/calls/domain/CallHistory.ts',
+  'src/features/calls/infrastructure/SQLiteCallHistoryRepository.ts',
   'src/features/calls/application/CallPromptDefinitions.ts',
   'src/features/calls/application/runtime/CallRuntimeDependencies.ts',
   'src/features/calls/application/runtime/CallRuntimeHelpers.ts',
@@ -157,6 +159,9 @@ exports.persistentMediaStore = {
   deleteCategoryFilesExceptPrefix: async () => {},
 };
 `);
+
+// 这些场景只替代媒体 IO；历史持久化与共享音频回收由 verify-call-history 覆盖。
+writeRuntimeModule('src/features/calls/application/CallHistory.js', 'exports.saveCallHistoryAudio = async () => {}; exports.saveCallHistorySnapshot = async () => {};');
 
 writeRuntimeModule('node_modules/@platform/persistence/index.js', `
 const runtime = () => globalThis.__callsContractFakes;
@@ -476,6 +481,7 @@ function createCallRepository(calls = [createCall()]) {
       events.push(event);
       return event;
     },
+    async appendHistoryEntry() {},
     async appendSnapshot(input) {
       snapshotInputs.push(input);
       if (repository.snapshotFailure) {
@@ -2633,6 +2639,7 @@ scenario('transcript、camera state 与 error event payload', async () => {
     text: '你好',
     visibleInChat: false,
     includeInAIContext: true,
+    payloadJson: '{"inputKind":"text"}',
   });
   assert.deepEqual(callRepository.eventInputs[1], {
     callId: 'call-1',
@@ -2937,6 +2944,8 @@ scenario('真实仓储并发创建来电与去电只有一个占用，终态后�
   db.exec(SCHEMAS.aiAssistants);
   db.exec(SCHEMAS.sessions);
   db.exec(SCHEMAS.callSessions);
+  db.exec(SCHEMAS.mediaAssets);
+  db.exec(SCHEMAS.callHistory);
   db.prepare(`INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at)
     VALUES ('ai', 'agent', 'AI', 'model', '2026-10-12', '2026-10-12')`).run();
   db.prepare(`INSERT INTO sessions (id, ai_assistant_id, name, created_at, updated_at)

@@ -8,6 +8,7 @@ export type ChatSubScreen =
   | 'modelSettings'
   | 'chatSettings'
   | 'summary'
+  | 'callHistory'
   | 'statistics'
   | 'filePreview';
 

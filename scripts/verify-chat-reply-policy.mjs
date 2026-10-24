@@ -236,4 +236,67 @@ assert.deepEqual(
   'policy 允许工具时，Agent task 应原样消费上游已解析的 effective tool names',
 );
 
-console.log('Chat ReplyPolicy 行为验证通过：传输与工具正交、图片保留授权、泡泡策略与 Agent task 权限边界。');
+// 真实页面请求配置与宿主配置装配共用同一角色偏好，主题仅提供默认。
+const variants = loadTypeScriptModule('src/shared/theme/themeVariants.ts');
+const chatTypes = loadTypeScriptModule('src/features/chat/presentation/messages/components/chatTypes.ts');
+let currentTheme;
+let pageRequest;
+const { useChatDetail: renderChatDetail } = loadTypeScriptModule('src/features/chat/presentation/messages/ChatDetail/useChatDetail.ts', name => ({
+  react: {
+    useMemo: factory => factory(), useState: initial => [initial, () => {}], useSyncExternalStore: () => null,
+  },
+  '../components/chatTypes': chatTypes,
+  '../components/useMessageHistoryState': { useMessageHistoryState: () => ({ messages: [] }) },
+  '../components/useChatTimelineSync': { useChatTimelineSync: () => {} },
+  './useChatSendFlow': { useChatSendFlow: params => { pageRequest = params.aiRequestConfig; return {}; } },
+  '../../../conversation/application/ChatCallGateway': { isChatSendBlockedByCall: () => false },
+  '@shared/theme': { ...variants, useTheme: () => currentTheme },
+})[name]);
+let currentAssistant;
+let hostRequest;
+let finishHost;
+const hostEvents = {
+  emitChatRegenerationChanged() {}, emitChatTypingStatusChanged() {},
+  emitChatMessagesReloadRequested() {}, emitChatTurnExecutionChanged() {},
+};
+const { getConversationTurnCoordinator } = loadTypeScriptModule('src/host/runtime/ConversationTurnCoordinator.ts', name => ({
+  '@features/chat/composition': {
+    ...hostEvents,
+    conversationTurnRepository: { claimIfIdle: async sessionId => ({ sessionId, runId: 'preference-run', kind: 'user_reply' }) },
+    sessionRepository: { getSession: async () => ({ aiAssistantId: currentAssistant.id }) },
+    executeUserReplyTurn: params => {
+      hostRequest = params.aiConfig;
+      return new Promise(resolve => { finishHost = () => resolve('committed'); });
+    },
+  },
+  '@features/assistants': { aiAssistantRepository: { getById: async () => currentAssistant } },
+  '@platform/device': {},
+  '@shared/diagnostics/TurnTimelineLog': { logTurnTimeline() {} },
+  '@shared/theme/themeStorage': { loadStoredThemeId: async () => currentTheme.id },
+  '@shared/theme/themeRegistry': { getThemeById: id => ({ id }) },
+  '@shared/theme/themeVariants': variants,
+})[name]);
+const coordinator = getConversationTurnCoordinator();
+const tick = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+for (const id of ['default-light', 'default-dark', 'liquid-glass', 'moon-kimi', 'paper-note']) {
+  for (const streamingReply of [null, true, false]) {
+    currentTheme = { id };
+    currentAssistant = { ...baseConfig, streamingReply, allowMultipleBubbles: true };
+    renderChatDetail('preference-session', currentAssistant);
+    const hostRun = coordinator.executeTurnFromHost('preference-session');
+    await tick();
+    const expectedStreaming = streamingReply ?? ['moon-kimi', 'paper-note'].includes(id);
+    const expectedBubbles = ['moon-kimi', 'paper-note'].includes(id) ? 'single-bubble' : 'multi-bubble';
+    for (const request of [pageRequest, hostRequest]) {
+      const policy = resolveAIReplyPolicy(request, { triggerSource: 'chat' });
+      assert.equal(policy.modelTransport, expectedStreaming ? 'stream' : 'complete', `${id} 遵守手动选择或主题默认`);
+      assert.equal(policy.bubbleDeliveryMode, expectedBubbles, '传输选择不改变主题和用户的气泡策略');
+    }
+    currentTheme = { id: id === 'default-light' ? 'paper-note' : 'default-light' };
+    currentAssistant = { ...currentAssistant, streamingReply: !expectedStreaming };
+    assert.equal(hostRequest.enableStreamingReply, expectedStreaming, '在途回复不随主题或偏好修改而改变');
+    finishHost(); await hostRun;
+  }
+}
+
+console.log('Chat ReplyPolicy 行为验证通过：传输与工具正交、主题默认与角色覆盖、页面与宿主一致、在途策略固定。');

@@ -115,6 +115,8 @@ export {
   sendGroupUserMessage,
 } from './group/application';
 export type { CreateGroupChatParams } from './group/application';
+export { changeGroupMembers, renameGroupChat, searchGroupNames, listHistoricalGroups, setHistoricalGroupInjection } from './group/application/GroupMembership';
+export { GroupMembershipError } from './group/domain/GroupMembership';
 
 // 只读时间线查询。
 export {
@@ -137,10 +139,7 @@ export type {
 } from './messages/application/MessageTimeline';
 export { deleteChatMessage } from './messages/application/DeleteChatMessage';
 export { markVoiceMessagePlayed } from './messages/application/MarkVoiceMessagePlayed';
-export {
-  voiceMessagePlaybackCoordinator,
-  type VoiceMessagePlaybackViewState,
-} from './messages/application/VoiceMessagePlaybackCoordinator';
+export { voiceMessagePlaybackCoordinator } from './messages/application/VoiceMessagePlaybackCoordinator';
 export {
   startUserVoiceMessageRecording,
   type UserVoiceMessageRecording,

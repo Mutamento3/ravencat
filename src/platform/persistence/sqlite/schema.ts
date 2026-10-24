@@ -1,4 +1,5 @@
 /** 集中定义 SQLite 建表与索引语句。 */
+import { CALL_HISTORY_SCHEMA } from './callHistorySchema';
 
 import {
   RAVEN_CAT_AI_SCHEDULES_OWNER_STATUS_TIME_INDEX,
@@ -25,9 +26,10 @@ import { MEMORY_V3_SCHEMA } from './memoryV3Schema';
 import { MODEL_SELECTION_SCHEMA } from './modelSelectionSchema';
 import { TRANSLATION_SELECTION_SCHEMA } from './translationModelSchema';
 import { AUXILIARY_MODEL_DEFAULTS_SCHEMA } from './auxiliaryModelDefaultsSchema';
-import { CHAT_SUMMARY_SCHEMA, CHAT_TIMELINE_RUN_ANCHOR_SCHEMA } from './chatSummarySchema';
+import { CHAT_SUMMARY_SCHEMA, CHAT_TIMELINE_RUN_ANCHOR_SCHEMA, CHAT_SUMMARY_WORK_QUEUE_TRIGGERS } from './chatSummarySchema';
 import { CHAT_TOOL_PACKAGE_EXPOSURE_SCHEMA } from './chatToolPackageSchema';
 import { CHAT_TURN_PRESENTATIONS_SCHEMA } from './chatTurnPresentationSchema';
+import { GROUP_HISTORY_SCHEMA } from './groupMembershipSchema';
 import {
   TOGETHER_LISTENING_ACTIVITIES_SCHEMA,
   TOGETHER_LISTENING_CHAT_CREATED_INDEX,
@@ -104,7 +106,9 @@ export const SCHEMAS: Record<string, string> = {
       enable_external_tool_map INTEGER DEFAULT 0,
       enable_short_text_protocol INTEGER DEFAULT 1,
       allow_multiple_bubbles INTEGER DEFAULT 1,
+      streaming_reply INTEGER CHECK (streaming_reply IN (0, 1)),
       show_token_usage INTEGER NOT NULL DEFAULT 1,
+      show_action_steps INTEGER NOT NULL DEFAULT 1,
       supports_vision INTEGER DEFAULT 0,
       -- 已发布版保留的物理列；当前运行时使用角色视觉模型选择。
       image_processing_mode TEXT NOT NULL DEFAULT 'direct',
@@ -210,6 +214,8 @@ export const SCHEMAS: Record<string, string> = {
       agent_id TEXT NOT NULL,
       display_order INTEGER DEFAULT 0,
       enabled INTEGER DEFAULT 1,
+      muted INTEGER NOT NULL DEFAULT 0 CHECK (muted IN (0, 1)),
+      joined_during_plan_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(group_id, ai_assistant_id),
@@ -347,6 +353,7 @@ export const SCHEMAS: Record<string, string> = {
 
   chatToolPackageExposure: CHAT_TOOL_PACKAGE_EXPOSURE_SCHEMA,
   chatTurnPresentations: CHAT_TURN_PRESENTATIONS_SCHEMA,
+  groupChatHistory: GROUP_HISTORY_SCHEMA,
   chatRegenerationRequests: CHAT_REGENERATION_REQUESTS_SCHEMA,
   chatReplyVersions: CHAT_REPLY_VERSIONS_SCHEMA,
 
@@ -375,6 +382,8 @@ export const SCHEMAS: Record<string, string> = {
       FOREIGN KEY (ai_assistant_id) REFERENCES ai_assistants(id) ON DELETE CASCADE
     );
   `,
+
+  callHistory: CALL_HISTORY_SCHEMA,
 
   callParticipants: `
     CREATE TABLE IF NOT EXISTS call_participants (
@@ -622,6 +631,7 @@ export const SCHEMAS: Record<string, string> = {
 };
 
 export const INDEXES: Record<string, string> = {
+  chatSummaryWorkQueue: CHAT_SUMMARY_WORK_QUEUE_TRIGGERS,
   chatFavorites: CHAT_FAVORITES_INDEXES,
   idxStickerOwnership: STICKER_OWNERSHIP_INDEXES,
   idxStickerEmbeddingsModel: STICKER_EMBEDDINGS_MODEL_INDEX,

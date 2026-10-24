@@ -17,7 +17,7 @@ export interface NetEasePlaySongArgs {
 
 export const netEasePlaySongDefinition = {
   name: 'netease_play_song',
-  description: '【主理 AI 专属】按精确网易云 song ID 向官方客户端派发播放请求；结果不代表最终播放状态。',
+  description: '按精确网易云 song ID 向官方客户端派发播放请求；结果不代表最终播放状态。',
   parameters: {
     type: 'object',
     properties: {

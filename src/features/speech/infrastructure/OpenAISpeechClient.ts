@@ -1,18 +1,13 @@
 /** OpenAI 兼容语音接口适配器。 */
 import { normalizeAIBaseURL } from '@platform/ai';
 import { audioBytesToBase64 } from './speechAudioEncoding';
+import { readSpeechHttpError } from './SpeechHttpError';
 import type { SpeechAudioFormat, SpeechSynthesisRequest, SpeechSynthesisResponse } from '../domain/SpeechProvider';
 
 export interface OpenAISpeechClientConfig {
   baseURL: string;
   apiKey: string;
   model: string;
-}
-
-interface OpenAISpeechErrorResponse {
-  error?: {
-    message?: string;
-  };
 }
 
 const MIME_BY_FORMAT: Record<SpeechAudioFormat, string> = {
@@ -62,8 +57,7 @@ export class OpenAISpeechClient {
       });
 
       if (!response.ok) {
-        const data = await response.json().catch(() => ({})) as OpenAISpeechErrorResponse;
-        throw new Error(data.error?.message || `HTTP ${response.status}: ${response.statusText}`);
+        throw await readSpeechHttpError(response, '语音合成', this.apiKey);
       }
 
       const audioBase64 = audioBytesToBase64(await response.arrayBuffer());

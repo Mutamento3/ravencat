@@ -6,7 +6,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 import expo.modules.core.interfaces.Package
 
-/** Expo 本地模块发现同时注册专用 RN 滚动视图，不替换应用其他滚动容器。 */
+/** 注册 Fabric 规范名称的滚动管理器；文字选择策略由专用 JS 适配显式启用。 */
 class NativeTextSelectionPackage : Package, ReactPackage {
   @Suppress("OVERRIDE_DEPRECATION")
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> = emptyList()

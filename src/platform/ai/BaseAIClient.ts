@@ -30,7 +30,7 @@ import type {
 const maxTokensFieldCache = new Map<string, string>();
 /** HTTP 状态保留给调用方分类失败，不要求业务层猜测服务端错误文案。 */
 class AIHttpError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string) { super(`HTTP ${status}: ${message}`); }
 }
 
 /** 同一份序列化文本用于发送和诊断，响应先留原文，再交给 Provider 解析。 */
@@ -55,9 +55,18 @@ async function fetchAIResponseText(url: string, requestBody: Record<string, unkn
   }
 }
 
-function parseHTTPErrorBody(rawText: string): { error?: { message?: string } } {
-  try { return JSON.parse(rawText); }
-  catch { return {}; }
+/** Provider 错误属于外部协议；保留 code/message，纯文本拒绝也不能丢失。 */
+function readProviderError(data: unknown): string | null {
+  if (data === null || typeof data !== 'object') return null;
+  if ('error' in data && data.error != null) {
+    return typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+  }
+  return 'message' in data && typeof data.message === 'string' ? JSON.stringify(data) : null;
+}
+
+function parseHTTPErrorBody(rawText: string): string {
+  try { return readProviderError(JSON.parse(rawText)) ?? rawText; }
+  catch { return rawText; }
 }
 
 export class BaseAIClient {
@@ -228,8 +237,7 @@ export class BaseAIClient {
         capture?.setResponse(response.status, rawText);
         await capture?.finish();
         capture = null;
-        const errorData = parseHTTPErrorBody(rawText);
-        const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+        const errorMessage = parseHTTPErrorBody(rawText) || response.statusText;
         const fallbackRequestBody = this.buildMaxTokensFallbackRequestBody(requestBody, errorMessage);
 
         if (fallbackRequestBody) {
@@ -272,8 +280,7 @@ export class BaseAIClient {
     );
 
     if (!response.ok) {
-      const errorData = parseHTTPErrorBody(rawText);
-      const errorMessage = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+      const errorMessage = parseHTTPErrorBody(rawText) || response.statusText;
       const fallbackRequestBody = this.buildMaxTokensFallbackRequestBody(requestBody, errorMessage);
 
       if (fallbackRequestBody) {
@@ -321,7 +328,10 @@ export class BaseAIClient {
 
     this.rememberMaxTokensFieldName(getRequestBodyMaxTokensFieldName(requestBody) || 'max_tokens');
 
-    return JSON.parse(rawText) as OpenAIChatCompletionResponse;
+    const data = JSON.parse(rawText);
+    const providerError = readProviderError(data);
+    if (providerError !== null) throw new Error(`模型接口错误：${providerError}`);
+    return data as OpenAIChatCompletionResponse;
   }
 
   private rememberMaxTokensFieldName(fieldName: string): void {
@@ -457,7 +467,11 @@ export class BaseAIClient {
       completionTokens: 0,
       totalTokens: 0,
       success: false,
-      error: errorMessage,
+      // Provider 可能回显当前密钥；错误离开传输边界前脱敏，与是否开启诊断无关。
+      error: this.config.apiKey
+        ? [this.config.apiKey, JSON.stringify(this.config.apiKey).slice(1, -1), encodeURIComponent(this.config.apiKey)]
+          .reduce((message, secret) => message.split(secret).join('[REDACTED]'), errorMessage)
+        : errorMessage,
       toolCalls: null,
       isToolCall: false,
     };
@@ -643,7 +657,7 @@ export class BaseAIClient {
       }
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return this.createErrorResponse(errorMessage);
+      return this.createErrorResponse(errorMessage, error instanceof AIHttpError ? error.status : null);
     }
   }
 
@@ -687,7 +701,7 @@ export class BaseAIClient {
       }
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return this.createErrorResponse(errorMessage);
+      return this.createErrorResponse(errorMessage, error instanceof AIHttpError ? error.status : null);
     }
   }
 
@@ -786,7 +800,7 @@ export class BaseAIClient {
         model: this.config.model,
       });
 
-      return this.createErrorResponse(errorMessage);
+      return this.createErrorResponse(errorMessage, error instanceof AIHttpError ? error.status : null);
     }
   }
 
@@ -1166,15 +1180,10 @@ async function sendStreamingRequestWithXMLHttpRequest(params: {
 function extractXHRStreamingError(xhr: XMLHttpRequest): string {
   const rawText = String(xhr.responseText || '').trim();
   if (!rawText) {
-    return `HTTP ${xhr.status}: ${xhr.statusText || 'Request failed'}`;
+    return xhr.statusText || 'Request failed';
   }
 
-  try {
-    const parsed = JSON.parse(rawText) as { error?: { message?: string } };
-    return parsed.error?.message || rawText;
-  } catch {
-    return rawText;
-  }
+  return parseHTTPErrorBody(rawText);
 }
 
 function createOpenAICompatibleSSEParser(
@@ -1205,6 +1214,7 @@ function createOpenAICompatibleSSEParser(
     }
 
     const payload = JSON.parse(normalizedPayload) as {
+      error?: unknown;
       id?: string;
       choices?: {
         delta?: {
@@ -1223,6 +1233,7 @@ function createOpenAICompatibleSSEParser(
       usage?: OpenAIChatUsage | null;
     };
 
+    if (payload.error != null) throw new Error(`模型流式接口错误：${readProviderError(payload)}`);
     messageId = payload.id || messageId;
     if (payload.usage) {
       promptTokens = payload.usage.prompt_tokens || promptTokens;
@@ -1383,6 +1394,7 @@ async function readOpenAICompatibleSSE(
     }
 
     const payload = JSON.parse(normalizedPayload) as {
+      error?: unknown;
       id?: string;
       choices?: {
         delta?: {
@@ -1401,6 +1413,7 @@ async function readOpenAICompatibleSSE(
       usage?: OpenAIChatUsage | null;
     };
 
+    if (payload.error != null) throw new Error(`模型流式接口错误：${readProviderError(payload)}`);
     messageId = payload.id || messageId;
     if (payload.usage) {
       promptTokens = payload.usage.prompt_tokens || promptTokens;

@@ -14,7 +14,7 @@ export interface ForegroundAppResultData {
 
 export const definition = {
   name: 'get_foreground_app',
-  description: '【主理 AI 专属】获取当前可靠识别到的前台 Android 应用及其受保护状态，不读取页面内容',
+  description: '获取当前可靠识别到的前台 Android 应用及其受保护状态，不读取页面内容',
   parameters: {
     type: 'object',
     properties: {},

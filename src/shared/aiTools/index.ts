@@ -29,6 +29,7 @@ export type {
   ToolPackageExposureChange,
 } from './AgentToolContracts';
 export { assertAgentToolInputSchema, matchesAgentToolInputSchema } from './AgentToolInputSchema';
+export { COMPLETION_INTENT_PARAMETER, COMPLETION_INTENT_RULE } from './ToolCompletionIntent';
 export { applyHostModelRunToolExposure } from './HostModelRunPreparation';
 export type {
   HostModelRunPreparationInput,

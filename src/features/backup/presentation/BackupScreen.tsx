@@ -158,7 +158,7 @@ export function BackupScreen({ onBack, runtime }: BackupScreenProps) {
           <View style={styles.securityTextBlock}>
             <Text style={styles.securityTitle}>完整本地备份</Text>
             <Text style={styles.securityDescription}>
-              备份包含消息、图片、文件和完整配置，无需密码。API 地址、Key 和其他凭据也以明文保存。
+              备份包含消息、图片、文件和数据库配置，无需密码。数据库中的模型 API Key 等凭据以明文保存；联网搜索 Key 和 MCP Token 不包含在备份中，恢复后可能需要重新填写。
             </Text>
           </View>
         </ThemedSurface>

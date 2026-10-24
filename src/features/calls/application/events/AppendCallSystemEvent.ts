@@ -1,3 +1,4 @@
+import { publishCallTranscriptFact } from './CallTranscriptFacts';
 import type { CallEvent } from '../../domain/CallEvent';
 import { getCallRuntimeDependencies } from '../runtime/CallRuntimeDependencies';
 
@@ -11,7 +12,7 @@ export async function appendCallErrorEvent(params: {
     throw new Error(`Call ${params.callId} not found`);
   }
 
-  return getCallRuntimeDependencies().repositories.calls.appendEvent({
+  const event = await getCallRuntimeDependencies().repositories.calls.appendEvent({
     callId: call.id,
     chatSessionId: call.chatSessionId,
     kind: 'error',
@@ -21,4 +22,6 @@ export async function appendCallErrorEvent(params: {
     includeInAIContext: true,
     payloadJson: params.payload ? JSON.stringify(params.payload) : null,
   });
+  publishCallTranscriptFact(event);
+  return event;
 }

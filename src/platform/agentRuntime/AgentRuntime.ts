@@ -151,6 +151,7 @@ export class AgentRuntime {
     state: AgentRunState,
     context: AgentRunLoopContext,
   ): Promise<AgentRunResult> {
+    let executionError: Error | undefined;
     try {
       await this.runLoop.execute(state, context);
       if (context.signal.aborted) {
@@ -158,11 +159,15 @@ export class AgentRuntime {
       }
     } catch (error) {
       const terminalCode = resolveAgentTerminalCode(error, context.signal);
+      if (!(error instanceof AgentRuntimeTerminalError) && !context.signal.aborted) {
+        executionError = error instanceof Error ? error : new Error(String(error));
+      }
       await closeOpenAgentStep(state, context.eventSink, this.clock.now());
       markRunTerminal(state, terminalCode, state.finalText, this.clock.now());
     }
 
     const result = toAgentRunResult(state);
+    if (executionError) result.error = executionError;
     if (context.eventSink) {
       await context.eventSink({ type: 'run_completed', runId: state.runId, result });
     }

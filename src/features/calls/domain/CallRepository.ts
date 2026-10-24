@@ -18,6 +18,8 @@ import type {
   CallParticipantRole,
 } from './CallParticipant';
 import type { CallSummarySource } from './CallSummary';
+import type { DatabaseTransactionExecutor } from '@platform/persistence';
+import type { CallHistoryEntry, CallHistoryRecord, CallHistoryImage } from './CallHistory';
 
 export interface CreateCallSessionInput {
   id?: string;
@@ -114,6 +116,18 @@ export interface CallSnapshotWriteResult {
 }
 
 export interface ICallRepository {
+  listHistory(assistantId: string): Promise<CallHistoryRecord[]>;
+  getHistory(callId: string, assistantId: string): Promise<CallHistoryRecord | null>;
+  listHistoryEntries(callId: string): Promise<CallHistoryEntry[]>;
+  renameHistory(callId: string, assistantId: string, title: string): Promise<'saved' | 'duplicate' | 'missing'>;
+  deleteHistory(callId: string, assistantId: string): Promise<string[]>;
+  appendHistoryEntry(input: Omit<CallHistoryEntry, 'mediaAssetId' | 'durationMs'>): Promise<void>;
+  attachHistoryAudio(transaction: DatabaseTransactionExecutor, entryId: string, assetId: string, durationMs: number): Promise<void>;
+  getHistorySnapshotSaving(assistantId: string): Promise<boolean>;
+  setHistorySnapshotSaving(assistantId: string, enabled: boolean): Promise<void>;
+  listHistoryImages(callId: string): Promise<CallHistoryImage[]>;
+  appendHistoryImage(transaction: DatabaseTransactionExecutor, image: CallHistoryImage): Promise<void>;
+  deleteHistoryImage(imageId: string, callId: string, assistantId: string): Promise<string>;
   createSession(input: CreateCallSessionInput): Promise<CallSession>;
   /** 创建非终态通话并原子取得全局占用；已有通话时返回 null，不产生第二个会话。 */
   createSessionIfIdle(input: CreateCallSessionInput): Promise<CallSession | null>;

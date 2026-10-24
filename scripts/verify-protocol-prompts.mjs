@@ -111,13 +111,92 @@ assert.ok((await repository.getPromptText('a')).includes('使用固定称呼'));
 assert.equal((await tools.Add.execute({ content: '使用固定称呼', summary: '表达' }, context)).data.id, added.data.id);
 await tools.Update.execute({ protocolId: added.data.id, content: '使用新的固定称呼' }, context);
 assert.ok((await repository.getPromptText('a')).includes('使用新的固定称呼'));
-await repository.update('low', { content: '用户修改称呼' });
+await repository.update('a', 'low', { content: '用户修改称呼' });
 assert.ok((await repository.getPromptText('a')).startsWith('- 用户修改称呼\n'));
 assert.equal((await tools.Get.execute({}, context)).data.length, 4);
 assert.equal((await tools.Search.execute({ keyword: '新的' }, context)).data[0].id, added.data.id);
 await tools.Delete.execute({ protocolId: added.data.id }, context);
 assert.ok(!(await repository.getPromptText('a')).includes('使用新的固定称呼'));
 assert.equal(await repository.getPromptText('b'), '- 另一位 AI 的设定');
+
+// 通过生产适配器检查模型实际收到的 observation，不能只断言未回灌的 data。
+const { LegacyAgentToolAdapter } = load('src/host/composition/agent/LegacyAgentToolAdapter.ts');
+const modelTools = Object.fromEntries(Object.entries(tools).map(([name, tool]) => [name,
+  new LegacyAgentToolAdapter(tool[`${name}Protocol${['Get', 'Search'].includes(name) ? 's' : ''}Tool`],
+    { owner: 'protocol', risk: 'safe_read', idempotency: 'idempotent' }, () => context)]));
+const executeForModel = (name, args) => modelTools[name].execute(args, {});
+const originalContent = '这是用于精确区分相似条目的完整协议正文，长度超过原列表的三十字截断限制。称呼保持原样。';
+const created = await executeForModel('Add', { content: originalContent, summary: '精确管理' });
+assert.equal(created.status, 'success');
+const targetId = created.data.id;
+assert.ok(created.modelContent.includes(targetId));
+assert.ok(created.modelContent.includes(originalContent));
+const duplicate = await executeForModel('Add', { content: originalContent, summary: '精确管理' });
+assert.equal(duplicate.data.id, targetId);
+assert.ok(duplicate.modelContent.includes(targetId));
+const similar = await repository.insert({ aiAssistantId: 'a', content: `${originalContent}保留这条。`, summary: '相似条目' });
+for (const result of [await executeForModel('Get', {}), await executeForModel('Search', { keyword: '精确管理' })]) {
+  assert.equal(result.status, 'success');
+  assert.ok(result.modelContent.includes(targetId), '模型必须能拿到真实 ID');
+  assert.ok(result.modelContent.includes(originalContent), '模型必须能看到完整正文以区分条目');
+  assert.ok(result.modelContent.includes('精确管理'));
+  assert.ok(!result.modelContent.includes('另一位 AI 的设定'));
+}
+const updated = await executeForModel('Update', { protocolId: targetId, content: '  修改后的实际正文  ' });
+assert.equal(updated.status, 'success');
+assert.equal(updated.data.content, '修改后的实际正文');
+assert.equal(updated.data.summary, '精确管理');
+assert.deepEqual(updated.data, await repository.getById(targetId), '返回 commit 对应的完整条目');
+assert.ok(updated.modelContent.includes(targetId));
+assert.ok(updated.modelContent.includes('修改后的实际正文'));
+assert.ok((await executeForModel('Search', { keyword: '修改后的实际正文' })).modelContent.includes(targetId));
+const summaryUpdated = await executeForModel('Update', { protocolId: targetId, summary: '新摘要' });
+assert.equal(summaryUpdated.status, 'success');
+assert.equal(summaryUpdated.data.content, updated.data.content);
+assert.equal(summaryUpdated.data.summary, '新摘要');
+assert.equal((await executeForModel('Update', { protocolId: targetId, content: updated.data.content })).status, 'success',
+  '重复写入相同正文仍是命中已有条目的成功操作');
+
+const beforeInvalidWrites = await repository.getByAI('a');
+assert.equal(await repository.update('a', '__probe_invalid_id__', { content: '无效更新' }), null);
+assert.equal(await repository.delete('a', '__probe_invalid_id__'), false);
+for (const protocolId of ['__probe_invalid_id__', 'other']) {
+  for (const [name, args] of [['Update', { protocolId, content: '不得写入' }], ['Delete', { protocolId }]]) {
+    const result = await executeForModel(name, args);
+    assert.equal(result.status, 'error', '不存在或属于其他 AI 的条目不得报告成功');
+    assert.ok(result.modelContent.includes('不存在或不属于当前 AI'));
+  }
+}
+assert.deepEqual(await repository.getByAI('a'), beforeInvalidWrites);
+assert.equal(await repository.getPromptText('b'), '- 另一位 AI 的设定');
+for (const name of ['Update', 'Delete']) {
+  const result = await tools[name].execute({ protocolId: targetId, content: '不得写入' },
+    { ...context, getAIId: () => null });
+  assert.equal(result.success, false);
+}
+
+// 真实 SQLite 写入失败仍须进入模型可见的失败结果，并保留原内容。
+db.exec(`CREATE TRIGGER reject_protocol_update BEFORE UPDATE ON protocols BEGIN SELECT RAISE(ABORT, '拒绝更新'); END;
+  CREATE TRIGGER reject_protocol_delete BEFORE DELETE ON protocols BEGIN SELECT RAISE(ABORT, '拒绝删除'); END;`);
+assert.equal((await executeForModel('Update', { protocolId: targetId, content: '不能提交' })).status, 'error');
+assert.equal((await executeForModel('Delete', { protocolId: targetId })).status, 'error');
+assert.deepEqual(await repository.getByAI('a'), beforeInvalidWrites);
+db.exec('DROP TRIGGER reject_protocol_update; DROP TRIGGER reject_protocol_delete;');
+const deleted = await executeForModel('Delete', { protocolId: targetId });
+assert.equal(deleted.status, 'success');
+assert.ok(deleted.modelContent.includes(targetId));
+assert.equal(await repository.getById(targetId), null);
+assert.ok(!(await executeForModel('Get', {})).modelContent.includes(targetId));
+assert.ok(!(await repository.getPromptText('a')).includes(updated.data.content));
+assert.ok(await repository.getById(similar.id), '按 ID 删除必须保留相似条目');
+assert.equal((await executeForModel('Delete', { protocolId: targetId })).status, 'error', '重复删除不得假报成功');
+await repository.delete('a', similar.id);
+
+const commands = load('src/features/protocol/composition.ts', { './infrastructure/SQLiteProtocolRepository': { protocolRepository: repository } });
+await assert.rejects(commands.saveProtocol({ aiAssistantId: 'a', protocolId: targetId, content: '已删除条目' }), /协议不存在/);
+await assert.rejects(commands.deleteProtocol('a', targetId), /协议不存在/);
+await assert.rejects(commands.saveProtocol({ aiAssistantId: 'a', protocolId: 'other', content: '跨 AI 修改' }), /不属于当前 AI/);
+await assert.rejects(commands.deleteProtocol('a', 'other'), /不属于当前 AI/);
 
 const { PromptPackBlockFactory } = load('src/host/prompt/PromptPackBlockFactory.ts', {
   '@shared': {}, '@features/memory': {}, '@features/assistants': {}, '@features/moments': {},
@@ -192,4 +271,4 @@ db.exec("DELETE FROM ai_assistants WHERE id = 'a'");
 assert.equal(await repository.getPromptText('a'), '');
 assert.equal(await repository.getPromptText('b'), '- 另一位 AI 的设定');
 db.close();
-console.log('协议空间验证通过：旧内容完整迁移、事务回滚、双方编辑、按 AI 隔离及七类场景常驻注入。');
+console.log('协议空间验证通过：旧内容完整迁移、事务回滚、模型可见 ID 与完整内容、精确更新删除、无效 ID 失败、按 AI 隔离及七类场景常驻注入。');

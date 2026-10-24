@@ -96,4 +96,13 @@ await act(async () => rendered.unmount());
 assert.equal(testSignal.aborted, true, '离页取消测试请求');
 await act(async () => { releaseTest(); });
 assert.equal(configuration.sources.find(source => source.engine === 'brave').configured, false);
+// 恢复的默认来源可能仍启用，但本机凭据已缺失；用户必须能关闭它。
+configuration.defaultEngine = 'tavily';
+Object.assign(configuration.sources.find(source => source.engine === 'tavily'), { enabled: true, configured: false, apiKey: '' });
+await act(async () => { rendered = create(React.createElement(Screen, { onBack() {} })); });
+assert.equal(field('Tavily API Key').props.value, '');
+assert.equal(toggle('允许 AI 使用 Tavily').props.disabled, false);
+await act(async () => toggle('允许 AI 使用 Tavily').props.onValueChange(false));
+assert.equal(toggle('允许 AI 使用 Tavily').props.disabled, true);
+await act(async () => rendered.unmount());
 console.log('联网搜索页面：顶部说明、来源与默认选择、普通输入、异步反馈、深度开关和离页取消通过。');

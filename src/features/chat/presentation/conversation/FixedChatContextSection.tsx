@@ -47,9 +47,9 @@ export default function FixedChatContextSection({ conversationId, onChoose, onFi
     finally { setBusy(false); }
   };
   return <View style={styles.settingsSection}>
-    <Text style={styles.sectionLabel}>固定消息上下文起点（实验性）</Text>
+    <Text style={styles.sectionLabel}>固定消息上下文起点</Text>
     <Text style={styles.paramDescription}>仅影响这个 AI。设置后，从选中的消息到最新消息全部进入上下文，近期条数暂时失效，原参数保留。</Text>
-    <Text style={styles.paramDescription}>实验性功能：对话增长可能增加 Token 消耗并超出模型的上下文额度，请按需使用。</Text>
+    <Text style={styles.paramDescription}>对话增长可能增加 Token 消耗并超出模型的上下文额度，请按需使用。</Text>
     {error && <Text accessibilityRole="alert" style={styles.contextLimitError}>{error}</Text>}
     {fixedStart && <>
       <Text numberOfLines={4} style={styles.fixedPreview}>{fixedStart.content}</Text>

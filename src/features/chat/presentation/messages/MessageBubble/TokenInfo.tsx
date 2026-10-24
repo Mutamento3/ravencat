@@ -1,8 +1,8 @@
-/** 按交互主题配置渲染消息的 Token 使用量提示。 */
+/** 渲染列表按当前 AI 展示选择传入的 Token 使用量。 */
 
 import React, { memo } from 'react';
 import { Text } from 'react-native';
-import { getChatInteractionProfile, useTheme, useThemedStyles } from '@shared/theme';
+import { useThemedStyles } from '@shared/theme';
 import { createMessageBubbleStyles } from './styles';
 
 interface TokenInfoProps {
@@ -16,11 +16,9 @@ interface TokenInfoProps {
 export const TokenInfo = memo(function TokenInfo({
   tokensUsed, promptTokens, completionTokens, cachedTokens, isMe,
 }: TokenInfoProps) {
-  const theme = useTheme();
   const styles = useThemedStyles(createMessageBubbleStyles);
-  const interactionProfile = getChatInteractionProfile(theme);
 
-  if (!interactionProfile.showTokenUsage || !tokensUsed || tokensUsed <= 0) return null;
+  if (!tokensUsed || tokensUsed <= 0) return null;
 
   return (
     <Text style={[styles.tokenInfo, isMe ? styles.myTokenInfo : styles.aiTokenInfo]}>

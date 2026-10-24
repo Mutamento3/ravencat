@@ -25,6 +25,8 @@ export interface ChatTurnDisplaySnapshot {
   apiMessageId?: string | null;
   assistantAsActivity?: boolean;
   pendingDelivery?: boolean;
+  /** 生成中的正文随持久批次交付，不叠加非流式的分段间隔。 */
+  streamingDelivery?: boolean;
   tokensUsed?: number;
   promptTokens?: number;
   completionTokens?: number;

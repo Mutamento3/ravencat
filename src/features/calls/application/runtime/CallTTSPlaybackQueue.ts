@@ -1,6 +1,7 @@
 /** 串行合成并播放通话语音，同时记录播放状态事件。 */
 
-import { temporarySpeechAudioStore } from '@platform/device';
+import { temporarySpeechAudioStore, createRandomUUID } from '@platform/device';
+import { saveCallHistoryAudio } from '../CallHistory';
 import { synthesizeTextToSpeech } from '@features/speech';
 import type { CallSentenceSpeech } from './CallSpeechSentenceStream';
 import { appendCallErrorEvent } from '../events/AppendCallSystemEvent';
@@ -108,7 +109,6 @@ export class CallTTSPlaybackQueue {
     } else {
       await getCallRuntimeDependencies().native.audioPlayback.stop();
     }
-    await this.deleteAudio(active.audioUri);
     this.activePlayback = null;
     emitSentencePlayback({ type: 'interrupted', callId, text: active.text });
     await appendTtsEvent({
@@ -138,7 +138,6 @@ export class CallTTSPlaybackQueue {
     } else {
       await getCallRuntimeDependencies().native.audioPlayback.stop();
     }
-    await this.deleteAudio(active.audioUri);
     this.activePlayback = null;
     // 挂断清理：字幕区依赖该事件清除当前句。
     emitSentencePlayback({ type: 'interrupted', callId, text: active.text });
@@ -150,7 +149,7 @@ export class CallTTSPlaybackQueue {
     }
 
     const call = await getCallRuntimeDependencies().repositories.calls.getSessionById(params.callId);
-    if (!call || call.state !== 'active') {
+    if (!call || call.state !== 'active' || version !== this.getVersion(params.callId)) {
       return;
     }
 
@@ -167,8 +166,13 @@ export class CallTTSPlaybackQueue {
     };
     this.activePlayback = active;
     let playbackStarted = false;
+    const entryId = createRandomUUID();
 
     try {
+      await getCallRuntimeDependencies().repositories.calls.appendHistoryEntry({
+        id: entryId, callId: params.callId, speaker: 'ai', inputKind: 'speech', text: params.text,
+        createdAt: new Date().toISOString(),
+      });
       const synthesis = await synthesizeTextToSpeech({
         text: params.speech?.synthesisText ?? params.text,
         assistantId: params.assistantId,
@@ -176,16 +180,16 @@ export class CallTTSPlaybackQueue {
         modelSnapshot: params.speech?.modelSnapshot,
         signal: abortController.signal,
       });
+      active.audioUri = synthesis.audioUri;
 
       if (active.interrupted || version !== this.getVersion(params.callId)) {
-        await this.deleteAudio(synthesis.audioUri);
         return;
       }
 
       if (!synthesis.success || !synthesis.audioUri) {
         await appendCallErrorEvent({
           callId: params.callId,
-          text: synthesis.errorInfo?.message || synthesis.rawError || 'TTS 合成失败',
+          text: `语音合成失败（TTS${synthesis.modelConfigName ? ` · ${synthesis.modelConfigName}` : ''}）：${synthesis.errorInfo?.message || synthesis.rawError || '合成结果缺少音频'}`,
           payload: {
             type: 'ttsFailure',
             modelConfigId: synthesis.modelConfigId,
@@ -195,8 +199,9 @@ export class CallTTSPlaybackQueue {
         return;
       }
 
+      await saveCallHistoryAudio({ callId: params.callId, entryId, uri: synthesis.audioUri, mimeType: synthesis.mimeType });
+      if (active.interrupted || version !== this.getVersion(params.callId)) return;
       active.phase = 'playing';
-      active.audioUri = synthesis.audioUri;
       await appendTtsEvent({
         callId: params.callId,
         kind: 'ttsStarted',
@@ -210,15 +215,16 @@ export class CallTTSPlaybackQueue {
         },
       });
 
+      if (active.interrupted || version !== this.getVersion(params.callId)) return;
       playbackStarted = true;
       emitSentencePlayback({ type: 'started', callId: params.callId, text: params.text });
       params.onPlaybackStarted?.();
       const playbackSession = await getCallRuntimeDependencies().native.audioPlayback.play(synthesis.audioUri);
       active.playbackSession = playbackSession;
+      if (active.interrupted || version !== this.getVersion(params.callId)) await playbackSession.stop();
       await playbackSession.finished;
 
       if (active.interrupted || version !== this.getVersion(params.callId)) {
-        await this.deleteAudio(synthesis.audioUri);
         return;
       }
 
@@ -232,10 +238,8 @@ export class CallTTSPlaybackQueue {
         },
       });
       emitSentencePlayback({ type: 'ended', callId: params.callId, text: params.text });
-      await this.deleteAudio(synthesis.audioUri);
     } catch (error) {
       if (active.interrupted || abortController.signal.aborted) {
-        await this.deleteAudio(active.audioUri);
         return;
       }
 
@@ -245,13 +249,14 @@ export class CallTTSPlaybackQueue {
       }
       await appendCallErrorEvent({
         callId: params.callId,
-        text: error instanceof Error ? error.message : 'TTS 播放失败',
+        text: `${active.phase === 'synthesizing' ? '语音合成' : '音频播放'}失败（TTS）：${error instanceof Error ? error.message : String(error)}`,
         payload: {
           type: 'ttsFailure',
           phase: active.phase,
         },
       });
     } finally {
+      await this.deleteAudio(active.audioUri);
       if (playbackStarted) {
         params.onPlaybackEnded?.();
       }

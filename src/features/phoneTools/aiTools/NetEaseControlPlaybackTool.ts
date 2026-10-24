@@ -18,7 +18,7 @@ export interface NetEaseControlPlaybackArgs {
 
 export const netEaseControlPlaybackDefinition = {
   name: 'netease_control_playback',
-  description: '【主理 AI 专属】控制网易云当前播放会话：pause 暂停，resume 恢复，next 请求下一首，previous 请求上一首。成功仅表示请求已派发，不代表已确认新的播放状态。',
+  description: '控制网易云当前播放会话的播放命令。成功仅表示请求已派发，不代表已确认新的播放状态。',
   parameters: {
     type: 'object',
     properties: {

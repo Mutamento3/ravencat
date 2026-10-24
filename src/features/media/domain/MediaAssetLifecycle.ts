@@ -10,6 +10,8 @@ export type MediaAssetReferenceKind =
   | 'moments_cover'
   | 'wallpaper'
   | 'call_background'
+  | 'call_audio'
+  | 'call_snapshot'
   | 'user_avatar'
   | 'assistant_avatar'
   | 'group_avatar'

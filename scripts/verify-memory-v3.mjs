@@ -753,11 +753,22 @@ try {
   insertOngoing.run(200, '已开始', 'system', now, now, wakeMetadata('started'), 'ongoing-run', 1);
   insertOngoing.run(201, '完整收到的第一步', 'system', now, now, wakeMetadata('assistant'), 'ongoing-run', 2);
   insertOngoing.run(202, '后来回复的普通聊天', 'assistant', later, later, null, null, null);
+  database.prepare(`INSERT INTO messages (id,session_id,text,is_me,sender_type,created_at,time,status,metadata_json,turn_run_id)
+    VALUES (205,'events','其他会话的终态',0,'system',?,?,'sent',?,'ongoing-run')`)
+    .run(later, later, wakeMetadata('terminal'));
+  const ongoingRaw = (await summary.readContext('ongoing-wake', [])).raw;
+  assert.deepEqual(ongoingRaw.map(item => [item.messageId, item.pending === true]), [[200, true], [201, true], [202, false]],
+    '只保护本会话仍在执行的自主 run，其他会话的终态与普通消息不改变该事实');
+  const ongoingGuest = await summary.readBackgroundContexts('ongoing-ai', 'outside', { privateLimit: 10, groupLimit: 0 });
+  assert.deepEqual(ongoingGuest.find(item => item.conversationId === 'ongoing-wake').timeline.map(item => item.messageId), [202],
+    '召唤读取单聊背景时排除未终结 run，保留普通历史');
   assert.equal(await summary.claim('ongoing-wake', 1, 'waiting-for-next-output', now, "2099-01-01T00:00:00.000Z", 'Asia/Shanghai'), null,
     '没有 streaming 行时也不能把摘要游标推进到后来的聊天');
   insertOngoing.run(203, '下一步已经收到了', 'system', later, later, wakeMetadata('assistant'), 'ongoing-run', 3);
   insertOngoing.run(204, '执行结束', 'system', later, later,
     JSON.stringify({ ...JSON.parse(wakeMetadata('terminal')), terminalCode: 'COMPLETED' }), 'ongoing-run', 4);
+  assert.ok((await summary.readContext('ongoing-wake', [])).raw.every(item => item.pending !== true),
+    '本会话终态到达后解除整个自主 run 的保护');
   const finishedWakeClaim = await summary.claim('ongoing-wake', 1, 'finished-wake', now, "2099-01-01T00:00:00.000Z", 'Asia/Shanghai');
   assert.ok(finishedWakeClaim.messages.some((item) => item.content.includes('下一步已经收到了')),
     '整个 run 到达终态后，追加输出进入同一次摘要交接');
@@ -1498,7 +1509,7 @@ try {
     assert.ok(await protocols.getById(failingSource.id));
     database.exec('DROP TRIGGER reject_memory_transfer');
     await assert.rejects(transferProtocolToMemory('b', failingSource, values(failingSource)), /不属于当前 AI/);
-    await protocols.update(failingSource.id, { content: 'AI 更新后的协议' });
+    await protocols.update('a', failingSource.id, { content: 'AI 更新后的协议' });
     database.prepare('UPDATE protocols SET updated_at = ? WHERE id = ?').run(failingSource.updatedAt, failingSource.id);
     await assert.rejects(transferProtocolToMemory('a', failingSource, values(failingSource)), /协议已被修改/);
     const freshSource = await protocols.getById(failingSource.id);
@@ -1586,6 +1597,127 @@ try {
       assert.equal(returnedRows, 0);
       assert.equal(callReads, 0);
     } finally { raw.getAllAsync = getAll; }
+  }
+
+  // 启动只消费持久待处理身份；事实回滚、并发新内容和进程重建不能丢失或复活工作。
+  {
+    const mainDatabase = database;
+    const previousRuntime = summaryRuntime.getChatSummaryRuntime();
+    const queuePath = path.join(directory, 'summary-queue.db');
+    database = new DatabaseSync(queuePath); database.exec('PRAGMA foreign_keys = ON');
+    try {
+      await bootstrap();
+      const queued = new SQLiteChatSummaryRepository((tx, conversationId, boundary) => calls.readSummarySources(tx, {
+        chatSessionId: conversationId, excludedCallIds: boundary.processedCallIds, after: boundary.historyStartsAfter,
+      }));
+      const pending = async () => (await queued.prepareConversations(new Date().toISOString())).conversationIds;
+      assert.deepEqual(await pending(), [], '空队列启动没有待检查会话');
+      const addConversation = id => {
+        database.prepare('INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated_at) VALUES (?,?,?,?,?,?)')
+          .run(id+'-ai',id+'-agent',id,'chat',now,now);
+        database.prepare("INSERT INTO chat_conversations(id,kind) VALUES (?,'direct')").run(id);
+        database.prepare('INSERT INTO sessions(id,ai_assistant_id,name,created_at,updated_at) VALUES (?,?,?,?,?)')
+          .run(id,id+'-ai',id,now,now);
+      };
+      const addQueuedMessage = (id, content) => database.prepare(`INSERT INTO messages
+        (session_id,text,is_me,sender_type,created_at,status) VALUES (?,?,0,'assistant',?,'sent')`).run(id, content, now);
+      addConversation('pending-empty'); addConversation('pending-chat');
+      assert.deepEqual(await pending(), [], '既有空会话不因启动进入领取流程');
+      addQueuedMessage('pending-chat','后台提交的原文');
+      assert.deepEqual(await pending(), ['pending-chat']);
+      const revision = await queued.readQueuedRevision('pending-chat');
+      database.exec('BEGIN'); addQueuedMessage('pending-chat','需要回滚的原文'); database.exec('ROLLBACK');
+      assert.equal(await queued.readQueuedRevision('pending-chat'), revision, '入队与消息事实一同回滚');
+      database.close(); database = new DatabaseSync(queuePath); database.exec('PRAGMA foreign_keys = ON');
+      await bootstrap();
+      assert.deepEqual(await pending(), ['pending-chat'], '没有前台内存唤醒也能在重启后恢复');
+      let generated = 0;
+      const configureQueued = getBatchSize => summaryRuntime.configureChatSummaryRuntime({ repository: queued, getBatchSize,
+        generateAddition: async () => { generated++; return '队列摘要'; }, generateSecondary: async () => '二级摘要' });
+      configureQueued(async () => 5);
+      assert.equal(await summaryApplication.processChatSummary('pending-chat', signal), false);
+      assert.deepEqual(await pending(), [], '不足门槛的会话只检查一次');
+      await bootstrap();
+      assert.deepEqual(await pending(), [], '普通启动不重新发现已检查且无变化的原文');
+      assert.equal(generated,0);
+
+      addQueuedMessage('pending-chat','检查前的新消息');
+      configureQueued(async () => { addQueuedMessage('pending-chat','检查期间到来的消息'); return 5; });
+      assert.equal(await summaryApplication.processChatSummary('pending-chat', signal), false);
+      assert.deepEqual(await pending(), ['pending-chat'], '旧检查水位不能确认并发到来的新内容');
+      const newerRevision = await queued.readQueuedRevision('pending-chat');
+      await queued.acknowledgeQueuedRevision('pending-chat', newerRevision);
+      await queued.acknowledgeQueuedRevision('pending-chat', revision);
+      assert.equal(await queued.readQueuedRevision('pending-chat'),null,'迟到的旧确认不能回退水位');
+
+      addQueuedMessage('pending-chat','等待取消恢复');
+      const cancelled = new AbortController();
+      configureQueued(async () => { cancelled.abort(); return 5; });
+      await assert.rejects(summaryApplication.processChatSummary('pending-chat',cancelled.signal),{name:'AbortError'});
+      assert.deepEqual(await pending(), ['pending-chat'], '取消保留持久待处理记录');
+      configureQueued(async () => { throw new Error('队列读取故障'); });
+      await assert.rejects(summaryApplication.processChatSummary('pending-chat',signal),/队列读取故障/);
+      assert.deepEqual(await pending(), ['pending-chat'], '本地故障不能确认工作');
+      configureQueued(async () => 5);
+      await summaryApplication.processChatSummary('pending-chat',signal);
+      assert.deepEqual(await pending(), []);
+
+      addConversation('pending-backlog');
+      for(let index=0;index<5;index++) addQueuedMessage('pending-backlog','积压 '+index);
+      configureQueued(async () => 2);
+      const beforeGenerated = generated;
+      let passes = 0;
+      while(await summaryApplication.processChatSummary('pending-backlog',signal)) assert.ok(++passes<=3,'积压不能无限自唤醒');
+      assert.equal(generated-beforeGenerated,2,'沿用原流程逐批消费，剩余不足门槛时停止');
+      assert.deepEqual(await pending(), []);
+      await queued.updateSettings('pending-backlog',{primaryLimit:1});
+      assert.deepEqual(await pending(), ['pending-backlog'],'设置变化重新入队，允许整理已有原文');
+      configureQueued(async () => 1);
+      while(await summaryApplication.processChatSummary('pending-backlog',signal)) assert.ok(++passes<=5);
+      assert.deepEqual(await pending(), []);
+
+      addConversation('pending-call');
+      await calls.createSession({ id:'queue-call',chatSessionId:'pending-call',aiAssistantId:'pending-call-ai',agentId:'pending-call-agent',
+        direction:'outgoing',requestedMode:'audio',source:'user',state:'active',startedAt:now,acceptedAt:now });
+      await calls.appendEvent({ id:'queue-speech',callId:'queue-call',chatSessionId:'pending-call',kind:'userSpeechText',
+        actorType:'user',text:'纯通话里约定了计划',includeInAIContext:true,createdAt:now });
+      assert.equal(database.prepare("SELECT COUNT(*) n FROM messages WHERE session_id='pending-call'").get().n,0);
+      assert.deepEqual(await pending(), ['pending-call'],'没有聊天气泡的通话原文也入队');
+      assert.equal(await summaryApplication.processChatSummary('pending-call',signal),false,'通话进行中仍不能领取');
+      assert.deepEqual(await pending(), []);
+      await calls.updateSession('queue-call',{state:'ended',endedAt:later,endReason:'user_hangup'});
+      assert.deepEqual(await pending(), ['pending-call'],'通话结束重新入队，不依赖新消息');
+      assert.equal(await summaryApplication.processChatSummary('pending-call',signal),true);
+      await summaryApplication.processChatSummary('pending-call',signal);
+      assert.deepEqual(await pending(), []);
+
+      // 已确认的会话没有新事实时只由到期任务唤醒，失败暂停与有效租约都不进入恢复候选。
+      addQueuedMessage('pending-chat','重试范围');
+      const failureClaim = await queued.claim('pending-chat',1,'queued-retry',now,'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+      const future = new Date(Date.now()+60_000).toISOString();
+      await queued.failTask(failureClaim,{kind:'timeout',message:'稍后重试',retryable:true},new Date().toISOString());
+      await queued.releaseClaim(failureClaim);
+      await queued.acknowledgeQueuedRevision('pending-chat',await queued.readQueuedRevision('pending-chat'));
+      database.prepare('UPDATE chat_summary_tasks SET next_attempt_at=? WHERE id=?').run(future,failureClaim.taskId);
+      assert.deepEqual(await pending(), [],'冷却期间不重复领取');
+      assert.ok(await queued.getNextWakeAt());
+      assert.deepEqual((await queued.prepareConversations(new Date(Date.now()+180_000).toISOString())).conversationIds,['pending-chat']);
+      database.prepare("UPDATE chat_summary_tasks SET status='failed',next_attempt_at=NULL WHERE id=?").run(failureClaim.taskId);
+      assert.deepEqual(await pending(), [],'失败暂停不被启动复活');
+      await queued.retryTask('pending-chat',failureClaim.taskId,new Date().toISOString());
+      assert.deepEqual(await pending(), ['pending-chat'],'显式手动重试可消费');
+      const resumed = await queued.claim('pending-chat',1,'queued-resumed',new Date().toISOString(),'2099-01-01T00:00:00.000Z','Asia/Shanghai');
+      assert.deepEqual(await pending(), [],'有效在途租约不重复恢复');
+      database.prepare("UPDATE chat_summary_state SET claim_expires_at=? WHERE conversation_id='pending-chat'").run(now);
+      assert.deepEqual(await pending(), ['pending-chat'],'过期的在途任务可以恢复');
+      await queued.releaseClaim(resumed);
+      database.prepare("DELETE FROM chat_conversations WHERE id='pending-chat'").run();
+      assert.equal(await queued.readQueuedRevision('pending-chat'),null,'会话删除级联清理队列身份');
+    } finally {
+      database.close(); database = mainDatabase;
+      fs.unlinkSync(queuePath);
+      summaryRuntime.configureChatSummaryRuntime(previousRuntime);
+    }
   }
 
   // 同一 JS runtime：恢复出厂后不能沿用“已初始化”缓存，默认记录必须在队列运行前重建。

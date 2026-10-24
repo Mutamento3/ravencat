@@ -66,7 +66,10 @@ assert.equal(inboxBlock.required, false);
 assert.equal(inboxBlock.truncatable, false);
 assert.ok(inboxBlock.content.trim());
 assert.ok(inboxBlock.content.includes('moment-for-ordinary'));
-assert.doesNotMatch(inboxBlock.content, /getMomentDetail|调用|需要主动处理/, '未授权时保留社交事实，不催促执行或介绍工具');
+assert.match(inboxBlock.content, /用户未为你开启工具调用权限/, '工具开关未开启时明确说明权限状态');
+assert.doesNotMatch(inboxBlock.content, /getMomentDetail|需要主动处理/, '未授权时保留社交事实，不催促执行或介绍工具');
+const enabledInboxBlock = await realFactory.createMomentSocialInboxBlock({ ...inboxParams[0], enableTools: true }, inboxParams[1]);
+assert.doesNotMatch(enabledInboxBlock.content, /用户未为你开启工具调用权限/, '已开启工具时不误报权限关闭');
 const detailTool = load('src/features/moments/aiTools/GetMomentDetailTool.ts', {
   '../domain/MomentErrors': {}, './MomentReading': {},
 });
@@ -164,9 +167,12 @@ for (const runtimeContext of [undefined, groupContext]) {
   const enabledPack = await assembler.assembleChatPromptPack({ ...params, runtimeContext, allowedToolNames });
   const disabledPack = await assembler.assembleChatPromptPack({ ...params, runtimeContext,
     toolsDescription: '', allowedToolNames: [], aiConfig: { ...params.aiConfig, enableTools: false } });
-  assert.equal(enabledPack.blocks.find((item) => item.key === 'moments_social_inbox').content,
-    disabledPack.blocks.find((item) => item.key === 'moments_social_inbox').content, '社交事实不依赖工具权限');
-  assert.doesNotMatch(disabledPack.dynamicSystemPrompt, /getMomentDetail|调用|需要主动处理/);
+  assert.ok(enabledPack.dynamicSystemPrompt.includes('moment-for-ordinary'), '开启工具时仍保留社交事实');
+  assert.ok(disabledPack.dynamicSystemPrompt.includes('moment-for-ordinary'), '关闭工具时仍保留社交事实');
+  assert.match(disabledPack.dynamicSystemPrompt, /用户未为你开启工具调用权限/);
+  assert.match(disabledPack.dynamicSystemPrompt, /暂无法处理这些事务/);
+  assert.doesNotMatch(enabledPack.dynamicSystemPrompt, /用户未为你开启工具调用权限/);
+  assert.doesNotMatch(disabledPack.dynamicSystemPrompt, /getMomentDetail|需要主动处理/);
   assert.equal(disabledPack.toolInstructionsSlot, undefined, '关闭后没有工具目录插槽');
   const enabledContextBlocks = enabledPack.blocks.filter((item) => !['tools_description', 'tool_context_explanation'].includes(item.key));
   assert.deepEqual(disabledPack.blocks.map((item) => [item.definitionId, item.placement, item.systemSegment]),

@@ -57,13 +57,10 @@ export async function execute(
       return { success: true, message: '协议空间为空', data: [] };
     }
 
-    const summary = protocols.map((p, i) =>
-      `${i + 1}. ${p.content.substring(0, 30)}${p.content.length > 30 ? '...' : ''}${p.summary ? ` (${p.summary})` : ''}`
-    ).join('\n');
-
     return {
       success: true,
-      message: `共 ${protocols.length} 条协议:\n${summary}`,
+      // Agent 适配层仅将 message 回灌模型，管理所需的 ID 与完整内容必须在这里返回。
+      message: `共 ${protocols.length} 条协议（id 用作 protocolId）:\n${JSON.stringify(protocols)}`,
       data: protocols
     };
   } catch (error) {

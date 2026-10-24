@@ -17,6 +17,7 @@ import {
   ChatSettingsIcon,
   SummaryIcon,
   StatisticsIcon,
+  CallHistoryIcon,
 } from './AIOptionsParts';
 
 interface AIOptionsProps {
@@ -28,6 +29,7 @@ interface AIOptionsProps {
   onModelSettings?: () => void;
   onChatSettings?: () => void;
   onChatSummary?: () => void;
+  onCallHistory?: () => void;
   onChatStatistics?: () => void;
   onDeleteAI?: () => void | Promise<void>;
 }
@@ -98,6 +100,7 @@ export default function AIOptions({
   onModelSettings,
   onChatSettings,
   onChatSummary,
+  onCallHistory,
   onChatStatistics,
   onDeleteAI,
 }: AIOptionsProps) {
@@ -109,7 +112,7 @@ export default function AIOptions({
 
     showAppDialog({
       title: '删除 AI 助手',
-      message: `删除「${getAssistantDisplayName(aiAssistant)}」会永久清空它的会话、消息、聊天摘要和专属记忆空间。若要保留数据，请先到设置中备份应用。确定继续吗？`,
+      message: `删除「${getAssistantDisplayName(aiAssistant)}」会永久清空它的会话、消息、通话记录、聊天摘要和专属记忆空间。若要保留数据，请先到设置中备份应用。确定继续吗？`,
       buttons: [
         { text: '取消', style: 'cancel' },
         {
@@ -167,6 +170,10 @@ export default function AIOptions({
       key: 'chat-summary', icon: <SummaryIcon color={theme.colors.brand.primary} />,
       title: '聊天摘要', onPress: onChatSummary,
     }] : []),
+    {
+      key: 'call-history', icon: <CallHistoryIcon color={theme.colors.brand.primary} />,
+      title: '通话记录', onPress: onCallHistory,
+    },
     ...(conversationId ? [{
       key: 'chat-statistics', icon: <StatisticsIcon color={theme.colors.brand.primary} />,
       title: '相遇痕迹', onPress: onChatStatistics,

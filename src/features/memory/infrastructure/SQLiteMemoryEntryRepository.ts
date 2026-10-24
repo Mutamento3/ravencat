@@ -119,7 +119,17 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
     return executor('createEntry').withExclusiveTransactionAsync((tx) => this.createEntryInTransaction(tx, input));
   }
 
-  /** Host 转存复用同一写入逻辑，由外层事务同时提交协议删除。 */
+  /** 已删除的写入回执仍有效，重复转换不能悄悄恢复用户删除的记忆。 */
+  async getEntryByWriteKey(poolId: string, writeKey: string): Promise<MemoryEntry | null> {
+    const db = executor('getEntryByWriteKey');
+    const receipt = await db.getFirstAsync<{ memory_id: string | null }>(
+      'SELECT memory_id FROM memory_write_receipts WHERE pool_id = ? AND write_key = ?', [poolId, writeKey]);
+    if (!receipt) return null;
+    if (receipt.memory_id === null) throw new MemoryNotFoundError();
+    return readEntry(db, poolId, receipt.memory_id);
+  }
+
+  /** Host 跨 Feature 转存复用同一写入逻辑，由外层事务裁决来源状态。 */
   async createEntryInTransaction(tx: DatabaseTransactionExecutor, input: CreateMemoryRecord): Promise<MemoryEntry> {
     if (input.writeKey !== null) {
       const receipt = await tx.getFirstAsync<{ memory_id: string | null }>(

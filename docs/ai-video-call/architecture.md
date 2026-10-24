@@ -29,7 +29,7 @@ aiTool 来源拒接/未接后的即时 AI 跟进、每 AI 可选通话设置和�
 
 ## 3. 持久事实与 Chat 上下文
 
-`call_sessions` 与 `call_events` 保存原始通话事实，Chat messages 只保存可见状态记录与应交付的 AI 消息。通话不保存原始音频；实时识别/合成产生的临时文件按媒体生命周期清理。
+`call_sessions` 与 `call_events` 保存原始通话事实，Chat messages 只保存可见状态记录与应交付的 AI 消息。`call_history` 与 `call_history_entries` 保存独立的历史展示及分段录音引用：用户语音按识别时间切段，文字输入不生成录音，AI 按原有 TTS 句子分别归档。长期音频由 MediaAsset 管理并参与备份与引用回收；采集 PCM 和合成临时文件仍按媒体生命周期清理。历史展示删除不改写 AI 上下文事实及已有摘要。
 
 已接通电话终态只保留一条最终通话时长记录；未接、拒接或失败各自显示对应结果，不额外生成时长气泡。用户/AI 转写、工具、快照/OCR 和播放事件不伪装成普通可见聊天正文。
 
@@ -39,7 +39,7 @@ aiTool 来源拒接/未接后的即时 AI 跟进、每 AI 可选通话设置和�
 
 ## 4. 领域与并发
 
-CallSession 保存角色/会话 identity、方向、状态、媒体模式、来源、请求/接通/终态时间与原因；CallEvent 保存转写、系统/工具/媒体事实。CallAttachment 是临时快照事实，不变成长久视频或音频档案。
+CallSession 保存角色/会话 identity、方向、状态、媒体模式、来源、请求/接通/终态时间与原因；CallEvent 保存转写、系统/工具/媒体事实。CallAttachment 仍是临时快照事实，独立的历史录音引用放在 call_history_entries。截图保存由每 AI 的 call_history_preferences 控制，默认关闭；开启后的长期图片引用放在 call_history_images，详情可单独删除，不保存整段视频。
 
 同一时间只允许一通有效通话，新请求通过持久 owner 的 claim/事务裁决 busy；UI 禁用不是唯一性保证。被拉黑或无资格角色由业务层拒绝，不在原生层复制授权状态机。
 
@@ -102,7 +102,7 @@ Calls 执行独立于 Overlay FGS 和 Companion 服务。CameraX 与窗口由 se
 
 ## 8. 快照、背景与权限
 
-本轮 `lookAtUser` 才截取相机图片，按当前角色视觉模型选择走原图或识别转述；没有独立 Vision 模型类别或通话 OCR 配置。工具直接消费本次快照，将文字与 modelImages 交给统一 Agent history；同批 tool 结果完整配对后再追加附图，不创建用户消息。读取为模型输入后立即清理本次文件，失败/取消同样清理，OCR 事实保留。通话终态及冷启动继续清理残留；临时快照从默认备份排除。窗口/页面不能成为截帧 provider 的第二个 owner。
+本轮 `lookAtUser` 才截取相机图片，按当前角色视觉模型选择走原图或识别转述；没有独立 Vision 模型类别或通话 OCR 配置。工具直接消费本次快照，将文字与 modelImages 交给统一 Agent history；同批 tool 结果完整配对后再追加附图，不创建用户消息。读取为模型输入后立即清理视觉临时文件，失败/取消同样清理，OCR 事实保留。开启历史截图保存时，拍照 owner 在采集源退场前创建独立长期副本，不延长视觉临时快照的生命周期。通话终态及冷启动继续清理临时残留；临时快照从默认备份排除，长期副本沿 MediaAsset 参与备份。窗口/页面不能成为截帧 provider 的第二个 owner。
 
 Calls 背景是 SQLite 持有的稳定 MediaAsset 选择，角色绑定、旧全局迁移和 revision/CAS 由 Calls 管理。AI 头像供小窗与通知共享，不与全屏背景混用。模型选择见[辅助模型契约](../architecture/auxiliary-model-selection.md)，文件边界见[媒体契约](../ravencat-media-asset-refactor-plan.md)。
 

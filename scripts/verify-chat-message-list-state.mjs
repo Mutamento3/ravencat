@@ -466,12 +466,82 @@ function userMessage(id = 20) {
   assert.deepEqual(Array.from(merge()), [user], 'run 清理后不保留展示阻挡状态');
 }
 
+// 群工具的成功提示立即可见，但不把同一段行动过程拆成多张卡。
+{
+  const sessionId = 'group-operation-display';
+  const runId = 'group-operation-run';
+  const user = userMessage(901);
+  const kinds = ['reasoning', 'tool', 'reasoning', 'tool', 'reasoning', 'assistant'];
+  const texts = ['思考改名', '修改群名', '思考移除', '移除成员', '确认结果', '处理好了'];
+  const snapshots = kinds.map((kind, index) => ({
+    runId, sequence: index + 1, stepIndex: Math.floor(index / 2), kind, status: 'sent', text: texts[index],
+    clientMessageId: agentIdentity.buildAgentTimelineClientMessageId(runId, index + 1),
+    createdAt: `2026-09-09T12:00:0${index + 1}.000Z`, time: '12:00',
+  }));
+  const notices = [2, 4].map((second, index) => message({
+    id: 910 + index, senderType: 'system', turnRunId: runId, turnItemIndex: null,
+    text: index === 0 ? '主理修改了群名' : '主理将成员移出了群聊',
+    createdAt: `2026-09-09T12:00:0${second}.500Z`,
+    metadataJson: JSON.stringify({ type: 'groupMembershipChanged' }),
+  }));
+  const merge = (persistedMessages) => transientTimeline.mergeTimelineRenderMessages({
+    persistedMessages, transientMessages: transientStore.snapshotAgentTransientTimelineWithReplacements(sessionId),
+  });
+  const project = messages => Array.from(actionGrouping.segmentContiguousAgentActions(messages), item => (
+    item.kind === 'message' ? item.message.text : Array.from(item.children, child => child.text)
+  ));
+
+  assert.deepEqual(project(merge([user, notices[0]])), [user.text, notices[0].text],
+    '先收到业务提示时立即显示，不能等待整轮回复完成');
+  transientStore.applyAgentTransientTimelineSnapshots({ sessionId, snapshots: snapshots.slice(0, 2) });
+  let rendered = merge([user, notices[0]]);
+  assert.deepEqual(project(rendered), [user.text, texts.slice(0, 2), notices[0].text]);
+  const initialCardKey = actionGrouping.segmentContiguousAgentActions(rendered)[1].key;
+
+  transientStore.applyAgentTransientTimelineSnapshots({ sessionId, snapshots: snapshots.slice(2, 4) });
+  rendered = merge([user, ...notices]);
+  assert.deepEqual(project(rendered), [user.text, texts.slice(0, 4), ...notices.map(item => item.text)],
+    '第二次操作追加到原行动卡，已经成功的两条系统提示保持独立且有序');
+  assert.equal(actionGrouping.segmentContiguousAgentActions(rendered)[1].key, initialCardKey);
+
+  transientStore.applyAgentTransientTimelineSnapshots({ sessionId, snapshots: snapshots.slice(4) });
+  const expected = [user.text, texts.slice(0, 5), ...notices.map(item => item.text), texts[5]];
+  assert.deepEqual(project(merge([user, ...notices])), expected);
+  const committed = snapshots.map((snapshot, index) => message({
+    id: 920 + index, senderType: snapshot.kind === 'tool' ? 'system' : snapshot.kind,
+    text: snapshot.text, clientMessageId: snapshot.clientMessageId, createdAt: snapshot.createdAt,
+    turnRunId: runId, turnItemIndex: index + 1,
+    metadataJson: snapshot.kind === 'tool' ? JSON.stringify({ type: 'toolStatus', status: 'completed',
+      toolNames: [], displayNames: [], displayText: snapshot.text, source: 'chatToolFlow' }) : null,
+  }));
+  transientStore.reconcileAgentTransientTimelineCommit(sessionId, runId, committed);
+  assert.deepEqual(project(merge([user, ...notices])), expected, '落库交接不拆卡、不隐藏成功提示');
+  transientStore.acknowledgeAgentTransientTimelineCommitted(sessionId, committed);
+  const persisted = timelineOrdering.sortChatTimelineMessages([user, ...notices, ...committed]);
+  assert.deepEqual(project(merge(persisted)), expected, '历史重读与实时展示采用相同的分组');
+  assert.equal(actionGrouping.segmentContiguousAgentActions(persisted)[1].key, initialCardKey);
+  assert.deepEqual(project(actionGrouping.filterActionStepsForPresentation(persisted, false)),
+    [user.text, ...notices.map(item => item.text), texts[5]], '关闭行动步骤仍然显示群操作结果');
+  assert.deepEqual(project([committed[0], notices[0]]), [[texts[0]], notices[0].text],
+    '中断后即使没有最终回复，已发生的操作结果仍保留');
+
+  const otherNotice = { ...notices[0], turnRunId: 'another-run', text: '另一个 AI 修改了群名' };
+  const manualNotice = { ...notices[0], turnRunId: null, text: '用户修改了群名' };
+  const realReply = { ...committed[5], text: '先说一句话' };
+  for (const boundary of [user, otherNotice, manualNotice, realReply]) {
+    assert.deepEqual(project([committed[0], notices[0], boundary, committed[2]]),
+      [[texts[0]], notices[0].text, boundary.text, [texts[2]]], '用户、其他运行和真实发言仍切开行动过程');
+  }
+  transientStore.clearAgentTransientTimelineRun(runId, sessionId);
+}
+
 // 原生列表只模拟布局完成、尺寸变化和滚动命令；跟随决策使用真实组件。
 {
   let scrolls = 0;
   const anchorTargets = [];
   let offset = 600;
   let nativeViewportHeight = 600;
+  let nativeContentHeight = 1200;
   let scrollContainerMounts = 0;
   let scrollContainerUnmounts = 0;
   const ScrollView = React.forwardRef(function ScrollView(props, ref) {
@@ -483,7 +553,7 @@ function userMessage(id = 20) {
   });
   const native = {
     View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView,
-    requireNativeComponent: () => 'NativeTextSelectionScrollView',
+    requireNativeComponent: name => name,
     Animated: {
       createAnimatedComponent: (Component) => React.forwardRef(function AnimatedComponent(props, ref) {
         return React.createElement(Component, { ...props, ref });
@@ -515,14 +585,20 @@ function userMessage(id = 20) {
     const { CompatScrollView } = useSecondaryProps(props);
     React.useImperativeHandle(ref, () => ({
       scrollToEnd: () => { scrolls++; offset = 1000; },
-      scrollToOffset: ({ offset: target }) => { scrolls++; offset = target; },
+      scrollToOffset: ({ offset: target }) => {
+        scrolls++;
+        offset = Math.min(target, Math.max(0, nativeContentHeight - nativeViewportHeight));
+      },
       getChildContainerDimensions: () => ({ width: 400, height: measuredContentHeight - 32 }),
       getFirstItemOffset: () => 16,
       getWindowSize: () => ({ width: 400, height: nativeViewportHeight }),
       getAbsoluteLastScrollOffset: () => offset,
       scrollToIndex: ({ index }) => { anchorTargets.push(props.data[index].msg.id); },
     }), [props.data]);
-    const observedProps = { ...props, onLayout: (event) => {
+    const observedProps = { ...props, onContentSizeChange: (width, height) => {
+      nativeContentHeight = height;
+      props.onContentSizeChange(width, height);
+    }, onLayout: (event) => {
       nativeViewportHeight = event.nativeEvent.layout.height;
       props.onLayout(event);
     } };
@@ -593,6 +669,9 @@ function userMessage(id = 20) {
   let props = { sessionId: 's1', messages, hasMore: false, isLoadingMore: false, onPreviewFile: () => {}, onDismissInputSurface: () => { dismisses++; } };
   let renderer;
   act(() => { renderer = create(React.createElement(List, props)); });
+  const nativeScroller = renderer.root.findByType('NativeScroller');
+  assert.equal(nativeScroller.props.nativeScrollViewComponent, 'ScrollView', '聊天滚动必须使用 Fabric ScrollView 的坐标契约');
+  assert.equal(nativeScroller.props.textSelectionEnabled, true, '文字选择策略只由专用滚动适配显式启用');
   const list = () => renderer.root.findByType('FlashList');
   const messageData = () => Array.from(list().props.data).filter(item => 'msg' in item);
   let measuredContentHeight = 1200;
@@ -790,16 +869,67 @@ function userMessage(id = 20) {
   assert.equal(scrolls, 7, '离开页面后不执行遗留的贴底请求');
   assert.equal(scrollContainerUnmounts, 2, '离开页面释放剩余滚动容器');
 
-  // 相同文字不代表重复消息；纸条只隐藏 reasoning，其他主题两种消息都保留。
+  // 群聊控制栏已占据布局高度；列表提交先于原生内容扩高时，不能把旧底部当成已贴底。
+  props = { ...props, sessionId: 'group-bottom-follow', messages: [message({ id: 7800 })],
+    showAssistantName: true, anchorMessageId: null };
+  nativeViewportHeight = 600;
+  offset = 600;
+  act(() => { renderer = create(React.createElement(List, props)); });
+  commit(1200);
+  update({ messages: [...props.messages, message({ id: 7801, text: '群成员的新回复' })] });
+  act(() => {
+    measuredContentHeight = 1550;
+    list().props.onCommitLayoutEffect();
+  });
+  flushFrames();
+  assert.equal(offset, 600, '原生内容尚未扩高时仍停在旧的可滚动范围内');
+  act(() => list().props.onContentSizeChange(400, 1400));
+  flushFrames();
+  assert.equal(offset, 600, '原生内容只更新了部分高度时，不能提前消费待执行的跟随');
+  act(() => list().props.onContentSizeChange(400, 1550));
+  flushFrames();
+  assert.equal(offset, 950, '原生内容扩高后完成待执行的跟随，完整显示最后一条群消息');
+  const scrollsAfterGroupReply = scrolls;
+  commit(1800);
+  assert.equal(scrolls, scrollsAfterGroupReply, '已完成跟随后，单独展开内容仍保留阅读位置');
+  update({ messages: [...props.messages, message({ id: 7802, text: '下一位成员的回复' })] });
+  act(() => {
+    measuredContentHeight = 2100;
+    list().props.onCommitLayoutEffect();
+  });
+  flushFrames();
+  offset = 100;
+  act(() => list().props.onScrollEndDrag(away));
+  act(() => list().props.onContentSizeChange(400, 2100));
+  flushFrames();
+  assert.equal(offset, 100, '等待原生扩高时用户已上翻，迟到的尺寸事件不能再拉回底部');
+  act(() => renderer.unmount());
+
+  // 所有主题都按当前 AI 的选择隐藏完整行动步骤；相同文字的正文始终保留。
   const sameTextMessages = [
     message({ id: 7900, senderType: 'reasoning', text: '相同的正文', logicalMessageId: 'same-text' }),
-    message({ id: 7901, text: '相同的正文', logicalMessageId: 'same-text' }),
+    message({ id: 7901, text: '相同的正文', logicalMessageId: 'same-text', tokensUsed: 120 }),
   ];
-  for (const themeId of ['paper-note', 'moon-kimi']) {
+  for (const themeId of ['default-light', 'default-dark', 'liquid-glass', 'paper-note', 'moon-kimi']) {
     theme = { ...theme, id: themeId };
-    props = { ...props, sessionId: 'same-text-session', messages: sameTextMessages, anchorMessageId: null };
+    const processMessage = message({ id: 7902, senderType: 'system', text: '工具执行中',
+      metadataJson: JSON.stringify({ type: 'toolStatus', status: 'running', toolNames: ['search'],
+        displayNames: ['搜索'], displayText: '工具执行中', source: 'chatToolFlow' }) });
+    props = { ...props, sessionId: 'same-text-session', messages: [...sameTextMessages, processMessage], anchorMessageId: null,
+      aiAssistant: { id: 'ai', showActionSteps: true, showTokenUsage: true } };
     act(() => { renderer = create(React.createElement(List, props)); });
-    assert.deepEqual(messageData().map(item => item.msg.id), themeId === 'paper-note' ? [7901] : [7900, 7901]);
+    assert.deepEqual(messageData().map(item => item.msg.id), [7900, 7901, 7902]);
+    assert.equal(messageData().find(item => item.msg.id === 7901).displayTokensUsed, 120, `${themeId} 显示 Token`);
+    update({ aiAssistant: { id: 'ai', showActionSteps: false, showTokenUsage: true } });
+    assert.deepEqual(messageData().map(item => item.msg.id), [7901]);
+    assert.equal(messageData()[0].displayTokensUsed, 120, '隐藏行动步骤不隐藏 Token');
+    update({ aiAssistant: { id: 'other-ai', showActionSteps: true, showTokenUsage: false } });
+    assert.deepEqual(messageData().map(item => item.msg.id), [7900, 7901, 7902], '另一个 AI 使用自己的选择');
+    assert.equal(messageData().find(item => item.msg.id === 7901).displayTokensUsed, 0, `${themeId} 隐藏 Token`);
+    update({ aiAssistant: { id: 'ai', showActionSteps: false, showTokenUsage: true } });
+    assert.deepEqual(messageData().map(item => item.msg.id), [7901], '切回后恢复当前 AI 的选择');
+    update({ aiAssistant: { id: 'ai', showActionSteps: true, showTokenUsage: true } });
+    assert.deepEqual(messageData().map(item => item.msg.id), [7900, 7901, 7902], '重新开启恢复已有行动步骤');
     act(() => renderer.unmount());
     flushFrames();
   }
@@ -809,7 +939,7 @@ function userMessage(id = 20) {
   nativeViewportHeight = 600;
   measuredContentHeight = 800;
   offset = 200;
-  props = { ...props, sessionId: 'footer-continuity', messages: [message({ id: 7950 })], anchorMessageId: null };
+  props = { ...props, sessionId: 'footer-continuity', messages: [message({ id: 7950 })], anchorMessageId: null, aiAssistant: undefined };
   act(() => { renderer = create(React.createElement(List, props)); });
   commit(800);
   const footer = renderer.root.findByType('PaperNoteFooter');

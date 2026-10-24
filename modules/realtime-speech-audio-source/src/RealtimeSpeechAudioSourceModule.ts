@@ -27,6 +27,7 @@ export type RealtimeSpeechAudioSourceSubscription = {
 
 export type RealtimeSpeechAudioSourceStartResult = {
   echoCancellationEnabled: boolean;
+  archiveId?: string | null;
 };
 
 type RealtimeSpeechAudioSourceEvents = {
@@ -39,9 +40,11 @@ declare class RealtimeSpeechAudioSourceNativeModule extends NativeModule {
   start(options: {
     sampleRate: number;
     chunkDurationMs: number;
+    archiveSegments?: boolean;
   }): Promise<RealtimeSpeechAudioSourceStartResult>;
   stop(): Promise<void>;
   isRecording(): Promise<boolean>;
+  exportSegment(archiveId: string, startMs: number, endMs: number): Promise<{ uri: string; durationMs: number }>;
 }
 
 const NativeRealtimeSpeechAudioSource =
@@ -52,12 +55,17 @@ const emitter = new EventEmitter<RealtimeSpeechAudioSourceEvents>(NativeRealtime
 export function startRealtimeSpeechAudioSource(options: {
   sampleRate: number;
   chunkDurationMs: number;
+  archiveSegments?: boolean;
 }): Promise<RealtimeSpeechAudioSourceStartResult> {
   return NativeRealtimeSpeechAudioSource.start(options);
 }
 
 export function stopRealtimeSpeechAudioSource(): Promise<void> {
   return NativeRealtimeSpeechAudioSource.stop();
+}
+
+export function exportRealtimeSpeechSegment(archiveId: string, startMs: number, endMs: number): Promise<{ uri: string; durationMs: number }> {
+  return NativeRealtimeSpeechAudioSource.exportSegment(archiveId, startMs, endMs);
 }
 
 export function isRealtimeSpeechAudioSourceRecording(): Promise<boolean> {

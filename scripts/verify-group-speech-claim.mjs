@@ -3,6 +3,7 @@
  * 本轮输入快照、claim 后规划顺序、终态释放与历史重复计划迁移。
  */
 
+import { SCHEMAS } from './helpers/sqlite-bootstrap-fixture.mjs';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import fs from 'node:fs';
@@ -128,6 +129,12 @@ function createSpeechPlanDatabase({ activeIndex = true } = {}) {
         ON group_speech_plans(group_id)
         WHERE status IN ('pending', 'preparing', 'running');
     `);
+  }
+  db.exec('PRAGMA foreign_keys=OFF');
+  db.exec(SCHEMAS.groupChatMembers);
+  for (const id of [...'123456789ABCDEFGH'.split('').map(letter => `ai-${letter}`)]) {
+    db.prepare(`INSERT INTO group_chat_members (id, group_id, ai_assistant_id, agent_id, enabled, created_at, updated_at)
+      VALUES (?, 'g1', ?, ?, 1, '2026-08-01', '2026-08-01')`).run(`fixture-${id}`, id, `agent-${id.slice(3)}`);
   }
   return db;
 }

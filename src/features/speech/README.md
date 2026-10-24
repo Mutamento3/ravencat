@@ -12,11 +12,13 @@ AI 语音继续复用 `synthesizeTextToSpeech`，consumer 为 `chatVoiceMessage`
 
 `SpeechProviderCatalog` 持有提供方、官方地址、模型参数和表单校验契约。Assistants 持有模型资产及编辑草稿，负责按提供方渲染下拉选择和参数。新建官方服务不要求填写 URL；自定义 OpenAI 兼容服务保留地址输入。旧配置中的自定义地址保持不变，用户可明确改用官方地址。
 
-TTS 支持 OpenAI、MiniMax、ElevenLabs、OpenRouter 与自定义 OpenAI 兼容服务。正式调用与设置测试共用 `synthesizeConfiguredSpeech` 和 `SpeechSynthesisGateway`。OpenRouter 的风格指令使用当前官方顶层 `instructions`，只为已声明支持该能力的模型开放。OpenRouter 模型目录与 ElevenLabs 模型/音色目录可从官方接口加载。
+TTS 支持 OpenAI、MiniMax、ElevenLabs、Fish Audio、OpenRouter 与自定义 OpenAI 兼容服务。正式调用与设置测试共用 `synthesizeConfiguredSpeech` 和 `SpeechSynthesisGateway`。OpenRouter 的风格指令使用当前官方顶层 `instructions`，只为已声明支持该能力的模型开放。OpenRouter 模型目录与 ElevenLabs 模型/音色目录可从官方接口加载。
+
+Fish Audio 使用原生 `POST /v1/tts`：模型通过 `model` 请求头指定，音色 ID 映射为 `reference_id`，不套用 OpenAI 协议。配置页提供 S2.1-Pro（默认）、S2.1-Pro-Free、S2-Pro、S1 与 Drama 3，以及语速、MP3／WAV、采样温度、Top P、延迟模式和文本读法转换。模型名在统一配置边界校验，避免官方将未知名称替换为默认付费模型。当前接入单音色；S2／S2.1（含免费版）与 Drama 3 开放方括号表达标签，S1 保持普通正文与标点。多说话人、参考音频上传、音标和 Drama 3 成对 XML 控制未开放；聊天、通话和试听继续复用现有模型快照与临时音频生命周期。
 
 表达能力随模型变化：MiniMax 使用 emotion，OpenAI 的 GPT-4o Mini TTS 使用 instructions，Eleven v3/v4 使用音频表达标签。Eleven v4 不发送 style、speed 或 speaker boost；其他已接入 Eleven 模型的 speed 范围为 0.7～1.2。Chat 的 `createConfiguredVoiceMessageTool` 在每次 run 准备时固定角色 TTS 模型、工具 schema 和文本说明，只向 AI 暴露实际支持的表达参数；执行继续使用同一快照。
 
-### 语气词、声音与停顿（2026-10-10 核对）
+### 语气词、声音与停顿
 
 自然语气词“嗯、啊、唔”和标点属于正文。`SpeechText` 拥有已核对模型的句内标记契约，并在模型输出边界生成合成输入与 canonical 转写；不支持、非法或不完整的标记直接报错，不静默删除或当作正文朗读。Chat 与 Calls 复用同一契约，不在 Provider adapter 重复校验内部数据。
 
@@ -27,12 +29,15 @@ TTS 支持 OpenAI、MiniMax、ElevenLabs、OpenRouter 与自定义 OpenAI 兼容
 | MiniMax speech-2.8-hd / turbo | emotion、speed；句内 `<#0.5#>` 停顿与官方 `(laughs)`、`(breath)`、`(sighs)` 等声音标记。 |
 | MiniMax speech-2.6、speech-02 的 hd / turbo | emotion、speed 与 `<#0.5#>` 停顿，不开放 2.8 的声音标记；仅 2.6 支持 fluent / whisper 情绪值。 |
 | Eleven v3 / v4 / v4 turbo | 支持符合语法的任意自然语言 Audio Tags，由 AI 按情境自主决定是否使用及标签内容；`[whispers]`、`[laughs]`、`[short pause]` 等仅为示例，不是白名单。不使用 SSML break。标签与音色匹配会影响实际效果，不是精确计时。 |
+| Fish S2-Pro / S2.1-Pro / S2.1-Pro-Free / Drama 3 | 支持自然语言方括号表达标签，提示词给出 `[happy]`、`[whispering]`、`[laughing]` 及完整句子示例，不限制为这些词。`[break]`、`[long-break]` 表达相对停顿；不承诺秒数，不使用 S1 圆括号、音标、说话人或成对 XML。 |
 | Eleven multilingual v2 / flash v2.5 / turbo v2.5 | 自然正文、speed 与 `<break time="0.5s" />`，停顿大于 0 且不超过 3 秒；不开放 v3/v4 的方括号标签。 |
 | OpenRouter Voxtral、自定义 OpenAI 兼容服务、动态目录中的未知模型 | 不因兼容接口或厂商名称推断句内控制能力；AI 只获得自然正文和标点规则。自定义服务的用户连接参数仍由其配置决定。 |
 
+Fish 的方括号语法与自然语言描述以[官方表达文档](https://docs.fish.audio/developer-guide/core-features/emotions)和 [Drama 3 文档](https://docs.fish.audio/features/text-to-speech/drama-3)为依据。配置为自定义 OpenAI 兼容服务时，即使模型名含 Fish，也不自动赋予这些能力。
+
 MiniMax 停顿范围为 0.01～99.99 秒，最多两位小数，必须位于可朗读正文之间且不能连续使用。音标、发音字典、多说话人和背景音不在当前文本契约中。
 
-Eleven Audio Tags 接受配对的半角 `[标签]`、全角 `［标签］` 和方头 `【标签】`，统一为半角括号，去除标签首尾空格并将内部连续空格统一成一个半角空格；正文与中文标点不参与规范化。每个标签去除首尾空格后为 1～100 个 Unicode 字符，至少包含文字或数字；允许文字、组合音标、数字、空格，以及引号、逗号、句号、问号、感叹号、冒号、分号、顿号、省略号、连字符和破折号。不允许嵌套、括号不匹配、未闭合、换行、控制字符或其他符号。不支持 Audio Tags 的模型仍拒绝这些标签。`synthesisText` 进入 TTS，去标签的 `transcript` 进入消息、字幕与通话事实。
+Eleven 与 Fish 的方括号 Audio Tags 共用语法边界：接受配对的半角 `[标签]`、全角 `［标签］` 和方头 `【标签】`，统一为半角括号，去除标签首尾空格并将内部连续空格统一成一个半角空格；正文与中文标点不参与规范化。每个标签去除首尾空格后为 1～100 个 Unicode 字符，至少包含文字或数字；允许文字、组合音标、数字、空格，以及引号、逗号、句号、问号、感叹号、冒号、分号、顿号、省略号、连字符和破折号。不允许嵌套、括号不匹配、未闭合、换行、控制字符或其他符号。不支持 Audio Tags 的模型仍拒绝这些标签。`synthesisText` 进入 TTS，去标签的 `transcript` 进入消息、字幕与通话事实。Fish 的 `[break]`／`[long-break]` 在通话分句中与两侧正文同次合成，避免停顿成为没有可朗读正文的独立片段。
 
 纯声音标签语音消息暂不开放：去除标签后为空仍报错，不调用 TTS。是否允许没有可朗读正文的声音消息属于独立产品决定，需要另行确定转写、预览和上下文应表达什么，不能随标签语法放宽一并改变。
 
@@ -42,9 +47,11 @@ Eleven Audio Tags 接受配对的半角 `[标签]`、全角 `［标签］` 和�
 
 `SpeechConfigurationTest` 使用经过同一表单边界校验的连接快照，不保存测试文本，不改变系统或角色的模型选择，不创建消息或媒体资产。TTS 支持修改测试文本、生成、播放、暂停；STT 支持填写预期文本、麦克风实时识别与等待最终结果。切换配置或离开页面时取消连接，释放麦克风、播放器并删除临时音频；迟到的结果也必须清理。
 
+Fish、OpenAI 兼容、MiniMax 和 ElevenLabs 语音接口的 HTTP 失败保留状态码、`error.message` 或顶层 `message`，并在现有错误信息中附上响应正文，便于区分地址、音色与服务端错误。非 JSON 响应同样保留原文；当前配置的 API Key（包括 JSON 和 URL 转义形式）在 HTTP 边界脱敏，不输出请求头或额外记录日志。测试页的错误文字可长按选择和复制。MiniMax 的业务失败保留 `base_resp.status_code` 与描述；实时 STT 保留 Provider 错误码、原生 WebSocket 错误原因及非正常关闭的 code/reason。通话中的 TTS/STT 失败沿同一错误事实立即显示，文本模型 HTTP 诊断不采集语音请求。
+
 新增提供方只需添加参数定义与真实协议适配，然后注册到现有入口；Chat、Calls 和测试页不判断具体协议。不支持的官方参数不包装成万能 JSON 输入，实时 STT 也不接受文件转写服务来凑提供方数量。
 
-官方协议参考：[OpenAI TTS](https://developers.openai.com/api/docs/guides/text-to-speech)、[OpenRouter TTS](https://openrouter.ai/docs/guides/overview/multimodal/tts)、[MiniMax T2A](https://platform.minimax.io/docs/api-reference/speech-t2a-http)、[ElevenLabs TTS](https://elevenlabs.io/docs/api-reference/text-to-speech/convert)、[ElevenLabs 表达与停顿](https://elevenlabs.io/docs/overview/capabilities/text-to-speech/best-practices)、[Mistral Voxtral TTS](https://docs.mistral.ai/studio/audio/text_to_speech/speech)、[阿里实时 ASR](https://help.aliyun.com/zh/model-studio/fun-asr-realtime-websocket-api)。
+官方协议参考：[OpenAI TTS](https://developers.openai.com/api/docs/guides/text-to-speech)、[OpenRouter TTS](https://openrouter.ai/docs/guides/overview/multimodal/tts)、[MiniMax T2A](https://platform.minimax.io/docs/api-reference/speech-t2a-http)、[ElevenLabs TTS](https://elevenlabs.io/docs/api-reference/text-to-speech/convert)、[ElevenLabs 表达与停顿](https://elevenlabs.io/docs/overview/capabilities/text-to-speech/best-practices)、[Fish Audio TTS](https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech)、[Mistral Voxtral TTS](https://docs.mistral.ai/studio/audio/text_to_speech/speech)、[阿里实时 ASR](https://help.aliyun.com/zh/model-studio/fun-asr-realtime-websocket-api)。
 
 `npm run verify:speech` 验证请求、参数、配置提交、实时完成屏障与测试生命周期；真实鉴权、发音质量与 Android 采集/播放仍需要对应密钥和设备验收。
 

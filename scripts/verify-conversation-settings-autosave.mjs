@@ -50,7 +50,7 @@ function screen() {
   });
   const persisted = { id: 'ai', name: '旧名称', systemPrompt: '原始人设', avatar: 'old.jpg', avatarMediaAssetId: 'old-asset', model: 'chat', updatedAt: 'old',
     privateContextPrimaryLimit: 30, privateContextSecondaryLimit: 10, groupContextPrimaryLimit: 40, groupContextSecondaryLimit: 5,
-    allowMultipleBubbles: true, showTokenUsage: true };
+    allowMultipleBubbles: true, streamingReply: null, showTokenUsage: true, showActionSteps: true };
   let uri = persisted.avatar; let draft = null; let committedUri = uri;
   const react = {
     useState(initial) {
@@ -163,11 +163,19 @@ try {
   assert.deepEqual(context.writes.at(-1), { allowMultipleBubbles: false }, '开关立即提交且不覆盖模型配置');
   assert.equal(context.render().allowMultipleBubbles, false);
   assert.equal(chatSettingsDraft.getChatSettingsDraft(context.persisted).allowMultipleBubbles, false, '重新进入保留已保存的开关');
+  for (const streamingReply of [true, false, null]) {
+    context.render().setStreamingReply(streamingReply); await tick();
+    assert.deepEqual(context.writes.at(-1), { streamingReply }, '回复方式独立即时保存');
+    assert.equal(chatSettingsDraft.getChatSettingsDraft(context.persisted).streamingReply, streamingReply, '重进保留回复方式');
+  }
   context.render().setShowTokenUsage(false); await tick();
   assert.deepEqual(context.writes.at(-1), { showTokenUsage: false }, 'Token 开关立即保存且不覆盖模型或气泡设置');
   assert.equal(chatSettingsDraft.getChatSettingsDraft(context.persisted).showTokenUsage, false, '重新进入保留 Token 显示选择');
+  context.render().setShowActionSteps(false); await tick();
+  assert.deepEqual(context.writes.at(-1), { showActionSteps: false }, '行动步骤开关独立立即保存');
+  assert.equal(chatSettingsDraft.getChatSettingsDraft(context.persisted).showActionSteps, false, '重新进入保留行动步骤选择');
 
-  // 主题冻结发生在设置 UI，不能把暂时禁用误写为用户的新选择。
+  // 未手动选择时采用主题默认，操作后按 AI 保存，切换主题不覆盖选择。
   const tokenPage = screen();
   const variants = load('src/shared/theme/themeVariants.ts');
   let theme = { id: 'daylight', colors: { chat: { screen: '#fff' } } };
@@ -188,28 +196,43 @@ try {
     '../messages/components/ChatWallpaperSettings': { default: 'ChatWallpaperSettings' },
     './ContextWindowSection': { default: 'ContextWindowSection' },
     './FixedChatContextSection': { default: 'FixedChatContextSection' },
+    './HistoricalGroupsSection': { default: 'HistoricalGroupsSection' },
   });
-  const findToggle = (node) => {
-    if (node?.props?.label === '显示 Token 用量') return node;
-    for (const child of node?.children ?? []) { const found = findToggle(child); if (found) return found; }
+  const findToggle = (node, label) => {
+    if (node?.props?.label === label) return node;
+    for (const child of node?.children ?? []) { const found = findToggle(child, label); if (found) return found; }
     return null;
   };
-  const tokenToggle = () => findToggle(Settings({ aiAssistant: tokenPage.persisted, conversationId: 'direct-ai', onChooseFixedStart() {} }));
-  assert.equal(tokenToggle().props.value, true, '支持主题默认显示 Token');
-  tokenToggle().props.onValueChange(false); await tick();
-  assert.equal(tokenToggle().props.value, false);
-  tokenToggle().props.onValueChange(true); await tick();
-  const writesBeforeFreeze = tokenPage.writes.length;
-  for (const id of ['paper-note', 'moon-kimi']) {
+  const toggle = (label) => findToggle(Settings({ aiAssistant: tokenPage.persisted, conversationId: 'direct-ai', onChooseFixedStart() {} }), label);
+  for (const id of ['default-light', 'default-dark', 'liquid-glass', 'paper-note', 'moon-kimi']) {
     theme = { ...theme, id };
-    assert.equal(tokenToggle().props.value, false, '冻结主题的开关始终显示关闭');
-    assert.equal(tokenToggle().props.disabled, true, '冻结主题不允许操作开关');
-    assert.equal(tokenPage.persisted.showTokenUsage, true, '切换主题不覆盖原来的用户选择');
+    assert.equal(toggle('流式输出').props.value, ['paper-note', 'moon-kimi'].includes(id), `${id} 的开关采用主题默认`);
+    assert.equal(tokenPage.writes.length, 0, '查看默认开关不写入手动选择');
   }
-  assert.equal(tokenPage.writes.length, writesBeforeFreeze, '冻结主题不产生配置写入');
-  theme = { ...theme, id: 'daylight' };
-  assert.equal(tokenToggle().props.value, true, '切回支持主题恢复原选择');
-  assert.equal(tokenToggle().props.disabled, false);
+  for (const id of ['default-light', 'default-dark', 'liquid-glass', 'paper-note', 'moon-kimi']) {
+    const writesBeforeTheme = tokenPage.writes.length;
+    theme = { ...theme, id };
+    const streamingToggle = () => toggle('流式输出');
+    assert.equal(streamingToggle().props.value, false, `${id} 保留此前关闭选择`);
+    assert.equal(tokenPage.writes.length, writesBeforeTheme, '切换主题不产生配置写入');
+    for (const value of [true, false]) {
+      streamingToggle().props.onValueChange(value); await tick();
+      assert.equal(streamingToggle().props.value, value, `${id} 可自由开关流式输出`);
+      assert.deepEqual(tokenPage.writes.at(-1), { streamingReply: value }, '开关独立保存布尔选择');
+    }
+    for (const label of ['显示 Token 用量', '显示行动步骤']) {
+      assert.equal(toggle(label).props.value, true, `${id} 保留开启选择`);
+      assert.notEqual(toggle(label).props.disabled, true, `${id} 允许操作`);
+    }
+    toggle('显示 Token 用量').props.onValueChange(false); await tick();
+    assert.equal(toggle('显示 Token 用量').props.value, false);
+    assert.equal(toggle('显示行动步骤').props.value, true, 'Token 开关不影响行动步骤');
+    toggle('显示行动步骤').props.onValueChange(false); await tick();
+    assert.equal(toggle('显示行动步骤').props.value, false);
+    toggle('显示 Token 用量').props.onValueChange(true); await tick();
+    assert.equal(toggle('显示行动步骤').props.value, false, '行动步骤开关独立保存');
+    toggle('显示行动步骤').props.onValueChange(true); await tick();
+  }
   for (const invalid of ['', '0', '1.5']) {
     context.render().handleContextLimitChange('privatePrimary', invalid);
     assert.equal(await context.render().flush(), false);

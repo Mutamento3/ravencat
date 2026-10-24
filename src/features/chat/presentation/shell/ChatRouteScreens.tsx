@@ -16,6 +16,7 @@ import CreateGroup from '../group/CreateGroup';
 import GroupAdminSettings from '../group/GroupAdminSettings';
 import GroupChatDetail from '../group/GroupChatDetail';
 import GroupOptions from '../group/GroupOptions';
+import { renameGroupChat, subscribeGroupChanged } from '../../group/application/GroupMembership';
 import AIOptions from '../conversation/AIOptions';
 import ChatSettings from '../conversation/ChatSettings';
 import ChatStatisticsScreen from '../conversation/ChatStatisticsScreen';
@@ -216,18 +217,16 @@ function useGroupRouteDetails(groupId: string, enabled: boolean) {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
-    if (!enabled) {
-      return () => {
-        active = false;
-      };
-    }
-
+    let request = 0;
     setDetails(null);
     setLoadError(null);
-    void getGroupChat(groupId)
+    const load = () => {
+      const currentRequest = ++request;
+      void getGroupChat(groupId)
       .then((nextDetails) => {
-        if (!active) {
+        if (!active || currentRequest !== request) {
           return;
         }
         if (!nextDetails) {
@@ -235,16 +234,20 @@ function useGroupRouteDetails(groupId: string, enabled: boolean) {
           return;
         }
         setDetails(nextDetails);
+        setLoadError(null);
       })
       .catch((error) => {
-        if (!active) {
+        if (!active || currentRequest !== request) {
           return;
         }
         setLoadError(error instanceof Error ? error.message : '群聊信息加载失败');
       });
-
+    };
+    load();
+    const unsubscribe = subscribeGroupChanged(id => { if (id === groupId) load(); });
     return () => {
       active = false;
+      unsubscribe();
     };
   }, [enabled, groupId]);
 
@@ -401,6 +404,7 @@ export function ChatMenuRouteScreen({ aiId }: { aiId: string }) {
       onModelSettings={() => router.openSubScreen('modelSettings')}
       onChatSettings={() => router.openSubScreen('chatSettings')}
       onChatSummary={() => router.openSubScreen('summary')}
+      onCallHistory={() => router.openSubScreen('callHistory')}
       onChatStatistics={() => router.openSubScreen('statistics')}
       onDeleteAI={async () => {
         await state.handleDeleteAI();
@@ -659,7 +663,9 @@ export function GroupMenuRouteScreen({ groupId }: { groupId: string }) {
   }
 
   const handleUpdateProfile = async (input: UpdateGroupChatProfileInput, draft?: import('@platform/device/DeviceMediaService').PersistentAvatarDraft | null) => {
-    const updated = draft ? await updateGroupChatAvatarFromDraft(groupId, draft) : await updateGroupChatProfile(groupId, input);
+    if (input.name !== undefined) await renameGroupChat(groupId, input.name);
+    const updated = input.name !== undefined ? (await getGroupChat(groupId))!.group
+      : draft ? await updateGroupChatAvatarFromDraft(groupId, draft) : await updateGroupChatProfile(groupId, input);
     setDetails((current) => current ? { ...current, group: updated } : current);
     router.groupUpdated(updated);
     return updated;

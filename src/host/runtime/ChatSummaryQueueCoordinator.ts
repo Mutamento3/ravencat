@@ -3,13 +3,13 @@ import { InteractionManager } from 'react-native';
 import { showAppDialog } from '@shared/ui/appDialogStore';
 import { prepareChatSummaryConversations, processChatSummary, getNextChatSummaryWakeAt, setChatEventBus } from '@features/chat/composition';
 import { subscribeChatSummaryChanged } from '@features/chat';
-import { subscribeAuxiliaryModelsChanged } from '@features/assistants';
+import { subscribeAIAssistantUpdated, subscribeAuxiliaryModelsChanged } from '@features/assistants';
 let configured = false;
 let active = false;
 let scheduled: ReturnType<typeof InteractionManager.runAfterInteractions> | null = null;
 let running: Promise<void> | null = null;
 let controller: AbortController | null = null;
-let scanAll = false;
+let scanPending = false;
 const requestedConversations = new Set<string>();
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 export function configureChatSummaryQueue(): void {
@@ -23,24 +23,26 @@ export function configureChatSummaryQueue(): void {
     }
   });
   subscribeAuxiliaryModelsChanged(() => requestChatSummaryRun());
+  subscribeAIAssistantUpdated(() => requestChatSummaryRun());
   // 通话结束更新既有记录气泡，走 patched 而不是新增消息事件。
   setChatEventBus({ emit(eventName, payload) {
-    if (eventName === 'messagesUpdated' || eventName === 'messagesPatched' || eventName === 'groupSpeechPlanChanged') requestChatSummaryRun(payload.sessionId);
+    if (eventName === 'messagesUpdated' || eventName === 'messagesPatched' || eventName === 'messagesDeleted'
+      || eventName === 'groupSpeechPlanChanged' || eventName === 'turnExecutionChanged') requestChatSummaryRun(payload.sessionId);
   } });
 }
 export function requestChatSummaryRun(conversationId?: string): void {
   if (!configured || !active) return;
-  if (conversationId === undefined) scanAll = true;
+  if (conversationId === undefined) scanPending = true;
   else requestedConversations.add(conversationId);
   schedulePending();
 }
 function schedulePending(): void {
-  if (!active || running || scheduled || (!scanAll && requestedConversations.size === 0)) return;
+  if (!active || running || scheduled || (!scanPending && requestedConversations.size === 0)) return;
   scheduled = InteractionManager.runAfterInteractions(() => {
     scheduled = null;
-    // 普通事实只使所属会话失效；前台恢复、模型配置和租期唤醒才需要全量发现。
-    const conversationIds = scanAll ? undefined : [...requestedConversations];
-    scanAll = false;
+    // 内存集合只合并唤醒；工作身份已随来源事实持久化，恢复时也只读取待处理队列。
+    const conversationIds = scanPending ? undefined : [...requestedConversations];
+    scanPending = false;
     requestedConversations.clear();
     controller = new AbortController();
     const signal = controller.signal;
@@ -74,7 +76,7 @@ export function setChatSummaryForegroundActive(value: boolean): void {
   active = value;
   if (active) requestChatSummaryRun();
   else {
-    scheduled?.cancel(); scheduled = null; scanAll = false; requestedConversations.clear(); controller?.abort();
+    scheduled?.cancel(); scheduled = null; scanPending = false; requestedConversations.clear(); controller?.abort();
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = null;
   }

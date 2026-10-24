@@ -51,6 +51,7 @@ const { MEDIA_ASSET_SCHEMA, MEDIA_ASSET_CONTENT_HASH_INDEX } = await loadTypeScr
   'src/platform/persistence/sqlite/mediaAssetSchema.ts',
 );
 const { CALL_BACKGROUND_SELECTION_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callBackgroundSchema.ts');
+const { CALL_HISTORY_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callHistorySchema.ts');
 const { CHAT_FAVORITES_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatFavoriteSchema.ts');
 const { CHAT_REPLY_VERSIONS_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatReplyVersionSchema.ts');
 const mediaAssetBackingModule = await loadTypeScriptModule(
@@ -130,6 +131,8 @@ function createDatabase() {
     );
     CREATE TABLE ai_downloaded_images (id TEXT PRIMARY KEY, assistant_id TEXT, media_asset_id TEXT);
     CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, metadata_json TEXT);
+    CREATE TABLE call_sessions (id TEXT PRIMARY KEY, chat_session_id TEXT);
+    ${CALL_HISTORY_SCHEMA}
   `);
   return db;
 }

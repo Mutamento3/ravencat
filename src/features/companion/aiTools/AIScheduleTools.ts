@@ -32,7 +32,7 @@ export const CreateAIScheduleTool = {
   name: 'create_ai_schedule',
   definition: {
     name: 'create_ai_schedule',
-    description: '【主理 AI 专属】主动伴随开启时安排未来自主唤醒，默认同时写入手机系统日历提醒用户。缺少日历权限会报错且不会创建任何日程；首次遇到应告知用户可在小程序的“权限与后台运行”开启系统日历权限。用户拒绝或已表达仅内部提醒偏好时，显式设 system_calendar=false，不要反复索要权限。已有同一安排应修改，不要重复创建；日程不是预写消息，到点依据最新上下文决定行动',
+    description: '主动伴随开启时安排未来自主唤醒，默认同时写入手机系统日历提醒用户。缺少日历权限会报错且不会创建任何日程；首次遇到应告知用户可在小程序的“权限与后台运行”开启系统日历权限。用户拒绝或已表达仅内部提醒偏好时，显式设 system_calendar=false，不要反复索要权限。已有同一安排应修改，不要重复创建；日程不是预写消息，到点依据最新上下文决定行动',
     parameters: {
       type: 'object',
       properties: {
@@ -59,7 +59,7 @@ export const ListAISchedulesTool = {
   name: 'list_ai_schedules',
   definition: {
     name: 'list_ai_schedules',
-    description: '【主理 AI 专属】按 1 天至 3 个月的范围轻量浏览自己的 AI 日程',
+    description: '按 1 天至 3 个月的范围轻量浏览自己的 AI 日程',
     parameters: {
       type: 'object',
       properties: {
@@ -91,7 +91,7 @@ export const GetAIScheduleTool = {
   name: 'get_ai_schedule',
   definition: {
     name: 'get_ai_schedule',
-    description: '【主理 AI 专属】读取一条 AI 日程的完整详情与 bounded canonical source snapshot',
+    description: '读取一条 AI 日程的完整详情与创建时的来源快照',
     parameters: idParameters(),
   },
   execute: executeGet,
@@ -101,7 +101,7 @@ export const UpdateAIScheduleTool = {
   name: 'update_ai_schedule',
   definition: {
     name: 'update_ai_schedule',
-    description: '【主理 AI 专属】修改尚未到期的 scheduled AI 日程，保留原 stable identity 与来源快照',
+    description: '修改尚未到期的 AI 日程，保留原日程 ID 与来源快照',
     parameters: {
       type: 'object',
       properties: {
@@ -122,7 +122,7 @@ export const CancelAIScheduleTool = {
   name: 'cancel_ai_schedule',
   definition: {
     name: 'cancel_ai_schedule',
-    description: '【主理 AI 专属】取消尚未到期的 scheduled AI 日程；历史记录会永久保留',
+    description: '取消尚未到期的 AI 日程；历史记录会永久保留',
     parameters: idParameters(),
   },
   execute: executeCancel,

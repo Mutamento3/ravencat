@@ -11,7 +11,7 @@ import { ScreenOcrObservationError } from '../application/ScreenOcrObservationPo
 
 export const definition = {
   name: 'read_screen_ocr',
-  description: '【主理 AI 专属】对当前 Android 页面做一次安全屏幕截图快照，并通过本地 OCR 读取其中的可见文字；不理解非文字视觉内容。',
+  description: '对当前 Android 页面做一次安全屏幕截图快照，并通过本地 OCR 读取其中的可见文字；不理解非文字视觉内容。',
   parameters: {
     type: 'object',
     properties: {},

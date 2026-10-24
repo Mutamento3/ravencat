@@ -15,7 +15,9 @@ export interface ChatSettingsDraft extends ContextLimitsDraft {
   nickname: string;
   systemPrompt: string;
   allowMultipleBubbles: boolean;
+  streamingReply: boolean | null;
   showTokenUsage: boolean;
+  showActionSteps: boolean;
 }
 
 export function getChatSettingsDraft(ai: AIProfile): ChatSettingsDraft {
@@ -24,7 +26,9 @@ export function getChatSettingsDraft(ai: AIProfile): ChatSettingsDraft {
     nickname: ai.nickname ?? '',
     systemPrompt: ai.systemPrompt ?? '',
     allowMultipleBubbles: ai.allowMultipleBubbles,
+    streamingReply: ai.streamingReply,
     showTokenUsage: ai.showTokenUsage,
+    showActionSteps: ai.showActionSteps,
     privatePrimary: String(ai.privateContextPrimaryLimit),
     privateSecondary: String(ai.privateContextSecondaryLimit),
     groupPrimary: String(ai.groupContextPrimaryLimit),
@@ -56,8 +60,12 @@ export function parseChatSettingsDraft(
       result.patch.systemPrompt = draft.systemPrompt;
     } else if (field === 'allowMultipleBubbles') {
       result.patch.allowMultipleBubbles = draft.allowMultipleBubbles;
+    } else if (field === 'streamingReply') {
+      result.patch.streamingReply = draft.streamingReply;
     } else if (field === 'showTokenUsage') {
       result.patch.showTokenUsage = draft.showTokenUsage;
+    } else if (field === 'showActionSteps') {
+      result.patch.showActionSteps = draft.showActionSteps;
     } else {
       const guest = field === 'privateSecondary' || field === 'groupSecondary';
       const parsed = readDraftInteger(draft[field], guest ? '客条数（0关闭整类背景）' : '主条数', false, guest ? 0 : 1);

@@ -65,10 +65,15 @@ export class SQLiteLedgerRepository implements ILedgerRepository {
    */
   async getRecords(filters: LedgerRecordFilters = {}): Promise<WalletRecord[]> {
     const db: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'wallet.getRecords', feature: 'wallet', priority: 'runtime' });
-    const { year, month, day, type, category, keyword, startDate, endDate, limit = 100 } = filters;
+    const { ids, year, month, day, type, category, keyword, startDate, endDate, limit = 100 } = filters;
     
     let whereClause = 'WHERE 1=1';
     const params: (string | number)[] = [];
+
+    if (ids) {
+      whereClause += ` AND id IN (${ids.map(() => '?').join(',')})`;
+      params.push(...ids);
+    }
 
     if (year) {
       whereClause += " AND strftime('%Y', record_date) = ?";

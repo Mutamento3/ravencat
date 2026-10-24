@@ -15,6 +15,7 @@
 | `AIAvatar` | AI 头像（首字母回退） |
 | `AIInfoCard` | AI 信息展示卡片 |
 | `AvatarImage` | 通用头像图片（带 fallback） |
+| `AudioPlaybackBar` | 语音条：播放／暂停、进度、时长和互斥长短按；播放与文件解析由调用方注入，不包含聊天气泡 |
 | `BackgroundPickerCard` | 背景类图片选择卡片（缩略预览 + 更换 / 恢复默认） |
 | `Button` | 通用按钮（primary / secondary / danger / text） |
 | `AppDialogHost` / `showAppDialog` | 全应用统一的报错、提示与确认弹窗 |
@@ -53,7 +54,7 @@
 
 表单页在当前窗口内容外包一层 `KeyboardAvoidingContainer`；它测量容器在窗口中的实际位置，
 只为与键盘重叠的部分增加 padding，不把局部布局坐标与键盘屏幕坐标直接相减。
-窗口已被原生缩小时不重复避让；隐藏后清零，旧测量不能恢复留白。`ModalSheet avoidKeyboard`
+窗口已被原生缩小时不重复避让；隐藏后清零，旧测量不能恢复留白。原生 View 的 ref 接入/脱离定义测量有效期：脱离后忽略键盘事件，并立即失效尚未返回的测量，不依赖 React effect 稍后的清理顺序。`ModalSheet avoidKeyboard`
 已经包含这个容器，内容不能再次包一层。独立 `Modal` 必须在自己的窗口内部包裹容器，
 关闭但仍挂载的弹窗传 `enabled={visible}`，避免监听其他窗口的输入。
 

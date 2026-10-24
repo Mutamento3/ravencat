@@ -8,6 +8,9 @@ const minimaxInterjections = [
 const elevenAudioTagExamples = [
   'whispers', 'excited', 'laughs', 'short pause',
 ];
+const fishAudioTagExamples = [
+  'happy', 'whispering', 'laughing', 'break', 'long-break',
+];
 const MAX_AUDIO_TAG_LENGTH = 100;
 const AUDIO_TAG_CLOSERS: Record<string, string> = { '[': ']', '［': '］', '【': '】' };
 
@@ -35,6 +38,8 @@ function speechTextRules(provider: SpeechProviderId, model: string): SpeechTextR
     if (['eleven_multilingual_v2', 'eleven_flash_v2_5', 'eleven_turbo_v2_5'].includes(model))
       return { tags: [], audioTags: false, pause: 'ssml' };
   }
+  if (provider === 'fishAudio' && ['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3'].includes(model))
+    return { tags: [], audioTags: true, pause: null };
   return { tags: [], audioTags: false, pause: null };
 }
 
@@ -46,8 +51,12 @@ export function getSpeechTextGuidance(provider: SpeechProviderId, model: string,
   ];
   if (rules.tags.length)
     guidance.push(`当前模型允许在正文的相应位置插入这些声音或表达标记：${rules.tags.join('、')}。只使用列出的标记，不要混用其他厂商语法；标记不属于转写正文。`);
-  if (rules.audioTags)
-    guidance.push(`可根据情境自主决定是否使用 Audio Tags，以及标签的自然语言内容。例如 ${elevenAudioTagExamples.map((tag) => `[${tag}]`).join('、')}，这些只是示例，不是白名单。使用 [标签]，也兼容 ［标签］、【标签】；每个标签去除首尾空格后为 1～${MAX_AUDIO_TAG_LENGTH} 个字符，只含文字、数字、空格和自然语言标点（引号、逗号、句号、问号、感叹号、冒号、分号、顿号、省略号、连字符或破折号），至少包含文字或数字，不允许嵌套、换行或其他符号。不使用 XML、SSML 或其他厂商语法；标签不属于转写正文，语音仍须包含可朗读正文。标签效果由模型与音色决定。`);
+  if (rules.audioTags) {
+    const examples = provider === 'fishAudio' ? fishAudioTagExamples : elevenAudioTagExamples;
+    guidance.push(`可根据情境自主决定是否使用 Audio Tags，以及标签的自然语言内容。例如 ${examples.map((tag) => `[${tag}]`).join('、')}，这些只是示例，不是白名单。使用 [标签]，也兼容 ［标签］、【标签】；每个标签去除首尾空格后为 1～${MAX_AUDIO_TAG_LENGTH} 个字符，只含文字、数字、空格和自然语言标点（引号、逗号、句号、问号、感叹号、冒号、分号、顿号、省略号、连字符或破折号），至少包含文字或数字，不允许嵌套、换行或其他符号。不使用 XML、SSML 或其他厂商语法；标签不属于转写正文，语音仍须包含可朗读正文。标签效果由模型与音色决定。`);
+    if (provider === 'fishAudio')
+      guidance.push('Fish 的句子情绪通常放在句首，声音和停顿放在发生的位置。例如“[warm and gentle]嗯，我在。[break]你慢慢说。”或“[happy][laughing]哈哈，太好了！”。可用简短自然语言描述语气，不混用 S1 的圆括号标签；[break]、[long-break] 只表达相对停顿，不承诺秒数。不输出说话人、音标或成对 XML 标签。');
+  }
   if (rules.pause === 'minimax')
     guidance.push('停顿使用 <#秒数#>，范围 0.01～99.99 秒，最多两位小数，例如“嗯，<#0.5#>我在听。”；只能放在可朗读正文之间，不能连续使用。');
   if (rules.pause === 'ssml')
@@ -61,7 +70,7 @@ export function getSpeechTextGuidance(provider: SpeechProviderId, model: string,
 
 /** 分句消费的语法事实；这里只识别停顿，合法性仍由 prepareSpeechText 在输出边界验证。 */
 export function hasSpeechPause(text: string): boolean {
-  return /<#|<break\b|[\[［【][^\[\]［］【】\r\n]*(?:\bpauses?\b|停顿)[^\[\]［］【】\r\n]*[\]］】]/i.test(text);
+  return /<#|<break\b|[\[［【][^\[\]［］【】\r\n]*(?:\bpauses?\b|\b(?:long-)?break\b|停顿)[^\[\]［］【】\r\n]*[\]］】]/i.test(text);
 }
 
 /** 模型输出的语音文本边界：规范化合成标签，并从转写中移除当前模型允许的控制标记。 */

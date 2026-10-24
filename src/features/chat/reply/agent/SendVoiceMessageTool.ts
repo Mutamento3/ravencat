@@ -2,6 +2,7 @@
 import { MEDIA_ASSET_STORAGE_BACKEND, prepareMediaAssetBatch } from '@features/media';
 import { synthesizeTextToSpeech, resolveTextToSpeechModel, readSpeechMetadata, getSpeechParameters, getSpeechTextGuidance, prepareSpeechText, type ResolvedSpeechModel, type SpeechDelivery } from '@features/speech';
 import { readLocalAudioMetadata, temporarySpeechAudioStore } from '@platform/device';
+import { COMPLETION_INTENT_PARAMETER } from '@shared/aiTools';
 import type { AgentToolExecutionContext, AgentToolExecutionResult } from '@shared/aiTools';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 
@@ -19,17 +20,13 @@ export const sendVoiceMessageDefinition = {
   name: 'send_voice_message',
   description: [
     '把完整自然语言作为一条真实语音消息发送到当前单聊或群聊。一次调用只发送一条；需要连续多条时可多次调用。',
-    '用 on_success 声明成功后结束或继续。失败会返回错误供你处理。',
+    '失败会返回错误供你处理。',
   ].join(''),
   parameters: {
     type: 'object',
     properties: {
       text: { type: 'string', minLength: 1, maxLength: 2000, description: '语音可自然使用语气词和标点停顿；不写动作、旁白或表演说明' },
-      on_success: {
-        type: 'string',
-        enum: ['finish', 'continue'],
-        description: '成功后意图：本次回复已完整选 finish，系统将结束本轮；还要发送语音、表情包、补充文字或执行其他操作选 continue。同批多个工具按顺序执行，仅最后一个工具的 finish 决定结束；任何工具失败都会继续请求你。无需为可能失败选择 continue。',
-      },
+      on_success: COMPLETION_INTENT_PARAMETER,
     },
     required: ['text', 'on_success'],
     additionalProperties: false,

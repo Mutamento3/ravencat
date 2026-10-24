@@ -60,6 +60,7 @@ const { MEDIA_ASSET_SCHEMA, MEDIA_ASSET_CONTENT_HASH_INDEX } = await loadTypeScr
   'src/platform/persistence/sqlite/mediaAssetSchema.ts',
 );
 const { CALL_BACKGROUND_SELECTION_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callBackgroundSchema.ts');
+const { CALL_HISTORY_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callHistorySchema.ts');
 const { CHAT_FAVORITES_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatFavoriteSchema.ts');
 const chatTimelineSqlModule = await loadTypeScriptModule('src/features/chat/messages/infrastructure/ChatTimelineSql.ts');
 const messageTimeSeparatorModule = await loadTypeScriptModule(
@@ -181,6 +182,8 @@ function createDatabase() {
       owner_assistant_id TEXT
     );
     CREATE TABLE ai_downloaded_images (id TEXT PRIMARY KEY, assistant_id TEXT, media_asset_id TEXT);
+    CREATE TABLE call_sessions (id TEXT PRIMARY KEY, chat_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE);
+    ${CALL_HISTORY_SCHEMA}
     CREATE TABLE moments (id TEXT PRIMARY KEY);
     CREATE TABLE moment_media (
       id TEXT PRIMARY KEY,

@@ -259,7 +259,9 @@ assert.equal(metadata.getMessageSharedRecord({ metadataJson: JSON.stringify({ ki
     CREATE TABLE group_speech_tasks (id TEXT PRIMARY KEY, plan_id TEXT, group_id TEXT,
     ai_assistant_id TEXT, agent_id TEXT, sequence_order INTEGER, source TEXT, status TEXT,
     visible_reply_committed INTEGER DEFAULT 0, started_at TEXT, completed_at TEXT,
-    error_message TEXT, created_at TEXT, updated_at TEXT);`);
+    error_message TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE group_chat_members (id TEXT PRIMARY KEY, group_id TEXT, ai_assistant_id TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1, muted INTEGER NOT NULL DEFAULT 0, joined_during_plan_id TEXT);`);
   boundaries.set('@features/profile', { removeConversationWallpaperInTransaction() {} });
   const { GroupChatRepository } = load('src/features/chat/group/infrastructure/SQLiteGroupChatRepository.ts');
   const groups = new GroupChatRepository();
@@ -300,10 +302,13 @@ assert.equal(metadata.getMessageSharedRecord({ metadataJson: JSON.stringify({ ki
     db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(id, 'group');
     db.prepare('INSERT INTO sessions (id) VALUES (?)').run(id);
     db.prepare('INSERT INTO group_chats (id) VALUES (?)').run(id);
+    for (const ai of assistants) {
+      db.prepare('INSERT INTO group_chat_members (id, group_id, ai_assistant_id) VALUES (?, ?, ?)').run(`${id}:${ai.id}`, id, ai.id);
+    }
     await share.shareChatRecord({ target: { kind: 'group', id }, record: directRecord, comment: '', clientMessageId: randomUUID() });
   }
   const result = await invokeGroupChat('empty-share-group');
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(adminRequests.length, 1);
   const input = adminRequests[0].modelMessages[0];
   assert.equal(input.role, 'user');

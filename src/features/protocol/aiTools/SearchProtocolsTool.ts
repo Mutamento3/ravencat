@@ -66,13 +66,9 @@ export async function execute(
       return { success: true, message: `未找到包含"${keyword}"的协议`, data: [] };
     }
 
-    const summary = protocols.map((p, i) =>
-      `${i + 1}. ${p.content}`
-    ).join('\n');
-
     return {
       success: true,
-      message: `找到 ${protocols.length} 条相关协议:\n${summary}`,
+      message: `找到 ${protocols.length} 条相关协议（id 用作 protocolId）:\n${JSON.stringify(protocols)}`,
       data: protocols
     };
   } catch (error) {

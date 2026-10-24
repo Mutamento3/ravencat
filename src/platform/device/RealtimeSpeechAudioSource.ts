@@ -4,6 +4,7 @@ import {
   addRealtimeSpeechDetectedListener,
   startRealtimeSpeechAudioSource,
   stopRealtimeSpeechAudioSource,
+  exportRealtimeSpeechSegment,
   type RealtimeSpeechAudioSourceStartResult,
   type RealtimeSpeechAudioSourceSubscription,
 } from '../../../modules/realtime-speech-audio-source';
@@ -11,12 +12,14 @@ import {
 export interface RealtimeSpeechAudioSourceSession {
   echoCancellationEnabled: boolean;
   stop(): Promise<void>;
+  exportSegment(startMs: number, endMs: number): Promise<{ uri: string; durationMs: number }>;
 }
 
 export interface RealtimeSpeechAudioSourceStartParams {
   onAudioChunk: (chunk: ArrayBuffer) => void;
   onSpeechDetected?: () => void;
   onError: (error: Error) => void;
+  archiveSegments?: boolean;
 }
 
 export interface RealtimeSpeechAudioSource {
@@ -42,6 +45,7 @@ class NativeRealtimeSpeechAudioSource implements RealtimeSpeechAudioSource {
       startResult = await startRealtimeSpeechAudioSource({
         sampleRate: 16000,
         chunkDurationMs: 200,
+        archiveSegments: params.archiveSegments,
       });
     } catch (error) {
       subscriptions.forEach((subscription) => subscription.remove());
@@ -49,10 +53,18 @@ class NativeRealtimeSpeechAudioSource implements RealtimeSpeechAudioSource {
     }
 
     let stopping: Promise<void> | undefined;
+    const exports = new Set<Promise<unknown>>();
     return {
       echoCancellationEnabled: startResult.echoCancellationEnabled,
       // 原生 stop 完成前仍接收末尾 PCM；重复停止共享同一次原生释放。
-      stop: () => stopping ??= stopRealtimeSpeechAudioSource().finally(() => {
+      exportSegment: (startMs, endMs) => {
+        if (!startResult.archiveId || stopping) return Promise.reject(new Error('录音分段保存未开启或采集已停止'));
+        const operation = exportRealtimeSpeechSegment(startResult.archiveId, startMs, endMs);
+        exports.add(operation);
+        void operation.then(() => exports.delete(operation), () => exports.delete(operation));
+        return operation;
+      },
+      stop: () => stopping ??= Promise.allSettled([...exports]).then(() => stopRealtimeSpeechAudioSource()).finally(() => {
         subscriptions.forEach((subscription) => subscription.remove());
       }),
     };

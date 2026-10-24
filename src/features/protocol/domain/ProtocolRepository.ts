@@ -25,6 +25,8 @@ export interface IProtocolRepository {
   getPromptText(aiAssistantId: string): Promise<string>;
   search(aiAssistantId: string, keyword: string): Promise<Protocol[]>;
   insert(protocol: CreateProtocolInput): Promise<Protocol>;
-  update(id: string, updates: UpdateProtocolInput): Promise<Partial<Protocol> & Pick<Protocol, 'id' | 'updatedAt'>>;
-  delete(id: string): Promise<boolean>;
+  /** 仅修改所属 AI 的条目；未命中返回 null，成功返回事务内的完整结果。 */
+  update(aiAssistantId: string, id: string, updates: UpdateProtocolInput): Promise<Protocol | null>;
+  /** 仅删除所属 AI 的条目；返回是否实际删除。 */
+  delete(aiAssistantId: string, id: string): Promise<boolean>;
 }

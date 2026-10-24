@@ -50,6 +50,7 @@ interface GroupChatMemberRow {
   agent_id: string;
   display_order: number | null;
   enabled: number | null;
+  muted: number;
   name?: string | null;
   nickname?: string | null;
   avatar?: string | null;
@@ -966,7 +967,9 @@ export class GroupChatRepository implements IGroupChatRepository {
               `INSERT INTO group_speech_tasks
                (id, plan_id, group_id, ai_assistant_id, agent_id, sequence_order, source,
                 status, started_at, completed_at, error_message, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, NULL, ?, ?)`,
+               SELECT ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, NULL, ?, ?
+               WHERE EXISTS (SELECT 1 FROM group_chat_members m WHERE m.group_id = ? AND m.ai_assistant_id = ?
+                 AND m.enabled = 1 AND m.muted = 0 AND (m.joined_during_plan_id IS NULL OR m.joined_during_plan_id <> ?))`,
               [
                 input.id,
                 planId,
@@ -977,6 +980,9 @@ export class GroupChatRepository implements IGroupChatRepository {
                 input.source,
                 now,
                 now,
+                input.groupId,
+                input.aiAssistantId,
+                planId,
               ],
             );
           }
@@ -1014,6 +1020,12 @@ export class GroupChatRepository implements IGroupChatRepository {
         if (!plan || (plan.status !== 'pending' && plan.status !== 'running')) {
           return null;
         }
+
+        // 继承任务和规划期间的成员变化在领取边界收口，重新加入也不能复活旧机会。
+        await transaction.runAsync(`UPDATE group_speech_tasks SET status = 'skipped', completed_at = ?, updated_at = ?, error_message = '成员当前不可发言'
+          WHERE plan_id = ? AND status = 'queued' AND NOT EXISTS (SELECT 1 FROM group_chat_members m
+            WHERE m.group_id = group_speech_tasks.group_id AND m.ai_assistant_id = group_speech_tasks.ai_assistant_id
+            AND m.enabled = 1 AND m.muted = 0 AND (m.joined_during_plan_id IS NULL OR m.joined_during_plan_id <> ?))`, [now, now, planId, planId]);
 
         const next = await transaction.getFirstAsync<GroupSpeechTaskRow>(
           `SELECT *
@@ -1071,6 +1083,11 @@ export class GroupChatRepository implements IGroupChatRepository {
       if (input.aiAssistantId === sourceTask.aiAssistantId) {
         continue;
       }
+
+      const eligibleMember = await transaction.getFirstAsync<{ id: string }>(`SELECT id FROM group_chat_members
+        WHERE group_id = ? AND ai_assistant_id = ? AND enabled = 1 AND muted = 0
+        AND (joined_during_plan_id IS NULL OR joined_during_plan_id <> ?)`, [input.groupId, input.aiAssistantId, planId]);
+      if (!eligibleMember) continue;
 
       // 只有来源任务之后仍排在 queued 中的目标任务，才是能覆盖本次 mention
       // 的 future turn。running、终态和来源之前的任务都不提供覆盖。
@@ -1245,7 +1262,7 @@ export class GroupChatRepository implements IGroupChatRepository {
         status,
         options.startedAt === undefined ? null : options.startedAt,
         options.completedAt === undefined
-          ? (status === 'completed' || status === 'failed' || status === 'skipped' || status === 'superseded' || status === 'terminated' ? now : null)
+          ? (status === 'completed' || status === 'partial' || status === 'failed' || status === 'skipped' || status === 'superseded' || status === 'terminated' ? now : null)
           : options.completedAt,
         options.errorMessage || null,
         now,
@@ -1350,6 +1367,7 @@ export class GroupChatRepository implements IGroupChatRepository {
       agentId: row.agent_id,
       displayOrder: row.display_order || 0,
       enabled: row.enabled !== 0,
+      muted: row.muted === 1,
       name: row.name || undefined,
       nickname: row.nickname,
       avatar: row.avatar || null,

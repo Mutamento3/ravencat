@@ -4,7 +4,7 @@ RavenCat 使用 React Native、Expo SDK 54 和 TypeScript，原生部分使用 K
 
 ## 准备环境
 
-- Node.js 22，版本范围为 `>=22.13.0 <23`；`.nvmrc` 提供参考版本。
+- Node.js 22，版本范围为 `>=22.23.4 <23`；`.nvmrc` 提供参考版本。
 - npm；安装时使用仓库的 `package-lock.json`。
 - Android Studio、Android SDK、JDK 17，以及可用的 `adb`。
 - 开启 USB 调试的 Android 13+ 手机，或对应版本的模拟器。

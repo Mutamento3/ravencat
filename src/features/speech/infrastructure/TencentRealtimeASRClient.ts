@@ -83,7 +83,7 @@ export class TencentRealtimeASRClient {
         try {
           const message = parseTencentRealtimeASRMessage(event.data);
           if (message.code !== undefined && message.code !== 0) {
-            fail(new Error(message.message || `Tencent realtime ASR error: ${message.code}`));
+            fail(new Error(`腾讯云 STT code=${message.code}: ${message.message || '服务商未提供错误描述'}`));
             return;
           }
           if (!ready) {
@@ -105,9 +105,9 @@ export class TencentRealtimeASRClient {
           else handlers.onFinalResult?.(result);
         } catch (error) { fail(error instanceof Error ? error : new Error('Invalid Tencent realtime ASR response')); }
       };
-      socket.onerror = () => fail(new Error('Tencent realtime ASR WebSocket failed'));
-      socket.onclose = () => {
-        if (!closed && !finished) fail(new Error('Tencent realtime ASR connection closed before final result'));
+      socket.onerror = (event) => fail(new Error(`腾讯云 STT WebSocket 网络失败：${(event as Event & { message?: string }).message || '原生连接未提供具体原因'}`));
+      socket.onclose = (event) => {
+        if (!closed && !finished) fail(new Error(`Tencent realtime ASR connection closed before final result (code=${event.code}): ${event.reason}`));
         close();
         handlers.onClosed?.();
       };

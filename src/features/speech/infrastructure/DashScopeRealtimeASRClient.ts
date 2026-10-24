@@ -120,16 +120,16 @@ export function connectDashScopeRealtimeASR(
             handlers.onFinished?.();
             break;
           case 'task-failed':
-            fail(new Error(`${message.header.error_code}: ${message.header.error_message}`));
+            fail(new Error(`阿里百炼 STT ${message.header.error_code}: ${message.header.error_message}`));
             break;
         }
       } catch (error) {
         fail(error instanceof Error ? error : new Error('实时识别响应格式无效'));
       }
     };
-    socket.onerror = () => fail(new Error('阿里百炼实时语音识别 WebSocket 网络失败'));
-    socket.onclose = () => {
-      if (!closed && !finished) fail(new Error('实时语音识别连接提前关闭'));
+    socket.onerror = (event) => fail(new Error(`阿里百炼实时语音识别 WebSocket 网络失败：${(event as Event & { message?: string }).message || '原生连接未提供具体原因'}`));
+    socket.onclose = (event) => {
+      if (!closed && !finished) fail(new Error(`阿里百炼实时语音识别连接提前关闭（code=${event.code}）：${event.reason}`));
       close();
     };
   });

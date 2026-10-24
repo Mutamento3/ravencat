@@ -20,7 +20,7 @@ export interface NetEaseGetPublicPlaylistArgs {
 
 export const netEaseGetPublicPlaylistDefinition = {
   name: 'netease_get_public_playlist',
-  description: '【主理 AI 专属】分页读取指定网易云公开歌单的元数据和歌曲；不会自动翻取完整歌单。',
+  description: '分页读取指定网易云公开歌单的元数据和歌曲。',
   parameters: {
     type: 'object',
     properties: {

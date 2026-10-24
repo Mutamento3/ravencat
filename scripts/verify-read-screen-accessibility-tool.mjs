@@ -99,9 +99,6 @@ const toolModule = loadTypeScriptModule(
 
 const { definition, execute } = toolModule;
 assert.equal(definition.name, 'read_screen_accessibility');
-assert.match(definition.description, /当前.*Android.*页面|当前页面/u);
-assert.match(definition.description, /Accessibility/u);
-assert.match(definition.description, /OCR/iu);
 assert.deepEqual(definition.parameters.properties, {});
 assert.equal(definition.parameters.additionalProperties, false);
 

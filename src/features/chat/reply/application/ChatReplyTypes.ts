@@ -103,6 +103,7 @@ export interface AIReplyRuntimeContext {
       aiAssistantId: string;
       agentId: string;
       name: string;
+      muted?: boolean;
     }[];
     recentWindowLimit: number;
     planId?: string | null;

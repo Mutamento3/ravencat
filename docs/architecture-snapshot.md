@@ -39,6 +39,9 @@
             └── [callId].tsx
         ├── chat
             ├── [aiId]
+                ├── call-history
+                    ├── [callId].tsx
+                    └── index.tsx
                 ├── chat-settings.tsx
                 ├── file-preview.tsx
                 ├── index.tsx
@@ -223,6 +226,7 @@
                 └── RequestVideoCallTool.ts
             ├── application
                 ├── CallBackgroundSettings.ts
+                ├── CallHistory.ts
                 ├── CallNotificationFacade.ts
                 ├── CallPromptBlocks.ts
                 ├── CallPromptDefinitions.ts
@@ -267,6 +271,7 @@
                 ├── CallAIConfig.ts
                 ├── CallBackgroundRepository.ts
                 ├── CallEvent.ts
+                ├── CallHistory.ts
                 ├── CallParticipant.ts
                 ├── CallRepository.ts
                 ├── CallSession.ts
@@ -277,9 +282,13 @@
                 ├── NativeCallAudioAdapter.ts
                 ├── NativeCallExecutionAdapter.ts
                 ├── SQLiteCallBackgroundRepository.ts
+                ├── SQLiteCallHistoryRepository.ts
                 └── SQLiteCallRepository.ts
             └── presentation
                 ├── CallActiveScreen.tsx
+                ├── CallHistoryDetailScreen.tsx
+                ├── CallHistoryScreen.tsx
+                ├── callHistoryStyles.ts
                 ├── CallRuntimeProvider.tsx
                 ├── CallScreen.tsx
                 ├── components
@@ -288,6 +297,8 @@
                     ├── CallBackgroundLayer.tsx
                     ├── CallControls.styles.ts
                     ├── CallControls.tsx
+                    ├── CallHistoryEntryCard.tsx
+                    ├── CallHistoryImages.tsx
                     ├── CallTextInputModal.tsx
                     ├── CallTranscriptOverlay.styles.ts
                     └── CallTranscriptOverlay.tsx
@@ -326,6 +337,7 @@
                     ├── GroupAutoInvocationScheduler.ts
                     ├── GroupChatManagement.ts
                     ├── GroupChatMessaging.ts
+                    ├── GroupMembership.ts
                     ├── GroupMentionModelText.ts
                     ├── GroupMessageCommit.ts
                     ├── GroupMessageMentionParser.ts
@@ -342,9 +354,11 @@
                 ├── domain
                     ├── GroupChat.ts
                     ├── GroupChatRepository.ts
+                    ├── GroupMembership.ts
                     └── GroupParticipantDirectory.ts
                 └── infrastructure
-                    └── SQLiteGroupChatRepository.ts
+                    ├── SQLiteGroupChatRepository.ts
+                    └── SQLiteGroupMembershipRepository.ts
             ├── index.ts
             ├── messages
                 ├── application
@@ -411,6 +425,7 @@
                     ├── ChatStatisticsScreen.tsx
                     ├── ContextWindowSection.tsx
                     ├── FixedChatContextSection.tsx
+                    ├── HistoricalGroupsSection.tsx
                     └── useChatSettings.ts
                 ├── favorites
                     ├── ChatFavoritesScreen.styles.ts
@@ -421,6 +436,7 @@
                     ├── GroupAdminSettings.tsx
                     ├── groupAdminSettingsDraft.ts
                     ├── GroupChatDetail.tsx
+                    ├── GroupMembersSection.tsx
                     ├── GroupOptions.tsx
                     ├── GroupSpeechQueueOverlay.tsx
                     ├── NumberInputPresetsSection.tsx
@@ -1063,9 +1079,11 @@
             ├── infrastructure
                 ├── DashScopeRealtimeASRClient.ts
                 ├── ElevenLabsSpeechClient.ts
+                ├── FishAudioSpeechClient.ts
                 ├── MiniMaxSpeechClient.ts
                 ├── OpenAISpeechClient.ts
                 ├── speechAudioEncoding.ts
+                ├── SpeechHttpError.ts
                 ├── SpeechProviderOptions.ts
                 ├── SpeechSynthesisGateway.ts
                 ├── SQLiteSpeechSettingsRepository.ts
@@ -1220,6 +1238,7 @@
     ├── host
         ├── application
             ├── ApplicationUpdates.ts
+            ├── ConvertExitedGroupHistoryToMemory.ts
             ├── resetApplicationData.ts
             └── TransferProtocolToMemory.ts
         ├── composition
@@ -1227,6 +1246,7 @@
                 ├── ApplicationSettingsTools.ts
                 ├── assertImageToolRunCurrent.ts
                 ├── createAgentToolRegistry.ts
+                ├── GroupManagementTools.ts
                 ├── HostAgentRunAssembly.ts
                 ├── index.ts
                 ├── LegacyAgentToolAdapter.ts
@@ -1235,6 +1255,7 @@
                 ├── registerMcpAgentTools.ts
                 ├── registerMcpToolsForHostRun.ts
                 └── ToolPackageExposure.ts
+            ├── chatSummaryRepository.ts
             ├── completePendingBackupRestore.ts
             ├── configureAIImageTools.ts
             ├── configureAIRuntime.ts
@@ -1377,6 +1398,7 @@
             ├── InspectLocalImage.ts
             ├── LocalAudioMetadata.ts
             ├── LocalAudioPlayback.ts
+            ├── LocalAudioPlaybackCoordinator.ts
             ├── MediaFileContent.ts
             ├── MediaFileLifetime.ts
             ├── Notification.ts
@@ -1428,6 +1450,7 @@
                 ├── auxiliaryModelDefaultsSchema.ts
                 ├── backupSnapshot.ts
                 ├── callBackgroundSchema.ts
+                ├── callHistorySchema.ts
                 ├── chatFavoriteSchema.ts
                 ├── chatRegenerationSchema.ts
                 ├── chatReplyVersionSchema.ts
@@ -1440,6 +1463,7 @@
                 ├── conversationPinMigration.ts
                 ├── conversationTurnIntegrityRepair.ts
                 ├── defaultRecords.ts
+                ├── groupMembershipSchema.ts
                 ├── groupMentionMetadataMigration.ts
                 ├── hostAIRelationshipSchema.ts
                 ├── initialization.ts
@@ -1475,8 +1499,11 @@
             ├── AgentToolInputSchema.ts
             ├── HostModelRunPreparation.ts
             ├── index.ts
+            ├── ToolCompletionIntent.ts
             ├── ToolContext.ts
             └── ToolContracts.ts
+        ├── audio
+            └── AudioPlaybackState.ts
         ├── avatar
             ├── avatarConstants.ts
             ├── avatarRegistry.ts
@@ -1539,6 +1566,7 @@
             ├── AppDialogHost.tsx
             ├── appDialogStore.ts
             ├── AppTextInput.tsx
+            ├── AudioPlaybackBar.tsx
             ├── AutoSaveDraftEditor.ts
             ├── AutoSaveErrors.tsx
             ├── AvatarImage.d.ts
@@ -2025,12 +2053,19 @@
     ├── realtime-speech-audio-source
         ├── android
             └── src
-                └── main
+                ├── main
                     └── java
                         └── expo
                             └── modules
                                 └── realtimespeechaudiosource
-                                    └── RealtimeSpeechAudioSourceModule.kt
+                                    ├── RealtimeSpeechAudioSourceModule.kt
+                                    └── SpeechSegmentArchive.kt
+                └── test
+                    └── java
+                        └── expo
+                            └── modules
+                                └── realtimespeechaudiosource
+                                    └── SpeechSegmentArchiveTest.kt
         ├── index.ts
         └── src
             └── RealtimeSpeechAudioSourceModule.ts

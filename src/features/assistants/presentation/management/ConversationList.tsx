@@ -244,11 +244,10 @@ export default function ConversationList({
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
   const floatingTabBarScrollPadding = useFloatingTabBarScrollPadding();
-  // 玻璃主题下悬浮 TabBar 覆盖在列表上方，需预留底部空间才能滚出最后一条；
-  // 非玻璃主题的 TabBar 占据布局空间，保留原有留白即可。
-  const listPaddingBottom = theme.effects.glass.enabled
-    ? floatingTabBarScrollPadding
-    : 20;
+  // 只有纸条主题的 TabBar 占据布局空间；其余主题均需为悬浮底栏预留滚动空间。
+  const listPaddingBottom = theme.id === 'paper-note'
+    ? 20
+    : floatingTabBarScrollPadding;
 
   const animateMenuIn = useCallback(() => {
     menuOpacity.setValue(0);

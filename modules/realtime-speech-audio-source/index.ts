@@ -5,6 +5,7 @@ export {
   isRealtimeSpeechAudioSourceRecording,
   startRealtimeSpeechAudioSource,
   stopRealtimeSpeechAudioSource,
+  exportRealtimeSpeechSegment,
 } from './src/RealtimeSpeechAudioSourceModule';
 
 export type {

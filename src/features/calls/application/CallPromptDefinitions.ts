@@ -67,7 +67,7 @@ export const CALL_PROMPT_DEFINITIONS = [
   },
   {
     id: 'control.call_end_marker',
-    version: 2,
+    version: 3,
     name: '通话结束标记',
     description: '用 [[END_CALL]] 显式表达 AI 主动结束当前通话。',
     owner: 'calls',

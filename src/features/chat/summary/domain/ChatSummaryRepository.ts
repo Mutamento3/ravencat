@@ -108,12 +108,18 @@ export interface ChatBackgroundContextOptions {
 export interface ChatBackgroundContext {
   conversationId: string; kind: 'direct' | 'group'; name: string;
   timeline: ConversationContextItem[]; contextSegments: ChatSummarySegment[];
+  /** 退出快照保留正文供用户管理，自动读取另遵循退出时的摘要注入选择。 */
+  summaryInjectionEnabled?: boolean;
+  membership?: { status: 'left'; exitedAt: string };
 }
 export interface ChatSummaryRepository {
+  captureGroupHistoryInTransaction(transaction: import('@platform/persistence').DatabaseTransactionExecutor, groupId: string, groupName: string): Promise<ChatBackgroundContext>;
   invalidateModelReferencesInTransaction(transaction: import('@platform/persistence').DatabaseTransactionExecutor, modelConfigId: string): Promise<void>;
   readBackgroundContexts(assistantId: string, currentConversationId: string, options: ChatBackgroundContextOptions): Promise<ChatBackgroundContext[]>;
   readContext(conversationId: string, protectedMessageIds: readonly number[]): Promise<ChatSummarySnapshot>;
   prepareConversations(now: string, conversationIds?: readonly string[]): Promise<{ conversationIds: string[]; pausedConversationIds: string[] }>;
+  readQueuedRevision(conversationId: string): Promise<number | null>;
+  acknowledgeQueuedRevision(conversationId: string, revision: number): Promise<void>;
   getNextWakeAt(): Promise<string | null>;
   claim(conversationId: string, batchSize: number, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<ChatSummaryClaim | null>;
   appendClaim(claim: ChatSummaryClaim, additions: readonly ChatSummaryAddition[], now: string): Promise<boolean>;

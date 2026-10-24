@@ -1,4 +1,5 @@
 /** 将 Chat 的仓储端口与数据库维护能力连接到具体实现。 */
+import { chatSummaryRepository } from './chatSummaryRepository';
 import {
   configureChatRuntimeDependencies,
   configureChatImageModels,
@@ -7,6 +8,7 @@ import {
   chatImageSettingsRepository,
   conversationTurnRepository,
   groupChatRepository,
+  groupMembershipRepository,
   messageRepository,
   sessionRepository,
   configureChatFavoriteRuntime,
@@ -84,12 +86,14 @@ export function configureChatRuntime(): void {
   });
   subscribeAuxiliaryModelsChanged(notifyChatImageModelsChanged);
   configureChatRuntimeDependencies({
+    captureGroupHistory: (tx, groupId, groupName) => chatSummaryRepository.captureGroupHistoryInTransaction(tx, groupId, groupName),
     mutations: { isRunCurrent: (transaction, runId) => conversationTurnRepository.isRunCurrentInTransaction(transaction, runId) },
     turnPresentation: { freeze: freezeTurnDisplays, interrupt: interruptSessionTurnDisplays },
     repositories: {
       messages: messageRepository,
       sessions: sessionRepository,
       groups: groupChatRepository,
+      membership: groupMembershipRepository,
       turns: conversationTurnRepository,
     },
     assistantDirectory: {

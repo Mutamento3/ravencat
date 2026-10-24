@@ -268,6 +268,12 @@ const SENSITIVE_ACTION = {
 };
 
 const builtInTools = [
+  ...[
+    ['search_groups', false, true], ['join_group', false, false], ['add_group_member', false, false],
+    ['remove_group_member', true, false], ['mute_group_member', true, false],
+    ['unmute_group_member', true, false], ['leave_group', false, false], ['rename_group', false, false],
+  ].map(([name, hostOnly, readOnly]) => ({ module: './GroupManagementTools', symbol: name, name, owner: 'chat', hostOnly, readOnly,
+    ...(readOnly ? PRIVATE_READ : REVERSIBLE_ACTION) })),
   { module: '@features/webTools', symbol: 'KimiWebSearchTool', name: 'kimi_web_search', owner: 'webTools', ...SAFE_READ },
   { module: '@features/webTools', symbol: 'KimiWebFetchTool', name: 'kimi_web_fetch', owner: 'webTools', ...SAFE_READ },
   { module: '@features/webTools', symbol: 'KimiMewTool', name: 'kimi_mew', owner: 'webTools', risk: 'safe_read', idempotency: 'not_idempotent' },
@@ -312,6 +318,7 @@ const builtInTools = [
   { module: '@features/calls', symbol: 'RequestVideoCallTool', name: 'requestVideoCall', owner: 'calls', ...EXTERNAL_SIDE_EFFECT },
   { module: '@features/calls', symbol: 'LookAtUserTool', name: 'lookAtUser', owner: 'calls', ...SENSITIVE_ACTION },
   { module: '@features/memory', symbol: 'RememberMemoryTool', name: 'remember_memory', owner: 'memory', ...REVERSIBLE_WRITE },
+  { module: '@features/memory', symbol: 'ConvertExitedGroupHistoryTool', name: 'convert_exited_group_history_to_memory', owner: 'memory', ...REVERSIBLE_WRITE },
   { module: '@features/memory', symbol: 'RecallMemoryTool', name: 'recall_memory', owner: 'memory', ...PRIVATE_READ },
   { module: '@features/memory', symbol: 'UpdateMemoryTool', name: 'update_memory', owner: 'memory', ...REVERSIBLE_WRITE },
   { module: '@features/memory', symbol: 'ForgetMemoryTool', name: 'forget_memory', owner: 'memory', ...REVERSIBLE_WRITE },
@@ -379,6 +386,7 @@ const featureMocks = Object.fromEntries(
   [...new Set(builtInTools.map((tool) => tool.module))].map((module) => [module, {}])
 );
 featureMocks['@platform/ai'] = loadTypeScriptModule('src/platform/ai/moonshotEndpoint.ts', {});
+featureMocks['@shared/aiTools'] = loadTypeScriptModule('src/shared/aiTools/ToolCompletionIntent.ts');
 for (const tool of builtInTools) {
   featureMocks[tool.module][tool.symbol] = (
     tool.module === '@features/companion'
@@ -387,6 +395,7 @@ for (const tool of builtInTools) {
     || tool.module === '@features/stickers'
     || tool.module === '@features/memory'
     || tool.module === './ApplicationSettingsTools'
+    || tool.module === './GroupManagementTools'
     || tool.symbol === 'SendVoiceMessageTool'
     || tool.symbol === 'SearchChatSummariesTool'
     || tool.symbol === 'GetSecondarySummaryTool'
@@ -407,6 +416,8 @@ const momentSnapshotTool = {
 featureMocks['@features/moments/composition'] = { createMomentToolForRun: async () => { momentPreparationCount++; return momentSnapshotTool; } };
 featureMocks['./ApplicationSettingsTools'] = { applicationSettingsTools: builtInTools.filter(tool => tool.module === './ApplicationSettingsTools')
   .map(entry => ({ tool: createAgentNativeBuiltInTool(entry.name), owner: entry.owner, hostOnly: entry.hostOnly, mutating: entry.mutating })) };
+featureMocks['./GroupManagementTools'] = { groupManagementTools: builtInTools.filter(tool => tool.module === './GroupManagementTools')
+  .map(entry => ({ tool: createAgentNativeBuiltInTool(entry.name), hostOnly: entry.hostOnly, readOnly: entry.readOnly })) };
 const defaultToolPermissions = {};
 featureMocks['@features/prompting'] = { readPromptDefaults: async () => ({ toolPermissions: defaultToolPermissions }) };
 assert.ok(featureMocks['@features/stickers'].SearchStickersTool, 'Sticker 搜索工具 mock 必须存在');
@@ -763,7 +774,7 @@ assert.deepEqual(
     owner,
     defaultEnabled: !['kimi_web_search', 'kimi_web_fetch', 'kimi_mew'].includes(name),
     callOnly: name === 'lookAtUser',
-    memoryParticipation: ['remember_memory', 'recall_memory', 'update_memory', 'forget_memory'].includes(name)
+    memoryParticipation: ['remember_memory', 'recall_memory', 'update_memory', 'forget_memory', 'convert_exited_group_history_to_memory'].includes(name)
       ? 'read_write'
       : 'none',
     })).sort((left, right) => left.name.localeCompare(right.name)),

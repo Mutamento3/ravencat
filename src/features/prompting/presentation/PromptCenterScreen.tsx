@@ -28,7 +28,7 @@ const RULE_TABS: { id: RuleDefinitionId; label: string }[] = [
   { id: 'foundation.visual_grounding', label: '视觉规则' },
 ];
 const EMPTY_RULES: Record<RuleDefinitionId, string> = { 'foundation.default_core': '', 'foundation.visual_grounding': '' };
-const PACKAGE_NAMES: Record<string, string> = { kimiOfficial: 'Kimi 官方工具', webTools: '联网工具包', media: '图片', applicationSettings: '应用设置工具', protocol: '协议空间', moments: '时刻', wallet: '羽库记账', calls: '通话', memory: '记忆', chat: '语音', stickers: '表情包', togetherListening: '一起听', host: '主理 AI 专属' };
+const PACKAGE_NAMES: Record<string, string> = { kimiOfficial: 'Kimi 官方工具', webTools: '联网工具包', media: '图片', applicationSettings: '应用设置工具', groupChat: '群聊', protocol: '协议空间', moments: '时刻', wallet: '羽库记账', calls: '通话', memory: '记忆', chat: '语音', stickers: '表情包', togetherListening: '一起听', host: '主理 AI 专属' };
 
 /** 展示按产品用途分包；摘要工具仍由 Chat 拥有，主理工具统一在专属包管理。 */
 function getToolPackageId(tool: Snapshot['tools'][number]): string {

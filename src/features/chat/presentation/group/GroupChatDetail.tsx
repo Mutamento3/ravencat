@@ -27,6 +27,7 @@ import {
   terminateGroupSpeechPlan,
 } from '../../group/application';
 import GroupSpeechQueueOverlay from './GroupSpeechQueueOverlay';
+import { subscribeGroupChanged } from '../../group/application/GroupMembership';
 import { getHostAIAssistant } from '@features/assistants';
 import { acceptChatTogetherListeningInvitation, declineChatTogetherListeningInvitation, leaveChatTogetherListening,
   type ChatTogetherListeningResult } from '../../conversation/application/ChatTogetherListeningGateway';
@@ -331,6 +332,10 @@ export default function GroupChatDetail({
     setActivePlan(await getActiveGroupSpeechPlan(sessionId));
   }, [sessionId]);
 
+  useEffect(() => subscribeGroupChanged(id => {
+    if (id === sessionId) void refreshGroupDetails().catch(error => console.error('[群聊] 成员资料刷新失败', error));
+  }), [sessionId, refreshGroupDetails]);
+
   useEffect(() => {
     void refreshGroupDetails().catch((error) => {
       console.error('[GroupChatDetail] Failed to load group detail:', error);
@@ -352,7 +357,7 @@ export default function GroupChatDetail({
   const aiAssistantLike = useMemo<ChatDetailAIAssistantLike>(() => ({
     id: group.id,
     agentId: `group_${group.id}`,
-    name: group.name,
+    name: groupDetails?.group.name ?? group.name,
     avatar: group.avatar,
     model: '群聊',
     apiKey: '',
@@ -365,7 +370,7 @@ export default function GroupChatDetail({
     allowMultipleBubbles: true,
     isHostAI: false,
     isBlocked: false,
-  }), [group]);
+  }), [group, groupDetails]);
 
   const assistantById = useMemo(() => {
     return new Map(
@@ -780,7 +785,7 @@ export default function GroupChatDetail({
             <ChatSelectionHeader count={selection.count} paddingTop={Math.max(insets.top, 8)} disabled={selection.isDeleting} onCancel={selection.exit} />
           ) : (
             <ChatHeader
-            aiName={group.name}
+            aiName={groupDetails?.group.name ?? group.name}
             onGoBack={onGoBack}
             onOpenMenu={onOpenMenu}
             paddingTop={Math.max(insets.top, 8)}

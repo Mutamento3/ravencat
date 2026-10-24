@@ -258,6 +258,8 @@ assert.equal(metadata.buildReplyQuoteModelText({ replyToText: '旧引用', metad
 // 输入区交接使用真实 React hook；落库故意挂起，验证受理与提交完成的职责边界。
 global.IS_REACT_ACT_ENVIRONMENT = true;
 const pendingSubmissions = [];
+const callDialogs = [];
+let outgoingCallAction;
 let activeCall = null;
 const hookModule = { exports: {} };
 const hookCode = ts.transpileModule(fs.readFileSync(path.join(root, 'src/features/chat/presentation/messages/ChatDetail/useChatSendFlow.ts'), 'utf8'), {
@@ -265,11 +267,13 @@ const hookCode = ts.transpileModule(fs.readFileSync(path.join(root, 'src/feature
 }).outputText;
 const hookMocks = {
   react: React,
+  '@shared/ui': { showAppDialog: dialog => callDialogs.push(dialog) },
   './ChatAttachmentDraftFiles': { retainChatAttachmentDraftFiles: () => () => {} },
   '../../../messages/application/MessageTimeline': timeline,
   '../../../messages/application/SendUserMessage': { sendUserMessage: params => new Promise((resolve, reject) => pendingSubmissions.push({ params, resolve, reject })) },
   '../../../conversation/application/ChatCallGateway': {
     getActiveChatCall: () => activeCall,
+    startOutgoingChatCall: () => outgoingCallAction(),
     isChatSendBlockedByCall: load('src/features/chat/conversation/application/ChatCallGateway.ts').isChatSendBlockedByCall,
   },
   '../../../messages/domain/chatMessageMetadata': metadata,
@@ -343,6 +347,26 @@ try {
   assert.equal(composer.text, '被通话拦截的草稿', '发送检查拒绝时必须保留输入');
   assert.equal(composer.messages, beforeBlocked);
   assert.equal(pendingSubmissions.length, 0);
+
+  // 已有聊天消息时，拨号动作失败也必须显示独立详情，而非写入不可见的加载错误。
+  const refusal = '接听决策失败（测试模型）：HTTP 401: API Key invalid';
+  outgoingCallAction = async () => ({ status: 'failed', call: { id: 'failed-call', state: 'missed' },
+    errorMessage: refusal, visibleMessages: [] });
+  await act(async () => { await composer.startVideoCall(); });
+  assert.equal(callDialogs.length, 1);
+  assert.equal(callDialogs[0].message, refusal);
+  assert.equal(callDialogs[0].tone, 'error');
+  assert.ok(composer.messages.length > 0, '错误不需要清空既有聊天才能被用户看到');
+  assert.equal(composer.error, null, '拨号错误不污染历史加载状态');
+  outgoingCallAction = async () => { throw new Error('拨号运行时初始化失败'); };
+  await act(async () => { await composer.startVideoCall(); });
+  assert.equal(callDialogs.length, 2);
+  assert.equal(callDialogs[1].message, '拨号运行时初始化失败');
+  for (const status of ['ended', 'accepted', 'rejected']) {
+    outgoingCallAction = async () => ({ status, call: { id: 'call' }, visibleMessages: [] });
+    await act(async () => { await composer.startVideoCall(); });
+  }
+  assert.equal(callDialogs.length, 2, '用户挂断、成功与 AI 明确拒接不显示系统故障');
 } finally {
   if (composerSurface) await act(async () => composerSurface.unmount());
 }

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Keyboard, ScrollView, Text, TouchableOpacity, View, type GestureResponderEvent } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   SPEECH_PROVIDERS,
@@ -9,7 +9,6 @@ import {
   type SpeechProviderOptions,
   type SpeechConnectionConfig,
   type SpeechKind,
-  type SpeechProviderId,
 } from '@features/speech';
 import { KeyboardAvoidingContainer, Button, DropdownField, InputField, ToggleField, showAppDialog } from '@shared/ui';
 import NavigationHeader from '@shared/ui/NavigationHeader';
@@ -79,6 +78,7 @@ export default function SpeechModelEditScreen({
     };
   }, [draft.provider, draft.apiKey, draft.baseUrl]);
   const provider = SPEECH_PROVIDERS.find((entry) => entry.id === draft.provider && entry.kind === kind);
+  const providerLocked = kind === 'tts' && !!modelId;
   const fields = provider ? getSpeechParameters(provider.id, draft.model) : [];
   const modelOptions = options?.models ?? provider?.models.map((value) => ({ value, label: value })) ?? [];
   const loadOptions = async () => {
@@ -102,6 +102,10 @@ export default function SpeechModelEditScreen({
   };
   const blur = () => {
     if (modelId) void commit();
+  };
+  const dismissBackgroundInput = (event: GestureResponderEvent) => {
+    // 只观察空白容器上的抬手，不参与 responder 竞争，也不处理子控件的触摸。
+    if (event.target === event.currentTarget) Keyboard.dismiss();
   };
   const set = (key: string, value: string | boolean, immediate = false) => {
     setTestError(null);
@@ -163,9 +167,6 @@ export default function SpeechModelEditScreen({
         },
       },
     ] });
-  const reset = () => {
-    void restore().then(() => feedback.setBlocked(false));
-  };
   const setModel = (model: string, immediate = false) => {
     const next: Partial<SpeechModelDraft> = { model };
     const allowed = getSpeechParameters(provider!.id, model);
@@ -177,11 +178,7 @@ export default function SpeechModelEditScreen({
         next[field.key] = field.defaultValue === true;
     change(next, immediate);
   };
-  const rightButton = modelId ? (
-    feedback.blocked ? (
-      <Button title="恢复" variant="text" onPress={reset} />
-    ) : undefined
-  ) : (
+  const rightButton = modelId ? undefined : (
     <Button
       title={saving ? '创建中…' : '创建'}
       variant="text"
@@ -195,6 +192,7 @@ export default function SpeechModelEditScreen({
     <SafeAreaView
       style={{ flex: 1, backgroundColor: theme.colors.background.app }}
       edges={['top', 'left', 'right']}
+      onTouchEnd={dismissBackgroundInput}
     >
       <KeyboardAvoidingContainer style={{ flex: 1 }}>
         <NavigationHeader
@@ -204,214 +202,229 @@ export default function SpeechModelEditScreen({
         />
         <AutoSaveErrors
           error={editor.saveError || creationError}
-          blocked={!!modelId && feedback.blocked}
+          blocked={!!modelId && feedback.blocked && Object.keys(errors).length > 0}
           retry={blur}
-          restore={modelId ? reset : undefined}
         />
         <ScrollView
           ref={feedback.scrollRef}
-          contentContainerStyle={{ padding: theme.spacing.lg, paddingBottom: theme.spacing.xl }}
-          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ flexGrow: 1 }}
+          keyboardShouldPersistTaps="always"
           keyboardDismissMode="on-drag"
         >
-          <View onLayout={feedback.fieldLayout(['provider'])}>
-            <DropdownField
-              label="提供方"
-              value={draft.provider}
-              options={SPEECH_PROVIDERS.filter((entry) => entry.kind === kind).map((entry) => ({
-                value: entry.id,
-                label: entry.label,
-              }))}
-              error={errors.provider}
-              onChange={(value) => {
-                if (value === draft.provider) return;
-                change(switchSpeechProvider(value as SpeechProviderId), true);
-              }}
-            />
-          </View>
-          {!provider ? (
-            <Text style={{ color: theme.colors.feedback.error }}>原配置的提供方无效，请重新选择。</Text>
-          ) : null}
-          <InputField
-            label="配置名称"
-            value={draft.name}
-            onChangeText={(value) => set('name', value)}
-            onBlur={blur}
-            error={errors.name}
-            placeholder={`例如：${provider?.label ?? '语音服务'}`}
-          />
-          <ToggleField
-            label="启用配置"
-            value={draft.enabled}
-            onValueChange={(value) => set('enabled', value, true)}
-          />
-          <InputField
-            label={provider?.credentialLabel ?? 'API Key'}
-            value={draft.apiKey}
-            onChangeText={(value) => set('apiKey', value)}
-            onBlur={blur}
-            error={errors.apiKey}
-            autoCapitalize="none"
-            autoCorrect={false}
-            autoGrow
-          />
-          {provider && draft.preserveEndpoint && draft.provider !== 'openaiCompatible' ? (
-            <View>
-              <Text style={{ color: theme.colors.text.secondary }}>
-                此配置保留原服务地址：{draft.baseUrl}
-              </Text>
-              <Button
-                title="改用官方地址"
-                variant="text"
-                onPress={() => set('preserveEndpoint', false, true)}
+          <View
+            collapsable={false}
+            style={{ flexGrow: 1, padding: theme.spacing.lg, paddingBottom: theme.spacing.xl }}
+            onTouchEnd={dismissBackgroundInput}
+          >
+            <View onLayout={feedback.fieldLayout(['provider'])}>
+              <DropdownField
+                label="提供方"
+                value={draft.provider}
+                disabled={providerLocked}
+                options={SPEECH_PROVIDERS.filter((entry) => entry.kind === kind).map((entry) => ({
+                  value: entry.id,
+                  label: entry.label,
+                }))}
+                error={errors.provider}
+                onChange={(value) => {
+                  if (value === draft.provider) return;
+                  const nextProvider = SPEECH_PROVIDERS.find((entry) => entry.id === value)!;
+                  change({
+                    ...switchSpeechProvider(nextProvider.id),
+                    ...(!draft.name.trim() || draft.name === provider?.label ? { name: nextProvider.label } : {}),
+                  }, true);
+                }}
               />
             </View>
-          ) : null}
-          {draft.provider === 'openaiCompatible' ? (
+            {!provider ? (
+              <Text style={{ color: theme.colors.feedback.error }}>
+                {providerLocked ? '原配置的提供方无效，请删除后新建配置。' : '原配置的提供方无效，请重新选择。'}
+              </Text>
+            ) : null}
             <InputField
-              label="API 地址"
-              value={draft.baseUrl}
-              onChangeText={(value) => set('baseUrl', value)}
+              label="配置名称"
+              value={draft.name}
+              onChangeText={(value) => set('name', value)}
               onBlur={blur}
-              error={errors.baseUrl}
+              error={errors.name}
+              placeholder={`例如：${provider?.label ?? '语音服务'}`}
+            />
+            <ToggleField
+              label="启用配置"
+              value={draft.enabled}
+              onValueChange={(value) => set('enabled', value, true)}
+            />
+            <InputField
+              label={provider?.credentialLabel ?? 'API Key'}
+              value={draft.apiKey}
+              onChangeText={(value) => set('apiKey', value)}
+              onBlur={blur}
+              error={errors.apiKey}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="https://example.com/v1"
+              autoGrow
             />
-          ) : null}
-          {provider && ['openrouter', 'elevenlabs'].includes(provider.id) ? (
-            <Button
-              title={loadingOptions ? '加载官方目录…' : '加载官方模型与音色'}
-              disabled={loadingOptions}
-              variant="text"
-              onPress={() => {
-                void loadOptions();
-              }}
-            />
-          ) : null}
-          {optionsError ? (
-            <Text accessibilityRole="alert" style={{ color: theme.colors.feedback.error }}>
-              {optionsError}
-            </Text>
-          ) : null}
-          {provider ? (
-            provider.models.length ? (
-              <DropdownField
-                label="模型"
-                value={draft.model}
-                options={modelOptions}
-                onChange={(value) => setModel(value, true)}
-                error={errors.model}
-              />
-            ) : (
+            {provider && draft.preserveEndpoint && draft.provider !== 'openaiCompatible' ? (
+              <View>
+                <Text style={{ color: theme.colors.text.secondary }}>
+                  此配置保留原服务地址：{draft.baseUrl}
+                </Text>
+                <Button
+                  title="改用官方地址"
+                  variant="text"
+                  onPress={() => set('preserveEndpoint', false, true)}
+                />
+              </View>
+            ) : null}
+            {draft.provider === 'openaiCompatible' ? (
               <InputField
-                label="模型"
-                value={draft.model}
-                onChangeText={setModel}
+                label="API 地址"
+                value={draft.baseUrl}
+                onChangeText={(value) => set('baseUrl', value)}
                 onBlur={blur}
-                error={errors.model}
+                error={errors.baseUrl}
                 autoCapitalize="none"
                 autoCorrect={false}
+                placeholder="https://example.com/v1"
               />
-            )
-          ) : null}
-          {options?.voices.length ? (
-            <DropdownField
-              label="从官方音色库选择"
-              value={String(draft.voiceId)}
-              options={options.voices}
-              onChange={(value) => set('voiceId', value, true)}
-            />
-          ) : null}
-          {fields
-            .filter((field) => !field.advanced || advanced)
-            .map((field) => (
-              <View key={`${draft.provider}:${field.key}`} onLayout={feedback.fieldLayout([field.key])}>
-                {field.type === 'select' ? (
-                  <DropdownField
-                    label={field.label}
-                    value={String(draft[field.key] ?? '')}
-                    options={[
-                      ...(!field.required ? [{ value: '', label: '使用服务默认值' }] : []),
-                      ...field.options!.map((value) => ({
-                        value,
-                        label:
-                          (
-                            {
-                              auto: '自动',
-                              china: '国内站',
-                              international: '国际站',
-                              us: '美国西部',
-                              beijing: '北京',
-                              singapore: '新加坡',
-                              happy: '高兴',
-                              sad: '悲伤',
-                              calm: '平静',
-                              angry: '生气',
-                              fearful: '害怕',
-                              disgusted: '厌恶',
-                              surprised: '惊讶',
-                              fluent: '生动',
-                              whisper: '低语',
-                              whispers: '低语',
-                              excited: '兴奋',
-                              curious: '好奇',
-                              sarcastic: '讽刺',
-                              crying: '哭泣',
-                              laughs: '笑',
-                              sighs: '叹气',
-                            } as Record<string, string>
-                          )[value] ?? value,
-                      })),
-                    ]}
-                    error={errors[field.key]}
-                    onChange={(value) => set(field.key, value, true)}
-                  />
-                ) : field.type === 'boolean' ? (
-                  <ToggleField
-                    label={field.label}
-                    value={draft[field.key] === true}
-                    onValueChange={(value) => set(field.key, value, true)}
-                  />
-                ) : (
-                  <InputField
-                    label={field.label}
-                    value={String(draft[field.key] ?? '')}
-                    onChangeText={(value) => set(field.key, value)}
-                    onBlur={blur}
-                    error={errors[field.key]}
-                    hint={
-                      field.hint ??
-                      (field.type === 'number'
-                        ? `留空使用服务默认值；范围 ${field.min}～${field.max}`
-                        : undefined)
-                    }
-                    keyboardType={field.type === 'number' ? 'numeric' : 'default'}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    multiline={field.key === 'instructions'}
-                  />
-                )}
-              </View>
-            ))}
-          {fields.some((field) => field.advanced) ? (
-            <TouchableOpacity onPress={() => setAdvanced(!advanced)}>
-              <Text style={{ color: theme.colors.text.secondary, paddingVertical: theme.spacing.md }}>
-                {advanced ? '收起高级参数' : '展开高级参数'}
+            ) : null}
+            {provider && ['openrouter', 'elevenlabs'].includes(provider.id) ? (
+              <Button
+                title={loadingOptions ? '加载官方目录…' : '加载官方模型与音色'}
+                disabled={loadingOptions}
+                variant="text"
+                onPress={() => {
+                  void loadOptions();
+                }}
+              />
+            ) : null}
+            {optionsError ? (
+              <Text accessibilityRole="alert" style={{ color: theme.colors.feedback.error }}>
+                {optionsError}
               </Text>
-            </TouchableOpacity>
-          ) : null}
-          <SpeechConfigurationTest
-            kind={kind}
-            getConfiguration={getConfiguration}
-            configurationRevision={JSON.stringify(draft)}
-          />
-          {testError ? (
-            <Text accessibilityRole="alert" style={{ color: theme.colors.feedback.error }}>
-              {testError}
-            </Text>
-          ) : null}
-          {modelId ? <Button title="删除配置" variant="danger" onPress={remove} /> : null}
+            ) : null}
+            {provider ? (
+              provider.models.length ? (
+                <DropdownField
+                  label="模型"
+                  value={draft.model}
+                  options={modelOptions}
+                  onChange={(value) => setModel(value, true)}
+                  error={errors.model}
+                />
+              ) : (
+                <InputField
+                  label="模型"
+                  value={draft.model}
+                  onChangeText={setModel}
+                  onBlur={blur}
+                  error={errors.model}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              )
+            ) : null}
+            {options?.voices.length ? (
+              <DropdownField
+                label="从官方音色库选择"
+                value={String(draft.voiceId)}
+                options={options.voices}
+                onChange={(value) => set('voiceId', value, true)}
+              />
+            ) : null}
+            {fields
+              .filter((field) => !field.advanced || advanced)
+              .map((field) => (
+                <View key={`${draft.provider}:${field.key}`} onLayout={feedback.fieldLayout([field.key])}>
+                  {field.type === 'select' ? (
+                    <DropdownField
+                      label={field.label}
+                      value={String(draft[field.key] ?? '')}
+                      options={[
+                        ...(!field.required ? [{ value: '', label: '使用服务默认值' }] : []),
+                        ...field.options!.map((value) => ({
+                          value,
+                          label:
+                            (
+                              {
+                                auto: '自动',
+                                china: '国内站',
+                                international: '国际站',
+                                us: '美国西部',
+                                beijing: '北京',
+                                singapore: '新加坡',
+                                normal: '常规',
+                                balanced: '均衡',
+                                low: '低延迟',
+                                happy: '高兴',
+                                sad: '悲伤',
+                                calm: '平静',
+                                angry: '生气',
+                                fearful: '害怕',
+                                disgusted: '厌恶',
+                                surprised: '惊讶',
+                                fluent: '生动',
+                                whisper: '低语',
+                                whispers: '低语',
+                                excited: '兴奋',
+                                curious: '好奇',
+                                sarcastic: '讽刺',
+                                crying: '哭泣',
+                                laughs: '笑',
+                                sighs: '叹气',
+                              } as Record<string, string>
+                            )[value] ?? value,
+                        })),
+                      ]}
+                      error={errors[field.key]}
+                      onChange={(value) => set(field.key, value, true)}
+                    />
+                  ) : field.type === 'boolean' ? (
+                    <ToggleField
+                      label={field.label}
+                      value={draft[field.key] === true}
+                      onValueChange={(value) => set(field.key, value, true)}
+                    />
+                  ) : (
+                    <InputField
+                      label={field.label}
+                      value={String(draft[field.key] ?? '')}
+                      onChangeText={(value) => set(field.key, value)}
+                      onBlur={blur}
+                      error={errors[field.key]}
+                      hint={
+                        field.hint ??
+                        (field.type === 'number'
+                          ? `留空使用服务默认值；范围 ${field.min}～${field.max}`
+                          : undefined)
+                      }
+                      keyboardType={field.type === 'number' ? 'numeric' : 'default'}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      multiline={field.key === 'instructions'}
+                    />
+                  )}
+                </View>
+              ))}
+            {fields.some((field) => field.advanced) ? (
+              <TouchableOpacity onPress={() => setAdvanced(!advanced)}>
+                <Text style={{ color: theme.colors.text.secondary, paddingVertical: theme.spacing.md }}>
+                  {advanced ? '收起高级参数' : '展开高级参数'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            <SpeechConfigurationTest
+              kind={kind}
+              getConfiguration={getConfiguration}
+              configurationRevision={JSON.stringify(draft)}
+            />
+            {testError ? (
+              <Text accessibilityRole="alert" style={{ color: theme.colors.feedback.error }}>
+                {testError}
+              </Text>
+            ) : null}
+            {modelId ? <Button title="删除配置" variant="danger" onPress={remove} /> : null}
+          </View>
         </ScrollView>
       </KeyboardAvoidingContainer>
     </SafeAreaView>

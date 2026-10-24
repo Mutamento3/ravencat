@@ -7,6 +7,7 @@ import type {
 import { createMiniMaxSpeechClient } from './MiniMaxSpeechClient';
 import { createOpenAISpeechClient } from './OpenAISpeechClient';
 import { synthesizeElevenLabs } from './ElevenLabsSpeechClient';
+import { synthesizeFishAudio } from './FishAudioSpeechClient';
 import { getSpeechParameters } from '../application/SpeechProviderCatalog';
 
 /** 正式合成与表单测试共用协议适配，不在 Assistants 复制请求构造。 */
@@ -40,6 +41,8 @@ export function synthesizeSpeechAudio(
       }).synthesize({ text, speed: delivery.speed, emotion: delivery.emotion, signal });
     case 'elevenlabs':
       return synthesizeElevenLabs(config, metadata, text, delivery, signal);
+    case 'fishAudio':
+      return synthesizeFishAudio(config, metadata, text, delivery, signal);
     case 'openai':
     case 'openaiCompatible':
     case 'openrouter':

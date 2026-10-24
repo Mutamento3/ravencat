@@ -154,7 +154,7 @@ const MEDIA_ASSET_LEGACY_REFERENCE_QUERY = `
     AND TRIM(CAST(tree.value AS TEXT)) <> ''
 `;
 
-const MEDIA_ASSET_REFERENCE_QUERY = `${MEDIA_ASSET_LEGACY_REFERENCE_QUERY}
+const MEDIA_ASSET_REPLY_VERSION_REFERENCE_QUERY = `${MEDIA_ASSET_LEGACY_REFERENCE_QUERY}
   UNION ALL
   SELECT CAST(tree.value AS TEXT), 'chat_reply_version', chat_reply_versions.id,
          'chat_reply_versions.snapshot_json:' || tree.fullkey
@@ -162,6 +162,18 @@ const MEDIA_ASSET_REFERENCE_QUERY = `${MEDIA_ASSET_LEGACY_REFERENCE_QUERY}
   WHERE tree.type = 'text'
     AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
     AND TRIM(CAST(tree.value AS TEXT)) <> ''
+`;
+
+const MEDIA_ASSET_CALL_AUDIO_REFERENCE_QUERY = `${MEDIA_ASSET_REPLY_VERSION_REFERENCE_QUERY}
+  UNION ALL
+  SELECT media_asset_id, 'call_audio', id, 'call_history_entries.media_asset_id'
+  FROM call_history_entries WHERE media_asset_id IS NOT NULL
+`;
+
+const MEDIA_ASSET_REFERENCE_QUERY = `${MEDIA_ASSET_CALL_AUDIO_REFERENCE_QUERY}
+  UNION ALL
+  SELECT media_asset_id, 'call_snapshot', id, 'call_history_images.media_asset_id'
+  FROM call_history_images
 `;
 
 /**
@@ -176,6 +188,14 @@ const MEDIA_ASSET_CANDIDATE_UNREFERENCED_QUERY = `
   SELECT candidate.asset_id AS asset_id
   FROM candidate
   WHERE NOT EXISTS (
+          SELECT 1 FROM call_history_entries
+          WHERE call_history_entries.media_asset_id = candidate.asset_id
+        )
+    AND NOT EXISTS (
+          SELECT 1 FROM call_history_images
+          WHERE call_history_images.media_asset_id = candidate.asset_id
+        )
+    AND NOT EXISTS (
           SELECT 1 FROM user_profile
           WHERE user_profile.moments_cover_media_asset_id = candidate.asset_id
         )
@@ -266,6 +286,12 @@ const CHAT_SESSION_MEDIA_ASSET_IDS_QUERY = `
   WHERE s.session_id IN ({{SESSIONS}})
     AND tree.type = 'text' AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
     AND TRIM(CAST(tree.value AS TEXT)) <> ''
+  UNION
+  SELECT e.media_asset_id FROM call_history_entries e JOIN call_sessions c ON c.id = e.call_id
+  WHERE c.chat_session_id IN ({{SESSIONS}}) AND e.media_asset_id IS NOT NULL
+  UNION
+  SELECT i.media_asset_id FROM call_history_images i JOIN call_sessions c ON c.id = i.call_id
+  WHERE c.chat_session_id IN ({{SESSIONS}})
 `;
 
 function buildPlaceholders(count: number): string {
@@ -358,7 +384,12 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
   async listBackupAssets(executor: DatabaseReadExecutor): Promise<readonly MediaAsset[]> {
     // 恢复预检读取尚未升级的 staging 快照；版本表从 137 起存在，不能对旧备份执行新表查询。
     const version = await executor.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-    const references = version!.user_version >= 137 ? MEDIA_ASSET_REFERENCE_QUERY : MEDIA_ASSET_LEGACY_REFERENCE_QUERY;
+    // 143 的已安装库存在仅录音和含截图两种结构；恢复预检必须保留实际已有的图片引用。
+    const hasCallImages = version!.user_version === 143
+      && await executor.getFirstAsync("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'call_history_images'") !== null;
+    const references = version!.user_version >= 144 || hasCallImages ? MEDIA_ASSET_REFERENCE_QUERY
+      : version!.user_version === 143 ? MEDIA_ASSET_CALL_AUDIO_REFERENCE_QUERY
+      : version!.user_version >= 137 ? MEDIA_ASSET_REPLY_VERSION_REFERENCE_QUERY : MEDIA_ASSET_LEGACY_REFERENCE_QUERY;
     const rows = await executor.getAllAsync<Omit<MediaAssetRow, 'id'> & { id: string | null; asset_id: string }>(`
       SELECT media_assets.*, referenced.asset_id
       FROM (SELECT DISTINCT asset_id FROM (${references})) AS referenced
@@ -575,7 +606,13 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
       SELECT media_asset_id AS asset_id FROM stickers WHERE owner_assistant_id = ?
       UNION
       SELECT media_asset_id AS asset_id FROM ai_downloaded_images WHERE assistant_id = ?
-    `, [assistantId, assistantId, assistantId, assistantId]);
+      UNION
+      SELECT e.media_asset_id AS asset_id FROM call_history_entries e JOIN call_history h ON h.call_id = e.call_id
+      WHERE h.assistant_id = ? AND e.media_asset_id IS NOT NULL
+      UNION
+      SELECT i.media_asset_id AS asset_id FROM call_history_images i JOIN call_history h ON h.call_id = i.call_id
+      WHERE h.assistant_id = ?
+    `, [assistantId, assistantId, assistantId, assistantId, assistantId, assistantId]);
     return rows.map((row) => row.asset_id);
   }
 
@@ -590,7 +627,7 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
 
     const rows = await executor.getAllAsync<{ asset_id: string }>(
       CHAT_SESSION_MEDIA_ASSET_IDS_QUERY.replaceAll('{{SESSIONS}}', buildPlaceholders(sessions.length)),
-      [...sessions, ...sessions],
+      [...sessions, ...sessions, ...sessions, ...sessions],
     );
 
     return rows.map((row) => row.asset_id);

@@ -2,6 +2,7 @@ import type { CallAttachment, CallEvent } from '../../domain/CallEvent';
 import { PERSISTENT_MEDIA_CATEGORY, persistentMediaStore } from '@platform/device';
 import { getCallRuntimeDependencies } from '../runtime/CallRuntimeDependencies';
 import { CALL_SNAPSHOT_PROCESS_PREFIX } from './CallSnapshotLifetime';
+import { saveCallHistorySnapshot } from '../CallHistory';
 
 export interface AttachCallSnapshotInput {
   callId: string;
@@ -40,9 +41,10 @@ export async function attachCallSnapshot(
     mimeType: input.mimeType || 'image/jpeg',
   });
 
+  let result: AttachCallSnapshotResult;
   try {
     const info = await persistentMediaStore.getInfo(persistedUri);
-    return await getCallRuntimeDependencies().repositories.calls.appendSnapshot({
+    result = await getCallRuntimeDependencies().repositories.calls.appendSnapshot({
       callId: call.id,
       chatSessionId: call.chatSessionId,
       event: {
@@ -77,6 +79,8 @@ export async function attachCallSnapshot(
     }
     throw error;
   }
+  await saveCallHistorySnapshot(call.aiAssistantId, input.sourceUri, result.attachment);
+  return result;
 }
 
 function createCallSnapshotId(prefix: string): string {

@@ -240,6 +240,7 @@ assert.equal((await repo.listStickers()).length, 2, 'AI 满库不能占用用户
 // 浏览和选择时带素材 ID 与缺向量提醒；不把本地路径或文件内容交给模型。
 const stickerTools = load('src/features/stickers/aiTools/StickerAgentTools.ts', {
   '@shared/runtime/abortSignal': abort, '@features/media': { mediaImageFailure: () => null },
+  '@shared/aiTools': load('src/shared/aiTools/ToolCompletionIntent.ts'),
   '../application/StickerRuntime': runtime, '../application/AIStickerCommands': commands,
   '../application/StickerQueries': { getStickerById: id => repo.getStickerById(id, 'ai-one'),
     listStickersInGroupForAI: async () => ({ stickers: [userSticker], nextCursor: null }) },

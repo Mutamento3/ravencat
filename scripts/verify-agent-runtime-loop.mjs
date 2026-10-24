@@ -1162,6 +1162,7 @@ const { SelectStickerTool } = loadTypeScriptModule('src/features/stickers/aiTool
   '@features/media': { mediaImageFailure: () => null },
   '../application/StickerRuntime': { getStickersRuntimeDependencies: () => ({ media: { resolveMediaAsset: async () => ({}) } }) },
   '../application/AIStickerCommands': { getStickerVectorState: async () => ({ status: 'missing_or_stale', reminder: '缺向量仍可发送' }) },
+  '@shared/aiTools': loadTypeScriptModule('src/shared/aiTools/ToolCompletionIntent.ts'),
   '@shared/runtime/abortSignal': abortSignalModule,
   '../application/StickerQueries': {
     getStickerById: async (id) => ({

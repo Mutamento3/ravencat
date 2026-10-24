@@ -20,6 +20,7 @@ import { ContextLimitsApply, type AIProfile } from '@features/assistants';
 import ChatWallpaperSettings from '../messages/components/ChatWallpaperSettings';
 import ContextWindowSection from './ContextWindowSection';
 import FixedChatContextSection from './FixedChatContextSection';
+import HistoricalGroupsSection from './HistoricalGroupsSection';
 
 interface ChatSettingsProps {
   aiAssistant: AIProfile;
@@ -41,7 +42,6 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
   const theme = useTheme();
   const interactionProfile = getChatInteractionProfile(theme);
   const canUseMultipleBubbles = interactionProfile.enableAssistantMessageSegmentation;
-  const canShowTokenUsage = interactionProfile.showTokenUsage;
   const styles = useThemedStyles(createStyles);
   const commonStyles = React.useMemo(() => createCommonStyles(theme), [theme]);
 
@@ -58,8 +58,12 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
     handleContextLimitChange,
     allowMultipleBubbles,
     setAllowMultipleBubbles,
+    streamingReply,
+    setStreamingReply,
     showTokenUsage,
     setShowTokenUsage,
+    showActionSteps,
+    setShowActionSteps,
     settingsErrors,
     avatarUrl,
     callBackgroundUri,
@@ -138,6 +142,7 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
           errors={settingsErrors}
           fixed={fixed}
         />
+        <HistoricalGroupsSection assistantId={aiAssistant.id} />
         <ContextLimitsApply readSettings={async () => {
           if (!await flush()) return null;
           return { privateContextPrimaryLimit: Number(contextLimits.privatePrimary), privateContextSecondaryLimit: Number(contextLimits.privateSecondary),
@@ -149,21 +154,30 @@ export default function ChatSettings({ aiAssistant, conversationId, onChooseFixe
         {/* 气泡数量只影响客户端自动分段，不改变聊天输出格式要求。 */}
         <View style={styles.settingsSection}>
           <ToggleField
+            label="流式输出"
+            hint="开启后文字逐步显示；允许多气泡时，会在自然分段处接着下一泡输出。仅影响这个 AI 的单聊，从下一轮回复生效。"
+            value={streamingReply ?? interactionProfile.preferStreamingReply}
+            onValueChange={setStreamingReply}
+          />
+          <ToggleField
             label="允许多气泡回复"
             hint={canUseMultipleBubbles
-              ? '开启后客户端会按空行和句长把回复自动拆成多个气泡；表达风格仍由人设和提示词决定。'
+              ? '开启后按空行和句长自动分泡，流式时边生成边分泡；表达风格仍由人设和提示词决定。'
               : '当前主题实际使用单气泡；你的多气泡原设置会保留，切回支持主题后恢复。'}
             value={allowMultipleBubbles}
             onValueChange={setAllowMultipleBubbles}
           />
           <ToggleField
+            label="显示行动步骤"
+            hint="显示思维链与工具执行过程；仅影响这个 AI 的单聊展示，所有主题通用。"
+            value={showActionSteps}
+            onValueChange={setShowActionSteps}
+          />
+          <ToggleField
             label="显示 Token 用量"
-            hint={canShowTokenUsage
-              ? '在回复下方显示输入、输出、缓存命中数量与命中率；只影响当前对话的展示。'
-              : '当前主题固定不显示 Token 用量，开关不可修改；切回支持的主题后恢复原选择。'}
-            value={canShowTokenUsage && showTokenUsage}
+            hint="在回复下方显示输入、输出、缓存命中数量与命中率；仅影响这个 AI 的单聊展示，所有主题通用。"
+            value={showTokenUsage}
             onValueChange={setShowTokenUsage}
-            disabled={!canShowTokenUsage}
           />
         </View>
         <AutoSaveErrors error={infoSaveError} blocked={blocked && Object.keys(settingsErrors).length > 0}

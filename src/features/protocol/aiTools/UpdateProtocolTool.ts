@@ -23,7 +23,7 @@ interface UpdateProtocolResult {
   success: boolean;
   message?: string;
   error?: string;
-  data?: Partial<Protocol> & Pick<Protocol, 'id' | 'updatedAt'>;
+  data?: Protocol;
 }
 
 /**
@@ -31,11 +31,11 @@ interface UpdateProtocolResult {
  */
 export const definition = {
   name: 'updateProtocol',
-  description: '修改协议空间的一条提示词或信息。',
+  description: '修改当前 AI 协议空间的一条提示词或信息。使用查询或添加工具返回的真实 ID，不要猜测 ID。',
   parameters: {
     type: 'object',
     properties: {
-      protocolId: { type: 'string', description: '协议ID' },
+      protocolId: { type: 'string', description: '查询或添加协议工具返回条目的 id' },
       content: { type: 'string', description: '新协议内容' },
       summary: { type: 'string', description: '新协议摘要' },
     },
@@ -53,7 +53,12 @@ export async function execute(
   args: UpdateProtocolArgs,
   context: ProtocolToolContext
 ): Promise<UpdateProtocolResult> {
+  const aiAssistantId = context.getAIId();
   const { protocolId, content, summary } = args;
+
+  if (!aiAssistantId) {
+    return { success: false, error: '未指定AI助手' };
+  }
 
   if (!protocolId) {
     return { success: false, error: '缺少协议ID' };
@@ -69,11 +74,14 @@ export async function execute(
 
   try {
     throwIfAbortSignalAborted(context.abortSignal);
-    const protocol = await context.repositories.protocol!.update(protocolId, updates);
+    const protocol = await context.repositories.protocol!.update(aiAssistantId, protocolId, updates);
+    if (!protocol) {
+      return { success: false, error: '协议不存在或不属于当前 AI，未执行更新。请查询协议空间取得真实 ID。' };
+    }
 
     return {
       success: true,
-      message: '已更新协议',
+      message: `已更新协议（id 用作 protocolId）:\n${JSON.stringify(protocol)}`,
       data: protocol
     };
   } catch (error) {

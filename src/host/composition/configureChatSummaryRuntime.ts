@@ -1,9 +1,9 @@
 /** Chat拥有摘要与任务规则；Host解析实际模型，默认单聊复用稳定前缀，其余只装配专用请求。 */
 import { aiAssistantRepository, resolveAuxiliaryModel } from '@features/assistants';
-import { callRepository } from '@features/calls/composition';
+import { chatSummaryRepository } from './chatSummaryRepository';
 import { userProfileRepository } from '@features/profile';
 import { protocolRepository } from '@features/protocol';
-import { configureChatSummaryRuntime, SQLiteChatSummaryRepository, sessionRepository, groupChatRepository, createChatSummaryPromptBlock,
+import { configureChatSummaryRuntime, sessionRepository, groupChatRepository, createChatSummaryPromptBlock,
   createSecondaryChatSummaryPromptBlock, buildChatSummaryModelInput, type ChatSummaryModelInput,
   type SecondaryChatSummaryClaim, ChatSummaryGenerationError, type ChatSummaryCallDiagnostics,
   type ChatSummaryRequestSettings } from '@features/chat/composition';
@@ -22,9 +22,7 @@ export function configureChatSummary(): void {
   if (configured) return;
   configured = true;
   configureChatSummaryRuntime({
-    repository: new SQLiteChatSummaryRepository((tx, conversationId, boundary) => callRepository.readSummarySources(tx, {
-      chatSessionId: conversationId, excludedCallIds: boundary.processedCallIds, after: boundary.historyStartsAfter,
-    })),
+    repository: chatSummaryRepository,
     async getBatchSize(conversationId) {
       const settings = await getChatSummarySettings(conversationId);
       const group = await groupChatRepository.getById(conversationId);

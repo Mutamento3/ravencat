@@ -23,6 +23,7 @@ import type {
 } from '../domain/CallEvent';
 import type { CallParticipant } from '../domain/CallParticipant';
 import type { CallContextInfo, CallSummarySource, CallSummaryTranscript } from '../domain/CallSummary';
+import { SQLiteCallHistoryRepository } from './SQLiteCallHistoryRepository';
 
 const ACTIVE_CALL_STATE_FILTER = "('requested', 'ringing', 'dialing', 'connecting', 'active', 'ending')";
 
@@ -91,7 +92,7 @@ function createEntityId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export class SQLiteCallRepository implements ICallRepository {
+export class SQLiteCallRepository extends SQLiteCallHistoryRepository implements ICallRepository {
   async createSession(input: CreateCallSessionInput): Promise<CallSession> {
     return databaseCoordinator.transaction(
       { name: 'calls.createSession', feature: 'calls', priority: 'interactive' },
@@ -147,6 +148,7 @@ export class SQLiteCallRepository implements ICallRepository {
       ]
     );
 
+    await this.createHistoryInTransaction(db, id, input.aiAssistantId, input.startedAt || now);
     const row = await db.getFirstAsync<CallSessionRow>('SELECT * FROM call_sessions WHERE id = ?', [id]);
     return this.mapSessionRow(row!);
   }
@@ -349,39 +351,46 @@ export class SQLiteCallRepository implements ICallRepository {
   }
 
   async appendEvent(input: CreateCallEventInput): Promise<CallEvent> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'calls.appendEvent', feature: 'calls', priority: 'interactive' });
-    const id = input.id || createEntityId('call_event');
-    const createdAt = input.createdAt || new Date().toISOString();
+    return databaseCoordinator.transaction({ name: 'calls.appendEvent', feature: 'calls', priority: 'interactive' }, async db => {
+      const id = input.id || createEntityId('call_event');
+      const createdAt = input.createdAt || new Date().toISOString();
 
-    await db.runAsync(
-      `INSERT INTO call_events
-       (id, call_id, chat_session_id, kind, actor_type, actor_id, text, attachment_id,
-        visible_in_chat, include_in_ai_context, payload_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        input.callId,
-        input.chatSessionId,
-        input.kind,
-        input.actorType,
-        input.actorId || null,
-        input.text || null,
-        input.attachmentId || null,
-        input.visibleInChat ? 1 : 0,
-        input.includeInAIContext === false ? 0 : 1,
-        input.payloadJson || null,
-        createdAt,
-      ]
-    );
+      await db.runAsync(
+        `INSERT INTO call_events
+         (id, call_id, chat_session_id, kind, actor_type, actor_id, text, attachment_id,
+          visible_in_chat, include_in_ai_context, payload_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          input.callId,
+          input.chatSessionId,
+          input.kind,
+          input.actorType,
+          input.actorId || null,
+          input.text || null,
+          input.attachmentId || null,
+          input.visibleInChat ? 1 : 0,
+          input.includeInAIContext === false ? 0 : 1,
+          input.payloadJson || null,
+          createdAt,
+        ]
+      );
 
-    const row = await db.getFirstAsync<CallEventRow>(
-      'SELECT * FROM call_events WHERE id = ?',
-      [id]
-    );
-    if (!row) {
-      throw new Error(`Failed to retrieve inserted call event ${id}`);
-    }
-    return this.mapEventRow(row);
+      const row = await db.getFirstAsync<CallEventRow>(
+        'SELECT * FROM call_events WHERE id = ?',
+        [id]
+      );
+      if (!row) {
+        throw new Error(`Failed to retrieve inserted call event ${id}`);
+      }
+      if (input.kind === 'userSpeechText') {
+        await this.appendHistoryEntryInTransaction(db, {
+          id, callId: input.callId, speaker: 'user', text: input.text!, createdAt,
+          inputKind: input.payloadJson ? JSON.parse(input.payloadJson).inputKind : 'text',
+        });
+      }
+      return this.mapEventRow(row);
+    });
   }
 
   async appendSnapshot(input: CreateCallSnapshotInput): Promise<CallSnapshotWriteResult> {

@@ -3,15 +3,17 @@ import type { DatabaseWriteExecutor } from '../runtime';
 import { SCHEMAS, INDEXES } from './schema';
 import { DEFAULT_RECORDS_SQL } from './defaultRecords';
 import { migrateMemoryTriggerGroups } from './memoryV3Schema';
-import { migrateSecondaryChatSummary, migrateFixedChatContext, migrateChatSummaryModels, migrateChatSummaryPrimaryLimit } from './chatSummarySchema';
+import { migrateSecondaryChatSummary, migrateFixedChatContext, migrateChatSummaryModels, migrateChatSummaryPrimaryLimit, migrateChatSummaryWorkQueue } from './chatSummarySchema';
 import { migrateStickerOwnership } from './stickerOwnershipMigration';
 import { migrateApplicationSettingsTools } from './applicationSettingsMigration';
 import { migrateChatTurnObservability } from './chatTurnObservabilitySchema';
 import { migrateAssistantNicknameHistory } from './assistantNicknameHistoryMigration';
 import { migrateChatTurnPublication } from './chatTurnPresentationSchema';
+import { migrateGroupMembership } from './groupMembershipSchema';
 
+/** 143 已安装库可能尚无截图表；正式升级补齐结构，保留已有通话与媒体引用。 */
+export const DATABASE_SCHEMA_VERSION = 144;
 /** 114/115 是旧代码里的迁移编号；已发布数据库实际停在 user_version=108。 */
-export const DATABASE_SCHEMA_VERSION = 138;
 const PUBLIC_RELEASE_VERSION = 108;
 
 /** 当前公开版的关键结构。拒绝旧开发库，避免把不完整库误标为新基线。 */
@@ -54,14 +56,14 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
     }
     return;
   }
-  if (version !== 0 && version !== PUBLIC_RELEASE_VERSION && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137) {
+  if (version !== 0 && version !== PUBLIC_RELEASE_VERSION && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143) {
     throw new Error(`数据库版本 ${version} 不受当前版本支持，请使用匹配的 RavenCat 版本。`);
   }
   const tables = await db.getAllAsync<{ name: string }>(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'android_metadata'",
   );
   const fresh = tables.length === 0;
-  if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137) {
+  if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143) {
     // 在任何 DDL/default 写入之前检查；失败不修改旧库。
     await assertPublicReleaseSchema(db);
     const retiredTables = new Set(['raven_cat_self_wakes', 'capability_bindings', 'assistant_capability_bindings', 'memory_entries']);
@@ -93,9 +95,17 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
       await db.execAsync('ALTER TABLE raven_cat_ai_schedules ADD COLUMN system_calendar INTEGER NOT NULL DEFAULT 0 CHECK (system_calendar IN (0, 1));');
     }
     if (!fresh && version < 138) await migrateChatSummaryPrimaryLimit(db);
+    if (!fresh && version < 139) {
+      await db.execAsync('ALTER TABLE ai_assistants ADD COLUMN show_action_steps INTEGER NOT NULL DEFAULT 1;');
+    }
+    if (!fresh && version < 140) {
+      await db.execAsync('ALTER TABLE ai_assistants ADD COLUMN streaming_reply INTEGER CHECK (streaming_reply IN (0, 1));');
+    }
+    if (!fresh && version < 141) await migrateGroupMembership(db);
     for (const sql of Object.values(INDEXES)) await db.execAsync(sql);
+    if (!fresh && version < 142) await migrateChatSummaryWorkQueue(db);
     if (!fresh) await migrateApplicationSettingsTools(db);
-    if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137) {
+    if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143) {
       // 纳入公开版115的定向修复：只清理无有效主体的 MCP 授权，正常授权原样保留。
       await db.execAsync(`
         DELETE FROM mcp_server_assistants

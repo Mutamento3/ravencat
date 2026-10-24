@@ -1,12 +1,14 @@
 /** 通话复用统一 Agent 循环，Calls 只拥有逐句语音投影与通话事实提交。 */
 
 import type { CallEvent } from '../../domain/CallEvent';
+import type { CallInputAudio } from '../../domain/CallHistory';
 import type { CallAIConfig } from '../../domain/CallAIConfig';
 import { createAIClient, getErrorDisplayInfo } from '@platform/ai';
 import { BaseAIClientAgentModelGateway } from '@platform/agentRuntime';
 import { ToolContext } from '@shared/aiTools';
 import { DEFAULT_PRIVATE_CONTEXT_PRIMARY_LIMIT } from '@shared/prompt';
 import { appendAISpeechText, appendUserSpeechText } from '../events/AppendCallTranscriptEvent';
+import { appendCallErrorEvent } from '../events/AppendCallSystemEvent';
 import { getCallRuntimeDependencies } from './CallRuntimeDependencies';
 import { CallReplyRunCancelledError, isCallReplyCancellationError } from './CallReplyRunState';
 import { createCallSpeechSentenceStream } from './CallSpeechSentenceStream';
@@ -36,6 +38,7 @@ export async function processCallAIReply(params: {
   callId: string;
   runId: string;
   userText: string;
+  userAudio?: Promise<CallInputAudio | null>;
   aiConfig: CallAIConfig;
   signal: AbortSignal;
   onToolExecutionChanged?: (active: boolean) => void;
@@ -58,8 +61,10 @@ export async function processCallAIReply(params: {
   const userEvent = await appendUserSpeechText({
     callId: call.id,
     text,
+    audio: params.userAudio,
   });
 
+  let failureStage = '通话回复准备';
   try {
     const runtimeDependencies = getCallRuntimeDependencies();
     const speechModel = await resolveTextToSpeechModel({ assistantId: params.aiConfig.id, consumer: 'call' });
@@ -132,6 +137,7 @@ export async function processCallAIReply(params: {
       params.onSpeechSentence?.(sentence, speech);
     }, speechModel);
     let streamedTextLength = 0;
+    failureStage = '模型回复';
     const result = await runtimeDependencies.agent.run({
       runId: params.runId,
       task: {
@@ -163,12 +169,23 @@ export async function processCallAIReply(params: {
           speechStream.pushSegment('');
         } else if (event.type === 'assistant_text_delta') {
           streamedTextLength += event.text.length;
+          failureStage = '回复语音文本解析';
           speechStream.push(event.text);
+          failureStage = '模型回复';
         } else if (event.type === 'model_turn_completed') {
           const turn = modelGateway.takeCompletedTurn(event.stepIndex);
           // Gateway 已保证最终正文延续 delta；只补未流出的尾部，避免重复朗读。
+          failureStage = '回复语音文本解析';
           speechStream.push(turn.assistantText.slice(streamedTextLength));
           speechStream.flush();
+          failureStage = '模型回复';
+          if (!turn.assistantText.trim() && turn.toolCalls.length === 0) {
+            throw new Error(turn.finishReason === 'length'
+              ? '模型已耗尽输出额度，但没有返回可朗读正文；请检查最大输出 token 设置。'
+              : turn.finishReason === 'content_filter'
+                ? '服务商因内容审核未返回可朗读正文（finish_reason=content_filter）。'
+                : `模型没有返回可朗读正文（finish_reason=${turn.finishReason}，思考字符数=${turn.reasoningText.length}）。`);
+          }
         } else if (event.type === 'tool_call_started') {
           params.onToolExecutionChanged?.(true);
         } else if (event.type === 'tool_call_completed') {
@@ -182,7 +199,7 @@ export async function processCallAIReply(params: {
     if (result.status !== 'completed') {
       throw result.terminalCode === 'MODEL_REQUEST_FAILED'
         ? modelGateway.requireModelRequestError()
-        : new Error(`通话 Agent 回复失败：${result.terminalCode}`);
+        : result.error ?? new Error(`通话 Agent 执行失败：${result.terminalCode}`);
     }
 
     await assertCallReplyCanCommit(call.id, params.signal);
@@ -208,30 +225,19 @@ export async function processCallAIReply(params: {
         userEvent,
       };
     }
-    const errorMessage = getErrorDisplayInfo(error instanceof Error ? error : new Error('通话回复失败')).message;
-    await appendCallError(call.id, call.chatSessionId, errorMessage);
+    const detail = getErrorDisplayInfo(error instanceof Error ? error : String(error), { includeDetails: true }).message;
+    const errorMessage = `${failureStage}失败（${params.aiConfig.model}）：${detail}`;
+    await appendCallErrorEvent({
+      callId: call.id,
+      text: errorMessage,
+      payload: { type: 'replyFailure', stage: failureStage, model: params.aiConfig.model, runId: params.runId },
+    });
     return {
       status: 'failed',
       userEvent,
       errorMessage,
     };
   }
-}
-
-async function appendCallError(
-  callId: string,
-  chatSessionId: string,
-  text: string
-): Promise<void> {
-  await getCallRuntimeDependencies().repositories.calls.appendEvent({
-    callId,
-    chatSessionId,
-    kind: 'error',
-    actorType: 'system',
-    text,
-    visibleInChat: false,
-    includeInAIContext: true,
-  });
 }
 
 async function assertCallReplyCanCommit(callId: string, signal: AbortSignal): Promise<void> {

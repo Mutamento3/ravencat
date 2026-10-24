@@ -188,11 +188,11 @@ export async function prepareGroupSpeechPlan(
     (member) => member.enabled && enabledMemberProfiles.has(member.aiAssistantId),
   );
   const availableMembers = details.members.filter(
-    (member) => member.enabled && memberProfiles.has(member.aiAssistantId),
+    (member) => member.enabled && !member.muted && memberProfiles.has(member.aiAssistantId),
   );
   const recognizedMentionedMembers = findMentionedMembers(currentUserMessages, recognizedMembers);
   const mentionedMembers = recognizedMentionedMembers.filter(
-    (member) => memberProfiles.has(member.aiAssistantId),
+    (member) => !member.muted && memberProfiles.has(member.aiAssistantId),
   );
   const mentionedIds = new Set(mentionedMembers.map((member) => member.aiAssistantId));
   const memberAliases = createGroupAdminMemberAliases(availableMembers);

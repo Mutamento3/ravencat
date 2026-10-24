@@ -3,6 +3,7 @@ import { getAssistantDisplayName, aiAssistantRepository, getAuxiliaryModelSelect
 import { createAIClient } from '@platform/ai';
 import { configureMemoryRuntimeDependencies, memoryEntryRepository, memoryRepository, MemoryEmbeddingError } from '@features/memory/composition';
 import { configureMemoryEmbeddingQueue, refreshMemoryEmbeddingModel } from '../runtime/MemoryEmbeddingQueueCoordinator';
+import { convertExitedGroupHistoryToMemory } from '../application/ConvertExitedGroupHistoryToMemory';
 
 let configured = false;
 export function configureMemoryRuntime(): void {
@@ -17,6 +18,7 @@ export function configureMemoryRuntime(): void {
   };
   configureMemoryRuntimeDependencies({
     repository: memoryEntryRepository,
+    convertExitedGroupHistory: convertExitedGroupHistoryToMemory,
     resolveMemorySpace,
     async listMemorySpaces() {
       const assistants = await aiAssistantRepository.getAll();

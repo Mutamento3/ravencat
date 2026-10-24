@@ -1,5 +1,6 @@
 /** 群聊消费共享Agent timeline，以逐条事务提交正文、媒体与mention调度；取消后保留已提交事实。 */
 import { databaseCoordinator } from '@platform/persistence';
+import type { ModelFinishReason } from '@platform/ai';
 import type { ConversationTurnCommitItem } from '../../reply/domain/ConversationTurn';
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import { buildSessionPreviewTextFromMessage } from '../../messages/domain/chatMessageMetadata';
@@ -27,8 +28,26 @@ export function createGroupSegmentedReplyPersistence(params: {
     GroupSpeechTask,
     'id' | 'planId' | 'groupId' | 'aiAssistantId' | 'sequenceOrder'
   >;
-}): AssistantTurnCommitPort {
+}): AssistantTurnCommitPort & {
+  getReplyOutput: () => {
+    visibleReplyCommitted: boolean;
+    reasoningCommitted: boolean;
+    finishReason: ModelFinishReason | null;
+  };
+} {
+  // 队列消费模型结束事实和实际 commit 事实；不能用最终回调替代已发出的气泡。
+  const output = {
+    visibleReplyCommitted: false,
+    reasoningCommitted: false,
+    finishReason: null as ModelFinishReason | null,
+  };
   return {
+    getReplyOutput: () => output,
+    observeRunEvent(event) {
+      if (event.type === 'run_completed') {
+        output.finishReason = event.result.steps.at(-1)?.modelTurn.finishReason ?? null;
+      }
+    },
     persistAssistantPrelude: rejectLegacyProjection,
     // 共用 Agent timeline 消费语音／贴纸 intent；仍由群逐泡事务裁决提交资格。
     persistsIntermediates: false,
@@ -49,6 +68,8 @@ export function createGroupSegmentedReplyPersistence(params: {
           const message = await fenced.commitMessage({ message: { ...item.message, turnRunId: params.task.id, turnItemIndex: index + 1 },
             previewText: item.message.senderType === 'assistant' ? buildSessionPreviewTextFromMessage(item.message) : null });
           messages.push(message);
+          if (message.senderType === 'assistant') output.visibleReplyCommitted = true;
+          if (message.senderType === 'reasoning') output.reasoningCommitted = true;
           try { await item.finalizeAfterCommit?.(); }
           catch (error) { console.warn('[GroupAssistantTurnCommit] 已提交媒体的暂存清理失败', error); }
           commitParams.callbacks?.notifyUI?.(message.sessionId);

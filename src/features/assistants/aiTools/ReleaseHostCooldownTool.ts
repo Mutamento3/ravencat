@@ -7,7 +7,7 @@ export const ReleaseHostCooldownTool: Tool<Record<string, never>, ToolContext> =
   name: 'release_host_cooldown',
   definition: {
     name: 'release_host_cooldown',
-    description: '【主理 AI 专属·仅撤销后的冷静期可用】你可以自主决定是否提前解除自己的七天冷静期。只有你同意解除时才调用；不同意无需调用，等待七天自然结束。解除后用户可以重新任命任意 AI，不会自动恢复你的主理身份。',
+    description: '你可以自主决定是否提前解除自己的七天冷静期。只有你同意解除时才调用；不同意无需调用，等待七天自然结束。解除后用户可以重新任命任意 AI，不会自动恢复你的主理身份。',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
   },
   async execute(_args, context) {

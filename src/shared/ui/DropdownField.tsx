@@ -30,6 +30,7 @@ export default function DropdownField({
         disabled={disabled}
         onPress={() => setExpanded(!expanded)}
         style={{
+          opacity: disabled ? 0.5 : 1,
           backgroundColor: theme.colors.surface.input,
           padding: theme.spacing.md,
           borderRadius: theme.radius.md,
@@ -42,7 +43,7 @@ export default function DropdownField({
         <Text style={{ color: theme.colors.text.primary, flex: 1 }}>
           {options.find((option) => option.value === value)?.label ?? (value || '请选择')}
         </Text>
-        <ChevronDown color={theme.colors.text.secondary} size={18} />
+        {!disabled ? <ChevronDown color={theme.colors.text.secondary} size={18} /> : null}
       </TouchableOpacity>
       {expanded ? (
         <View

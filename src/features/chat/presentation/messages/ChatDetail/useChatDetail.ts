@@ -44,14 +44,13 @@ export function useChatDetail(
   // 根据 AI 助手配置生成请求参数（如 API 端点、认证头等）
   const aiRequestConfig = useMemo(() => {
     const baseConfig = buildAIRequestConfig(aiAssistant);
-    if (!baseConfig || interactionProfile.enableAssistantMessageSegmentation) {
-      return baseConfig;
-    }
+    if (!baseConfig) return null;
 
     return {
       ...baseConfig,
-      allowMultipleBubbles: false,
-      enableStreamingReply: interactionProfile.preferStreamingReply,
+      allowMultipleBubbles: interactionProfile.enableAssistantMessageSegmentation
+        ? baseConfig.allowMultipleBubbles : false,
+      enableStreamingReply: baseConfig.enableStreamingReply ?? interactionProfile.preferStreamingReply,
     };
   }, [
     aiAssistant,

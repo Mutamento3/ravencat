@@ -313,6 +313,9 @@ export class PromptPackBlockFactory {
           '',
           '以下是与你有关的未读社交事件摘要，不含时刻正文、图片、地点与评论内容，不能据此猜测详情或声称已经读取、互动。',
           '其中 ID 仅用于内部关联，不应出现在聊天正文。',
+          ...(aiConfig.enableTools === true ? [] : [
+            '用户未为你开启工具调用权限，暂无法处理这些事务。',
+          ]),
           '',
           formatSocialInboxSummary(summary),
         ].join('\n'),
@@ -348,7 +351,7 @@ export class PromptPackBlockFactory {
       || DEFAULT_SELF_NAME;
     const memberLines = groupChat.members.map((member) => {
       const isCurrentAI = member.aiAssistantId === groupChat.currentAIId;
-      return `- ${isCurrentAI ? '你自己' : '其他成员'}，显示名“${displayName(member.name)}”`;
+      return `- ${isCurrentAI ? '你自己' : '其他成员'}，显示名“${displayName(member.name)}”${member.muted ? '，当前已禁言，仍接收群上下文' : ''}`;
     });
 
     const content = [

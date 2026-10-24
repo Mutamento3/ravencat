@@ -13,8 +13,11 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import com.facebook.react.bridge.BridgeReactContext
 import com.facebook.react.bridge.NativeModule
+import com.facebook.react.bridge.JavaOnlyMap
 import com.facebook.react.internal.featureflags.ReactNativeFeatureFlags
 import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.RootView
+import com.facebook.react.uimanager.ReactStylesDiffMap
 import com.facebook.react.views.scroll.ReactScrollViewHelper
 import com.facebook.react.views.scroll.ScrollEventType
 import org.junit.Assert.*
@@ -29,6 +32,66 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class TextSelectionFocusTest {
+  @Test fun `dispatch through a child preserves momentum pairing and later idle touches`() {
+    val accessorType = Class.forName("com.facebook.react.internal.featureflags.ReactNativeFeatureFlagsLocalAccessor")
+    val setAccessor = ReactNativeFeatureFlags.javaClass.declaredMethods.single { it.name.startsWith("setAccessorProvider") }
+    setAccessor.invoke(ReactNativeFeatureFlags, { accessorType.getDeclaredConstructor().newInstance() })
+    for (terminal in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) {
+      val controller = Robolectric.buildActivity(Activity::class.java).setup().visible()
+      val activity = controller.get()
+      val bridge = object : BridgeReactContext(activity.application) {
+        override fun <T : NativeModule> getNativeModule(nativeModuleInterface: Class<T>): T? = null
+      }
+      val scroll = SelectionScrollView(ThemedReactContext(bridge, activity, "dispatch-test", 1))
+      SelectionScrollViewManager().updateProperties(scroll, ReactStylesDiffMap(JavaOnlyMap.of("textSelectionEnabled", true)))
+      val content = FrameLayout(activity)
+      val childTouches = mutableListOf<Int>()
+      content.setOnTouchListener { _, event -> childTouches.add(event.actionMasked); true }
+      scroll.addView(content)
+      // RN 拦截手势需要应用根节点；JVM 没有 JS dispatcher，仅替代此通知边界。
+      val root = object : FrameLayout(activity), RootView {
+        override fun onChildStartedNativeGesture(childView: View?, ev: MotionEvent) = Unit
+        override fun onChildEndedNativeGesture(childView: View, ev: MotionEvent) = Unit
+        override fun handleException(t: Throwable) { throw t }
+      }
+      root.addView(scroll)
+      activity.setContentView(root)
+      scroll.layout(0, 0, 480, 600)
+      content.layout(0, 0, 480, 5000)
+      scroll.setSendMomentumEvents(true)
+      val events = mutableListOf<ScrollEventType>()
+      val listener = object : ReactScrollViewHelper.ScrollListener {
+        override fun onScroll(view: ViewGroup?, type: ScrollEventType?, xVelocity: Float, yVelocity: Float) {
+          if (view === scroll && type != null) events.add(type)
+        }
+        override fun onLayout(view: ViewGroup?) = Unit
+      }
+      fun dispatch(action: Int, down: Long, time: Long) {
+        val event = MotionEvent.obtain(down, time, action, 100f, 100f, 0)
+        scroll.dispatchTouchEvent(event)
+        event.recycle()
+      }
+      ReactScrollViewHelper.addScrollListener(listener)
+      try {
+        scroll.fling(1000)
+        dispatch(MotionEvent.ACTION_DOWN, 0, 0)
+        dispatch(terminal, 0, 100)
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+        assertTrue(events.contains(ScrollEventType.MOMENTUM_BEGIN))
+        assertEquals(events.count { it == ScrollEventType.MOMENTUM_BEGIN }, events.count { it == ScrollEventType.MOMENTUM_END })
+        childTouches.clear()
+        val previousEnds = events.count { it == ScrollEventType.MOMENTUM_END }
+        dispatch(MotionEvent.ACTION_DOWN, 2000, 2000)
+        dispatch(MotionEvent.ACTION_UP, 2000, 2100)
+        assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), childTouches)
+        assertEquals(previousEnds, events.count { it == ScrollEventType.MOMENTUM_END })
+      } finally {
+        ReactScrollViewHelper.removeScrollListener(listener)
+        controller.pause().stop().destroy()
+      }
+    }
+  }
+
   @Test fun `touch interruption ends momentum before the next idle press`() {
     val accessorType = Class.forName("com.facebook.react.internal.featureflags.ReactNativeFeatureFlagsLocalAccessor")
     val setAccessor = ReactNativeFeatureFlags.javaClass.declaredMethods.single { it.name.startsWith("setAccessorProvider") }
@@ -40,7 +103,7 @@ class TextSelectionFocusTest {
       override fun <T : NativeModule> getNativeModule(nativeModuleInterface: Class<T>): T? = null
     }
     val context = ThemedReactContext(bridge, activity, "selection-test", 1)
-    val scroll = SelectionScrollView(context)
+    val scroll = SelectionScrollView(context).apply { textSelectionEnabled = true }
     val content = FrameLayout(activity)
     scroll.addView(content)
     activity.setContentView(scroll)
@@ -131,6 +194,7 @@ class TextSelectionFocusTest {
   }
 
   @Test fun `RN scroll view preserves reading offset on selection focus and still accepts scrolling`() {
+    assertEquals("ScrollView", SelectionScrollViewManager().name)
     // RN 提供的 JVM flags accessor 避免单元测试依赖 C++ JNI，滚动视图仍使用真实实现。
     val accessorType = Class.forName("com.facebook.react.internal.featureflags.ReactNativeFeatureFlagsLocalAccessor")
     val setAccessor = ReactNativeFeatureFlags.javaClass.declaredMethods.single { it.name.startsWith("setAccessorProvider") }
@@ -138,7 +202,7 @@ class TextSelectionFocusTest {
     val controller = Robolectric.buildActivity(Activity::class.java).setup().visible()
     val activity = controller.get()
     val context = ThemedReactContext(BridgeReactContext(activity.application), activity, "selection-test", 1)
-    val scroll = SelectionScrollView(context)
+    val scroll = SelectionScrollView(context).apply { textSelectionEnabled = true }
     val content = FrameLayout(activity)
     val text = SelectableText(activity).apply { setTextIsSelectable(true) }
     content.addView(text)
@@ -155,6 +219,11 @@ class TextSelectionFocusTest {
     text.touchMode = false
     scroll.requestChildFocus(content, text)
     assertNotEquals(2200, scroll.scrollY)
+    text.touchMode = true
+    SelectionScrollViewManager().updateProperties(scroll, ReactStylesDiffMap(JavaOnlyMap.of("textSelectionEnabled", false)))
+    scroll.scrollTo(0, 1800)
+    scroll.requestChildFocus(content, text)
+    assertNotEquals(1800, scroll.scrollY)
     controller.pause().stop().destroy()
   }
 }

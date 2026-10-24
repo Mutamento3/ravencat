@@ -98,14 +98,12 @@ export class SQLiteProtocolRepository implements IProtocolRepository {
     });
   }
 
-  async update(id: string, updates: UpdateProtocolInput): Promise<Partial<Protocol> & Pick<Protocol, 'id' | 'updatedAt'>> {
+  async update(aiAssistantId: string, id: string, updates: UpdateProtocolInput): Promise<Protocol | null> {
     const sets: string[] = [];
     const params: (string | null)[] = [];
-    const normalized = { ...updates };
     if (updates.content !== undefined) {
-      normalized.content = normalizeContent(updates.content);
       sets.push('content = ?');
-      params.push(normalized.content);
+      params.push(normalizeContent(updates.content));
     }
     if (updates.summary !== undefined) {
       sets.push('summary = ?');
@@ -115,16 +113,25 @@ export class SQLiteProtocolRepository implements IProtocolRepository {
 
     const now = new Date().toISOString();
     sets.push('updated_at = ?');
-    params.push(now, id);
+    params.push(now, aiAssistantId, id);
     const database = databaseCoordinator.openTaskExecutor({ name: 'protocol.update', feature: 'protocol', priority: 'runtime' });
-    await database.runAsync(`UPDATE protocols SET ${sets.join(', ')} WHERE id = ?`, params);
-    return { id, ...normalized, updatedAt: now };
+    // 命中结果与更新后的快照共用事务，调用方无需在 commit 后再次读取确认。
+    return database.withExclusiveTransactionAsync(async (transaction) => {
+      const result = await transaction.runAsync(
+        `UPDATE protocols SET ${sets.join(', ')} WHERE ai_assistant_id = ? AND id = ?`, params,
+      );
+      if (result.changes === 0) return null;
+      const row = await transaction.getFirstAsync<ProtocolRow>(
+        'SELECT * FROM protocols WHERE ai_assistant_id = ? AND id = ?', [aiAssistantId, id],
+      );
+      return mapRow(row!);
+    });
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(aiAssistantId: string, id: string): Promise<boolean> {
     const database = databaseCoordinator.openTaskExecutor({ name: 'protocol.delete', feature: 'protocol', priority: 'runtime' });
-    await database.runAsync('DELETE FROM protocols WHERE id = ?', [id]);
-    return true;
+    const result = await database.runAsync('DELETE FROM protocols WHERE ai_assistant_id = ? AND id = ?', [aiAssistantId, id]);
+    return result.changes > 0;
   }
 
   async getById(id: string): Promise<Protocol | null> {

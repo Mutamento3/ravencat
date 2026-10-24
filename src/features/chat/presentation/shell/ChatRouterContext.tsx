@@ -18,6 +18,7 @@ import { listGroupChats, updateGroupChatPinned } from '../../group/application';
 import { getCanonicalChatConversation } from '../../conversation/application/ChatPresentation';
 import { withArrivedConversationPreview } from './arrivedConversationPreview';
 import { getAssistantMessageArrivalSnapshot } from '../../reply/delivery/AssistantMessageArrival';
+import { setChatEventBus } from '../../messages/events/ChatEvents';
 import { setDirectConversationPinned } from '../../conversation/application/ConversationPin';
 import {
   buildConversationPreloadCandidates,
@@ -156,14 +157,30 @@ export function ChatRouterProvider({
 
   const loadGroups = useCallback(async () => {
     const revision = ++groupLoadRevisionRef.current;
-    const arrival = getAssistantMessageArrivalSnapshot();
-    const groups = await Promise.all((await listGroupChats()).map((group) => withArrivedConversationPreview(group, group.id)));
-    if (revision === groupLoadRevisionRef.current && arrival === getAssistantMessageArrivalSnapshot()) {
-      setGroupChats(groups);
+    const groups = await listGroupChats();
+    while (true) {
+      const arrival = getAssistantMessageArrivalSnapshot();
+      const arrivedGroups = await Promise.all(groups.map((group) => withArrivedConversationPreview(group, group.id)));
+      if (revision !== groupLoadRevisionRef.current) return arrivedGroups;
+      // 到达进度变化只重算预览；不能直接丢弃本次刷新，让列表永久停在旧消息。
+      if (arrival !== getAssistantMessageArrivalSnapshot()) continue;
+      setGroupChats(arrivedGroups);
       setGroupListReady(true);
+      return arrivedGroups;
     }
-    return groups;
   }, []);
+
+  useEffect(() => {
+    if (!chatParams.dbReady || !chatParams.conversationListLoadEnabled) return;
+    // 用户消息、编辑与删除同样改变预览，列表不能只依赖 AI 交付或某个返回按钮。
+    return setChatEventBus({
+      emit: async (event, payload) => {
+        if (!['messagesUpdated', 'messagesPatched', 'messagesDeleted', 'messagesReloadRequested'].includes(event)
+          || !groupChats.some((group) => group.id === payload.sessionId)) return;
+        await loadGroups();
+      },
+    });
+  }, [chatParams.dbReady, chatParams.conversationListLoadEnabled, groupChats, loadGroups]);
 
   const state = useChatScreen({
     ...chatParams,

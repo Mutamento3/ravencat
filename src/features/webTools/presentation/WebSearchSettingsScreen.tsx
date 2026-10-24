@@ -76,8 +76,8 @@ export default function WebSearchSettingsScreen({ onBack, refreshRevision = 0 }:
     return <ThemedSurface key={engine} variant="card" style={styles.card}><View style={styles.body}>
       <View style={styles.row}><View style={styles.copy}>
         <Text style={styles.title}>{name}{selected ? ' · 默认' : ''}</Text>
-        <Text style={styles.hint}>{needsKey ? '使用你自己的 API Key' : '内置来源 · 无需密钥'}</Text>
-      </View><Toggle accessibilityLabel={`允许 AI 使用 ${name}`} value={source.enabled} disabled={busy || !source.configured}
+        <Text style={styles.hint}>{needsKey ? (source.configured ? '使用你自己的 API Key' : '请填写并测试 API Key；恢复备份后可能需要重新配置') : '内置来源 · 无需密钥'}</Text>
+      </View><Toggle accessibilityLabel={`允许 AI 使用 ${name}`} value={source.enabled} disabled={busy || (!source.configured && !source.enabled)}
         onValueChange={enabled => { void perform(() => updateSearchConfiguration({ kind: 'enabled', engine, enabled })); }} /></View>
       {apiEngine && <>
         <InputField label={`${name} API Key`} value={keys[apiEngine]} autoGrow editable={!busy} autoCapitalize="none" autoCorrect={false} maxLength={512}

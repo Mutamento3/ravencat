@@ -48,6 +48,10 @@ database.exec(`UPDATE user_profile SET name='保留资料'; DROP TABLE web_searc
     assistant_id TEXT NOT NULL REFERENCES ai_assistants(id) ON DELETE CASCADE,
     previous_nickname TEXT, nickname TEXT, acknowledged INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
   ALTER TABLE raven_cat_ai_schedules DROP COLUMN system_calendar;
+  ALTER TABLE ai_assistants DROP COLUMN show_action_steps; ALTER TABLE ai_assistants DROP COLUMN streaming_reply;
+  ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit;
+  ALTER TABLE group_chat_members DROP COLUMN muted;
+  ALTER TABLE group_chat_members DROP COLUMN joined_during_plan_id;
   PRAGMA user_version=133;`);
 await bootstrapSqlite(createSqliteExecutor(database));
 assert.equal(database.prepare('PRAGMA user_version').get().user_version, DATABASE_SCHEMA_VERSION);
@@ -96,10 +100,12 @@ let defaults = {};
 let overrides = [];
 const featureNames = ['protocol', 'moments', 'wallet', 'calls', 'memory', 'deviceControl', 'companion', 'phoneTools', 'screenCapture', 'chat', 'stickers', 'togetherListening'];
 const registration = load('src/host/composition/agent/createAgentToolRegistry.ts', {
+  '@shared/aiTools': load('src/shared/aiTools/ToolCompletionIntent.ts'),
   '@platform/ai': endpoint,
   '@features/media': proxy,
   '@features/moments/composition': {},
   './ApplicationSettingsTools': { applicationSettingsTools: [] },
+  './GroupManagementTools': { groupManagementTools: [] },
   ...Object.fromEntries(featureNames.map((name) => [`@features/${name}`, proxy])),
   '@features/webTools': tools,
   '@features/prompting': { readPromptDefaults: async () => ({ toolPermissions: defaults }) },
@@ -270,6 +276,9 @@ pending = undefined;
 credentials.clear();
 const missing = await execute('web_search', { query: '资料' });
 assert.equal(missing.code, 'WEB_SEARCH_CREDENTIAL_MISSING');
+const missingConfiguration = await searchConfiguration.readSearchConfiguration();
+assert.equal(missingConfiguration.sources.find(source => source.engine === 'tavily').configured, false);
+assert.equal(missingConfiguration.sources.find(source => source.engine === 'tavily').apiKey, '');
 await searchConfiguration.updateSearchConfiguration({ kind: 'enabled', engine: 'brave', enabled: false });
 assert.equal((await searchRuntime.settings.read()).defaultEngine, null);
 assert.equal((await execute('web_search', { query: '资料' })).code, 'WEB_SEARCH_NOT_CONFIGURED');

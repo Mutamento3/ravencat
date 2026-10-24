@@ -80,7 +80,71 @@ CREATE TABLE IF NOT EXISTS chat_summary_call_boundary (
   conversation_id TEXT PRIMARY KEY REFERENCES chat_conversations(id) ON DELETE CASCADE,
   cleared_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat_summary_work_queue (
+  conversation_id TEXT PRIMARY KEY REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 1,
+  checked_revision INTEGER NOT NULL DEFAULT 0
+);
 `;
+
+// 入队和来源事实同事务提交；版本水位保留检查期间到来的新变化，后台与进程退出不会丢工作。
+function enqueueSummaryWork(where: string): string {
+  return `INSERT INTO chat_summary_work_queue (conversation_id)
+    SELECT id FROM chat_conversations WHERE ${where}
+    ON CONFLICT(conversation_id) DO UPDATE SET revision = revision + 1;`;
+}
+
+/** 这里只记录需要重新检查的身份，不扫描原文、不建立生成任务或消耗重试预算。 */
+export const CHAT_SUMMARY_WORK_QUEUE_TRIGGERS = `
+CREATE INDEX IF NOT EXISTS idx_chat_summary_work_pending ON chat_summary_work_queue(conversation_id)
+  WHERE revision > checked_revision;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_message_insert AFTER INSERT ON messages
+  WHEN NEW.status = 'sent' BEGIN ${enqueueSummaryWork('id = NEW.session_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_message_update
+  AFTER UPDATE OF text,status,delivery_status,metadata_json,sender_type,logical_message_id,turn_run_id,turn_item_index ON messages
+  WHEN NEW.status = 'sent' AND (OLD.text IS NOT NEW.text OR OLD.status IS NOT NEW.status
+    OR OLD.delivery_status IS NOT NEW.delivery_status OR OLD.metadata_json IS NOT NEW.metadata_json
+    OR OLD.sender_type IS NOT NEW.sender_type OR OLD.logical_message_id IS NOT NEW.logical_message_id
+    OR OLD.turn_run_id IS NOT NEW.turn_run_id OR OLD.turn_item_index IS NOT NEW.turn_item_index)
+  BEGIN ${enqueueSummaryWork('id = NEW.session_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_message_delete AFTER DELETE ON messages
+  BEGIN ${enqueueSummaryWork('id = OLD.session_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_turn_insert AFTER INSERT ON conversation_turn_state
+  WHEN NEW.reply_cursor > 0 BEGIN ${enqueueSummaryWork('id = NEW.session_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_turn_update AFTER UPDATE OF reply_cursor ON conversation_turn_state
+  WHEN OLD.reply_cursor IS NOT NEW.reply_cursor BEGIN ${enqueueSummaryWork('id = NEW.session_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_group_plan AFTER UPDATE OF status ON group_speech_plans
+  WHEN OLD.status IS NOT NEW.status AND NEW.status IN ('completed','failed','terminated','superseded')
+  BEGIN ${enqueueSummaryWork('id = NEW.group_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_call_event AFTER INSERT ON call_events
+  WHEN NEW.include_in_ai_context = 1 BEGIN ${enqueueSummaryWork('id = NEW.chat_session_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_call_end AFTER UPDATE OF ended_at ON call_sessions
+  WHEN OLD.ended_at IS NOT NEW.ended_at AND NEW.ended_at IS NOT NULL
+  BEGIN ${enqueueSummaryWork('id = NEW.chat_session_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_summary_change AFTER UPDATE OF revision ON chat_summary_state
+  WHEN OLD.revision IS NOT NEW.revision BEGIN ${enqueueSummaryWork('id = NEW.conversation_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_assistant_model
+  AFTER UPDATE OF model,api_key,api_base_url,private_context_primary_limit ON ai_assistants
+  WHEN OLD.model IS NOT NEW.model OR OLD.api_key IS NOT NEW.api_key OR OLD.api_base_url IS NOT NEW.api_base_url
+    OR OLD.private_context_primary_limit IS NOT NEW.private_context_primary_limit
+  BEGIN ${enqueueSummaryWork('id IN (SELECT id FROM sessions WHERE ai_assistant_id = NEW.id)')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_group_model_insert AFTER INSERT ON group_chat_admin_configs
+  BEGIN ${enqueueSummaryWork('id = NEW.group_id')} END;
+CREATE TRIGGER IF NOT EXISTS chat_summary_queue_group_model_update
+  AFTER UPDATE OF model,api_key,api_base_url ON group_chat_admin_configs
+  WHEN OLD.model IS NOT NEW.model OR OLD.api_key IS NOT NEW.api_key OR OLD.api_base_url IS NOT NEW.api_base_url
+  BEGIN ${enqueueSummaryWork('id = NEW.group_id')} END;
+`;
+
+/** 旧版本没有持久待检查记录，只在升级事务内发现一次既有来源；普通启动不再补扫。 */
+export async function migrateChatSummaryWorkQueue(db: DatabaseWriteExecutor): Promise<void> {
+  await db.execAsync(`INSERT OR IGNORE INTO chat_summary_work_queue (conversation_id)
+    SELECT c.id FROM chat_conversations c WHERE
+      EXISTS (SELECT 1 FROM messages m WHERE m.session_id = c.id)
+      OR EXISTS (SELECT 1 FROM call_sessions s WHERE s.chat_session_id = c.id)
+      OR EXISTS (SELECT 1 FROM chat_summary_segments s WHERE s.conversation_id = c.id)
+      OR EXISTS (SELECT 1 FROM chat_summary_tasks t WHERE t.conversation_id = c.id AND t.status <> 'completed');`);
+}
 /** 配置引用不建资产外键，删除资产后仍保留选择及不可用状态。 */
 export async function migrateChatSummaryModels(db: DatabaseWriteExecutor): Promise<void> {
   await db.execAsync(`CREATE TABLE IF NOT EXISTS chat_summary_request_settings (

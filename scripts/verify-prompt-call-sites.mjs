@@ -16,6 +16,8 @@ const EXPECTED_CALL_SITES = new Map([
   ['platform/agentRuntime/BaseAIClientAgentModelGateway.ts', /buildAgentModelMessages/],
   // 两级摘要的固定来源与稳定前缀由 verify-memory-v3-prompt 行为验证，不锁定某个组装 helper。
   ['host/composition/configureChatSummaryRuntime.ts', null],
+  // 退出群历史转换由 Host 拥有模型调用与记忆提交，来源隔离与保存契约见 Memory README。
+  ['host/application/ConvertExitedGroupHistoryToMemory.ts', null],
   // Sticker 语义标注是 Feature 自有的辅助模型调用（sticker recognition）：识别 prompt 与
   // JSON 契约都由 Sticker 拥有，不进入统一 Chat Prompt Pack，也不继承 persona / 聊天历史 /
   // RavenCat foundation。这里的证据就是它自己那份识别 prompt，而不是路径白名单。

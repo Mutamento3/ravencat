@@ -90,7 +90,9 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       groupContextSecondaryLimit: row.group_context_secondary_limit as number,
       enableTools: row.enable_tools === 1,
       disableThinking: row.disable_thinking === 1,
+      streamingReply: row.streaming_reply === null ? null : row.streaming_reply === 1,
       showTokenUsage: row.show_token_usage === 1,
+      showActionSteps: row.show_action_steps === 1,
       // 2.x 读取旧列仅用于覆盖未完成迁移的数据库；3.0 删除旧列和该回退。
       allowMultipleBubbles: row.allow_multiple_bubbles === undefined || row.allow_multiple_bubbles === null
         ? row.enable_short_text_protocol !== 0
@@ -345,8 +347,8 @@ export class AIAssistantRepository implements IAIAssistantRepository {
     await database.withExclusiveTransactionAsync(async (transaction) => {
       await transaction.runAsync(
         `INSERT INTO ai_assistants
-         (id, agent_id, name, nickname, avatar, avatar_media_asset_id, model, api_key, api_base_url, system_prompt, temperature, top_p, max_tokens, private_context_primary_limit, private_context_secondary_limit, group_context_primary_limit, group_context_secondary_limit, enable_tools, disable_thinking, enable_short_text_protocol, allow_multiple_bubbles, show_token_usage, supports_vision, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,      [
+         (id, agent_id, name, nickname, avatar, avatar_media_asset_id, model, api_key, api_base_url, system_prompt, temperature, top_p, max_tokens, private_context_primary_limit, private_context_secondary_limit, group_context_primary_limit, group_context_secondary_limit, enable_tools, disable_thinking, enable_short_text_protocol, allow_multiple_bubbles, streaming_reply, show_token_usage, show_action_steps, supports_vision, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,      [
           ai.id,
           ai.agentId,
           ai.name,
@@ -370,7 +372,9 @@ export class AIAssistantRepository implements IAIAssistantRepository {
           ai.allowMultipleBubbles === false ? 0 : 1,
           // 2.x 双写旧列供降级安装读取；3.0 删除旧列和这一次写入。
           ai.allowMultipleBubbles === false ? 0 : 1,
+          ai.streamingReply === null ? null : ai.streamingReply ? 1 : 0,
           ai.showTokenUsage ? 1 : 0,
+          ai.showActionSteps ? 1 : 0,
           ai.supportsVision ? 1 : 0,
           now,
           now
@@ -465,9 +469,17 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       fields.push('allow_multiple_bubbles = ?', 'enable_short_text_protocol = ?');
       values.push(settings.allowMultipleBubbles ? 1 : 0, settings.allowMultipleBubbles ? 1 : 0);
     }
+    if (settings.streamingReply !== undefined) {
+      fields.push('streaming_reply = ?');
+      values.push(settings.streamingReply === null ? null : settings.streamingReply ? 1 : 0);
+    }
     if (settings.showTokenUsage !== undefined) {
       fields.push('show_token_usage = ?');
       values.push(settings.showTokenUsage ? 1 : 0);
+    }
+    if (settings.showActionSteps !== undefined) {
+      fields.push('show_action_steps = ?');
+      values.push(settings.showActionSteps ? 1 : 0);
     }
     const contextColumns = {
       privateContextPrimaryLimit: 'private_context_primary_limit',

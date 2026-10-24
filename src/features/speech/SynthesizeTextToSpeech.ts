@@ -1,5 +1,4 @@
 /** 将文本合成为可播放的语音文件。 */
-import { getErrorDisplayInfo } from '@platform/ai';
 import { resolveTextToSpeechModel, type ResolvedSpeechModel, type SpeechModelConsumer } from './application/ResolveSpeechModel';
 import { synthesizeConfiguredSpeech } from './SynthesizeConfiguredSpeech';
 import type { SpeechDelivery } from './domain/SpeechProvider';
@@ -74,6 +73,6 @@ function buildSynthesisFailure(
     modelConfigName,
     model: null,
     rawError,
-    errorInfo: getErrorDisplayInfo(rawError),
+    errorInfo: { title: '语音合成失败', message: rawError, type: 'speech_synthesis' },
   };
 }

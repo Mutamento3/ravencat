@@ -14,7 +14,7 @@ export interface NetEaseGetSongLyricsArgs {
 
 export const netEaseGetSongLyricsDefinition = {
   name: 'netease_get_song_lyrics',
-  description: '【主理 AI 专属】读取指定网易云歌曲的歌词，保留 available、no_lyrics、uncollected 状态。',
+  description: '读取指定网易云歌曲的歌词，保留 available、no_lyrics、uncollected 状态。',
   parameters: {
     type: 'object',
     properties: {

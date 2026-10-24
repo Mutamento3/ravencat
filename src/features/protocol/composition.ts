@@ -22,7 +22,8 @@ export async function saveProtocol(params: {
   };
 
   if (params.protocolId) {
-    await protocolRepository.update(params.protocolId, payload);
+    const protocol = await protocolRepository.update(params.aiAssistantId, params.protocolId, payload);
+    if (!protocol) throw new Error('协议不存在或不属于当前 AI，请刷新后重试');
     return true;
   }
 
@@ -33,6 +34,8 @@ export async function saveProtocol(params: {
   return true;
 }
 
-export async function deleteProtocol(protocolId: string) {
-  return protocolRepository.delete(protocolId);
+export async function deleteProtocol(aiAssistantId: string, protocolId: string) {
+  const deleted = await protocolRepository.delete(aiAssistantId, protocolId);
+  if (!deleted) throw new Error('协议不存在或不属于当前 AI，请刷新后重试');
+  return true;
 }

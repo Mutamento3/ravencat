@@ -129,6 +129,7 @@ const hostModule = load('src/host/KimiPhoneHost.tsx', {
   },
   '@features/chat': { ChatRouterProvider: (props) => { chatProps = props; return props.children; }, listGroupChats: async () => [], getAssistantMessageArrivalSnapshot: () => arrival, subscribeAIMessageReceived: () => noop },
   '@features/chat/composition': { messageRepository: {}, setChatForegroundContext: noop, clearSessionTimelineCache: noop, emitChatMessagesUpdated: noop, applyAssistantMessageArrivalSnapshot: noop, interruptAbandonedGroupSpeechPlans: done },
+  '@features/wallet/composition': { stopLedgerAIReplyQueueForReset: noop, resumeLedgerAIReplyQueueAfterReset: noop },
   './composition/configureHostRuntime': { configureHostRuntime: noop },
   './shell/ApplicationUpdateProvider': { ApplicationUpdateProvider: passThrough },
   './composition/completePendingBackupRestore': { completePendingBackupRestore: done },

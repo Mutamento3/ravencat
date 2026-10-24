@@ -80,7 +80,7 @@ export async function requestOutgoingCallDecision(params: {
   if (!response.success) {
     return {
       success: false,
-      errorMessage: getErrorDisplayInfo(new Error(response.error || 'Unknown error')).message,
+      errorMessage: `接听决策失败（${aiConfig.model}）：${getErrorDisplayInfo(response.error || '模型未提供错误原因', { includeDetails: true }).message}`,
     };
   }
 

@@ -1,6 +1,7 @@
 /** 串联单次通话回复、语音播放和 AI 主动结束，避免终态早于最后一句。 */
 
 import type { CallAIConfig } from '../../domain/CallAIConfig';
+import type { CallInputAudio } from '../../domain/CallHistory';
 import type { CallSession } from '../../domain/CallSession';
 import { aiCallRuntimeService } from './AICallRuntimeService';
 import { callTTSPlaybackQueue } from './CallTTSPlaybackQueue';
@@ -29,6 +30,7 @@ export type RunCallTurnResult = ProcessCallAIReplyResult & {
 export interface RunCallTurnParams {
   callId: string;
   userText: string;
+  userAudio?: Promise<CallInputAudio | null>;
   aiConfig: CallAIConfig;
   onPlaybackStarted?: () => void;
   onPlaybackEnded?: () => void;
@@ -81,6 +83,7 @@ export class CallTurnRuntimeService {
         callId: params.callId,
         runId,
         userText: params.userText,
+        userAudio: params.userAudio,
         aiConfig: params.aiConfig,
         signal,
         onToolExecutionChanged: (active) => {

@@ -37,7 +37,7 @@ const shared = {
   '@shared/theme': { ThemedSurface: 'ThemedSurface', useTheme: () => theme, useThemedStyles: (factory) => factory(theme) },
   '@shared/ui': { NavigationHeader: 'NavigationHeader', AIInfoCard: 'AIInfoCard' },
   '@shared/ui/NavigationHeader': { __esModule: true, default: 'NavigationHeader' },
-  'lucide-react-native': { HeartHandshake: 'HeartHandshake', BookOpen: 'BookOpen' },
+  'lucide-react-native': { HeartHandshake: 'HeartHandshake', BookOpen: 'BookOpen', History: 'History' },
   '@expo/vector-icons': { Ionicons: 'Ionicons' },
   '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname || assistant.name },
 };
@@ -83,7 +83,7 @@ const routeDependencies = Object.fromEntries([
   '../../summary/presentation/ChatSummaryScreen', '../../summary/presentation/ChatSummaryEditorScreen',
   '../../summary/presentation/ChatSummarySettingsScreen', '../../summary/presentation/ChatSummaryTaskScreen', '../../summary/presentation/ChatSecondarySummaryScreen',
   '../messages/ChatDetail', '../messages/FilePreview', '../messages/components/ChatBackground',
-  '../../group/application', '../../conversation/application/ChatPresentation', '../messages/components/sessionTimelineCache',
+  '../../group/application', '../../group/application/GroupMembership', '../../conversation/application/ChatPresentation', '../messages/components/sessionTimelineCache',
 ].map((id) => [id, defaults]));
 const routes = load('src/features/chat/presentation/shell/ChatRouteScreens.tsx', {
   ...shared, ...routeDependencies,
@@ -105,7 +105,7 @@ try {
   const menuTitles = menuRenderer.root.findAllByType('TouchableOpacity').map((item) =>
     item.findAllByType('Text').map((text) => text.children.join('')).join(''));
   // 菜单顺序可随页面调整；导航契约要求入口完整，不冻结当前排列。
-  assert.deepEqual(menuTitles.sort(), ['模型设置', '协议空间', '聊天摘要', '对话设置', '相遇痕迹', '清除聊天记录', '删除当前 AI'].sort());
+  assert.deepEqual(menuTitles.sort(), ['模型设置', '协议空间', '聊天摘要', '对话设置', '通话记录', '相遇痕迹', '清除聊天记录', '删除当前 AI'].sort());
   const entry = menuRenderer.root.findAllByType('TouchableOpacity').find((item) =>
     item.findAllByType('Text').some((text) => text.children.join('') === '相遇痕迹'));
   assert.ok(entry, '更多中应有与其他功能相同的可点击菜单入口');

@@ -160,11 +160,18 @@ export function detectServiceBusyError(message: string): ServiceBusyErrorInfo {
 }
 
 /**
- * 获取错误显示信息
+ * 获取错误显示信息；需要排障的入口可保留具体原因，普通聊天使用简明提示。
  * @param error - 错误对象或消息
  * @returns 错误显示信息
  */
-export function getErrorDisplayInfo(error: Error | string): ErrorDisplayInfo {
+export function getErrorDisplayInfo(error: Error | string, options: { includeDetails?: boolean } = {}): ErrorDisplayInfo {
+  const display = mapErrorDisplayInfo(error);
+  if (!options.includeDetails) return display;
+  const detail = error instanceof Error ? error.message : error;
+  return { ...display, message: display.type === 'request' ? detail : `${display.message}\n${detail}` };
+}
+
+function mapErrorDisplayInfo(error: Error | string): ErrorDisplayInfo {
   const message = error instanceof Error ? error.message : String(error || '');
   const normalizedMessage = message.toLowerCase();
   const paramErrorInfo = detectParamError(message);

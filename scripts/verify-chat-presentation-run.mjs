@@ -66,7 +66,7 @@ const actionGrouping = loadModule(
   },
 );
 
-// 自主唤醒的开始、过程与结束进入同一行动组；主题隐藏普通推理不能抹掉自主记录。
+// 自主唤醒的开始、过程与结束进入同一行动组；关闭行动步骤仅隐藏展示。
 {
   const activity = (id, senderType, phase) => ({ id, senderType, isMe: false, status: 'sent',
     turnRunId: 'wake-run', text: phase, metadataJson: JSON.stringify({
@@ -75,7 +75,8 @@ const actionGrouping = loadModule(
     }) });
   const records = [activity(1, 'system', 'started'), activity(2, 'reasoning', 'reasoning'),
     activity(3, 'system', 'assistant'), activity(4, 'system', 'terminal')];
-  const visible = actionGrouping.filterReasoningMessagesForPresentation(records, false);
+  assert.equal(actionGrouping.filterActionStepsForPresentation(records, false).length, 0);
+  const visible = actionGrouping.filterActionStepsForPresentation(records, true);
   assert.equal(visible.length, 4);
   const grouped = actionGrouping.segmentContiguousAgentActions(visible);
   assert.equal(grouped.length, 1);
@@ -104,8 +105,6 @@ const messageListState = loadModule(
     throw new Error(`未预期的 messageListState 运行时依赖：${specifier}`);
   },
 );
-
-const themeVariants = loadModule('src/shared/theme/themeVariants.ts');
 
 const themeSources = {
   'default-light': 'src/shared/theme/themes/defaultLight.ts',
@@ -228,10 +227,10 @@ function project(messages) {
   return actionGrouping.segmentContiguousAgentActions(messages);
 }
 
-function projectForProfile(messages, profile) {
-  const visibleMessages = actionGrouping.filterReasoningMessagesForPresentation(
+function projectWithVisibility(messages, showActionSteps) {
+  const visibleMessages = actionGrouping.filterActionStepsForPresentation(
     messages,
-    profile.showReasoningMessages,
+    showActionSteps,
   );
   return project(visibleMessages);
 }
@@ -258,30 +257,26 @@ assert.equal(caseA[1].kind, 'message');
 assert.equal(caseA[1].message.id, 4);
 
 // grouping 是可见 timeline 的结构语义，不随视觉 surface 改变。
-for (const themeId of ['default-light', 'moon-kimi']) {
-  const profile = themeVariants.getChatInteractionProfile(themes[themeId]);
-  const projected = projectForProfile([
+for (const themeId of ['default-light', 'moon-kimi', 'paper-note']) {
+  const projected = projectWithVisibility([
     reasoning(1, {}, 'R1'),
     toolStatus(2, {}, 'T1'),
     reasoning(3, {}, 'R2'),
     message({ id: 4, senderType: 'assistant', turnRunId: 'run-1', text: 'A1' }),
-  ], profile);
+  ], true);
   assert.equal(projected.length, 2, `${themeId} 应得到相同的 ActionGroup 分段`);
   assertGroup(projected[0], [1, 2, 3], `${themeId} 的视觉 surface 不得改变 grouping`);
   assert.equal(projected[1].message.id, 4);
 }
 
-// profile 隐藏 reasoning 时，先过滤可见 timeline，再仅对剩余过程项分组。
-const hiddenReasoningProfile = themeVariants.getChatInteractionProfile(themes['paper-note']);
-const hiddenReasoningProjection = projectForProfile([
+// 关闭行动步骤同时隐藏思考与工具状态，保留相同文字的正文及业务系统消息。
+const hiddenActionProjection = projectWithVisibility([
   reasoning(1, {}, 'R1'),
   toolStatus(2, {}, 'T1'),
-  message({ id: 3, senderType: 'assistant', turnRunId: 'run-1', text: 'A1' }),
-], hiddenReasoningProfile);
-assert.equal(hiddenReasoningProfile.showReasoningMessages, false);
-assert.equal(hiddenReasoningProjection.length, 2);
-assertGroup(hiddenReasoningProjection[0], [2], '隐藏的 reasoning 不得被 ActionGroup 恢复');
-assert.equal(hiddenReasoningProjection[1].message.id, 3);
+  message({ id: 3, senderType: 'assistant', turnRunId: 'run-1', text: 'R1' }),
+  ordinarySystem(4),
+], false);
+assert.deepEqual(Array.from(hiddenActionProjection, item => item.message.id), [3, 4]);
 
 // Case B：assistant 切断同一 run，后续过程必须新开组。
 const caseB = project([

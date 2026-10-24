@@ -16,8 +16,6 @@ export interface ChatInteractionProfile {
    */
   enableVoiceMessageLongPressMenu: boolean;
   showAssistantInlineActions: boolean;
-  showTokenUsage: boolean;
-  showReasoningMessages: boolean;
   enableAssistantMessageSegmentation: boolean;
   preferStreamingReply: boolean;
 }
@@ -30,8 +28,6 @@ const DEFAULT_CHAT_INTERACTION_PROFILE: ChatInteractionProfile = {
   enableMessageLongPressMenu: true,
   enableVoiceMessageLongPressMenu: true,
   showAssistantInlineActions: false,
-  showTokenUsage: true,
-  showReasoningMessages: true,
   enableAssistantMessageSegmentation: true,
   preferStreamingReply: false,
 };
@@ -45,8 +41,6 @@ const OFFICIAL_REPLICA_CHAT_INTERACTION_PROFILE: ChatInteractionProfile = {
   // 内联操作保留；用户和 AI 都可通过长按管理消息与收藏。
   enableVoiceMessageLongPressMenu: true,
   showAssistantInlineActions: true,
-  showTokenUsage: false,
-  showReasoningMessages: true,
   enableAssistantMessageSegmentation: false,
   preferStreamingReply: true,
 };
@@ -59,8 +53,6 @@ const PAPER_NOTE_CHAT_INTERACTION_PROFILE: ChatInteractionProfile = {
   enableMessageLongPressMenu: true,
   enableVoiceMessageLongPressMenu: true,
   showAssistantInlineActions: false,
-  showTokenUsage: false,
-  showReasoningMessages: false,
   enableAssistantMessageSegmentation: false,
   preferStreamingReply: true,
 };

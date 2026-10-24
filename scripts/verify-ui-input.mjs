@@ -119,6 +119,39 @@ await act(async () => rendered.unmount());
 assert.equal(listeners.size, 0, '窗口卸载后释放键盘监听');
 assert.equal(ref.current, null);
 
+// 原生窗口可先于 React 组件退场；其余窗口的键盘事件不能测量已脱离的 View。
+let nativeViewAttached = false;
+const DetachableView = React.forwardRef(function DetachableView(props, nativeRef) {
+  const attached = nativeViewAttached;
+  React.useImperativeHandle(nativeRef, () => attached ? windowNative : null, [attached]);
+  return React.createElement('DetachedWindow', props);
+});
+const DetachableContainer = load('src/shared/ui/KeyboardAvoidingContainer.tsx', {
+  ...dependencies, 'react-native': { ...native, View: DetachableView },
+}).default;
+keyboard = undefined;
+frame = { y: 0, height: 800 };
+await act(async () => { rendered = create(React.createElement(DetachableContainer)); });
+await showKeyboard();
+const detachedWindow = () => rendered.root.findByType('DetachedWindow');
+const detachedBottom = () => Object.assign({}, ...detachedWindow().props.style).paddingBottom;
+assert.equal(detachedBottom(), 0, '没有原生 View 的保留页面忽略其他窗口的键盘事件');
+nativeViewAttached = true;
+await act(async () => { rendered.update(React.createElement(DetachableContainer)); });
+await act(async () => { detachedWindow().props.onLayout({ nativeEvent: { layout: { y: 0, height: 800 } } }); });
+assert.equal(detachedBottom(), 300, '原生 View 重新接入后按实际键盘位置避让');
+deferMeasurements = true;
+frame = { y: 0, height: 700 };
+await showKeyboard();
+nativeViewAttached = false;
+await act(async () => { rendered.update(React.createElement(DetachableContainer)); });
+await act(async () => { measurements.splice(0).forEach(complete => complete()); });
+assert.equal(detachedBottom(), 300, '原生 View 退场立即作废在途测量，不等待 effect 清理');
+await showKeyboard();
+deferMeasurements = false;
+await act(async () => { rendered.unmount(); });
+assert.equal(listeners.size, 0);
+
 // 改写单聊/群聊消息共用同一个编辑器；使用真实表单、弹窗和避让容器验证窗口缩放后的间隙。
 const modalTheme = load('src/shared/theme/themes/defaultLight.ts', {}).defaultLightTheme;
 const modalNative = {

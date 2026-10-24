@@ -15,7 +15,7 @@ const MAX_STRUCTURE_LABEL_CHARACTERS = 160;
 
 export const definition = {
   name: 'read_screen_accessibility',
-  description: '【主理 AI 专属】读取当前 Android 页面通过 Accessibility 暴露的文字和必要界面结构，不进行 OCR，也不代表可看到全部视觉内容',
+  description: '读取当前 Android 页面通过 Accessibility 暴露的文字和必要界面结构，不进行 OCR，也不代表可看到全部视觉内容',
   parameters: {
     type: 'object',
     properties: {},

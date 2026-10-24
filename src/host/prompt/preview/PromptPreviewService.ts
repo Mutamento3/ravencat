@@ -61,7 +61,8 @@ export const promptPreviewService: PromptPreviewGateway = {
           currentAIId: assistant.id,
           currentAgentId: assistant.agentId,
           currentAIName: assistant.name,
-          members: group.members.map((member) => ({
+          members: group.members.filter(member => member.enabled).map((member) => ({
+            muted: member.muted,
             aiAssistantId: member.aiAssistantId,
             agentId: member.agentId,
             name: member.name || member.agentId,

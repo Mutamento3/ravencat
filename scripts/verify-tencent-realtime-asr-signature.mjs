@@ -92,7 +92,7 @@ class FakeWebSocket {
   }
 
   emitError() {
-    this.onerror?.({});
+    this.onerror?.({ message: 'HTTP 401: authorization failed' });
   }
 
   emitClose() {
@@ -149,7 +149,7 @@ const failedClient = new TencentRealtimeASRClient({
 const failedConnectionPromise = failedClient.connect();
 const failedSocket = sockets.at(-1);
 failedSocket.emitError();
-await assert.rejects(failedConnectionPromise, /WebSocket failed/);
+await assert.rejects(failedConnectionPromise, /WebSocket 网络失败.*HTTP 401.*authorization failed/);
 assert.equal(unexpectedErrorCount, 1, '意外连接错误仍需上报');
 
 let cancelledErrorCount = 0;

@@ -29,7 +29,6 @@ export interface Tool<TArgs = any, TContext = any> {
   name: string;
   definition: ToolDefinition;
   execute: (args: TArgs, context: TContext) => Promise<ToolExecuteResult>;
-  promptDescription?: string;
 }
 
 /** 决定当前 AI 可见工具集合的配置。 */

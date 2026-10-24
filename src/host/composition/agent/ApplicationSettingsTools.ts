@@ -156,7 +156,7 @@ const getCallBackground = tool<TargetInput>('get_call_background', `获取并查
     const target = await targetFor(context, input.agent_id, 'manage');
     return showSelection(await getCallBackgroundImageSelection(target.id), `${target.name}的通话背景`, 'call', context);
   });
-const getGlobalBackground = tool<Record<string, never>>('get_global_background', '【主理 AI 专属】获取并查看玻璃主题全局背景图，无需参数；不切换当前主题。', emptyParameters,
+const getGlobalBackground = tool<Record<string, never>>('get_global_background', '获取并查看玻璃主题全局背景图，无需参数；不切换当前主题。', emptyParameters,
   async (_input, context) => {
     await targetFor(context, undefined, 'global');
     return showSelection(await getWallpaperImageSelection('app'), '玻璃主题全局背景', 'global_glass', context);
@@ -187,17 +187,17 @@ const setCallBackground = tool<ImageInput>('set_call_background', `更换或恢�
     const result = await changeCallBackgroundFromMediaAsset(target.id, { mediaAssetId: selectedImageId(input), aspect: screenAspect(), signal: context.abortSignal }, guardFor(context, target.id));
     return success({ agentId: target.agentId, action: input.action, ...result });
   });
-const setUserAvatar = tool<ImageInput>('set_user_avatar', `【主理 AI 专属】更换或恢复用户头像。${imageInstructions}`, imageParameters(false),
+const setUserAvatar = tool<ImageInput>('set_user_avatar', `更换或恢复用户头像。${imageInstructions}`, imageParameters(false),
   async (input, context) => {
     await targetFor(context, undefined, 'global');
     return success({ action: input.action, ...await changeCurrentUserAvatarFromMediaAsset(selectedImageId(input), context.abortSignal, guardFor(context, null)) });
   });
-const setMomentsCover = tool<ImageInput>('set_moments_cover', `【主理 AI 专属】更换或恢复朋友圈（时刻）封面。${imageInstructions}`, imageParameters(false),
+const setMomentsCover = tool<ImageInput>('set_moments_cover', `更换或恢复朋友圈（时刻）封面。${imageInstructions}`, imageParameters(false),
   async (input, context) => {
     await targetFor(context, undefined, 'global');
     return success({ action: input.action, ...await changeCurrentUserMomentsCoverFromMediaAsset(selectedImageId(input), context.abortSignal, guardFor(context, null)) });
   });
-const setGlobalBackground = tool<ImageInput>('set_global_background', `【主理 AI 专属】更换或恢复玻璃主题全局背景图；其他主题下也可保存，不自动切换主题。${imageInstructions}`, imageParameters(false),
+const setGlobalBackground = tool<ImageInput>('set_global_background', `更换或恢复玻璃主题全局背景图；其他主题下也可保存，不自动切换主题。${imageInstructions}`, imageParameters(false),
   async (input, context) => {
     await targetFor(context, undefined, 'global');
     const result = await changeWallpaperFromMediaAsset('app', { mediaAssetId: selectedImageId(input), aspect: screenAspect(), signal: context.abortSignal }, guardFor(context, null));

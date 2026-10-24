@@ -546,7 +546,7 @@ try {
           ? await rejectedClient[method](missingToolReasoning, tools)
           : await rejectedClient[method](missingToolReasoning);
         assert.equal(rejected.success, false);
-        assert.equal(rejected.error, 'reasoning_content missing');
+        assert.match(rejected.error, /reasoning_content missing/, '保留服务端原因，不锁定 HTTP 错误的展示包装');
         assert.equal(rejectedBodies.length, before + 1, `${method} 协议错误不隐藏重试`);
         assert.equal(Object.hasOwn(rejectedBodies.at(-1).messages[0], 'reasoning_content'), false,
           '缺失的真实工具思考不补空或空格');

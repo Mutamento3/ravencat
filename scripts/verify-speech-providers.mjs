@@ -30,10 +30,12 @@ const draftModule = load('src/features/assistants/presentation/auxiliaryModels/s
 const encoding = load(`${speechRoot}infrastructure/speechAudioEncoding.ts`);
 const ai = { normalizeAIBaseURL: (url) => url.replace(/\/$/, ''), ...load('src/platform/ai/errorMapping.ts') };
 const recognitionErrors = load(`${speechRoot}application/SpeechRecognitionErrors.ts`);
-const openai = load(`${speechRoot}infrastructure/OpenAISpeechClient.ts`, { '@platform/ai': ai, './speechAudioEncoding': encoding });
-const minimax = load(`${speechRoot}infrastructure/MiniMaxSpeechClient.ts`, { '@platform/ai': ai });
-const eleven = load(`${speechRoot}infrastructure/ElevenLabsSpeechClient.ts`, { './speechAudioEncoding': encoding });
-const gateway = load(`${speechRoot}infrastructure/SpeechSynthesisGateway.ts`, { './OpenAISpeechClient': openai, './MiniMaxSpeechClient': minimax, './ElevenLabsSpeechClient': eleven, '../application/SpeechProviderCatalog': catalog });
+const httpErrors = load(`${speechRoot}infrastructure/SpeechHttpError.ts`);
+const openai = load(`${speechRoot}infrastructure/OpenAISpeechClient.ts`, { '@platform/ai': ai, './speechAudioEncoding': encoding, './SpeechHttpError': httpErrors });
+const minimax = load(`${speechRoot}infrastructure/MiniMaxSpeechClient.ts`, { '@platform/ai': ai, './SpeechHttpError': httpErrors });
+const eleven = load(`${speechRoot}infrastructure/ElevenLabsSpeechClient.ts`, { './speechAudioEncoding': encoding, './SpeechHttpError': httpErrors });
+const fish = load(`${speechRoot}infrastructure/FishAudioSpeechClient.ts`, { './speechAudioEncoding': encoding, './SpeechHttpError': httpErrors });
+const gateway = load(`${speechRoot}infrastructure/SpeechSynthesisGateway.ts`, { './OpenAISpeechClient': openai, './MiniMaxSpeechClient': minimax, './ElevenLabsSpeechClient': eleven, './FishAudioSpeechClient': fish, '../application/SpeechProviderCatalog': catalog });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 const requests = [];
 const originalFetch = globalThis.fetch;
@@ -66,6 +68,87 @@ try {
   assert.ok(!catalog.getSpeechParameters('openai', 'tts-1').some((field) => field.key === 'instructions'));
   assert.ok(!catalog.getSpeechParameters('minimaxT2aV2', 'speech-2.8-hd').find((field) => field.key === 'emotion').options.includes('whisper'));
 
+  // Fish 使用原生请求头与单音色协议，零值、false 和单次语速覆盖不能在映射时丢失。
+  const fishController = new AbortController();
+  const fishConfig = { baseURL: 'https://api.fish.audio/v1/', apiKey: 'fish-key', model: 's2.1-pro', metadataJson: null };
+  const fishAudio = await gateway.synthesizeSpeechAudio(fishConfig, {
+    provider: 'fishAudio', voiceId: 'fish-voice', speed: 1.2, temperature: 0, topP: 0,
+    normalize: false, latency: 'balanced', instructions: '不属于 Fish 参数',
+  }, '你好，Fish。', { speed: 0.8 }, fishController.signal);
+  assert.equal(fishAudio.audioBase64, 'AQID');
+  assert.equal(fishAudio.mimeType, 'audio/mpeg');
+  assert.equal(fishAudio.model, 's2.1-pro');
+  assert.equal(requests.at(-1).url, 'https://api.fish.audio/v1/tts');
+  assert.equal(requests.at(-1).method, 'POST');
+  assert.deepEqual(requests.at(-1).headers, { 'Content-Type': 'application/json', Authorization: 'Bearer fish-key', model: 's2.1-pro' });
+  assert.equal(requests.at(-1).signal, fishController.signal);
+  assert.deepEqual(requests.at(-1).body, {
+    text: '你好，Fish。', reference_id: 'fish-voice', format: 'mp3', prosody: { speed: 0.8 },
+    temperature: 0, top_p: 0, normalize: false, latency: 'balanced',
+  });
+  assert.equal((await synthesize('fishAudio', 's2-pro', { voiceId: 'fish-voice', audioFormat: 'wav', speed: 1.1 })).mimeType, 'audio/wav');
+  assert.deepEqual(requests.at(-1).body.prosody, { speed: 1.1 });
+  await synthesize('fishAudio', 's1', { voiceId: 'fish-voice' });
+  assert.deepEqual(requests.at(-1).body, { text: '你好', reference_id: 'fish-voice', format: 'mp3' });
+  const beforeFishErrors = globalThis.fetch;
+  try {
+    for (const status of [401, 402, 429]) {
+      globalThis.fetch = async () => new Response(JSON.stringify({ status, message: 'Fish 请求失败' }), { status });
+      await assert.rejects(synthesize('fishAudio', 's2-pro', { voiceId: 'fish-voice' }), new RegExp(`Fish Audio HTTP ${status}: Fish 请求失败`));
+    }
+    globalThis.fetch = async () => new Response('upstream unavailable', { status: 503, statusText: 'Service Unavailable' });
+    await assert.rejects(synthesize('fishAudio', 's2-pro', { voiceId: 'fish-voice' }), /Fish Audio HTTP 503: Service Unavailable/);
+    globalThis.fetch = async () => new Response(new Uint8Array());
+    await assert.rejects(synthesize('fishAudio', 's2-pro', { voiceId: 'fish-voice' }), /空音频/);
+    globalThis.fetch = async (_url, { signal }) => { signal.throwIfAborted(); assert.fail('已取消的请求不能完成'); };
+    fishController.abort();
+    await assert.rejects(gateway.synthesizeSpeechAudio(fishConfig, { provider: 'fishAudio', voiceId: 'fish-voice' }, '你好', {}, fishController.signal), { name: 'AbortError' });
+  } finally { globalThis.fetch = beforeFishErrors; }
+
+  // 两条实际合成链路均保留 404 原因、请求标识及非 JSON 正文；密钥不能随服务端回显离开边界。
+  const diagnosticKey = 'secret"fish\\key';
+  let diagnosticMessage;
+  try {
+    for (const provider of ['openaiCompatible', 'fishAudio', 'minimaxT2aV2', 'elevenlabs']) {
+      const failWith = async (body, statusText = 'Not Found') => {
+        const response = new Response(body, { status: 404, statusText });
+        globalThis.fetch = async () => response;
+        let error;
+        try {
+          const result = await gateway.synthesizeSpeechAudio({
+            baseURL: 'https://example.invalid/v1', apiKey: diagnosticKey, model: 's2.1-pro-free', metadataJson: null,
+          }, { provider, voiceId: 'missing-voice' }, '你好', {});
+          assert.equal(result.success, false);
+          error = result.error;
+        } catch (cause) { error = cause.message; }
+        assert.equal(response.bodyUsed, true);
+        assert.match(error, /HTTP 404/);
+        assert.ok(!error.includes(diagnosticKey));
+        assert.ok(!error.includes(JSON.stringify(diagnosticKey).slice(1, -1)));
+        assert.ok(!error.includes(encodeURIComponent(diagnosticKey)));
+        return error;
+      };
+      const body = JSON.stringify({ status: 404, message: `Voice not found: ${diagnosticKey}`, reason: 'reference_id missing', request_id: 'fish-request-123' });
+      diagnosticMessage = await failWith(body);
+      assert.match(diagnosticMessage, /HTTP 404: Voice not found: \[REDACTED\]/);
+      assert.match(diagnosticMessage, /响应正文：\n/);
+      assert.match(diagnosticMessage, /reference_id missing/);
+      assert.match(diagnosticMessage, /fish-request-123/);
+      const nested = await failWith(JSON.stringify({ error: { message: 'Nested voice error' }, message: 'General error' }));
+      assert.match(nested.split('\n')[0], /HTTP 404: Nested voice error/);
+      const malformedNested = await failWith(JSON.stringify({ error: null, message: 'Top-level error' }));
+      assert.match(malformedNested.split('\n')[0], /HTTP 404: Top-level error/);
+      const plain = await failWith(`Proxy cannot find route; token=${encodeURIComponent(diagnosticKey)}`);
+      assert.match(plain, /Proxy cannot find route; token=\[REDACTED\]/);
+      const html = await failWith('<html><body>Unknown endpoint</body></html>');
+      assert.match(html, /<html><body>Unknown endpoint<\/body><\/html>/);
+      const empty = await failWith('', diagnosticKey);
+      assert.match(empty, /HTTP 404: \[REDACTED\]$/);
+      for (const value of ['null', '[]', '42', '{malformed'])
+        assert.ok((await failWith(value)).includes(`响应正文：\n${value}`));
+    }
+  } finally { globalThis.fetch = beforeFishErrors; }
+
   // 控制标记留在提供方输入，canonical 转写只包含正文；不把错误语法降级成朗读文本。
   const textCases = [
     ['minimaxT2aV2', 'speech-2.8-hd', '嗯，(laughs)<#0.5#>我在听。', '嗯， 我在听。'],
@@ -79,6 +162,7 @@ try {
     ['openai', 'gpt-4o-mini-tts', '嗯……啊，我知道了。', '嗯……啊，我知道了。'],
     ['openrouter', 'mistralai/voxtral-mini-tts-2603', '唔，等一下——好了。', '唔，等一下——好了。'],
     ['openaiCompatible', 'custom-model', '嗯，  我在。', '嗯，  我在。'],
+    ['fishAudio', 's2.1-pro', '嗯……我在，你说吧。', '嗯……我在，你说吧。'],
   ];
   for (const [provider, model, text, transcript] of textCases) {
     assert.deepEqual(speechText.prepareSpeechText(text, provider, model), { synthesisText: text, transcript });
@@ -86,36 +170,48 @@ try {
     assert.equal(requests.at(-1).body.text ?? requests.at(-1).body.input, text);
   }
   // Audio Tags 的内容由 AI 自主选择；只验证语法，不把示例变成词汇白名单。
-  for (const model of ['eleven_v3', 'eleven_v4', 'eleven_v4_turbo']) {
-    const guidance = speechText.getSpeechTextGuidance('elevenlabs', model);
+  const bracketModels = [
+    ...['eleven_v3', 'eleven_v4', 'eleven_v4_turbo'].map((model) => ['elevenlabs', model]),
+    ...['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3'].map((model) => ['fishAudio', model]),
+  ];
+  for (const [provider, model] of bracketModels) {
+    const guidance = speechText.getSpeechTextGuidance(provider, model);
     assert.ok(guidance.includes('自主决定'));
     assert.ok(guidance.includes('只是示例'));
     assert.ok(!guidance.includes('只使用列出的标记'));
     for (const [open, close] of [['[', ']'], ['［', '］'], ['【', '】']]) {
-      const prepared = speechText.prepareSpeechText(`  ${open}  speaking　very softly, with warmth  ${close}嗯……我在，别急！${open}轻声、温柔地说${close}继续吧。  `, 'elevenlabs', model);
+      const prepared = speechText.prepareSpeechText(`  ${open}  speaking　very softly, with warmth  ${close}嗯……我在，别急！${open}轻声、温柔地说${close}继续吧。  `, provider, model);
       assert.deepEqual(prepared, {
         synthesisText: '[speaking very softly, with warmth]嗯……我在，别急！[轻声、温柔地说]继续吧。',
         transcript: '嗯……我在，别急！ 继续吧。',
       });
-      await gateway.synthesizeSpeechAudio({ ...catalog.getSpeechProvider('elevenlabs'), baseURL: 'https://api.elevenlabs.io/v1', apiKey: 'key', model }, { provider: 'elevenlabs', voiceId: 'voice' }, prepared.synthesisText, {});
+      await gateway.synthesizeSpeechAudio({ baseURL: catalog.getSpeechProvider(provider).baseURL, apiKey: 'key', model }, { provider, voiceId: 'voice' }, prepared.synthesisText, {});
       assert.equal(requests.at(-1).body.text, prepared.synthesisText);
-      assert.throws(() => speechText.prepareSpeechText(`${open}laughs${close}`, 'elevenlabs', model), /不能只有/);
+      assert.throws(() => speechText.prepareSpeechText(`${open}laughs${close}`, provider, model), /不能只有/);
     }
-    assert.equal(speechText.prepareSpeechText('[standing] 你好', 'elevenlabs', model).transcript, '你好');
-    assert.equal(speechText.prepareSpeechText(`[${'a'.repeat(100)}]你好`, 'elevenlabs', model).transcript, '你好');
-    assert.equal(speechText.prepareSpeechText(`[${'𠮷'.repeat(100)}]你好`, 'elevenlabs', model).transcript, '你好');
-    assert.equal(speechText.prepareSpeechText('[soft-spoken, “café”! 很轻……]你好', 'elevenlabs', model).transcript, '你好');
+    assert.equal(speechText.prepareSpeechText('[standing] 你好', provider, model).transcript, '你好');
+    assert.equal(speechText.prepareSpeechText(`[${'a'.repeat(100)}]你好`, provider, model).transcript, '你好');
+    assert.equal(speechText.prepareSpeechText(`[${'𠮷'.repeat(100)}]你好`, provider, model).transcript, '你好');
+    assert.equal(speechText.prepareSpeechText('[soft-spoken, “café”! 很轻……]你好', provider, model).transcript, '你好');
     for (const tag of [
       '[]', '［　］', '【...】', `[${'a'.repeat(101)}]`,
       '[soft [laughs]]', '［soft【laughs】］', '【soft(laughs)】',
       '[soft］', '［soft】', '【soft]', '[soft', '［soft', '【soft', 'soft］', 'soft】',
       '[soft\nvoice]', '[soft\rvoice]', '[soft\tvoice]', '[\tsoft]', '[soft\u0000voice]', '[soft\u200Bvoice]',
       '[<break>]', '[soft/voice]', '[voice=soft]', '[soft🙂]', '[soft\\voice]',
-    ]) assert.throws(() => speechText.prepareSpeechText(`${tag}你好`, 'elevenlabs', model), undefined, tag);
+    ]) assert.throws(() => speechText.prepareSpeechText(`${tag}你好`, provider, model), undefined, tag);
+    if (provider === 'fishAudio') {
+      assert.match(guidance, /\[whispering\]/);
+      assert.match(guidance, /\[break\]/);
+      assert.match(guidance, /\[long-break\]/);
+      assert.throws(() => speechText.prepareSpeechText('(happy)你好', provider, model));
+      assert.throws(() => speechText.prepareSpeechText('<whisper>你好</whisper>', provider, model));
+    }
   }
   for (const [provider, model] of [
     ['elevenlabs', 'eleven_multilingual_v2'], ['elevenlabs', 'eleven_flash_v2_5'], ['elevenlabs', 'eleven_turbo_v2_5'],
     ['elevenlabs', 'future-model'], ['minimaxT2aV2', 'speech-2.8-hd'], ['openai', 'tts-1'], ['openaiCompatible', 'custom-model'],
+    ['fishAudio', 's1'], ['fishAudio', 'future-model'], ['openaiCompatible', 'fish-audio/s2.1-pro-free'],
   ]) {
     for (const tag of ['[whispers]', '［whispers］', '【轻声】'])
       assert.throws(() => speechText.prepareSpeechText(`${tag}你好`, provider, model));
@@ -167,10 +263,24 @@ try {
   assert.equal(completeSwitch.patch.apiKey, 'new-provider-key');
   assert.equal(JSON.parse(completeSwitch.patch.metadataJson).provider, 'elevenlabs');
   assert.ok(draftModule.parseSpeechModelDraft('tts', { ...edited, speed: '错误' }, ['speed']).errors.speed);
+  const fishDraft = { ...initial, ...draftModule.switchSpeechProvider('fishAudio'), apiKey: 'fish-key', voiceId: 'fish-voice', temperature: '0', topP: '0', normalize: false };
+  const fishParsed = draftModule.parseSpeechModelDraft('tts', fishDraft, Object.keys(fishDraft));
+  assert.deepEqual(fishParsed.errors, {});
+  assert.equal(fishParsed.patch.baseUrl, 'https://api.fish.audio/v1');
+  assert.equal(fishParsed.patch.apiKey, 'fish-key');
+  assert.deepEqual(JSON.parse(fishParsed.patch.metadataJson), { provider: 'fishAudio', voiceId: 'fish-voice', audioFormat: 'mp3', temperature: 0, topP: 0, normalize: false });
+  const fishReopened = draftModule.getSpeechModelDraft('tts', { ...fishParsed.patch, name: 'Fish', enabled: true });
+  assert.equal(fishReopened.voiceId, 'fish-voice');
+  assert.equal(fishReopened.temperature, '0');
+  assert.equal(fishReopened.normalize, false);
+  assert.deepEqual(draftModule.parseSpeechModelDraft('tts', fishReopened, Object.keys(fishReopened)).errors, {});
+  for (const [key, value] of [['voiceId', ''], ['model', 'typo-model'], ['speed', '2.1'], ['temperature', '-0.1'], ['topP', '1.1'], ['audioFormat', 'pcm'], ['latency', 'unknown']])
+    assert.ok(draftModule.parseSpeechModelDraft('tts', { ...fishDraft, [key]: value }, [key]).errors[key], `Fish ${key} 应在配置边界报错`);
   const damaged = draftModule.getSpeechModelDraft('tts', { name: '损坏配置', enabled: true, baseUrl: 'x', apiKey: '', model: '', metadataJson: '{broken' });
   assert.ok(draftModule.parseSpeechModelDraft('tts', damaged, ['provider']).errors.provider);
   const modelsById = new Map([
     ['eleven', { id: 'eleven', capabilityKind: 'tts', enabled: true, name: 'Eleven', baseUrl: 'https://api.elevenlabs.io/v1', apiKey: 'key', model: 'eleven_v4', metadataJson: '{"provider":"elevenlabs","voiceId":"voice"}' }],
+    ['fish', { id: 'fish', capabilityKind: 'tts', ...fishParsed.patch }],
     ['ali', { id: 'ali', capabilityKind: 'stt', enabled: true, name: '阿里', baseUrl: 'wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference', apiKey: 'key', model: 'fun-asr-realtime', metadataJson: '{"provider":"dashscopeRealtimeAsr","workspaceId":"workspace","region":"beijing"}' }],
     ['invalid', { id: 'invalid', capabilityKind: 'stt', enabled: true, name: '错误', baseUrl: 'https://example/v1', apiKey: 'key', model: 'file-stt', metadataJson: '{"provider":"openaiCompatible"}' }],
   ]);
@@ -183,6 +293,8 @@ try {
   });
   assert.equal((await assets.resolveAuxiliaryModel({ modelConfigId: 'ali', capabilityKind: 'stt' })).modelConfigId, 'ali');
   assert.equal((await assets.resolveAuxiliaryModel({ modelConfigId: 'eleven', capabilityKind: 'tts' })).modelConfigId, 'eleven');
+  assert.equal((await assets.resolveAuxiliaryModel({ modelConfigId: 'fish', capabilityKind: 'tts' })).modelConfigId, 'fish');
+  assert.equal(await assets.resolveAuxiliaryModel({ modelConfigId: 'fish', capabilityKind: 'stt' }), null);
   assert.equal(await assets.resolveAuxiliaryModel({ modelConfigId: 'invalid', capabilityKind: 'stt' }), null);
   modelsById.get('eleven').enabled = false;
   assert.equal((await assets.getAuxiliaryModelSelection({ modelConfigId: 'eleven', capabilityKind: 'tts' })).status, 'unavailable');
@@ -213,6 +325,7 @@ try {
   let selectedVoice = { ...directoryConfig, modelConfigId: 'first', modelConfigName: '第一配置' };
   const synthesized = [];
   const voiceTool = load('src/features/chat/reply/agent/SendVoiceMessageTool.ts', {
+    '@shared/aiTools': load('src/shared/aiTools/ToolCompletionIntent.ts'),
     '@features/speech': { ...catalog, ...speechText, resolveTextToSpeechModel: async () => selectedVoice, synthesizeTextToSpeech: async (params) => { synthesized.push(params); return { success: true, audioUri: 'temp://tool', mimeType: 'audio/mpeg' }; } },
     '@features/media': { MEDIA_ASSET_STORAGE_BACKEND: { persistentMedia: 'persistent' }, prepareMediaAssetBatch: async () => ({ ready: true }) },
     '@platform/device': { readLocalAudioMetadata: async () => ({ durationMs: 1000 }), temporarySpeechAudioStore: { deleteIfExists: async () => {} } },
@@ -240,6 +353,20 @@ try {
   assert.equal(tagOnlyVoice.code, 'VOICE_TEXT_INVALID');
   assert.equal(synthesized.length, synthesisCount);
 
+  // 默认 Fish 配置向聊天 AI 声明自己的示例，合成保留标签，消息事实只保存可朗读正文。
+  selectedVoice = { ...directoryConfig, model: 's2.1-pro-free', modelConfigId: 'fish-tool', metadataJson: '{"provider":"fishAudio","voiceId":"fish-voice"}' };
+  const fishTool = await voiceTool.createConfiguredVoiceMessageTool('assistant');
+  assert.match(fishTool.definition.parameters.properties.text.description, /\[whispering\]/);
+  assert.match(fishTool.definition.parameters.properties.text.description, /\[break\]/);
+  assert.equal(fishTool.definition.parameters.properties.speed.minimum, 0.5);
+  const fishSent = await fishTool.execute({ text: '[warm and gentle]嗯，我在。[break]你慢慢说。' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'fish-expression' });
+  assert.equal(fishSent.status, 'success');
+  assert.equal(fishSent.data.transcript, '嗯，我在。 你慢慢说。');
+  assert.equal(synthesized.at(-1).text, '[warm and gentle]嗯，我在。[break]你慢慢说。');
+  assert.equal(synthesized.at(-1).modelSnapshot.modelConfigId, 'fish-tool');
+  const fishCallBlocks = callPrompts.buildCallLivePromptBlocks(undefined, speechText.getSpeechTextGuidance('fishAudio', 's2.1-pro-free', false));
+  assert.ok(fishCallBlocks.some((block) => block.content.includes('[whispering]') && block.content.includes('[break]')));
+
   // 通话标记可以跨任意 delta；句间停顿和两侧正文必须同次合成，结束标记不进入声音或字幕。
   const plainCallSentences = [];
   const plainCallStream = callStreams.createCallSpeechSentenceStream((sentence) => plainCallSentences.push(sentence), null);
@@ -249,6 +376,12 @@ try {
   for (const text of ['【soft\nvoice】你好。', '［soft🙂］你好。', '【soft［voice］】你好。', '［soft】你好。', '【soft你好。', '【laughs】']) {
     const stream = callStreams.createCallSpeechSentenceStream(assert.fail, { ...directoryConfig, model: 'eleven_v4' });
     assert.throws(() => { for (const chunk of text) stream.push(chunk); stream.flush(); }, undefined, text);
+  }
+  // 相似或不完整的标记仍交给既有 Speech 边界报错，不能被修补成挂断。
+  for (const text of ['晚安。[[END_CALL]', '晚安。[[END_CALLS]]', '晚安。[END_CALL]']) {
+    const stream = callStreams.createCallSpeechSentenceStream(() => {}, null);
+    assert.throws(() => { for (const chunk of text) stream.push(chunk); stream.flush(); });
+    assert.equal(stream.shouldEndCall(), false);
   }
   const formattedCallSentences = [];
   const formattedCallStream = callStreams.createCallSpeechSentenceStream((transcript, speech) => formattedCallSentences.push({ transcript, text: speech.synthesisText }), { ...directoryConfig, model: 'eleven_v4' });
@@ -263,6 +396,10 @@ try {
       ['elevenlabs', model, '[[END_CALL]]【轻声、温柔地说。】我在。【dramatic pause】你说吧。晚安。'],
     ]),
     ['elevenlabs', 'eleven_multilingual_v2', '[[END_CALL]]我在。<break time="0.5s" />你说吧。晚安。'],
+    ...['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3'].flatMap((model) => [
+      ['fishAudio', model, '[[END_CALL]][whispering]我在。[break]你说吧。晚安。'],
+      ['fishAudio', model, '[[END_CALL]]【warm and gentle】我在。［long-break］你说吧。晚安。'],
+    ]),
   ]) {
     const snapshot = { ...directoryConfig, model, metadataJson: JSON.stringify({ provider, voiceId: 'voice' }), modelConfigId: 'call-voice', modelConfigName: '通话声音' };
     const runStream = (chunks) => {
@@ -284,9 +421,13 @@ try {
       return sentences;
     };
     const expected = runStream([text]);
-    assert.deepEqual(runStream([...text]), expected);
-    for (let split = 1; split < text.length; split++)
-      assert.deepEqual(runStream([text.slice(0, split), text.slice(split)]), expected);
+    const spokenText = text.replace('[[END_CALL]]', '');
+    for (const markedText of [text, spokenText + '[[END_CALL]]', spokenText.replace('晚安。', '[[END_CALL]]晚安。')]) {
+      assert.deepEqual(runStream([markedText]), expected);
+      assert.deepEqual(runStream([...markedText]), expected);
+      for (let split = 1; split < markedText.length; split++)
+        assert.deepEqual(runStream([markedText.slice(0, split), markedText.slice(split)]), expected);
+    }
   }
 
   // 实际回复 owner 固定模型，并把干净正文提交；切换选择不会改变已经产出的 TTS 输入。
@@ -345,6 +486,7 @@ try {
     '../snapshots/CallSnapshotLifetime': {},
     '../../aiTools/LookAtUserTool': { LookAtUserTool: { name: 'lookAtUser', definition: {},
       execute: async () => ({ success: true, data: { status: 'unavailable' } }) } },
+    '../events/AppendCallSystemEvent': { appendCallErrorEvent: assert.fail },
     '../events/AppendCallTranscriptEvent': {
       appendUserSpeechText: async ({ text }) => ({ id: 'user', text }),
       appendAISpeechText: async (event) => { callEvents.push(event); return { id: 'ai', ...event }; },
@@ -440,16 +582,16 @@ try {
   resolver.configureSpeechModelResolver(async () => ({ ...configuration, modelConfigId: 'selected', modelConfigName: '阿里' }));
   const failedCloud = realtime.startRealtimeSpeechToText({});
   await Promise.resolve(); await Promise.resolve();
-  sockets.at(-1).onclose();
+  sockets.at(-1).onclose({ code: 1006, reason: 'upstream closed' });
   const cloudFailure = await failedCloud;
   assert.equal(cloudFailure.success, false);
   assert.equal(cloudFailure.errorInfo.message, cloudFailure.rawError, '连接失败原因必须保留');
   assert.match(cloudFailure.errorInfo.message, /提前关闭/);
 
-  const networkReason = '阿里百炼实时语音识别 WebSocket 网络失败';
+  const networkReason = '阿里百炼实时语音识别 WebSocket 网络失败：HTTP 429: STT concurrent limit';
   const failedVoiceStart = voice.startVoiceMessageTranscription({});
   await Promise.resolve(); await Promise.resolve();
-  sockets.at(-1).onerror();
+  sockets.at(-1).onerror({ message: 'HTTP 429: STT concurrent limit' });
   const startFailure = await failedVoiceStart;
   assert.equal(startFailure.code, 'VOICE_STT_NETWORK_FAILED');
   assert.equal(startFailure.errorInfo.message, networkReason);
@@ -460,7 +602,7 @@ try {
   const failedSessionSocket = sockets.at(-1);
   failedSessionSocket.onopen(); failedSessionSocket.message('task-started');
   const failedSession = await openingFailedSession;
-  failedSessionSocket.onerror();
+  failedSessionSocket.onerror({ message: 'HTTP 429: STT concurrent limit' });
   assert.deepEqual(sessionErrors, [networkReason], '会话错误不能被通用模型文案替换');
   failedSession.session.close();
 
@@ -470,7 +612,7 @@ try {
   failedVoiceSocket.onopen(); failedVoiceSocket.message('task-started');
   const failedVoice = await openingFailedVoice;
   const finishingFailedVoice = failedVoice.finish({ uri: 'unused', mimeType: 'unused' });
-  failedVoiceSocket.onerror();
+  failedVoiceSocket.onerror({ message: 'HTTP 429: STT concurrent limit' });
   assert.equal((await finishingFailedVoice).errorInfo.message, networkReason, '结束录音后的失败结果仍保留具体原因');
 
   const openingVoice = voice.startVoiceMessageTranscription({});
@@ -482,11 +624,15 @@ try {
   voiceSocket.message('result-generated', { begin_time: 100, end_time: 200, text: '你好', sentence_end: true });
   voiceSocket.message('task-finished'); assert.deepEqual(await ending, { success: true, text: '你好世界' });
   const interrupted = dashscope.connectDashScopeRealtimeASR(configuration, { provider: 'dashscopeRealtimeAsr' }, {});
-  sockets.at(-1).onclose(); await assert.rejects(interrupted, /提前关闭/);
+  sockets.at(-1).onclose({ code: 1006, reason: 'upstream closed' }); await assert.rejects(interrupted, /提前关闭/);
   const failedTencent = new tencent.TencentRealtimeASRClient({ signedUrl: 'wss://test' }).connect();
-  sockets.at(-1).onclose(); await assert.rejects(failedTencent, /closed before final/);
+  sockets.at(-1).onclose({ code: 1006, reason: 'upstream closed' }); await assert.rejects(failedTencent, /closed before final/);
   const badTencent = new tencent.TencentRealtimeASRClient({ signedUrl: 'wss://test' }).connect();
   sockets.at(-1).onmessage({ data: 'not json' }); await assert.rejects(badTencent);
+
+  const tencentRefused = new tencent.TencentRealtimeASRClient({ signedUrl: 'wss://test' }).connect();
+  sockets.at(-1).onmessage({ data: JSON.stringify({ code: 4001, message: '账户服务额度不足' }) });
+  await assert.rejects(tencentRefused, /code=4001.*账户服务额度不足/);
 
   // 临时音频的取消结果由生成方清理，不交给已离开的页面。
   const deleted = [];
@@ -495,6 +641,137 @@ try {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(configured.synthesizeConfiguredSpeech({ configuration: { ...configuration, baseURL: 'https://api.openai.com/v1', model: 'gpt-4o-mini-tts', metadataJson: '{"provider":"openai","voiceId":"coral"}' }, text: '你好', signal: controller.signal }), /已取消/);
   assert.deepEqual(deleted, ['temp://audio']);
+
+  const synthesisOwner = load(`${speechRoot}SynthesizeTextToSpeech.ts`, {
+    '@platform/ai': ai,
+    './application/ResolveSpeechModel': resolver,
+    './SynthesizeConfiguredSpeech': configured,
+  });
+  const beforeSynthesisErrors = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'tts_limit', message: '声音合成额度不足' } }), { status: 429 });
+    const failedSynthesis = await synthesisOwner.synthesizeTextToSpeech({ text: '你好',
+      modelSnapshot: { ...configuration, baseURL: 'https://api.openai.com/v1', model: 'tts-1',
+        modelConfigId: 'tts-test', modelConfigName: '测试 TTS', metadataJson: '{"provider":"openai","voiceId":"coral"}' } });
+    assert.equal(failedSynthesis.success, false);
+    assert.match(failedSynthesis.errorInfo.message, /HTTP 429.*tts_limit.*声音合成额度不足/s);
+    globalThis.fetch = async () => new Response(JSON.stringify({ base_resp: { status_code: 1008, status_msg: '合成服务繁忙' } }));
+    const businessError = await gateway.synthesizeSpeechAudio({ baseURL: 'https://minimax.test', apiKey: 'key', model: 'speech-2.8-hd' },
+      { provider: 'minimaxT2aV2', voiceId: 'voice' }, '你好', {});
+    assert.equal(businessError.success, false);
+    assert.match(businessError.error, /code=1008.*合成服务繁忙/);
+  } finally { globalThis.fetch = beforeSynthesisErrors; }
+
+  // 从真实配置页选择 Fish、校验、创建、重开编辑，测试读取草稿但不提交资产。
+  const draftEditor = load('src/shared/ui/AutoSaveDraftEditor.ts');
+  let focusedSpeechField = null;
+  let blankDismissals = 0;
+  const nativeForm = {
+    View: 'View', Text: 'Text', ScrollView: 'ScrollView', TouchableOpacity: 'TouchableOpacity',
+    Keyboard: { dismiss() {
+      blankDismissals++;
+      // 原生边界结束当前焦点并发出 blur；持久化仍走真实页面与草稿编辑器。
+      const focused = focusedSpeechField;
+      focusedSpeechField = null;
+      if (focused) focused.props.onBlur();
+    } },
+    AppState: { addEventListener: () => ({ remove() {} }) },
+    BackHandler: { addEventListener: () => ({ remove() {} }) },
+  };
+  const formHooks = load('src/shared/ui/useAutoSaveDraft.ts', {
+    react: React, 'react-native': nativeForm, './AutoSaveDraftEditor': draftEditor,
+    'expo-router': { useFocusEffect: (effect) => React.useEffect(effect, [effect]) },
+  });
+  const formFeedback = load('src/shared/ui/useAutoSaveFeedback.ts', { react: React, 'react-native': nativeForm });
+  const formTheme = { spacing: { lg: 10, md: 8, sm: 4, xl: 16 }, colors: { background: { app: '#fff' }, text: { primary: '#000', secondary: '#555' }, feedback: { error: '#f00' } } };
+  const formPage = load('src/features/assistants/presentation/auxiliaryModels/SpeechModelEditScreen.tsx', {
+    react: React, 'react-native': nativeForm, 'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
+    '@features/speech': { ...catalog, SpeechConfigurationTest: 'SpeechTest' },
+    '@shared/ui': { KeyboardAvoidingContainer: 'KeyboardContainer', Button: 'Button', DropdownField: 'DropdownField', InputField: 'InputField', ToggleField: 'ToggleField', showAppDialog: assert.fail },
+    '@shared/ui/NavigationHeader': 'Header', '@shared/theme': { useTheme: () => formTheme },
+    '@shared/ui/useAutoSaveDraft': formHooks, '@shared/ui/useAutoSaveFeedback': formFeedback,
+    '@shared/ui/AutoSaveErrors': { AutoSaveErrors: 'AutoSaveErrors' }, './speechModelDraft': draftModule,
+  });
+  const createdFish = []; const fishWrites = [];
+  const formProps = { kind: 'tts', initialData: null, saving: false, onBack() {},
+    onCreate: async (input) => { createdFish.push(input); }, onSave: async (patch) => { fishWrites.push(patch); } };
+  let fishForm;
+  await act(async () => { fishForm = TestRenderer.create(React.createElement(formPage.default, formProps), { createNodeMock: () => ({ scrollTo() {} }) }); });
+  const formField = (type, label) => fishForm.root.findAllByType(type).find((node) => node.props.label === label);
+  assert.ok(formField('DropdownField', '提供方').props.options.some((option) => option.value === 'fishAudio'));
+  assert.equal(formField('DropdownField', '提供方').props.disabled, false, '新建配置允许选择提供方');
+  assert.equal(formField('InputField', '配置名称').props.value, 'MiniMax');
+  for (const option of formField('DropdownField', '提供方').props.options) {
+    await act(async () => { formField('DropdownField', '提供方').props.onChange(option.value); });
+    assert.equal(formField('InputField', '配置名称').props.value, option.label, '默认名称应跟随提供方切换');
+  }
+  await act(async () => { formField('InputField', '配置名称').props.onChangeText('我的语音'); });
+  await act(async () => { formField('DropdownField', '提供方').props.onChange('openai'); });
+  assert.equal(formField('InputField', '配置名称').props.value, '我的语音', '切换提供方应保留自定义名称');
+  await act(async () => { formField('InputField', '配置名称').props.onChangeText('   '); });
+  await act(async () => { formField('DropdownField', '提供方').props.onChange('fishAudio'); });
+  assert.equal(formField('InputField', '配置名称').props.value, 'Fish Audio', '空白名称应使用新提供方名称');
+  await act(async () => { assert.equal(fishForm.root.findByType('SpeechTest').props.getConfiguration(), null); });
+  assert.ok(formField('InputField', '音色 ID').props.error);
+  await act(async () => {
+    formField('InputField', '音色 ID').props.onChangeText('my-fish-voice');
+    formField('InputField', 'API Key').props.onChangeText('my-fish-key');
+    formField('InputField', '语速').props.onChangeText('1.1');
+    formField('DropdownField', '模型').props.onChange('s2.1-pro-free');
+  });
+  let fishTestConfiguration;
+  await act(async () => { fishTestConfiguration = fishForm.root.findByType('SpeechTest').props.getConfiguration(); });
+  assert.equal(fishTestConfiguration.baseURL, 'https://api.fish.audio/v1');
+  assert.equal(fishTestConfiguration.model, 's2.1-pro-free');
+  assert.equal(JSON.parse(fishTestConfiguration.metadataJson).voiceId, 'my-fish-voice');
+  assert.equal(JSON.parse(fishTestConfiguration.metadataJson).speed, 1.1);
+  assert.deepEqual(createdFish, []);
+  assert.deepEqual(fishWrites, []);
+  await act(async () => { fishForm.root.findByType('Header').props.rightButton.props.onPress(); });
+  assert.equal(createdFish.length, 1);
+  assert.equal(createdFish[0].name, 'Fish Audio');
+  assert.equal(createdFish[0].apiKey, 'my-fish-key');
+  await act(async () => { fishForm.unmount(); });
+  await act(async () => { fishForm = TestRenderer.create(React.createElement(formPage.default, { ...formProps, modelId: 'fish', initialData: createdFish[0] }), { createNodeMock: () => ({ scrollTo() {} }) }); });
+  assert.equal(formField('DropdownField', '提供方').props.disabled, true, '已有 TTS 配置不允许修改提供方');
+  assert.equal(formField('DropdownField', '提供方').props.value, 'fishAudio');
+  assert.equal(formField('InputField', 'API Key').props.value, 'my-fish-key');
+  assert.equal(formField('InputField', '音色 ID').props.value, 'my-fish-voice');
+  await act(async () => { formField('InputField', '音色 ID').props.onChangeText('updated-fish-voice'); });
+  assert.deepEqual(fishWrites, []);
+  focusedSpeechField = formField('InputField', '音色 ID');
+  const background = () => fishForm.root.findAllByType('View').find((node) => node.props.onTouchEnd);
+  await act(async () => { background().props.onTouchEnd({ target: 'input', currentTarget: 'background' }); });
+  assert.equal(blankDismissals, 0, '输入框的触摸冒泡不能让输入框失焦');
+  assert.deepEqual(fishWrites, []);
+  await act(async () => { background().props.onTouchEnd({ target: 'background', currentTarget: 'background' }); });
+  assert.equal(focusedSpeechField, null, '点击空白结束输入焦点');
+  assert.equal(blankDismissals, 1);
+  assert.equal(JSON.parse(fishWrites.at(-1).metadataJson).voiceId, 'updated-fish-voice');
+  for (const name of ['新的语音名称', '再次修改语音名称']) {
+    const writesBeforeTyping = fishWrites.length;
+    await act(async () => { formField('InputField', '配置名称').props.onChangeText(name); });
+    assert.equal(fishWrites.length, writesBeforeTyping, '输入期间不保存');
+    focusedSpeechField = formField('InputField', '配置名称');
+    await act(async () => { background().props.onTouchEnd({ target: 'background', currentTarget: 'background' }); });
+    assert.equal(fishWrites.at(-1).name, name, '每次修改后点击空白都提交最新输入');
+  }
+  await act(async () => { formField('InputField', '语速').props.onChangeText('错误'); });
+  await act(async () => { formField('InputField', '语速').props.onBlur(); });
+  assert.ok(formField('InputField', '语速').props.error);
+  await act(async () => { fishForm.root.findByType('Header').props.onGoBack(); });
+  assert.equal(fishForm.root.findByType('Header').props.rightButton, undefined, '已有语音配置不提供恢复入口');
+  assert.equal(fishForm.root.findByType('AutoSaveErrors').props.restore, undefined);
+  assert.equal(formField('InputField', '语速').props.value, '错误', '保留错误输入供用户修正');
+  await act(async () => { formField('InputField', '语速').props.onChangeText('1.2'); });
+  await act(async () => { formField('InputField', '语速').props.onBlur(); });
+  assert.equal(JSON.parse(fishWrites.at(-1).metadataJson).speed, 1.2, '修正后失焦继续自动保存');
+  assert.equal(formField('InputField', '语速').props.error, undefined);
+  assert.equal(fishForm.root.findByType('AutoSaveErrors').props.blocked, false, '修正后清除未保存提示');
+  assert.equal(formField('InputField', '音色 ID').props.value, 'updated-fish-voice');
+  assert.equal(formField('InputField', 'API Key').props.value, 'my-fish-key');
+  assert.equal(formField('DropdownField', '提供方').props.disabled, true);
+  await act(async () => { fishForm.unmount(); });
 
   // UI 测试通过真实 React 生命周期验证播放清理与迟到响应，不使用源码断言。
   const pending = deferred(); let stops = 0;
@@ -519,6 +796,19 @@ try {
   await act(async () => { renderer.root.findAllByType('Button')[1].props.onPress(); });
   await act(async () => { renderer.unmount(); });
   assert.equal(stops, 1); assert.ok(deleted.includes('temp://new'));
+
+  // 测试页使用服务端诊断原文，并允许用户选择复制，不把具体原因替换为通用 404 文案。
+  const failedPreview = load(`${speechRoot}presentation/SpeechConfigurationTest.tsx`, {
+    react: React, 'react-native': { View: 'View', Text: 'Text' }, '@shared/ui': { Button: 'Button', InputField: 'InputField' }, '@shared/theme': { useTheme: () => theme },
+    '@platform/device': { temporarySpeechAudioStore: store },
+    '../SynthesizeConfiguredSpeech': { synthesizeConfiguredSpeech: async () => { throw new Error(diagnosticMessage); } }, '../StartRealtimeSpeechToText': {},
+  });
+  await act(async () => { renderer = TestRenderer.create(React.createElement(failedPreview.SpeechConfigurationTest, props)); });
+  await act(async () => { renderer.root.findByType('Button').props.onPress(); });
+  const shownError = renderer.root.findAllByType('Text').find((node) => node.props.accessibilityRole === 'alert');
+  assert.equal(shownError.props.children, diagnosticMessage);
+  assert.equal(shownError.props.selectable, true);
+  await act(async () => { renderer.unmount(); });
 
   // STT 设置测试在停止麦克风后发送 finish，并显示屏障前到达的最后一句。
   let audioCallbacks; let recognitionCallbacks; let socketClosed = 0; const events = [];

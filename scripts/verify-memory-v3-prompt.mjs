@@ -290,7 +290,10 @@ contextSegments = undefined;
 const scheduledSummaries = [];
 let summaryBus;
 let auxiliaryChanged;
-mocks.set('@features/assistants', { subscribeAuxiliaryModelsChanged: listener => { auxiliaryChanged = listener; return () => {}; } });
+mocks.set('@features/assistants', {
+  subscribeAuxiliaryModelsChanged: listener => { auxiliaryChanged = listener; return () => {}; },
+  subscribeAIAssistantUpdated: () => () => {},
+});
 let summaryRuns = 0;
 let summaryConversations = ['conversation'];
 const preparedSummaryScopes = [];
@@ -344,7 +347,7 @@ await new Promise(setImmediate);
 assert.equal(summaryRuns,activeRuns+1);
 assert.deepEqual(preparedSummaryScopes.at(-1), ['conversation']);
 await summaryQueue.stopChatSummaryQueueForReset();
-// 普通消息仅检查所属会话，前台恢复与模型配置变化仍完整发现；多个会话不相互覆盖。
+// 普通消息定向消费，前台恢复与模型配置变化读取持久待处理集合；多个会话不相互覆盖。
 summaryConversations = ['conversation', 'other'];
 summaryQueue.setChatSummaryForegroundActive(true);
 scheduledSummaries.shift()(); await new Promise(setImmediate);

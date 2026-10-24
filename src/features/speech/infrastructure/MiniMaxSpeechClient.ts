@@ -1,4 +1,5 @@
 /** MiniMax 语音合成接口适配器。 */
+import { readSpeechHttpError } from './SpeechHttpError';
 import { normalizeAIBaseURL } from '@platform/ai';
 import type {
   SpeechSynthesisRequest,
@@ -126,14 +127,12 @@ export class MiniMaxSpeechClient {
         }),
       });
 
-      const data = await response.json().catch(() => ({})) as MiniMaxT2AResponse;
-      if (!response.ok) {
-        throw new Error(data.base_resp?.status_msg || `HTTP ${response.status}: ${response.statusText}`);
-      }
+      if (!response.ok) throw await readSpeechHttpError(response, 'MiniMax TTS', this.apiKey);
+      const data = await response.json() as MiniMaxT2AResponse;
 
       const statusCode = data.base_resp?.status_code ?? 0;
       if (statusCode !== 0) {
-        throw new Error(data.base_resp?.status_msg || `MiniMax TTS failed with status ${statusCode}`);
+        throw new Error(`MiniMax TTS code=${statusCode}: ${data.base_resp?.status_msg || '服务商未提供错误描述'}`);
       }
 
       const audioHex = normalizeText(data.data?.audio);

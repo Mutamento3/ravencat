@@ -18,7 +18,7 @@ export interface NetEaseSearchSongsArgs {
 export const netEaseSearchSongsDefinition = {
   name: 'netease_search_songs',
   description: [
-    '【主理 AI 专属】搜索网易云公开歌曲候选，返回歌曲、艺人、专辑等身份信息。',
+    '搜索网易云公开歌曲候选，返回歌曲、艺人、专辑等身份信息。',
     '结果仅是候选：必须结合歌名、艺人、专辑和用户上下文消歧，不得默认选择第一项；仍有多个合理候选时应询问用户。',
   ].join(''),
   parameters: {

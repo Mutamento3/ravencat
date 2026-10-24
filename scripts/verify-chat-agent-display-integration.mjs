@@ -91,6 +91,8 @@ if (!directory) {
   console.log(JSON.stringify({ history: await displays.listHistory('s'), visible: (await messages.getMessages('s', { limit: 100 })).messages,
     orphan, orphanStatus: db.prepare("SELECT status, terminal_reason FROM conversation_turn_runs WHERE session_id = 'orphan-tools'").get(),
     earlyHistory: await displays.listHistory('early-text'),
+    streamedVisible: (await messages.getMessages('stream-bubbles', { limit: 100 })).messages,
+    streamedInterrupted: await displays.listHistory('stream-bubbles-stopped'),
     completeVisible: (await messages.getMessages('complete-loop', { limit: 100 })).messages,
     crashVisible: (await messages.getMessages('crash-display', { limit: 100 })).messages,
     timeoutVisible: (await messages.getMessages('timeout-display', { limit: 100 })).messages }));
@@ -124,11 +126,14 @@ for (let i = 0; i < 200; i++) deltaTimeline.appendDelta(1, 'reasoning', 'x');
 assert.equal(readChanges().length, 1);
 assert.deepEqual(readChanges(), [], '没有变化时不能重复发布旧版本');
 deltaTimeline.appendDelta(1, 'assistant', 'first\n\nsecond');
-assert.equal(readChanges()[0].pendingDelivery, true);
-deltaTimeline.reconcileModelTurn(1, { assistantText: 'first\n\nsecond', reasoningText: 'x'.repeat(200),
+assert.deepEqual(readChanges().map(item => [item.text, item.status]), [['first', 'sent'], ['second', 'streaming']],
+  '首泡在空行处闭合，尾泡立即展示真实流式正文');
+deltaTimeline.appendDelta(1, 'assistant', ' tail');
+assert.deepEqual(readChanges().map(item => item.text), ['second tail'], '新 token 只发布活动气泡，不重写已闭合气泡');
+deltaTimeline.reconcileModelTurn(1, { assistantText: 'first\n\nsecond tail', reasoningText: 'x'.repeat(200),
   toolCalls: [{ id: 'a', name: 'one', arguments: '{}' }, { id: 'b', name: 'two', arguments: '{}' }], usage: {}, messageId: 'm' });
 const finalized = readChanges();
-assert.deepEqual(finalized.filter(item => item.kind === 'assistant').map(item => item.text), ['first', 'second']);
+assert.deepEqual(finalized.filter(item => item.kind === 'assistant').map(item => item.text), ['first', 'second tail']);
 deltaTimeline.startToolStatus(1);
 readChanges();
 deltaTimeline.markToolStarted(1, 'a');
@@ -144,7 +149,7 @@ for (const bubbleDeliveryMode of ['single-bubble', 'multi-bubble']) for (const c
   const timeline = new ChatAgentTimeline(usageRun, {}, { bubbleDeliveryMode });
   timeline.startStep(1);
   timeline.appendDelta(1, 'assistant', 'first\n\nsecond');
-  assert.equal(timeline.snapshots()[0].tokensUsed, undefined, '真实统计到达前不能估算用量');
+  assert.equal(timeline.snapshots().at(-1).tokensUsed, undefined, '真实统计到达前不能估算尾段用量');
   timeline.reconcileModelTurn(1, { assistantText: 'first\n\nsecond', reasoningText: '', toolCalls: [],
     usage: { totalTokens: 120, promptTokens: 100, completionTokens: 20, cachedTokens }, messageId: usageRun });
   store.applyAgentTransientTimelineSnapshots({ sessionId: usageRun, snapshots: timeline.snapshots() });
@@ -375,7 +380,74 @@ try {
     return { status: 'suppressed_foreground' };
   });
   const { createSingleTransactionTurnCommit } = load('src/features/chat/reply/application/SingleTransactionTurnCommit.ts');
+  const streamingWritesBefore = writes;
+  // 流式多气泡在生成过程中持续展示；阻塞非流式时钟不能阻塞它，T3 不重排或重播。
+  const streamingText = '首泡\n\n' + '长'.repeat(99) + '！？”)下一句\n\n末泡';
+  const { segmentAssistantReplyText } = load('src/features/chat/reply/application/AssistantReplySegmentation.ts');
+  const streamingExpected = segmentAssistantReplyText(streamingText, 'multi-bubble');
+  const streamingSession = 'stream-bubbles';
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(streamingSession, 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run(streamingSession);
+  await commitCanonicalUserMessage({ message: { ...user('边说边分泡'), sessionId: streamingSession } });
+  const streamingRun = await turns.claimIfIdle(streamingSession, 'user_reply');
+  const streamingDisplay = new presentation.ChatTurnPresentation(streamingRun, ai.agentId, ai.id);
+  await streamingDisplay.start();
+  const liveStreaming = new ChatAgentTimeline(streamingRun.runId, streamingDisplay.sink, { bubbleDeliveryMode: 'multi-bubble' });
+  liveStreaming.startStep(1);
+  holdArrival = true;
+  const waitsBeforeStreaming = pendingPaces.length;
+  let previousBubbles = new Map();
+  for (const chunk of ['首', '泡\n', '\n', '长'.repeat(99), '！', '？', '”', ')', '下', '一句\n\n', '末', '泡']) {
+    liveStreaming.appendDelta(1, 'assistant', chunk);
+    await streamingDisplay.flush();
+    const visible = store.snapshotAgentTransientTimelineWithReplacements(streamingSession);
+    assert.ok(visible.length > 0, '模型尚未完成时已有正文，不等待整段');
+    for (const bubble of visible) {
+      const previous = previousBubbles.get(bubble.clientMessageId);
+      if (previous !== undefined) assert.ok(bubble.text.startsWith(previous), '同一气泡只增长，不回缩或搬动正文');
+    }
+    previousBubbles = new Map(visible.map(bubble => [bubble.clientMessageId, bubble.text]));
+    const shown = (await displays.listHistory(streamingSession))[0].items.map(item => item.snapshot.text);
+    assert.deepEqual(shown, visible.map(bubble => bubble.text), '每次可见增量均先持久保存');
+    assert.equal(pendingPaces.length, waitsBeforeStreaming, '空行闭合与活动尾泡均不增加非流式计时等待');
+  }
+  assert.deepEqual([...previousBubbles.values()], streamingExpected);
+  liveStreaming.reconcileModelTurn(1, { assistantText: streamingText, reasoningText: '', toolCalls: [],
+    usage: { totalTokens: 120, promptTokens: 100, completionTokens: 20, cachedTokens: 80 }, messageId: 'stream-model' });
+  await streamingDisplay.flush();
+  const streamingItems = liveStreaming.buildCommitItems({ sessionId: streamingSession, aiConfig: ai,
+    policy: { bubbleDeliveryMode: 'multi-bubble' }, finalAssistantPolicy: 'commit_as_reply', finalStepIndex: 1 });
+  const streamingCommit = createSingleTransactionTurnCommit(streamingRun, ai.id, streamingDisplay);
+  const streamingResult = await streamingCommit.commitAgentTimeline({ sessionId: streamingSession, aiConfig: ai,
+    response: { text: streamingText }, runtimeContext: { replyRunId: streamingRun.runId }, items: streamingItems, callbacks: {} });
+  await streamingDisplay.finish();
+  assert.equal(streamingResult.outcome, 'committed');
+  assert.equal(pendingPaces.length, waitsBeforeStreaming, '已流式展示的正文在 T3 后不重播分段间隔');
+  const streamingSaved = (await messages.getMessages(streamingSession, { limit: 100 })).messages.filter(message => message.senderType === 'assistant');
+  assert.deepEqual(streamingSaved.map(message => message.text), streamingExpected, '最终历史与流式分泡完全一致');
+  assert.deepEqual(streamingSaved.map(message => message.clientMessageId), [...previousBubbles.keys()], 'T3 沿用已显示气泡身份');
+  assert.deepEqual(streamingSaved.map(usageOf), streamingExpected.map((_, index) => index === streamingExpected.length - 1
+    ? [120, 100, 20, 80] : [0, 0, 0, undefined]), '真实用量只由最终尾泡承载');
+  // 中途打断时，只保留已交付的气泡和活动尾泡，不补发迟到正文。
+  const stoppedSession = 'stream-bubbles-stopped';
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(stoppedSession, 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run(stoppedSession);
+  await commitCanonicalUserMessage({ message: { ...user('开始'), sessionId: stoppedSession } });
+  const stoppedRun = await turns.claimIfIdle(stoppedSession, 'user_reply');
+  const stoppedDisplay = new presentation.ChatTurnPresentation(stoppedRun, ai.agentId, ai.id);
+  await stoppedDisplay.start();
+  const stoppedTimeline = new ChatAgentTimeline(stoppedRun.runId, stoppedDisplay.sink, { bubbleDeliveryMode: 'multi-bubble' });
+  stoppedTimeline.startStep(1);
+  stoppedTimeline.appendDelta(1, 'assistant', '已闭合\n\n活动尾泡');
+  await stoppedDisplay.flush();
+  await commitCanonicalUserMessage({ message: { ...user('停止'), sessionId: stoppedSession } });
+  stoppedTimeline.appendDelta(1, 'assistant', '迟到正文');
+  await stoppedDisplay.flush();
+  await stoppedDisplay.finish();
+  assert.deepEqual((await displays.listHistory(stoppedSession))[0].items.map(item => item.snapshot.text), ['已闭合', '活动尾泡']);
+  holdArrival = false;
   const commit = createSingleTransactionTurnCommit(next, ai.id, nextDisplay);
+  const streamingScenarioWrites = writes - streamingWritesBefore;
   const delivered = [];
   let finalReplies = 0;
   let completions = 0;
@@ -401,7 +473,8 @@ try {
   assert.deepEqual((await messages.getMessages('s', { limit: 100 })).messages.filter(message => !message.isMe).map(message => message.text), ['A', 'B']);
   assert.equal(db.prepare('SELECT state FROM chat_turn_presentations WHERE run_id = ?').get(next.runId).state, 'completed');
   assert.ok(releasedBatches.some(ids => ids.includes(committed.messages[0].id) && ids.includes(committed.messages[1].id)), '新输入须批量清除原生 pending 过滤，不能让剩余分段继续被隐藏');
-  assert.ok(writes - runtimeWrites < 60, `两百个增量及发送回滚的合并写入次数过多：${writes - runtimeWrites}`);
+  assert.ok(writes - runtimeWrites - streamingScenarioWrites < 60,
+    `两百个增量及发送回滚的合并写入次数过多：${writes - runtimeWrites - streamingScenarioWrites}`);
   // 真实提交的媒体仅在 T3 后取得展示元数据，确认前不能进入历史读取。
   const mediaRun = await turns.claimIfIdle('s', 'user_reply');
   const mediaDisplay = new presentation.ChatTurnPresentation(mediaRun, ai.agentId, ai.id);
@@ -658,6 +731,65 @@ try {
   db.exec('DROP TRIGGER reject_checkpoint');
   assert.equal(activeDisplays.size, 0, 'SQLite 失败不能泄漏原生发布资格');
   await turns.revoke(cleanupRun, 'failed', 'checkpoint-rejected');
+  // 群工具写入邀请通知后会刷新展示历史；单聊历史读取不能清掉群执行器的实时投影。
+  const groupSession = 'group-invite-history-refresh';
+  const groupRun = 'group-task-invite';
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(groupSession, 'group');
+  const groupSink = store.createAgentTransientTimelineSink({ sessionId: groupSession, agentId: ai.agentId });
+  const groupTimeline = new ChatAgentTimeline(groupRun, groupSink);
+  const releaseGroupHistory = presentation.retainTurnDisplayHistory(groupSession);
+  groupTimeline.startStep(0);
+  groupTimeline.appendDelta(0, 'reasoning', '准备邀请成员');
+  groupTimeline.reconcileModelTurn(0, { assistantText: '', reasoningText: '准备邀请成员',
+    toolCalls: [{ id: 'invite-call', name: 'add_group_member', arguments: '{}' }], usage: {}, messageId: 'invite-model' });
+  groupTimeline.startToolStatus(0);
+  groupTimeline.markToolStarted(0, 'invite-call');
+  const readGroupProjection = () => store.snapshotAgentTransientTimelineWithReplacements(groupSession);
+  const initialGroupKeys = readGroupProjection().map(store.getAgentTimelineRenderKey);
+  const groupRefreshes = [];
+  const stopGroupObservation = store.agentTransientTimeline.subscribe(groupSession, () => {
+    groupRefreshes.push(readGroupProjection().length);
+  });
+  const invitationId = Number(db.prepare(`INSERT INTO messages(session_id,text,sender_type,is_me,created_at,metadata_json,turn_run_id)
+    VALUES (?, ?, 'system', 0, ?, ?, ?)`).run(groupSession, 'AI 邀请新成员加入了群聊', stamp,
+    JSON.stringify({ type: 'groupMembershipChanged' }), groupRun).lastInsertRowid);
+  const invitationWindow = [{ id: invitationId, turnRunId: groupRun }];
+  await presentation.reloadTurnDisplayHistory(groupSession, invitationWindow);
+  assert.deepEqual(readGroupProjection().map(store.getAgentTimelineRenderKey), initialGroupKeys,
+    '邀请通知触发历史刷新时，行动步骤不能先被清空');
+  groupTimeline.completeToolCall(0, 'invite-call', { status: 'success', modelContent: '已加入群聊' });
+  groupTimeline.startStep(1);
+  for (let index = 0; index < 4; index++) {
+    groupTimeline.appendDelta(1, 'reasoning', '继续确认');
+    await presentation.reloadTurnDisplayHistory(groupSession, invitationWindow);
+    assert.equal(readGroupProjection().at(-1).text, '继续确认'.repeat(index + 1), '通知重读不能覆盖或清除新到的思考');
+  }
+  releaseGroupHistory();
+  assert.ok(readGroupProjection().length > 0, '卸载历史窗口不拥有群执行投影的清理资格');
+  assert.ok(groupRefreshes.every(count => count > 0), '生成期间没有行动卡消失后再由下一批输出补回的空窗');
+  stopGroupObservation();
+  groupTimeline.clear('cancelled');
+  assert.deepEqual(readGroupProjection(), [], '群执行器仍可在自己的终态清理投影');
+
+  // 缩小历史窗口仍应回收旧历史，但不能顺带清掉同会话的其他实时执行片段。
+  let retainedHistory = (await displays.listHistory('s')).slice(0, 1);
+  const archivedRunId = retainedHistory[0].runId;
+  const otherTimeline = new ChatAgentTimeline('independent-execution', store.createAgentTransientTimelineSink({ sessionId: 's' }));
+  otherTimeline.startStep(0);
+  otherTimeline.appendDelta(0, 'reasoning', '另一条仍在执行的片段');
+  const releaseOwnershipWindow = presentation.retainTurnDisplayHistory('s');
+  presentation.configureChatTurnPresentation({ listHistory: async () => retainedHistory });
+  await presentation.reloadTurnDisplayHistory('s', [{ id: 1 }]);
+  assert.ok(store.snapshotAgentTransientTimelineWithReplacements('s').some(message => message.turnRunId === archivedRunId));
+  retainedHistory = [];
+  await presentation.reloadTurnDisplayHistory('s', [{ id: Number.MAX_SAFE_INTEGER }]);
+  const afterWindowChange = store.snapshotAgentTransientTimelineWithReplacements('s');
+  assert.equal(afterWindowChange.some(message => message.turnRunId === archivedRunId), false, '离开窗口的历史投影被正常回收');
+  assert.ok(afterWindowChange.some(message => message.text === '另一条仍在执行的片段'), '历史窗口不清理其他执行来源');
+  releaseOwnershipWindow();
+  otherTimeline.clear('cancelled');
+  presentation.configureChatTurnPresentation(displays);
+
   // 页面窗口按挂载引用计数释放，卸载前的异步读取不能污染重进后的列表。
   const historyRequests = [];
   presentation.configureChatTurnPresentation({ listHistory(sessionId, window) {
@@ -777,6 +909,10 @@ try {
   assert.equal(child.status, 0, child.stderr);
   const restored = JSON.parse(child.stdout);
   assert.deepEqual(restored.history[0].items.map(item => item.snapshot.text), publishedPrefix);
+  assert.deepEqual(restored.streamedVisible.filter(message => message.senderType === 'assistant').map(message => message.text), streamingExpected,
+    '独立进程恢复不重新分泡或重复正文');
+  assert.deepEqual(restored.streamedInterrupted[0].items.map(item => item.snapshot.text), ['已闭合', '活动尾泡'],
+    '流式分泡中断后重开仍只保留已交付前缀');
   assert.deepEqual(restored.visible.filter(message => !message.isMe).map(message => message.text), ['A', 'B', '']);
   assert.deepEqual(restored.crashVisible.filter(message => !message.isMe).map(message => message.text), ['已交付']);
   assert.equal(restored.orphan, null);

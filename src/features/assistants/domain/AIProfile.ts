@@ -45,8 +45,12 @@ export interface AIProfile {
   /** 默认沿用服务商行为；开启时请求模型关闭思考。 */
   disableThinking: boolean;
   allowMultipleBubbles: boolean;
-  /** 单聊消息用量提示的用户选择；主题是否允许展示由 Chat 展示层裁决。 */
+  /** 单聊回复传输偏好；null 跟随主题默认，从下一轮执行生效。 */
+  streamingReply: boolean | null;
+  /** 当前 AI 的单聊消息用量提示，跨主题保持相同选择。 */
   showTokenUsage: boolean;
+  /** 当前 AI 的单聊行动步骤（思考与工具过程）是否可见。 */
+  showActionSteps: boolean;
   /** 历史持久化字段，仅为兼容旧 SQLite 列保留，不参与运行时视觉判断。 */
   supportsVision: boolean;
   isLedgerAI: boolean;
@@ -133,7 +137,9 @@ export function createAIProfile(
     enableTools: data.enableTools ?? false,
     disableThinking: data.disableThinking ?? false,
     allowMultipleBubbles: data.allowMultipleBubbles ?? true,
+    streamingReply: data.streamingReply ?? null,
     showTokenUsage: data.showTokenUsage ?? true,
+    showActionSteps: data.showActionSteps ?? true,
     supportsVision: false,
     isLedgerAI: data.isLedgerAI ?? false,
     isHostAI: data.isHostAI ?? false,

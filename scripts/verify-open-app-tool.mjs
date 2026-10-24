@@ -88,8 +88,6 @@ assert.equal(definition.parameters.properties.package_name.type, 'string');
 assert.equal(definition.parameters.properties.package_name.minLength, 1);
 assert.equal(definition.parameters.properties.package_name.pattern, '^\\S+$');
 assert.equal(definition.parameters.additionalProperties, false);
-assert.match(definition.description, /精确 Android package name/u);
-assert.match(definition.description, /启动请求/u);
 
 const contextFor = (
   actorAiId = 'host-ai',

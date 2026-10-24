@@ -226,7 +226,7 @@ export default function ProtocolView({ onBack, aiAssistant, onConvertToMemory }:
         style: 'destructive',
         onPress: async () => {
           try {
-            await deleteProtocol(protocol.id);
+            await deleteProtocol(protocol.aiAssistantId, protocol.id);
             await loadProtocols();
           } catch (error) {
             console.error('Failed to delete protocol:', error);

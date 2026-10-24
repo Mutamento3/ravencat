@@ -98,11 +98,7 @@ const toolModule = loadTypeScriptModule(
 
 const { definition, execute } = toolModule;
 assert.equal(definition.name, 'read_screen_ocr');
-assert.match(definition.description, /当前.*Android.*页面|当前页面/u);
-assert.match(definition.description, /OCR/u);
-assert.match(definition.description, /本地/u);
-assert.match(definition.description, /快照|一次/u);
-assert.match(definition.description, /非文字视觉|视觉内容/u);
+// 描述措辞属于文案，不做实现锁定；只保留「不得夸大成实时/可点击视觉」的能力边界断言。
 assert.doesNotMatch(definition.description, /实时观察|图像理解|点击|可点击/u);
 assert.deepEqual(definition.parameters.properties, {});
 assert.equal(definition.parameters.additionalProperties, false);

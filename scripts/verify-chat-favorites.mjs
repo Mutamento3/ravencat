@@ -69,6 +69,8 @@ const boundaries = new Map([
   }],
 ]);
 const cache = new Map();
+boundaries.set('./LocalAudioPlayback', { localAudioPlaybackPort: boundaries.get('@platform/device').localAudioPlaybackPort });
+boundaries.get('@platform/device').localAudioPlaybackCoordinator = load('src/platform/device/LocalAudioPlaybackCoordinator.ts').localAudioPlaybackCoordinator;
 function load(relative) {
   const requested = path.resolve(root, relative);
   const filename = requested.endsWith('.ts') && !fs.existsSync(requested) ? `${requested}x` : requested;

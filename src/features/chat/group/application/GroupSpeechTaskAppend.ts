@@ -44,7 +44,7 @@ export async function resolveGroupAIMentionSpeechTaskInputs(params: {
   const inputs: AppendGroupSpeechTaskInput[] = [];
   for (const target of mentionTargets) {
     const member = memberByAssistantId.get(target.assistantId);
-    if (!member || !member.enabled) {
+    if (!member || !member.enabled || member.muted) {
       continue;
     }
     const profile = await runtime.assistantDirectory.getById(target.assistantId);

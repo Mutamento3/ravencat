@@ -42,7 +42,7 @@ export default function ContextWindowSection({ values, onChange, onBlur, errors 
       <Text style={styles.paramDescription}>
         {fixed ? '已固定消息起点，「单聊·主」暂不生效，原参数保留。' : '「主」用于当前来源会话，「客」用于其他会话中的背景。单聊带入自己的主·单聊与全部已参加群的客·群聊；群聊带入自己的客·单聊、当前群的主·群聊及其他已参加群的客·群聊。'}
       </Text>
-      <Text style={styles.paramDescription}>群额度按每群独立计算，退出或删除后不带入。主条数为正整数；客条数允许0，也可大于主条数。0关闭该类来源整块原文与摘要，不停止来源生成；正数限制近期原文，摘要另按来源注入开关。单聊按主·单聊触发摘要，群聊按群摘要设置触发。自动摘要成功前保留主视角未处理原文，关闭生成后按主窗口读取。</Text>
+      <Text style={styles.paramDescription}>群额度按每群独立计算。退出后仅带入退出时保存的历史，可在「历史群聊」关闭；不接收后续群消息。主条数为正整数；客条数允许0，也可大于主条数。0关闭该类来源整块原文与摘要，不停止来源生成；正数限制近期原文，摘要另按来源注入开关。单聊按主·单聊触发摘要，群聊按群摘要设置触发。自动摘要成功前保留主视角未处理原文，关闭生成后按主窗口读取。</Text>
       {CONTEXT_WINDOW_FIELDS.map(({ field, label }) => (
         <View key={field} style={styles.contextLimitField}>
           <View style={styles.contextLimitRow}>

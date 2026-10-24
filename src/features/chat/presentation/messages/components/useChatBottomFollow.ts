@@ -45,6 +45,7 @@ export function useChatBottomFollow({
   const isTouchActiveRef = useRef(false);
   // 请求在按压期间保留，允许执行时才排帧；同一请求最多拥有一帧。
   const pendingFollowRef = useRef<{ frame: number | null } | null>(null);
+  const nativeContentHeightRef = useRef<number | null>(null);
   const previousSnapshotRef = useRef<MessageListSnapshot>({ keys: [] });
   const committedTimelineRef = useRef<readonly ChatMessage[]>([]);
   const [showNewMessagePrompt, setShowNewMessagePrompt] = useState(false);
@@ -57,16 +58,22 @@ export function useChatBottomFollow({
   }, []);
 
   const followMeasuredBottom = useCallback(() => {
-    if (pausedRef.current || !isFollowingBottomRef.current) return;
+    if (pausedRef.current || !isFollowingBottomRef.current) return true;
     const list = listRef.current;
-    if (!list) return;
-    const offset = Math.max(0,
+    if (!list) return false;
+    const contentHeight =
       list.getFirstItemOffset() + list.getChildContainerDimensions().height
-      + contentPaddingBottom - list.getWindowSize().height);
+      + contentPaddingBottom;
+    // FlashList 提交的是 cell 布局，原生 ScrollView 的内容范围可能尚未扩高。
+    // 此时滚动会被截在旧底部；请求保留到原生尺寸事件到达，不另加 timer 或重试。
+    if (nativeContentHeightRef.current === null
+      || Math.round(nativeContentHeightRef.current) < Math.round(contentHeight)) return false;
+    const offset = Math.max(0, contentHeight - list.getWindowSize().height);
     // 使用已提交的布局同步滚动；scrollToEnd 内部会再排 timer，导致尾栏先下移、下一帧才拉回。
     if (offset !== list.getAbsoluteLastScrollOffset()) {
       list.scrollToOffset({ offset, animated: false });
     }
+    return true;
   }, [listRef, contentPaddingBottom]);
 
   const requestBottomFollow = useCallback(() => {
@@ -82,8 +89,7 @@ export function useChatBottomFollow({
       request.frame = null;
       // 排帧之后仍可能开始按压；此时保留请求，交给触摸或滚动结束处理。
       if (isTouchActiveRef.current || isUserDraggingRef.current) return;
-      pendingFollowRef.current = null;
-      followMeasuredBottom();
+      if (followMeasuredBottom()) pendingFollowRef.current = null;
     });
   }, [cancelPendingFollow, followMeasuredBottom]);
 
@@ -99,6 +105,15 @@ export function useChatBottomFollow({
 
   useEffect(() => cancelPendingFollow, [cancelPendingFollow]);
 
+  useEffect(() => {
+    nativeContentHeightRef.current = null;
+  }, [sessionId]);
+
+  const handleContentSizeChange = useCallback((height: number) => {
+    nativeContentHeightRef.current = height;
+    if (pendingFollowRef.current) requestBottomFollow();
+  }, [requestBottomFollow]);
+
   const handleListLayoutCommit = useCallback(() => {
     const mutation = classifyTailMutation({
       previous: previousSnapshotRef.current,
@@ -113,9 +128,10 @@ export function useChatBottomFollow({
         if (isTouchActiveRef.current || isUserDraggingRef.current) {
           requestBottomFollow();
         } else {
-          // FlashList 的 commit layout effect 已拥有最终尺寸，跟随与消息布局同批提交。
+          // 原生范围已就绪时同批跟随，否则保留请求，等内容尺寸事件完成交接。
           cancelPendingFollow();
-          followMeasuredBottom();
+          pendingFollowRef.current = { frame: null };
+          if (followMeasuredBottom()) pendingFollowRef.current = null;
         }
       }
     } else if (mutation.type === 'append' && mutation.appendedMessages.some(isNewMessagePromptEligible)) {
@@ -193,6 +209,7 @@ export function useChatBottomFollow({
     requestBottomFollow,
     stopFollowingBottom,
     handleListLayoutCommit,
+    handleContentSizeChange,
     handleScroll,
     handleScrollBeginDrag,
     handleUserScrollEnd,

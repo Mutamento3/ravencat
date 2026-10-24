@@ -7,11 +7,12 @@ export async function readSearchConfiguration() {
   const runtime = getWebToolsRuntime();
   const settings = await runtime.settings.read();
   // 密钥仅供用户配置页回填；模型执行的 observation 不使用这个编辑视图。
-  const sources = await Promise.all(settings.sources.map(async source => ({
-    engine: source.engine, enabled: source.enabled,
-    configured: !SEARCH_SOURCES.find(item => item.engine === source.engine)!.needsKey || source.credentialRef !== null,
-    apiKey: source.credentialRef === null ? '' : await runtime.credentials.read(source.credentialRef) ?? '',
-  })));
+  const sources = await Promise.all(settings.sources.map(async source => {
+    const apiKey = source.credentialRef === null ? null : await runtime.credentials.read(source.credentialRef);
+    return { engine: source.engine, enabled: source.enabled,
+      configured: !SEARCH_SOURCES.find(item => item.engine === source.engine)!.needsKey || apiKey !== null,
+      apiKey: apiKey ?? '' };
+  }));
   return { defaultEngine: settings.defaultEngine, allowAdvanced: settings.allowAdvanced,
     sources };
 }

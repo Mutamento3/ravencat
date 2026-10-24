@@ -8,7 +8,7 @@ import type { AgentTimelineItemSnapshot, AgentTimelineTransientSink } from '../a
 import {
   applyAgentTransientTimelineSnapshots,
   clearAgentTransientTimelineRun,
-  getLiveAgentTimelineRunIds,
+  getHistoryAgentTimelineRunIds,
 } from '../../messages/application/AgentTransientTimeline';
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import { emitChatMessagesReloadRequested, emitChatTurnExecutionChanged } from '../../messages/events/ChatEvents';
@@ -148,7 +148,9 @@ export function reloadTurnDisplayHistory(sessionId: string, messages?: readonly 
         if (historySessions.get(sessionId) !== session) return;
         if (session.revision !== revision) continue;
         const retained = new Set(history.map(run => run.runId));
-        for (const id of getLiveAgentTimelineRunIds(sessionId)) {
+        // 这里只回收来自历史读取的投影。共享 store 还承载群聊等执行器的实时片段，
+        // 它们不在单聊展示表中；按全 store 的 run 清理会让卡片在每次通知刷新时消失。
+        for (const id of getHistoryAgentTimelineRunIds(sessionId)) {
           if (!retained.has(id) && !runs.has(id)) clearAgentTransientTimelineRun(id, sessionId);
         }
         for (const run of history) {
@@ -161,12 +163,14 @@ export function reloadTurnDisplayHistory(sessionId: string, messages?: readonly 
             continue;
           }
           // 当前页面已经交付的行保留到 canonical 读回；不制造先清空再异步重载的空窗。
-          if (run.items.length) applyAgentTransientTimelineSnapshots({ sessionId, snapshots: run.items.map(({ snapshot }) => ({
-            ...snapshot, status: run.state === 'interrupted' && snapshot.kind !== 'tool' && (snapshot.status === 'streaming' || snapshot.status === 'running')
-              ? 'sent' as const : snapshot.status,
-            // 终态只用于结束局部运行样式，不能替换已交付正文或工具的真实完成状态。
-            interrupted: run.state === 'interrupted',
-          })) });
+          if (run.items.length) {
+            applyAgentTransientTimelineSnapshots({ sessionId, source: 'history', snapshots: run.items.map(({ snapshot }) => ({
+              ...snapshot, status: run.state === 'interrupted' && snapshot.kind !== 'tool' && (snapshot.status === 'streaming' || snapshot.status === 'running')
+                ? 'sent' as const : snapshot.status,
+              // 终态只用于结束局部运行样式，不能替换已交付正文或工具的真实完成状态。
+              interrupted: run.state === 'interrupted',
+            })) });
+          }
         }
         if (session.revision === revision) break;
       }
@@ -192,6 +196,8 @@ export class ChatTurnPresentation {
   private available = new Map<string, ChatTurnDisplayVersion>();
   private arriving = new Set<string>();
   private deliveredIdentities = new Set<string>();
+  /** 已经展示过生成过程的正文按模型进度继续，不再叠加完整回复的分段间隔。 */
+  private readonly streamingSequences = new Set<number>();
   private arrivals: Promise<void> = Promise.resolve();
   private arrivalByIdentity = new Map<string, Promise<void>>();
   private writable = true;
@@ -319,7 +325,7 @@ export class ChatTurnPresentation {
     if (this.closed || frozenSessions.has(this.sessionId)) return false;
     const scheduled = this.arrivalByIdentity.get(message.clientMessageId!);
     if (scheduled) await scheduled;
-    else if (!await pacing(this.runId, `ai:${this.assistantId}`)) return false;
+    else if (!this.deliveredIdentities.has(message.clientMessageId!) && !await pacing(this.runId, `ai:${this.assistantId}`)) return false;
     if (this.closed || frozenSessions.has(this.sessionId)) return false;
     // 先持久发布，后交给任何 surface；折叠、屏幕测量与页面卸载不撤销这份事实。
     const item = await repositorySlot.get().publishMessage(message.id);
@@ -355,14 +361,20 @@ export class ChatTurnPresentation {
         emitChatTurnExecutionChanged(this.sessionId);
         this.emittedProgressPhase = progress.phase;
       }
-      if (accepted) for (const item of batch) this.available.set(item.snapshot.clientMessageId, item);
+      if (accepted) for (const item of batch) {
+        this.available.set(item.snapshot.clientMessageId, item);
+        if (item.snapshot.kind === 'assistant' && item.snapshot.streamingDelivery) {
+          this.streamingSequences.add(item.snapshot.sequence);
+        }
+      }
       if (!accepted || frozenSessions.has(this.sessionId) || this.closed) return;
       const immediate: ChatTurnDisplayVersion[] = [];
       for (const item of batch) {
         const identity = item.snapshot.clientMessageId;
         if (item.snapshot.pendingDelivery) continue;
-        // 正文首次到达沿原生节奏排队；后续 reasoning/tool 不等待这条正文。
-        if (item.snapshot.kind === 'assistant' && !this.deliveredIdentities.has(identity)) {
+        // 完整回复沿原生节奏排队；流式正文随持久批次发布，后续过程不等待正文。
+        if (item.snapshot.kind === 'assistant' && !this.streamingSequences.has(item.snapshot.sequence)
+          && !this.deliveredIdentities.has(identity)) {
           if (this.arriving.has(identity)) continue;
           this.arriving.add(identity);
           this.arrivals = this.arrivals.then(async () => {

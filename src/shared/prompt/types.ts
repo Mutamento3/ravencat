@@ -142,6 +142,7 @@ export interface PromptPackGroupChatMemberContext {
   aiAssistantId: string;
   agentId: string;
   name: string;
+  muted?: boolean;
 }
 
 export interface PromptPackGroupChatContext {

@@ -183,21 +183,24 @@ async function readItemPage(
     timeline_order_item_index: after[2], id: after[3],
   }) : null;
   // 已处理历史在 SQL 边界排除，避免每次 claim 都在独占事务中解析、排序并传回整段历史。
+  // 自主 run 状态按会话聚合一次；逐消息关联扫描会让长历史占住事务，阻塞菜单等交互读取。
   const rows = await db.getAllAsync<ContextRow>(`${timelineOrderedMessagesCte(`m.session_id = ?
     ${messageId !== undefined ? 'AND m.id = ?' : ''}
     ${visibleOnly ? 'AND m.id > COALESCE((SELECT visible_after_message_id FROM sessions WHERE id = m.session_id), 0)' : ''}`)}
-    SELECT o.*, EXISTS (
-      SELECT 1 FROM messages s WHERE s.session_id = o.session_id AND s.turn_run_id = o.turn_run_id
-        AND json_valid(s.metadata_json) AND json_extract(s.metadata_json, '$.type') = 'agentActivity'
-        AND json_extract(s.metadata_json, '$.phase') = 'started'
-        AND NOT EXISTS (SELECT 1 FROM messages t WHERE t.session_id = s.session_id AND t.turn_run_id = s.turn_run_id
-          AND json_valid(t.metadata_json) AND json_extract(t.metadata_json, '$.type') = 'agentActivity'
-          AND json_extract(t.metadata_json, '$.phase') = 'terminal')
-    ) AS agent_activity_pending
+    , pending_activity_runs AS (
+      SELECT turn_run_id FROM messages
+      WHERE session_id = ? AND turn_run_id IS NOT NULL
+        AND json_valid(metadata_json) AND json_extract(metadata_json, '$.type') = 'agentActivity'
+      GROUP BY turn_run_id
+      HAVING MAX(json_extract(metadata_json, '$.phase') = 'started') = 1
+        AND MAX(json_extract(metadata_json, '$.phase') = 'terminal') = 0
+    )
+    SELECT o.*, p.turn_run_id IS NOT NULL AS agent_activity_pending
     FROM ordered_messages o
+    LEFT JOIN pending_activity_runs p ON p.turn_run_id = o.turn_run_id
     ${condition ? `WHERE ${condition.sql}${includeMessageId !== undefined ? ' OR id = ?' : ''}` : ''}
     ORDER BY ${timelineProjectionOrderBy('ASC')}${limit === undefined ? '' : ' LIMIT ?'}`, [conversationId, ...(messageId !== undefined ? [messageId] : []),
-      ...(condition?.params ?? []), ...(condition && includeMessageId !== undefined ? [includeMessageId] : []), ...(limit === undefined ? [] : [limit])]);
+      conversationId, ...(condition?.params ?? []), ...(condition && includeMessageId !== undefined ? [includeMessageId] : []), ...(limit === undefined ? [] : [limit])]);
   const items = rows.flatMap((row) => {
     const cursor: ChatCanonicalCursor = [row.timeline_order_created_at, row.timeline_order_anchor_id, row.timeline_order_item_index, row.id];
     const message: ChatMessage = { id: row.id, sessionId: row.session_id, text: row.text,
@@ -290,8 +293,21 @@ async function insertSegment(tx: DatabaseTransactionExecutor, conversationId: st
 }
 export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
   constructor(private readonly readCalls: CallSourceReader) {}
+  async captureGroupHistoryInTransaction(tx: DatabaseTransactionExecutor, groupId: string, groupName: string): Promise<ChatBackgroundContext> {
+    const settings = await readSettings(tx, groupId);
+    const raw = (await readItems(tx, groupId)).filter(item => item.pending !== true);
+    // 保存可读历史，不复制可操作的媒体快照；原群删除后不保留悬空的媒体所有权。
+    const timeline = buildConversationTimeline(raw, []).map(({ sharedRecord: _record, sharedComment: _comment, ...item }) => item);
+    return { conversationId: groupId, kind: 'group', name: groupName, timeline,
+      summaryInjectionEnabled: settings.injectEnabled,
+      contextSegments: selectContextSegments(await readSegments(tx, groupId), { ...settings, injectEnabled: true }) };
+  }
   async invalidateModelReferencesInTransaction(transaction: DatabaseTransactionExecutor, modelConfigId: string): Promise<void> {
     const sources = 'SELECT conversation_id FROM chat_summary_request_settings WHERE model_config_id = ?';
+    // 尚未领取过的会话也可能因缺少模型而待机，不能只依靠已有 state 的资格撤销来入队。
+    await transaction.runAsync(`INSERT INTO chat_summary_work_queue (conversation_id)
+      SELECT conversation_id FROM chat_summary_request_settings WHERE model_config_id = ?
+      ON CONFLICT(conversation_id) DO UPDATE SET revision = revision + 1`, [modelConfigId]);
     await transaction.runAsync(`UPDATE chat_summary_state SET generation = generation + 1, revision = revision + 1,
       claim_id = NULL, claim_to_cursor = NULL, claim_expires_at = NULL WHERE conversation_id IN (${sources})`, [modelConfigId]);
     await transaction.runAsync(`UPDATE chat_summary_tasks SET status = 'waiting', automatic_failures = 0, manual_retry = 0,
@@ -329,7 +345,29 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
         contexts.push({ conversationId: source.id, kind: source.kind, name: source.name, timeline: timeline.slice(start),
           contextSegments: selectContextSegments(await readSegments(tx, source.id, options.upperBound), settings) });
       }
-      return contexts;
+      if (options.groupLimit > 0) {
+        const histories = await tx.getAllAsync<{ context_json: string; exited_at: string }>(`SELECT h.context_json, h.exited_at
+          FROM group_chat_history h WHERE h.ai_assistant_id = ? AND h.inject_enabled = 1 AND h.group_id <> ?
+          AND NOT EXISTS (SELECT 1 FROM group_chat_members m WHERE m.group_id = h.group_id AND m.ai_assistant_id = h.ai_assistant_id AND m.enabled = 1)
+          ORDER BY h.group_id`, [assistantId, currentConversationId]);
+        for (const row of histories) {
+          if (options.upperBound && row.exited_at > options.upperBound.createdAt) continue;
+          const frozen: ChatBackgroundContext = JSON.parse(row.context_json);
+          const timeline = frozen.timeline.filter(item => !options.upperBound || item.messageId! <= options.upperBound.messageId);
+          const seen = new Set<string>();
+          let start = 0;
+          for (let index = timeline.length - 1; index >= 0; index--) {
+            const identity = timeline[index].logicalIdentity;
+            if (identity === null) continue;
+            if (!seen.has(identity) && seen.size === options.groupLimit) { start = index + 1; break; }
+            seen.add(identity);
+          }
+          contexts.push({ ...frozen, timeline: timeline.slice(start),
+            contextSegments: frozen.summaryInjectionEnabled ? frozen.contextSegments : [],
+            membership: { status: 'left', exitedAt: row.exited_at } });
+        }
+      }
+      return contexts.sort((a, b) => a.kind.localeCompare(b.kind) || a.conversationId.localeCompare(b.conversationId));
     });
   }
 
@@ -359,15 +397,37 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
     return executor('prepareConversations').withExclusiveTransactionAsync(async (tx) => {
       // 旧版本可能还在等待第三次请求；扫描先按当前预算收口，保留手动意图与有效在途请求。
       const exhausted = await tx.getAllAsync<{ id: string; conversation_id: string }>(`SELECT t.id,t.conversation_id FROM chat_summary_tasks t
-        WHERE t.automatic_failures >= ? AND t.manual_retry = 0 ${conversationIds ? 'AND t.conversation_id IN (SELECT value FROM json_each(?))' : ''}
+        WHERE t.status <> 'completed' AND t.automatic_failures >= ? AND t.manual_retry = 0 ${conversationIds ? 'AND t.conversation_id IN (SELECT value FROM json_each(?))' : ''}
         AND (t.status = 'waiting' OR (t.status = 'running' AND t.last_manual = 0
           AND NOT EXISTS (SELECT 1 FROM chat_summary_state s WHERE s.conversation_id = t.conversation_id AND s.claim_id IS NOT NULL AND s.claim_expires_at > ?)))`,
       [CHAT_SUMMARY_MAX_AUTOMATIC_ATTEMPTS, ...(conversationIds ? [JSON.stringify(conversationIds)] : []), now]);
       for (const task of exhausted) await tx.runAsync("UPDATE chat_summary_tasks SET status = 'failed', next_attempt_at = NULL, updated_at = ? WHERE id = ?", [now, task.id]);
-      const rows = await tx.getAllAsync<{ id: string }>(`SELECT id FROM chat_conversations
-        ${conversationIds ? 'WHERE id IN (SELECT value FROM json_each(?))' : ''} ORDER BY id`, conversationIds ? [JSON.stringify(conversationIds)] : []);
+      // 启动只消费持久待检查身份、到期重试和中断任务；显式未完成条件命中部分索引，跳过完成历史。
+      const rows = await tx.getAllAsync<{ id: string }>(`WITH pending AS (
+        SELECT conversation_id FROM chat_summary_work_queue WHERE revision > checked_revision
+        UNION SELECT t.conversation_id FROM chat_summary_tasks t
+          LEFT JOIN chat_summary_state s ON s.conversation_id = t.conversation_id
+          LEFT JOIN chat_summary_settings settings ON settings.conversation_id = t.conversation_id
+          WHERE t.status <> 'completed' AND (t.level = 'primary' OR COALESCE(settings.secondary_enabled,1) = 1) AND (
+            (t.status = 'waiting' AND (t.manual_retry = 1 OR t.next_attempt_at IS NULL OR t.next_attempt_at <= ?))
+            OR (t.status = 'running' AND (s.claim_id IS NULL OR s.claim_expires_at <= ?)))
+      ) SELECT p.conversation_id AS id FROM pending p
+        LEFT JOIN chat_summary_settings settings ON settings.conversation_id = p.conversation_id
+        WHERE COALESCE(settings.enabled,1) = 1
+        ${conversationIds ? 'AND p.conversation_id IN (SELECT value FROM json_each(?))' : ''}
+        ORDER BY p.conversation_id`, [now, now, ...(conversationIds ? [JSON.stringify(conversationIds)] : [])]);
       return { conversationIds: rows.map((row) => row.id), pausedConversationIds: [...new Set(exhausted.map((task) => task.conversation_id))] };
     });
+  }
+  async readQueuedRevision(conversationId: string): Promise<number | null> {
+    const row = await executor('queuedRevision').getFirstAsync<{ revision: number }>(
+      'SELECT revision FROM chat_summary_work_queue WHERE conversation_id = ? AND revision > checked_revision', [conversationId]);
+    return row === null ? null : row.revision;
+  }
+  async acknowledgeQueuedRevision(conversationId: string, revision: number): Promise<void> {
+    // 只推进本轮看见的水位；检查期间的新消息继续保持待处理，旧消费者也不能回退水位。
+    await executor('checked').runAsync(`UPDATE chat_summary_work_queue SET checked_revision = ?
+      WHERE conversation_id = ? AND checked_revision < ?`, [revision, conversationId, revision]);
   }
   async claim(conversationId: string, batchSize: number, claimId: string, now: string, expiresAt: string, timeZone: string): Promise<ChatSummaryClaim | null> {
     return executor('claim').withExclusiveTransactionAsync(async (tx) => {

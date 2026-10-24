@@ -44,7 +44,7 @@ export interface AIAssistantSummary {
 /** 对话设置拥有展示信息、人设、上下文与消息呈现策略，不接受身份键。 */
 export type AIAssistantSettingsUpdate = Partial<Pick<
   AIProfile,
-  'name' | 'nickname' | 'avatar' | 'avatarMediaAssetId' | 'systemPrompt' | 'allowMultipleBubbles' | 'showTokenUsage'
+  'name' | 'nickname' | 'avatar' | 'avatarMediaAssetId' | 'systemPrompt' | 'allowMultipleBubbles' | 'streamingReply' | 'showTokenUsage' | 'showActionSteps'
   | 'privateContextPrimaryLimit' | 'privateContextSecondaryLimit'
   | 'groupContextPrimaryLimit' | 'groupContextSecondaryLimit'
 >>;

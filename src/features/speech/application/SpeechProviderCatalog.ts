@@ -68,6 +68,15 @@ export const SPEECH_PROVIDERS: readonly SpeechProviderDefinition[] = [
     credentialLabel: 'API Key',
   },
   {
+    id: 'fishAudio',
+    label: 'Fish Audio',
+    kind: 'tts',
+    baseURL: 'https://api.fish.audio/v1',
+    models: ['s2.1-pro', 's2.1-pro-free', 's2-pro', 's1', 'drama-3'],
+    defaultModel: 's2.1-pro',
+    credentialLabel: 'API Key',
+  },
+  {
     id: 'openrouter',
     label: 'OpenRouter',
     kind: 'tts',
@@ -246,6 +255,16 @@ export function getSpeechParameters(provider: SpeechProviderId, model: string): 
         },
         { ...select('bitrate', 'MP3 码率', ['32000', '64000', '128000', '256000']), advanced: true },
       ];
+    case 'fishAudio':
+      return [
+        text('voiceId', '音色 ID', { required: true, hint: '填写 Fish Audio 音色库或自建音色的 ID（reference_id）' }),
+        number('speed', '语速', 0.5, 2),
+        { ...select('audioFormat', '音频格式', ['mp3', 'wav'], 'mp3'), advanced: true },
+        number('temperature', '采样温度', 0, 1, { advanced: true }),
+        number('topP', 'Top P', 0, 1, { advanced: true }),
+        { ...select('latency', '延迟模式', ['normal', 'balanced', 'low']), advanced: true },
+        { key: 'normalize', label: '将数字、日期等转换为读法', type: 'boolean', defaultValue: true, advanced: true },
+      ];
     case 'elevenlabs':
       return [
         text('voiceId', '音色 ID', { required: true, hint: '使用 ElevenLabs 音色库中的 voice_id' }),
@@ -329,6 +348,9 @@ export function validateSpeechConfiguration(
   const provider = SPEECH_PROVIDERS.find((entry) => entry.id === metadata.provider && entry.kind === kind);
   if (!provider) return { provider: '语音提供方不支持此能力' };
   if (!config.model.trim()) errors.model = '请选择或填写模型';
+  // Fish 会把未知模型静默替换为默认付费模型，在配置边界拒绝拼错或失效的模型名。
+  if (provider.id === 'fishAudio' && !provider.models.includes(config.model))
+    errors.model = '请选择支持的 Fish Audio 模型';
   if (provider.id === 'openaiCompatible') {
     try {
       const url = new URL(config.baseURL);

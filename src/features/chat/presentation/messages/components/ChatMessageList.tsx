@@ -50,7 +50,7 @@ import {
 } from './chatMessagePresentation';
 import { buildToolStatusProcessCard } from './chatToolStatusPresentation';
 import {
-  filterReasoningMessagesForPresentation,
+  filterActionStepsForPresentation,
   getLastPresentationTimelineMessage,
   renderedItemContainsMessageId,
   segmentContiguousAgentActions,
@@ -446,9 +446,9 @@ function ChatMessageList({
     // footer/run-tail 属于 canonical presentation timeline 上的消息事实，先于 ActionGroup
     // 包装计算，避免展示容器抢走 assistant output tail。
     const runTailFlags = computeRunTailFlagsForTimeline(presentationMessages);
-    const visibleMessages = filterReasoningMessagesForPresentation(
+    const visibleMessages = filterActionStepsForPresentation(
       presentationMessages,
-      interactionProfile.showReasoningMessages
+      aiAssistant?.showActionSteps !== false
     );
     // ActionGroup 是可见 timeline 的结构语义；surface 只在渲染组件内决定外观。
     const presentationItems = segmentContiguousAgentActions(visibleMessages);
@@ -561,6 +561,7 @@ function ChatMessageList({
     requestBottomFollow,
     stopFollowingBottom,
     handleListLayoutCommit,
+    handleContentSizeChange: updateBottomFollowContentSize,
     handleScroll: updateBottomFollowOnScroll,
     handleScrollBeginDrag,
     handleUserScrollEnd,
@@ -792,9 +793,10 @@ function ChatMessageList({
       // 不再需要「紧随其后的第一次滚动视为修正」这类布尔标记——它会被 reasoning
       // 展开、图片尺寸完成等没有后续滚动的事件永久挂着，反过来吞掉真实上滑。
       contentHeightRef.current = height;
+      updateBottomFollowContentSize(height);
       requestBootstrapPageIfContentTooShort();
     },
-    [requestBootstrapPageIfContentTooShort]
+    [requestBootstrapPageIfContentTooShort, updateBottomFollowContentSize]
   );
 
   const handleListLayout = useCallback(

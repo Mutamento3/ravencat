@@ -3,6 +3,7 @@
 export { default as AIAvatar } from './AIAvatar';
 export { default as AIInfoCard } from './AIInfoCard';
 export { default as AvatarImage } from './AvatarImage';
+export { default as AudioPlaybackBar } from './AudioPlaybackBar';
 export { default as BackgroundPickerCard } from './BackgroundPickerCard';
 export { default as Button } from './Button';
 export { default as AppDialogHost } from './AppDialogHost';

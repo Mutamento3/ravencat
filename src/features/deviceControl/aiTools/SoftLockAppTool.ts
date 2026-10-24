@@ -44,7 +44,7 @@ export type SoftLockAppResultData = {
 
 export const definition = {
   name: 'soft_lock_app',
-  description: '【主理 AI 专属】为精确 Android package 创建限时 Soft Lock 业务锁',
+  description: '为精确 Android package 创建限时 Soft Lock 业务锁',
   parameters: {
     type: 'object',
     properties: {

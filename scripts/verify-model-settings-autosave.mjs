@@ -283,7 +283,8 @@ try {
     };
     const writes = [];
     const { default: SpeechPage } = load(`${directory}auxiliaryModels/SpeechModelEditScreen.tsx`, {
-      react, 'react-native': { ScrollView: 'ScrollView', Text: 'Text', TouchableOpacity: 'Button', View: 'View' },
+      react, 'react-native': { ScrollView: 'ScrollView', Text: 'Text', TouchableOpacity: 'Button', View: 'View',
+        Keyboard: { dismiss() {} } },
       'react-native-safe-area-context': { SafeAreaView: 'SafeArea' },
       '@features/speech': { ...speechCatalog, SpeechConfigurationTest: 'SpeechTest' },
       '@shared/ui': { KeyboardAvoidingContainer: 'KeyboardContainer', Button: 'Button', DropdownField: 'Dropdown', InputField: 'Input', ToggleField: 'Toggle' },

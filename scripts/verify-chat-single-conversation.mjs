@@ -71,16 +71,20 @@ async function importMessageRepository(executor) {
 
 async function importCallRepository(executor) {
   globalThis.__CHAT_CALL_EXECUTOR__ = executor;
-  const source = read('src/features/calls/infrastructure/SQLiteCallRepository.ts')
-    .replace(
-      /import \{[\s\S]*?\} from '@platform\/persistence';/,
-      'const databaseCoordinator = { openTaskExecutor: () => globalThis.__CHAT_CALL_EXECUTOR__ };',
-    );
-  const output = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  for (const relativePath of ['domain/CallHistory', 'infrastructure/SQLiteCallHistoryRepository', 'infrastructure/SQLiteCallRepository']) {
+    const source = read(`src/features/calls/${relativePath}.ts`)
+      .replace(
+        /import \{[\s\S]*?\} from '@platform\/persistence';/,
+        'const databaseCoordinator = { openTaskExecutor: () => globalThis.__CHAT_CALL_EXECUTOR__ };',
+      )
+      .replaceAll("from '../domain/CallHistory'", "from './CallHistory.mjs'")
+      .replace("from './SQLiteCallHistoryRepository'", "from './SQLiteCallHistoryRepository.mjs'");
+    const output = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    fs.writeFileSync(path.join(tempDir, `${path.basename(relativePath)}.mjs`), output, 'utf8');
+  }
   const target = path.join(tempDir, 'SQLiteCallRepository.mjs');
-  fs.writeFileSync(target, output, 'utf8');
   return import(pathToFileURL(target).href);
 }
 

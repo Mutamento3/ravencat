@@ -35,15 +35,14 @@ export interface RenderedActionGroupItemLike {
   readonly actionGroup: ActionGroupPresentationItem | null;
 }
 
-/** 主题只能决定 reasoning 是否可见，不能改变后续 ActionGroup 的分段语义。 */
-export function filterReasoningMessagesForPresentation(
+/** 展示开关只过滤行动过程；正文与其他业务系统消息保持原样。 */
+export function filterActionStepsForPresentation(
   messages: readonly ChatMessage[],
-  showReasoningMessages: boolean
+  showActionSteps: boolean
 ): readonly ChatMessage[] {
-  return showReasoningMessages
+  return showActionSteps
     ? messages
-    : messages.filter((message) => message.senderType !== 'reasoning'
-      || parseMessageMetadata(message)?.type === 'agentActivity');
+    : messages.filter((message) => !isActionProcessMessage(message));
 }
 
 /** anchor 命中任意 child 时定位到承载它的整个 ActionGroup。 */
@@ -113,9 +112,9 @@ function createActionGroup(
 /**
  * 线性扫描 canonical presentation timeline。
  *
- * 只有相邻、同 run 的 reasoning / tool status 会进入同一组；任何普通消息都会立即
- * flush 当前组。缺少 run identity 的工具状态独立成卡，不推断它与相邻消息的归属；
- * 其他没有运行身份的旧过程消息保持原样。
+ * 同 run 的 reasoning / tool status 进入同一组；工具产生的群操作结果独立放在
+ * 该段行动卡下方，不让后续判断再拆出一张卡。真实发言、用户操作或其他 run
+ * 仍立即结束当前组。这里只调整展示，业务消息与模型上下文保留真实发生顺序。
  */
 export function segmentContiguousAgentActions(
   messages: readonly ChatMessage[]
@@ -143,6 +142,7 @@ export function segmentContiguousAgentActions(
   }
   let currentRunKey: string | null = null;
   let currentChildren: ChatMessage[] = [];
+  let currentGroupNotices: ChatMessage[] = [];
 
   const flushCurrentGroup = () => {
     if (!currentRunKey || currentChildren.length === 0) {
@@ -150,12 +150,20 @@ export function segmentContiguousAgentActions(
     }
 
     result.push(createActionGroup(currentRunKey, currentChildren, activityLifecycles.get(currentRunKey) ?? null));
+    for (const message of currentGroupNotices) result.push({ kind: 'message', message });
     currentRunKey = null;
     currentChildren = [];
+    currentGroupNotices = [];
   };
 
   for (const message of messages) {
     if (!isActionProcessMessage(message)) {
+      if (currentRunKey && message.senderType === 'system'
+        && parseMessageMetadata(message)?.type === 'groupMembershipChanged'
+        && resolvePresentationRunIdentity(message).key === currentRunKey) {
+        currentGroupNotices.push(message);
+        continue;
+      }
       flushCurrentGroup();
       result.push({ kind: 'message', message });
       continue;

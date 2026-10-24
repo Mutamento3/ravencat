@@ -1,10 +1,13 @@
 import type { CallEvent } from '../../domain/CallEvent';
 import { getCallRuntimeDependencies } from '../runtime/CallRuntimeDependencies';
 import { publishCallTranscriptFact } from './CallTranscriptFacts';
+import type { CallInputAudio } from '../../domain/CallHistory';
+import { saveCallHistoryAudio } from '../CallHistory';
 
 export async function appendUserSpeechText(params: {
   callId: string;
   text: string;
+  audio?: Promise<CallInputAudio | null>;
 }): Promise<CallEvent> {
   const call = await getCallRuntimeDependencies().repositories.calls.getSessionById(params.callId);
   if (!call) {
@@ -19,8 +22,11 @@ export async function appendUserSpeechText(params: {
     text: params.text,
     visibleInChat: false,
     includeInAIContext: true,
+    payloadJson: JSON.stringify({ inputKind: params.audio ? 'speech' : 'text' }),
   });
   publishCallTranscriptFact(event);
+  const audio = await params.audio;
+  if (audio) await saveCallHistoryAudio({ callId: call.id, entryId: event.id, ...audio, mimeType: 'audio/wav' });
   return event;
 }
 

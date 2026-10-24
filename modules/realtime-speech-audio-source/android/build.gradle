@@ -3,6 +3,10 @@ plugins {
   id 'expo-module-gradle-plugin'
 }
 
+dependencies {
+  testImplementation 'junit:junit:4.13.2'
+}
+
 group = 'expo.modules.realtimespeechaudiosource'
 version = '0.1.0'
 

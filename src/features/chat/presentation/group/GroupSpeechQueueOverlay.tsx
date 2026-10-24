@@ -6,9 +6,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Modal,
+  Pressable,
+  ScrollView,
   StyleSheet,
   Text,
-  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -85,12 +86,13 @@ export default function GroupSpeechQueueOverlay({
     );
   }, [participantDirectory]);
 
-  // 四色任务状态：completed 绿、running 枫渡蓝、queued 黄、failed 红；
+  // 已有输出但未完成用警告色，避免与完全没有回复的失败混淆。
   // 其余终态（已跳过/已换代/已终止）不属于进行中队列，用次级灰显示。
   const statusPresentation = useMemo<Record<GroupSpeechTaskStatus, { label: string; color: string }>>(() => ({
     queued: { label: '排队中', color: theme.colors.feedback.warning },
     running: { label: '回复中', color: theme.colors.brand.primary },
     completed: { label: '已完成', color: theme.colors.feedback.success },
+    partial: { label: '部分回复', color: theme.colors.feedback.warning },
     failed: { label: '失败', color: theme.colors.feedback.error },
     skipped: { label: '已跳过', color: theme.colors.text.secondary },
     superseded: { label: '已换代', color: theme.colors.text.secondary },
@@ -107,12 +109,14 @@ export default function GroupSpeechQueueOverlay({
       marginHorizontal: theme.spacing.md,
       marginBottom: 96,
       maxHeight: 320,
+      overflow: 'hidden',
       borderRadius: theme.radius.lg,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: theme.colors.border.light,
       paddingVertical: theme.spacing.sm,
     },
     header: {
+      flexShrink: 0,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
@@ -124,6 +128,10 @@ export default function GroupSpeechQueueOverlay({
       fontSize: 14,
       fontWeight: '600',
     },
+    taskList: {
+      flexGrow: 0,
+      flexShrink: 1,
+    },
     taskRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -132,10 +140,17 @@ export default function GroupSpeechQueueOverlay({
       paddingVertical: 4,
       gap: theme.spacing.sm,
     },
-    taskName: {
+    taskContent: {
       flex: 1,
+    },
+    taskName: {
       color: theme.colors.text.primary,
       fontSize: 14,
+    },
+    taskDetail: {
+      color: theme.colors.text.secondary,
+      fontSize: 12,
+      marginTop: 3,
     },
     statusText: {
       fontSize: 12,
@@ -158,49 +173,62 @@ export default function GroupSpeechQueueOverlay({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={styles.backdrop}>
-          <TouchableWithoutFeedback>
-            {/* 队列覆盖聊天消息，玻璃主题需要独立材质，不能沿用透明页面底色。 */}
-            <ThemedSurface
-              variant="modal"
-              cornerRadius={theme.radius.lg}
-              backgroundColor={theme.colors.background.app}
-              style={styles.panel}
-            >
-              <View style={styles.header}>
-                <Ionicons name="list" size={16} color={theme.colors.text.primary} />
-                <Text style={styles.headerText}>发言队列</Text>
-              </View>
-              {tasks.length === 0 ? (
-                <Text style={styles.emptyText}>
-                  {plan ? '暂无发言任务' : '当前没有发言计划'}
-                </Text>
-              ) : (
-                tasks.map((task) => {
-                  const participant = participantByAssistantId.get(task.aiAssistantId);
-                  const status = statusPresentation[task.status];
-                  return (
-                    <View key={task.id} style={styles.taskRow}>
-                      <AIAvatar
-                        name={participant?.nickname ?? participant?.displayName ?? 'AI'}
-                        avatarUrl={participant?.avatar ?? null}
-                        size="small"
-                      />
+      <View style={styles.backdrop}>
+        {/* 关闭遮罩与面板平级，避免点击响应器参与列表的滚动手势。 */}
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          accessibilityRole="button"
+          accessibilityLabel="关闭发言队列"
+          onPress={onClose}
+        />
+        {/* 队列覆盖聊天消息，玻璃主题需要独立材质，不能沿用透明页面底色。 */}
+        <ThemedSurface
+          variant="modal"
+          cornerRadius={theme.radius.lg}
+          backgroundColor={theme.colors.background.app}
+          style={styles.panel}
+        >
+          <View style={styles.header}>
+            <Ionicons name="list" size={16} color={theme.colors.text.primary} />
+            <Text style={styles.headerText}>发言队列</Text>
+          </View>
+          {tasks.length === 0 ? (
+            <Text style={styles.emptyText}>
+              {plan ? '暂无发言任务' : '当前没有发言计划'}
+            </Text>
+          ) : (
+            <ScrollView style={styles.taskList}>
+              {tasks.map((task) => {
+                const participant = participantByAssistantId.get(task.aiAssistantId);
+                // 历史失败或进程中断也可能已有正文，展示必须尊重持久提交事实。
+                const status = statusPresentation[
+                  task.status === 'failed' && task.visibleReplyCommitted ? 'partial' : task.status
+                ];
+                return (
+                  <View key={task.id} style={styles.taskRow}>
+                    <AIAvatar
+                      name={participant?.nickname ?? participant?.displayName ?? 'AI'}
+                      avatarUrl={participant?.avatar ?? null}
+                      size="small"
+                    />
+                    <View style={styles.taskContent}>
                       <Text style={styles.taskName} numberOfLines={1}>
                         {participant?.nickname ?? participant?.displayName ?? 'AI'}
                       </Text>
-                      <Text style={[styles.statusText, { color: status.color }]}>
-                        {status.label}
-                      </Text>
+                      {task.errorMessage ? (
+                        <Text style={styles.taskDetail}>{task.errorMessage}</Text>
+                      ) : null}
                     </View>
-                  );
-                })
-              )}
-            </ThemedSurface>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
+                    <Text style={[styles.statusText, { color: status.color }]}>
+                      {status.label}
+                    </Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
+        </ThemedSurface>
+      </View>
     </Modal>
   );
 }

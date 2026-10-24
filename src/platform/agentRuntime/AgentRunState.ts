@@ -67,6 +67,8 @@ interface AgentRunResultBase {
 }
 
 export interface AgentRunTerminalResult extends AgentRunResultBase {
+  /** 非预期执行异常保留原始原因；受控终态仍由 terminalCode 表达。 */
+  error?: Error;
   status: Extract<AgentRunStatus, 'completed' | 'failed' | 'cancelled'>;
   terminalCode: AgentTerminalCode;
 }

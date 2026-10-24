@@ -10,7 +10,7 @@ function load(relative, mocks = {}) {
   const module = { exports: {} };
   new Function('require', 'module', 'exports', source)((name) => {
     if (Object.hasOwn(mocks, name)) return mocks[name];
-    if (name.startsWith('.')) return load(path.posix.join(path.posix.dirname(relative), name + '.ts'));
+    if (name.startsWith('.')) return load(path.posix.join(path.posix.dirname(relative), name + '.ts'), mocks);
     assert.ok(Object.hasOwn(mocks, name), `缺少依赖：${name}`);
     return mocks[name];
   }, module, module.exports);
@@ -19,7 +19,7 @@ function load(relative, mocks = {}) {
 const { SCHEMAS } = load('src/platform/persistence/sqlite/schema.ts');
 const db = new DatabaseSync(':memory:');
 db.exec('PRAGMA foreign_keys = OFF');
-for (const key of ['callSessions', 'callEvents', 'callAttachments']) db.exec(SCHEMAS[key]);
+for (const key of ['callSessions', 'callEvents', 'callAttachments', 'callHistory']) db.exec(SCHEMAS[key]);
 function executorFor(database) {
   return {
     getFirstAsync: async (sql, params = []) => database.prepare(sql).get(...params) ?? null,
@@ -59,7 +59,8 @@ const device = {
 };
 const runtime = { getCallRuntimeDependencies: () => ({ repositories: { calls: repository } }) };
 const lifetime = load('src/features/calls/application/snapshots/CallSnapshotLifetime.ts', { '@platform/device': device, '../runtime/CallRuntimeDependencies': runtime });
-const { attachCallSnapshot } = load('src/features/calls/application/snapshots/AttachCallSnapshot.ts', { '@platform/device': device, '../runtime/CallRuntimeDependencies': runtime, './CallSnapshotLifetime': lifetime });
+const { attachCallSnapshot } = load('src/features/calls/application/snapshots/AttachCallSnapshot.ts', { '@platform/device': device, '../runtime/CallRuntimeDependencies': runtime, './CallSnapshotLifetime': lifetime,
+  '../CallHistory': { async saveCallHistorySnapshot() {} } });
 // 生命周期依赖显式注入，工具模型和原生音频不参与本次 SQL/file 行为验证。
 const originalWarn = console.warn;
 console.warn = (...values) => { warnings.push(values); };

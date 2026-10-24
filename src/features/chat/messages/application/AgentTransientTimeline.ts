@@ -58,6 +58,8 @@ export interface ApplyAgentTransientTimelineSnapshotsParams {
   sessionId: string;
   snapshots: readonly AgentTransientTimelineSnapshot[];
   agentId?: string | null;
+  /** 来源拥有投影回收权；历史窗口不能清理仍由执行器更新的片段。 */
+  source?: 'execution' | 'history';
 }
 
 export interface AgentTransientTimelineSink {
@@ -127,6 +129,7 @@ interface RunState {
   readonly sessionId: string;
   readonly runId: string;
   readonly createdOrder: number;
+  source: 'execution' | 'history';
   readonly items: Map<string, AgentTransientTimelineItem>;
   /** commit 返回后暂存，等历史查询包含同一条消息再移除，避免 commit/reload 空窗闪烁。 */
   replacements: Map<string, ChatMessage>;
@@ -213,6 +216,12 @@ export function getLiveAgentTimelineRunIds(sessionId?: string | null): ReadonlyS
   return session ? new Set(session.runs.keys()) : EMPTY_RUN_IDS;
 }
 
+/** 历史读取只能移除自己回填过的 run，不拥有其他执行器的实时投影。 */
+export function getHistoryAgentTimelineRunIds(sessionId: string): ReadonlySet<string> {
+  const session = sessions.get(sessionId);
+  return session ? new Set([...session.runs.values()].filter(run => run.source === 'history').map(run => run.runId)) : EMPTY_RUN_IDS;
+}
+
 const EMPTY_RUN_IDS: ReadonlySet<string> = new Set();
 
 function ensureRun(sessionId: string, runId: string): RunState {
@@ -225,6 +234,7 @@ function ensureRun(sessionId: string, runId: string): RunState {
     sessionId,
     runId,
     createdOrder: createdOrder += 1,
+    source: 'execution',
     items: new Map(),
     replacements: new Map(),
   };
@@ -316,7 +326,7 @@ function buildTransientMessageFromSnapshot(
   };
 }
 
-/** execution projector 的唯一 store sink；不要求页面已挂载。 */
+/** 执行与历史回填共用 store；来源随更新交接，回收时按来源隔离。 */
 export function applyAgentTransientTimelineSnapshots(
   params: ApplyAgentTransientTimelineSnapshotsParams
 ): void {
@@ -325,6 +335,7 @@ export function applyAgentTransientTimelineSnapshots(
     return;
   }
   const run = ensureRun(params.sessionId, firstSnapshot.runId);
+  run.source = params.source ?? 'execution';
   for (const snapshot of params.snapshots) {
     const item: AgentTransientTimelineItem = {
       sessionId: params.sessionId,
@@ -401,6 +412,7 @@ function replaceAgentTransientTimelineWithCommitted(
   params: ReplaceAgentTransientTimelineParams
 ): void {
   const run = ensureRun(params.sessionId, params.runId);
+  run.source = 'execution';
   for (const message of params.messages) {
     const identity = getAgentTimelineMessageIdentity(message as TimelineMessageWithOrder);
     const parsed = identity ? parseAgentTimelineClientMessageId(identity) : null;

@@ -19,6 +19,8 @@ export type GroupSpeechTaskStatus =
   | 'queued'
   | 'running'
   | 'completed'
+  /** 已提交部分内容：仅有思考，或正文被截断、后续交付未完成。 */
+  | 'partial'
   | 'failed'
   | 'skipped'
   /** 所属 plan 被换代时仍未到终态的任务；不再允许 claim 或提交。 */
@@ -61,6 +63,7 @@ export interface GroupChatMember {
   agentId: string;
   displayOrder: number;
   enabled: boolean;
+  muted: boolean;
   name?: string;
   nickname?: string | null;
   avatar?: string | null;

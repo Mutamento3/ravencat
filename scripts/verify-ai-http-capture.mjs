@@ -225,6 +225,55 @@ try {
     assert.equal((await client().chat(messages)).success, true, '诊断开关或存储故障不能改变聊天结果');
     assert.equal(records.length, before);
   }
+  captureEnabled = true; beginFailure = false; writeFailure = false;
+  globalThis.XMLHttpRequest = undefined;
+  const refusal = JSON.stringify({ error: { code: '1302', message: `请求并发超限 ${apiKey}` } });
+  for (const method of ['chat', 'chatWithTools', 'chatStream', 'chatStreamWithTools']) {
+    const before = requests.length;
+    responses.push({ raw: refusal, status: 429 });
+    const result = await client()[method](messages, []);
+    assert.equal(result.success, false);
+    assert.equal(result.httpStatus, 429, method);
+    assert.match(result.error, /HTTP 429.*1302.*请求并发超限/);
+    assert.ok(!result.error.includes(apiKey), '展示的服务端错误必须脱敏');
+    assert.equal(requests.length, before + 1, '限流不自动重试');
+    lastExchange(refusal, 429);
+  }
+  for (const body of [{ error: { code: 'provider_rejected', message: '模型服务拒绝请求' } }, { code: 'gateway_rejected', message: '上游网关拒绝请求' }]) {
+    const raw = JSON.stringify(body);
+    responses.push({ raw });
+    const result = await client().chat(messages);
+    assert.equal(result.success, false, 'HTTP 200 的业务错误仍保留具体原因');
+    assert.match(result.error, /(?:provider|gateway)_rejected/);
+    lastExchange(raw);
+  }
+  const streamError = 'data: ' + JSON.stringify({ error: { code: 'service_limit', message: '本时段服务额度已用完' } }) + '\n\n';
+  for (const method of ['chatStream', 'chatStreamWithTools']) {
+    responses.push({ chunks: [encode(partial), encode(streamError)] });
+    const result = await client()[method](messages, []);
+    assert.equal(result.success, false, '已经返回部分正文的 SSE 错误也不能被当作成功');
+    assert.match(result.error, /service_limit.*服务额度已用完/);
+    lastExchange(partial + streamError);
+  }
+  for (const [status, raw] of [[429, refusal], [200, partial + streamError]]) {
+    globalThis.XMLHttpRequest = class {
+      status = status;
+      responseText = '';
+      open(_method, url) { this.url = url; }
+      setRequestHeader() {}
+      send(body) {
+        rememberRequest(this.url, body);
+        this.responseText = raw;
+        this.onprogress(); this.onload();
+      }
+    };
+    const result = await client().chatStream(messages);
+    assert.equal(result.success, false, 'Android XHR 同样保留具体错误');
+    assert.match(result.error, status === 429 ? /HTTP 429.*1302/ : /service_limit/);
+    assert.ok(!result.error.includes(apiKey));
+    if (status === 429) assert.equal(result.httpStatus, 429);
+    lastExchange(raw, status);
+  }
   assert.equal(responses.length, 0);
   assert.equal(JSON.stringify(logs).includes(apiKey), false, '诊断故障不能把 API Key 输出到日志');
 } finally {

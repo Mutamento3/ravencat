@@ -113,6 +113,7 @@ import {
 } from '@host/navigation/externalNavigation';
 import { useRootNavigationReady } from '@host/navigation/useRootNavigationReady';
 import { resetApplicationData } from './application/resetApplicationData';
+import { stopLedgerAIReplyQueueForReset, resumeLedgerAIReplyQueueAfterReset } from '@features/wallet/composition';
 import {
   initializeStickerAnnotationQueue,
   requestStickerAnnotationRun,
@@ -641,6 +642,7 @@ function HostLifecycle({
         await interruptAbandonedGroupSpeechPlans();
         if (!isMounted || resettingApplicationDataRef.current) return;
         resumeHostAgentRunsAfterReset();
+        resumeLedgerAIReplyQueueAfterReset();
         getConversationTurnCoordinator().resumeTurnsAfterReset();
         try {
           await reconcileTogetherListeningSystemPresentation();
@@ -1357,6 +1359,7 @@ function HostLifecycle({
       // 先取消 StartupRecovery，再 drain，否则旧流程可能卡在等待会话列表。
       await cancelStartupRecoveryForReset();
       const executionShutdown = await Promise.allSettled([
+        stopLedgerAIReplyQueueForReset(),
         getConversationTurnCoordinator().cancelActiveTurnsForReset(),
         cancelActiveHostAgentRunsForReset(),
       ]);
@@ -1435,6 +1438,7 @@ function HostLifecycle({
             chatSettings: 'chat-settings',
             summary: 'summary',
             statistics: 'statistics',
+            callHistory: 'call-history',
             filePreview: 'file-preview',
           };
           router.push(`/chat/${encodeURIComponent(aiId)}/${segments[screen]}` as Href);

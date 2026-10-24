@@ -143,7 +143,7 @@ for (const cachedTokens of [80, 0, undefined]) {
   assert.equal(TokenInfo({ ...props, tokensUsed: first.tokensUsed }), null, '分段提示只显示一次');
   for (const id of ['paper-note', 'moon-kimi']) {
     theme = { id };
-    assert.equal(TokenInfo(props), null, '冻结主题即使收到用量也不能显示');
+    assert.equal(TokenInfo(props).children.join(''), text, '所有主题显示相同的真实用量');
   }
   theme = { id: 'daylight' };
 }

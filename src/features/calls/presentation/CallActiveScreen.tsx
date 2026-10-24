@@ -76,6 +76,7 @@ export default function CallActiveScreen({ onMinimize, runtime }: CallActiveScre
   const resumeSpeechAfterTextRef = useRef(false);
 
   const {
+    errorMessage,
     cameraEnabled,
     isEnding,
     isListening,
@@ -237,8 +238,15 @@ export default function CallActiveScreen({ onMinimize, runtime }: CallActiveScre
             />
           </View>
 
-          {runtime.errorMessage ? (
-            <Text style={styles.errorText} numberOfLines={2}>{runtime.errorMessage}</Text>
+          {errorMessage ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="查看通话错误详情"
+              accessibilityHint="展开完整错误，可选择复制"
+              onPress={() => showAppDialog({ title: '通话错误详情', message: errorMessage, tone: 'error' })}
+            >
+              <Text style={styles.errorText} numberOfLines={2}>{errorMessage}</Text>
+            </TouchableOpacity>
           ) : null}
 
           <CallControls actions={actions} />

@@ -15,7 +15,7 @@ export type NetEaseGetPlaybackStateArgs = Record<string, never>;
 
 export const netEaseGetPlaybackStateDefinition = {
   name: 'netease_get_playback_state',
-  description: '【主理 AI 专属】读取网易云当前播放会话的歌曲信息、播放状态与可用控制能力。',
+  description: '读取网易云当前播放会话的歌曲信息、播放状态与可用控制能力。',
   parameters: {
     type: 'object',
     properties: {},
