@@ -98,6 +98,8 @@ export interface PostConversationNotificationRequest {
 }
 
 export interface PostIncomingCallNotificationRequest {
+  ringtoneUri: string | null;
+  ringDurationMs: number;
   displayId: string;
   eventId: string;
   callId: string;
@@ -173,7 +175,7 @@ declare class KimiPhoneNotificationsNativeModule extends NativeModule<KimiPhoneN
   /** 按会话聚合 key 撤销：direct = `ai:<aiId>`，group = `group:<groupId>`；null 撤销全部 */
   cancelConversationNotifications(conversationKey?: string | null): Promise<void>;
   cancelIncomingCallNotification(callId: string): Promise<void>;
-  leaveCallScreen(callId: string, finished: boolean): Promise<void>;
+  leaveCallScreen(callId: string): Promise<void>;
   consumePendingNotificationResponses(): Promise<NativeNotificationResponse[]>;
   getNotificationDiagnostics(scopeKey?: string | null): Promise<NativeNotificationDiagnostics>;
   /** 显式用户操作：Android 14+ 打开本应用 FSI 系统授权页；API < 34 返回 false */
@@ -245,9 +247,9 @@ export function cancelIncomingCallNotification(callId: string): Promise<void> {
   return nativeModule.cancelIncomingCallNotification(callId);
 }
 
-/** 由宿主退出路由前调用；App 外接听的来电先退回原任务，媒体清理继续执行。 */
-export function leaveCallScreen(callId: string, finished: boolean): Promise<void> {
-  return nativeModule.leaveCallScreen(callId, finished);
+/** 按本次展示的来源退出；App 外进入时先退回原任务，媒体清理继续执行。 */
+export function leaveCallScreen(callId: string): Promise<void> {
+  return nativeModule.leaveCallScreen(callId);
 }
 
 export function consumePendingNotificationResponses(): Promise<NativeNotificationResponse[]> {

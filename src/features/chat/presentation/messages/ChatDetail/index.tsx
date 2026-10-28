@@ -50,6 +50,7 @@ import { getChatSummarySettings, setFixedChatContextStart } from '../../../summa
 import { subscribeChatSummaryChanged } from '../../../summary/application/ChatSummaryRuntime';
 import { setChatEventBus } from '../../../messages/events/ChatEvents';
 import { projectChatContextMessage } from '../../../summary/domain/ChatContext';
+import { useChatTextDraft } from '../../shell/ChatTextDraftProvider';
 import type { ChatSummarySettings } from '../../../summary/domain/ChatSummaryRepository';
 
 type ChatDetailCurrentUser = Pick<UserProfile, 'name' | 'avatar'>;
@@ -109,7 +110,7 @@ export default function ChatDetailModule({
   const chatBackgroundKey = sessionId ? `single:${sessionId}` : aiAssistant?.id ? `single:${aiAssistant.id}` : null;
   const headerPaddingTop = Math.max(insets.top, 8);
   const headerTitle = (aiAssistant ? getAssistantDisplayName(aiAssistant) : null) || 'AI助手';
-  const [inputText, setInputText] = useState('');
+  const { text: inputText, setText: setInputText, ready: draftReady, store: textDrafts } = useChatTextDraft(sessionId, isActive);
   const [replyTo, setReplyTo] = useState<ChatReplyTarget | null>(null);
   const [actionMenuVisible, setActionMenuVisible] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
@@ -173,7 +174,7 @@ export default function ChatDetailModule({
     surfaceHeight,
   } = useChatComposerSurface();
   const {
-    draftAttachment,
+    draftAttachments,
     readyAttachments,
     withAttachmentSubmission,
     isPreparingAttachment,
@@ -181,6 +182,7 @@ export default function ChatDetailModule({
     capturePhotoAttachment,
     selectDocumentAttachment,
     clearAttachment,
+    removeAttachment,
   } = useAttachmentDraft();
   const previousSessionIdRef = useRef(sessionId);
 
@@ -198,7 +200,6 @@ export default function ChatDetailModule({
 
     previousSessionIdRef.current = sessionId;
     void voiceMessagePlaybackCoordinator.stop();
-    setInputText('');
     setReplyTo(null);
     setActionMenuVisible(false);
     setSelectedMessage(null);
@@ -288,17 +289,18 @@ export default function ChatDetailModule({
 
   const handleSend = useCallback(async () => {
     if (inputText.trim().length === 0 && readyAttachments.length === 0) return;
+    const draft = textDrafts.read(sessionId!);
 
     await withAttachmentSubmission(
       (attachments) => sendMessage(inputText.trim(), replyTo, attachments, {
         onQueued: () => {
-          setInputText('');
+          textDrafts.replaceIfUnchanged(sessionId!, draft, '');
           setReplyTo(null);
         },
       }),
       (queued) => queued,
     );
-  }, [inputText, replyTo, readyAttachments, sendMessage, withAttachmentSubmission]);
+  }, [inputText, replyTo, readyAttachments, sendMessage, withAttachmentSubmission, sessionId, textDrafts]);
 
   const handleStickerPress = useCallback(async (sticker: StickerMessageSnapshot) => {
     const wasQueued = await sendSticker(sticker);
@@ -555,10 +557,10 @@ export default function ChatDetailModule({
                 onVoiceReviewTranscriptChange={updateVoiceReviewTranscript}
                 onVoiceReviewSend={handleVoiceReviewSend}
                 onVoiceReviewCancel={discardVoiceReviewDraft}
-                attachmentDraft={draftAttachment}
+                attachmentDrafts={draftAttachments}
                 hasReadyAttachment={readyAttachments.length > 0}
                 isPreparingAttachment={isPreparingAttachment}
-                onRemoveAttachment={clearAttachment}
+                onRemoveAttachment={removeAttachment}
                 onImagePress={selectImageAttachment}
                 onCameraPress={capturePhotoAttachment}
                 onFilePress={selectDocumentAttachment}
@@ -567,7 +569,7 @@ export default function ChatDetailModule({
                 onTogetherListeningPress={shouldShowTogetherListeningChatEntry(aiAssistant)
                   ? handleTogetherListeningInvite
                   : undefined}
-                disabled={isChatSendBlockedByActiveCall}
+                disabled={isChatSendBlockedByActiveCall || !draftReady}
                 disabledPlaceholder={isChatSendBlockedByActiveCall ? '视频电话期间不可发送普通聊天消息' : ''}
                 disabledPressMessage={
                   isChatSendBlockedByActiveCall ? '视频电话期间不可发送普通聊天消息' : undefined
@@ -628,7 +630,8 @@ export default function ChatDetailModule({
         onForward={selectedMessage && selection.availableKeys.has(getChatSelectionKey(selectedMessage)) && voiceRecordingState === 'idle' ? handleShareMessage : undefined}
         onQuote={messageActions?.quote ? handleQuoteMessage : undefined}
         onTranslate={messageActions?.translate ? handleTranslateMessage : undefined}
-        onFavorite={messageActions?.favorite ? favoriteMessage : undefined}
+        onFavorite={messageActions?.favorite ? favoriteMessage.toggle : undefined}
+        isFavorited={favoriteMessage.isFavorited}
         onToggleVoiceTranscript={getMessageVoice(selectedMessage)
           ? handleToggleVoiceTranscript
           : undefined}

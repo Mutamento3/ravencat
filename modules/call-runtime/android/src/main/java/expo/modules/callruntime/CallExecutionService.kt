@@ -15,7 +15,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.IBinder
 import android.os.PowerManager
-import android.telecom.DisconnectCause
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.graphics.drawable.IconCompat
@@ -26,6 +25,7 @@ import com.facebook.react.jstasks.HeadlessJsTaskContext
 import com.facebook.react.jstasks.HeadlessJsTaskEventListener
 import expo.modules.androidoverlayruntime.OverlayLaunchIntentFactory
 import expo.modules.androidoverlayruntime.OverlayInteractionExclusion
+import expo.modules.callringtone.CallRingtonePlayback
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 
@@ -40,18 +40,39 @@ class CallExecutionService : Service(), HeadlessJsTaskEventListener {
   internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   internal val camera by lazy { CallCameraSession(this) }
   internal val overlay by lazy { CallOverlayController(this) }
-  private var callControl: CallControlScope? = null
-  private var telecomJob: Job? = null
+  private val telecom by lazy {
+    CallTelecomSession(scope,
+      addCall = { block ->
+        val manager = CallsManager(this)
+        manager.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE or CallsManager.CAPABILITY_SUPPORTS_VIDEO_CALLING)
+        // 来电邀请只由应用响铃；用户接听后才注册系统通话，与去电共用激活和释放。
+        manager.addCall(
+          CallAttributesCompat(name, Uri.parse("ravencat-call:$callId"),
+            if (direction == "incoming") CallAttributesCompat.DIRECTION_INCOMING else CallAttributesCompat.DIRECTION_OUTGOING,
+            CallAttributesCompat.CALL_TYPE_VIDEO_CALL, callCapabilities = 0),
+          onAnswer = { },
+          onDisconnect = { endFromTelecom("hangup") },
+          onSetActive = { check(CallExecutionRegistry.alive && !finishing) },
+          onSetInactive = { endFromTelecom("interrupted") },
+          block = block,
+        )
+      },
+      onEnded = { endFromTelecom() },
+    )
+  }
   private var route: CallAudioRouteController? = null
   private var endpoints = emptyList<CallEndpointCompat>()
   private var endpoint: CallEndpointCompat? = null
   private val endpointIds = linkedMapOf<String, Int>()
   private var microphoneTypeAcquired = false
   private var cameraEnabled = false
-  private var finishing = false
+  internal var finishing = false
+    private set
   private var started = false
   private var connectedAt: Long? = null
-  private var activation: CompletableDeferred<Unit>? = null
+  private var finishTask: Deferred<Unit>? = null
+  private var terminalTask: Job? = null
+  private var terminalCommand: Deferred<Unit>? = null
   private var executionTaskId: Int? = null
   private var taskContext: HeadlessJsTaskContext? = null
   private var wakeLock: PowerManager.WakeLock? = null
@@ -86,6 +107,9 @@ class CallExecutionService : Service(), HeadlessJsTaskEventListener {
         NotificationChannel(CHANNEL, "正在通话", NotificationManager.IMPORTANCE_LOW),
       )
       updateForeground()
+      if (startIntent.getBooleanExtra("ringing", false)) {
+        CallRingtonePlayback.start(this, callId, startIntent.getStringExtra("ringtoneUri"), "outgoing")
+      }
       startIntent.getStringExtra("avatarUri")?.let { uri ->
         scope.launch {
           val bitmap = loadAvatar(uri)
@@ -124,74 +148,63 @@ class CallExecutionService : Service(), HeadlessJsTaskEventListener {
   }
 
   internal suspend fun activate() {
-    activation?.let { it.await(); return }
-    val established = CompletableDeferred<Unit>()
-    activation = established
-    val manager = CallsManager(this)
-    manager.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE or CallsManager.CAPABILITY_SUPPORTS_VIDEO_CALLING)
-    telecomJob = scope.launch {
-      try {
-        // 来电壳继续拥有 ringing；接听提交后才创建系统 active 投影，避免第二份来电 surface。
-        manager.addCall(
-          CallAttributesCompat(name, Uri.parse("ravencat-call:$callId"),
-            if (direction == "incoming") CallAttributesCompat.DIRECTION_INCOMING else CallAttributesCompat.DIRECTION_OUTGOING,
-            CallAttributesCompat.CALL_TYPE_VIDEO_CALL, callCapabilities = 0),
-          onAnswer = { },
-          onDisconnect = { CallExecutionRegistry.command("hangup") },
-          onSetActive = { check(CallExecutionRegistry.alive) },
-          onSetInactive = { CallExecutionRegistry.command("interrupted") },
-        ) {
-          callControl = this
-          launch {
-            try {
-              val result = if (direction == "incoming") answer(CallAttributesCompat.CALL_TYPE_VIDEO_CALL) else setActive()
-              check(result is CallControlResult.Success) { "系统无法接通电话：$result" }
-              endpoints = availableEndpoints.first { it.isNotEmpty() }
-              endpoint = currentCallEndpoint.first()
-              val controller = CallAudioRouteController(callId,
-                getDevices = { endpoints.mapNotNull { device(it) } },
-                getCurrentDevice = { endpoint?.let { device(it) } },
-                requestDevice = { id ->
-                  val target = endpoints.first { device(it)?.id == id }
-                  scope.launch {
-                    try {
-                      val changed = requestEndpointChange(target)
-                      if (changed is CallControlResult.Error) route?.requestFailed(id, "系统未接受音频设备切换：$changed")
-                    } catch (failure: Exception) { route?.requestFailed(id, failure.message ?: "系统未接受音频设备切换") }
-                  }
-                  true
-                },
-                scheduleTimeout = { timeout ->
-                  val task = Runnable { timeout() }
-                  handler.postDelayed(task, 30_000)
-                  val cancel: () -> Unit = { handler.removeCallbacks(task) }
-                  cancel
-                },
-                emit = { CallExecutionRegistry.emit?.invoke("onRoute", it) },
-              )
-              route = controller
-              launch { currentCallEndpoint.collect { endpoint = it; controller.actualChanged() } }
-              launch { availableEndpoints.collect { endpoints = it; controller.devicesChanged() } }
-              launch { isMuted.collect { muted -> CallExecutionRegistry.command("mute", muted) } }
-              controller.begin { message ->
-                if (message == null) established.complete(Unit)
-                else established.completeExceptionally(IllegalStateException(message))
+    CallRingtonePlayback.stop(callId)
+    var stage = "注册系统通话"
+    try {
+      telecom.activate { control ->
+        with(control) {
+          stage = "激活系统通话"
+          val result = if (direction == "incoming") answer(CallAttributesCompat.CALL_TYPE_VIDEO_CALL) else setActive()
+          check(result is CallControlResult.Success) { "系统无法接通电话：$result" }
+          stage = "等待可用音频端点"
+          endpoints = availableEndpoints.first { it.isNotEmpty() }
+          stage = "等待当前音频端点"
+          endpoint = currentCallEndpoint.first()
+          stage = "确认初始音频路由"
+          val controller = CallAudioRouteController(callId,
+            getDevices = { endpoints.mapNotNull { device(it) } },
+            getCurrentDevice = { endpoint?.let { device(it) } },
+            requestDevice = { id ->
+              val target = endpoints.first { device(it)?.id == id }
+              telecom.audioScope.launch {
+                try {
+                  val changed = requestEndpointChange(target)
+                  if (changed is CallControlResult.Error) route?.requestFailed(id, "系统未接受音频设备切换：$changed")
+                } catch (failure: Exception) { route?.requestFailed(id, failure.message ?: "系统未接受音频设备切换") }
               }
-              connectedAt = System.currentTimeMillis()
-              updateForeground()
-            } catch (failure: Exception) { established.completeExceptionally(failure) }
+              true
+            },
+            scheduleTimeout = { timeout ->
+              val task = Runnable { timeout() }
+              handler.postDelayed(task, 30_000)
+              val cancel: () -> Unit = { handler.removeCallbacks(task) }
+              cancel
+            },
+            emit = { CallExecutionRegistry.emit?.invoke("onRoute", it) },
+          )
+          route = controller
+          telecom.audioScope.launch { currentCallEndpoint.collect { endpoint = it; controller.actualChanged() } }
+          telecom.audioScope.launch { availableEndpoints.collect { endpoints = it; controller.devicesChanged() } }
+          telecom.audioScope.launch { isMuted.collect { muted -> CallExecutionRegistry.command("mute", muted) } }
+          val routed = CompletableDeferred<Unit>()
+          controller.begin { message ->
+            if (message == null) routed.complete(Unit)
+            else routed.completeExceptionally(IllegalStateException(message))
           }
-        }
-        if (!finishing && established.isCompleted) CallExecutionRegistry.command("interrupted")
-      } catch (failure: Exception) {
-        established.completeExceptionally(failure)
-        if (!finishing && CallExecutionRegistry.alive) {
-          try { CallExecutionRegistry.command("interrupted") } finally { finish() }
+          routed.await()
+          connectedAt = System.currentTimeMillis()
+          updateForeground()
         }
       }
+      overlay.connected()
+    } catch (failure: Exception) {
+      throw IllegalStateException(
+        "原生通话建立失败（$stage）：${failure.message ?: failure.toString()}\n" +
+          "设备：${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}，Android ${android.os.Build.VERSION.RELEASE} / API ${android.os.Build.VERSION.SDK_INT}\n" +
+          "当前端点类型：${endpoint?.type ?: "未收到"}，可用端点类型：${endpoints.map { it.type }}",
+        failure,
+      )
     }
-    established.await()
-    overlay.connected()
   }
 
   private fun device(value: CallEndpointCompat): CallAudioDevice? {
@@ -206,7 +219,39 @@ class CallExecutionService : Service(), HeadlessJsTaskEventListener {
   }
 
   internal fun routeState(): Map<String, Any?>? = route?.snapshot()
-  internal fun releaseAudio() { route?.close(); route = null }
+
+  internal suspend fun releaseAudio() {
+    finishing = true
+    val released = telecom.close()
+    try {
+      CallRingtonePlayback.stop(callId)
+      route?.close()
+      route = null
+    } finally { released.await() }
+  }
+
+  private fun endFromTelecom(action: String? = null) {
+    if (action != null && terminalCommand == null) {
+      terminalCommand = scope.async(start = CoroutineStart.LAZY) { CallExecutionRegistry.command(action) }
+    }
+    if (terminalTask != null) return
+    finishing = true
+    val task = scope.launch(start = CoroutineStart.LAZY) {
+      try {
+        terminalCommand?.start()
+        // 系统回调立即返回，不能让它等待 JS 再反向等待本次系统断开，形成环路。
+        releaseAudio()
+        val command = terminalCommand
+        if (command != null) command.await()
+        else if (CallExecutionRegistry.alive) CallExecutionRegistry.command("interrupted")
+      } catch (failure: Exception) {
+        android.util.Log.e("CallExecution", "系统通话结束收口失败", failure)
+      } finally { finish() }
+    }
+    terminalTask = task
+    task.start()
+  }
+
   internal suspend fun selectRoute(value: String) {
     val result = CompletableDeferred<Unit>()
     checkNotNull(route).select(value) { message ->
@@ -287,30 +332,42 @@ class CallExecutionService : Service(), HeadlessJsTaskEventListener {
     }
   }
 
-  internal fun finish() {
-    if (finishing) return
+  internal fun finish(): Deferred<Unit> {
+    finishTask?.let { return it }
     finishing = true
     CallExecutionRegistry.alive = false
-    activation?.completeExceptionally(IllegalStateException("通话已经结束"))
-    overlay.close()
-    camera.close()
-    route?.close()
-    OverlayInteractionExclusion.release(this)
-    scope.launch {
-      try { withTimeout(4_000) { callControl?.disconnect(DisconnectCause(DisconnectCause.LOCAL)) } }
+    val task = scope.async(start = CoroutineStart.LAZY) {
+      try { releaseAudio() }
       finally {
-        telecomJob?.cancel()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        try { overlay.close(); camera.close() }
+        finally {
+          OverlayInteractionExclusion.release(this@CallExecutionService)
+          stopForeground(STOP_FOREGROUND_REMOVE)
+          stopSelf()
+        }
       }
     }
+    finishTask = task
+    task.start()
+    return task
   }
 
   override fun onDestroy() {
-    if (started) { overlay.close(); camera.close(); route?.close() }
-    OverlayInteractionExclusion.release(this)
-    CallExecutionRegistry.cancelled(this)
-    scope.cancel()
+    // 系统销毁同样走有界断开；在它完成前不能取消拿着 Telecom 句柄的 scope。
+    if (started) {
+      val closing = finish()
+      scope.launch {
+        var failure: Throwable? = null
+        try { closing.await() }
+        catch (cause: Exception) {
+          failure = cause
+          android.util.Log.e("CallExecution", "系统通话释放失败", cause)
+        } finally {
+          CallExecutionRegistry.cancelled(this@CallExecutionService, failure)
+          scope.cancel()
+        }
+      }
+    } else scope.cancel()
     taskContext?.removeTaskEventListener(this)
     wakeLock?.release()
     wakeLock = null

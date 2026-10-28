@@ -8,7 +8,6 @@ export {
 } from './application/PromptingRuntimeDependencies';
 export {
   getPromptCenterSnapshot,
-  getPromptDefinitionDetails,
   type PromptCenterSnapshot,
 } from './application/GetPromptCenterSnapshot';
 export { default as PromptCenterScreen } from './presentation/PromptCenterScreen';
@@ -20,15 +19,6 @@ export {
   resolveLegacyPromptPreset,
   type ResolvedPromptPreset,
 } from './application/ResolveLegacyPromptPreset';
-export {
-  getPromptManagementSnapshot,
-  type PromptManagementSnapshot,
-  type PromptTargetSummary,
-} from './application/GetPromptManagementSnapshot';
-export {
-  previewResolvedPromptPack,
-  type PromptPackPreviewResult,
-} from './application/PreviewResolvedPromptPack';
 export {
   getPromptCenterMcpServices,
   setPromptCenterMcpServiceEnabled,
@@ -44,6 +34,8 @@ export {
   reorderAssistantUserPrompts,
   resetAssistantDefinitionOverride,
   resolveAssistantPromptConfiguration,
+  resolveImageGroundingPrompt,
+  resolveChatSummaryPromptOverride,
   saveAssistantDefinitionOverride,
   saveAssistantDefinitionState,
   setAssistantPromptLanguage,
@@ -61,8 +53,6 @@ export type {
   PromptAssistantOption,
   PromptMcpServiceConnectionStatus,
   PromptMcpServiceSummary,
-  PromptPreviewGateway,
-  PromptBindingTargetReader,
   SystemPromptPresetReader,
 } from './application/PromptingRuntimeDependencies';
 export {
@@ -70,4 +60,4 @@ export {
   sqlitePromptingRepository,
 } from './infrastructure/SQLitePromptingRepository';
 
-export { readPromptDefaults, listPromptAssistantOptions } from './application/ManagePromptDefaults';
+export { readPromptDefaults, listPromptAssistantOptions, getAppToolPackageSettings, setAppToolPackageEnabled } from './application/ManagePromptDefaults';

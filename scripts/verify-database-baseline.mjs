@@ -82,6 +82,64 @@ for(const retired of ['memories','memory_entries','capability_bindings','raven_c
 assert.ok(!tables(db).includes('call_background_legacy_migration'),'新库不创建旧文件迁移标记');
 seed(db);check(db);
 const before=data(db), schema=structure(db);
+// 148 升级到日程交接版本时，既有资料、外键和索引必须完整保留。
+const scheduleUpgrade=create();
+await bootstrapSqlite(createSqliteExecutor(scheduleUpgrade)); seed(scheduleUpgrade);
+scheduleUpgrade.exec('DROP TABLE raven_cat_ai_schedule_context; PRAGMA user_version=148;');
+const scheduleBefore=data(scheduleUpgrade);
+await bootstrapSqlite(createSqliteExecutor(scheduleUpgrade));
+assert.deepEqual(data(scheduleUpgrade),scheduleBefore);
+assert.deepEqual(structure(scheduleUpgrade),schema); check(scheduleUpgrade);
+scheduleUpgrade.close();
+// 147 的运行正文没有已读位：升级不补造旧红点，正式已读值与失败回滚均保留。
+const readUpgrade=create(); await bootstrapSqlite(createSqliteExecutor(readUpgrade)); seed(readUpgrade);
+readUpgrade.exec(`INSERT INTO messages(id,session_id,text,is_me,sender_type,is_read,created_at)
+ VALUES (43,'direct-proof','已读正文',0,'assistant',1,'2026-10-27'),
+        (44,'direct-proof','未读正文',0,'assistant',0,'2026-10-27');
+ INSERT INTO conversation_turn_runs(run_id,session_id,kind,reply_cursor_at_claim,input_high_watermark,revision_at_claim,status,created_at)
+ VALUES ('read-upgrade','direct-proof','user_reply',0,41,1,'superseded','2026-10-27');
+ INSERT INTO chat_turn_presentations(run_id,session_id,state,updated_at) VALUES ('read-upgrade','direct-proof','interrupted','2026-10-27');
+ INSERT INTO chat_turn_display_items(run_id,identity,version,snapshot_json,shown_version,shown_json,message_id)
+ VALUES ('read-upgrade','unbound',1,'{}',1,'{}',NULL),
+        ('read-upgrade','read',1,'{}',1,'{}',43),('read-upgrade','unread',1,'{}',1,'{}',44);
+ ALTER TABLE chat_turn_display_items DROP COLUMN is_read; PRAGMA user_version=147;`);
+const readExecutor=createSqliteExecutor(readUpgrade);
+await assert.rejects(bootstrapSqlite({ ...readExecutor, execAsync: async sql => {
+ if(sql.startsWith('UPDATE chat_turn_display_items SET is_read')) throw new Error('已读迁移回填失败');
+ return readExecutor.execAsync(sql);
+} }),/已读迁移回填失败/);
+assert.equal(readUpgrade.prepare('PRAGMA user_version').get().user_version,147);
+assert.equal(readUpgrade.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('chat_turn_display_items') WHERE name='is_read'").get().n,0);
+await bootstrapSqlite(readExecutor);
+assert.deepEqual(readUpgrade.prepare('SELECT identity,is_read FROM chat_turn_display_items ORDER BY identity').all().map(row=>[row.identity,row.is_read]),
+ [['read',1],['unbound',1],['unread',0]]);
+readUpgrade.exec("UPDATE chat_turn_display_items SET is_read=0 WHERE identity='unbound'");
+await bootstrapSqlite(readExecutor);
+assert.equal(readUpgrade.prepare("SELECT is_read FROM chat_turn_display_items WHERE identity='unbound'").get().is_read,0,'重复初始化不重置新的已读事实');
+check(readUpgrade); readUpgrade.close();
+// 144 的图片记录只存错误码：新增原因列不重放识别，迁移失败整笔回滚。
+const analysisUpgrade=create(); await bootstrapSqlite(createSqliteExecutor(analysisUpgrade)); seed(analysisUpgrade);
+analysisUpgrade.exec(`
+ INSERT INTO media_assets(id,storage_backend,storage_key,hash_algorithm,content_hash,mime_type,byte_size,status,created_at,updated_at)
+ VALUES ('analysis-asset','persistent-image','moments/test.jpg','sha256','${'a'.repeat(64)}','image/jpeg',12,'ready','2026-10-25','2026-10-25');
+ INSERT INTO moment_media(id,moment_id,media_asset_id,sort_order,analysis_status,analysis_error_code,created_at,updated_at)
+ VALUES ('analysis-proof','moment-proof','analysis-asset',0,'failed','model_request_failed','2026-10-25','2026-10-25');
+ ALTER TABLE moment_media DROP COLUMN analysis_error_message; PRAGMA user_version=144;
+`);
+const analysisBefore=data(analysisUpgrade), analysisSchemaBefore=structure(analysisUpgrade), analysisRaw=createSqliteExecutor(analysisUpgrade);
+await assert.rejects(bootstrapSqlite({...analysisRaw,execAsync:async sql=>{
+ if(sql.includes('PRAGMA user_version =')) throw new Error('识别原因迁移提交失败');
+ return analysisRaw.execAsync(sql);
+}}),/识别原因迁移提交失败/);
+assert.deepEqual(data(analysisUpgrade),analysisBefore); assert.deepEqual(structure(analysisUpgrade),analysisSchemaBefore);
+assert.equal(analysisUpgrade.prepare('PRAGMA user_version').get().user_version,144);
+await bootstrapSqlite(analysisRaw);
+assert.deepEqual({...analysisUpgrade.prepare('SELECT analysis_status,analysis_error_code,analysis_error_message FROM moment_media').get()},
+ {analysis_status:'failed',analysis_error_code:'model_request_failed',analysis_error_message:null});
+assert.deepEqual(structure(analysisUpgrade),schema); check(analysisUpgrade);
+const upgradedAnalysisData=data(analysisUpgrade);
+await bootstrapSqlite(analysisRaw);
+assert.deepEqual(data(analysisUpgrade),upgradedAnalysisData); analysisUpgrade.close();
 // 141 没有持久摘要队列：升级只补一次既有来源，失败回滚不留下队列或新版本号。
 const queueUpgrade=create(); await bootstrapSqlite(createSqliteExecutor(queueUpgrade)); seed(queueUpgrade);
 for(const {name} of queueUpgrade.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'chat_summary_queue_%'").all()) {

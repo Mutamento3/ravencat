@@ -56,10 +56,10 @@ interface ChatInputAreaProps {
   onVoiceRecordingStart?: () => Promise<boolean>;
   onVoiceRecordingFinish?: () => Promise<boolean>;
   onVoiceRecordingCancel?: () => Promise<void>;
-  attachmentDraft?: AttachmentDraftItem | null;
+  attachmentDrafts?: AttachmentDraftItem[];
   hasReadyAttachment?: boolean;
   isPreparingAttachment?: boolean;
-  onRemoveAttachment?: () => void;
+  onRemoveAttachment?: (id: string) => void;
   onImagePress?: () => Promise<unknown> | unknown;
   onCameraPress?: () => Promise<unknown> | unknown;
   onFilePress?: () => Promise<unknown> | unknown;
@@ -96,7 +96,7 @@ export default function ChatInputArea({
   onVoiceRecordingStart,
   onVoiceRecordingFinish,
   onVoiceRecordingCancel,
-  attachmentDraft = null,
+  attachmentDrafts = [],
   hasReadyAttachment = false,
   isPreparingAttachment = false,
   onRemoveAttachment,
@@ -129,8 +129,8 @@ export default function ChatInputArea({
   const [isCancellingVoice, setIsCancellingVoice] = useState(false);
   const voiceStartPromiseRef = useRef<Promise<boolean> | null>(null);
   const hasText = value.trim().length > 0;
-  const hasAttachment = Boolean(attachmentDraft);
-  const hasFailedAttachment = attachmentDraft?.status === 'failed';
+  const hasAttachment = attachmentDrafts.length > 0;
+  const hasFailedAttachment = attachmentDrafts.some((attachment) => attachment.status === 'failed');
   const canSend = !disabled && !isPreparingAttachment && !hasFailedAttachment && (hasText || hasReadyAttachment);
   const shouldShowSendButton = hasText || hasAttachment;
 
@@ -335,7 +335,7 @@ export default function ChatInputArea({
         </View>
       ) : null}
 
-      <ChatAttachmentComposerTray attachment={attachmentDraft} onRemove={onRemoveAttachment} />
+      <ChatAttachmentComposerTray attachments={attachmentDrafts} onRemove={onRemoveAttachment} />
 
       {/* 语音录制 / STT 的即时失败提示。输入区在会话始终挂载，因此这里的错误
           与「历史消息加载失败」独立，不依赖 messages.length === 0。 */}

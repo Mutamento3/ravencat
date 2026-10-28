@@ -1,4 +1,5 @@
 /** Companion 功能公共 API；只暴露当前跨 Feature 与路由入口所需能力。 */
+export { loadAIScheduleContext } from './application/AIScheduleContext';
 
 export {
   clearCompanionNativeDataForFactoryReset,

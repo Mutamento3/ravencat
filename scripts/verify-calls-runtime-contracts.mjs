@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { SCHEMAS, createSqliteExecutor } from './helpers/sqlite-bootstrap-fixture.mjs';
+import { SCHEMAS, bootstrapSqlite, createSqliteExecutor } from './helpers/sqlite-bootstrap-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -202,12 +202,17 @@ writeRuntimeModule('src/features/calls/application/runtime/ProcessCallAIReply.js
 exports.processCallAIReply = (...args) => globalThis.__callsContractFakes.processCallAIReply(...args);
 `);
 
+writeRuntimeModule('src/features/calls/application/CallRingtoneSettings.js', `
+exports.loadCallRingtoneUri = async () => null;
+`);
+
 const fakeRuntime = {};
 globalThis.__callsContractFakes = fakeRuntime;
 
 const callHelpers = loadCompiled(
   'src/features/calls/application/runtime/CallRuntimeHelpers.ts'
 );
+const { parseOutgoingCallDecision } = loadCompiled('src/features/calls/application/runtime/OutgoingCallDecisionParser.ts');
 const { AICallRuntimeService, aiCallRuntimeService } = loadCompiled(
   'src/features/calls/application/runtime/AICallRuntimeService.ts'
 );
@@ -370,6 +375,13 @@ function createCall(overrides = {}) {
 
 // P0 双 incoming surface 收口：RN CallScreen 恢复语义由 Calls 层唯一判定。
 // incoming requested/ringing 由原生来电 surface（CallStyle / IncomingCallActivity）独占，
+for (const direction of ['incoming', 'outgoing']) {
+  for (const state of ['ended', 'missed', 'rejected', 'failed']) {
+    assert.equal(shouldRestoreCallScreen(createCall({ direction, state })), false,
+      `${direction} ${state} 不得恢复已失去媒体 runtime 的通话页`);
+  }
+}
+
 // Host 不得自动打开 RN 通话页；只有 acceptCall() 进入 active 后才恢复。
 assert.equal(
   shouldRestoreCallScreen(createCall({ direction: 'incoming', state: 'requested' })),
@@ -932,7 +944,7 @@ function createChatWritePort(repository) {
         displayText: params.displayText,
         aiContextText: params.aiContextText,
       });
-      const sender = chatMetadata.getCallStatusMessageSender({ direction: params.direction });
+      const sender = chatMetadata.getCallStatusMessageSender({ direction: params.direction, callStatus: params.callStatus });
       const result = await repository.upsertStatefulTimelineEntry({
         message: {
           sessionId: params.sessionId,
@@ -2155,6 +2167,61 @@ scenario('Chat 通话状态 upsert 使用真实 SQLite adapter 原子提交', as
   removeBus();
 });
 
+scenario('通话系统故障原子更新为系统消息并清除 AI 气泡身份', async () => {
+  const db = new DatabaseSync(':memory:');
+  const executor = createSqliteExecutor(db);
+  await bootstrapSqlite(executor);
+  db.prepare(`INSERT INTO ai_assistants (id, agent_id, name, model, created_at, updated_at)
+    VALUES ('ai-1', 'agent-1', 'AI', 'test', '2026-10-27', '2026-10-27')`).run();
+  db.prepare(`INSERT INTO sessions (id, ai_assistant_id, name, created_at, updated_at)
+    VALUES ('session-1', 'ai-1', 'chat', '2026-10-27', '2026-10-27')`).run();
+  db.prepare("INSERT INTO chat_conversations (id, kind) VALUES ('session-1', 'direct')").run();
+  fakeRuntime.databaseCoordinator = {
+    openTaskExecutor: () => ({
+      async withExclusiveTransactionAsync(task) {
+        db.exec('BEGIN IMMEDIATE');
+        try { const result = await task(executor); db.exec('COMMIT'); return result; }
+        catch (error) { db.exec('ROLLBACK'); throw error; }
+      },
+    }),
+  };
+  configureChatMessageRuntime({ messages: new MessageRepository() });
+
+  try {
+    for (const direction of ['incoming', 'outgoing']) {
+      const params = {
+        sessionId: 'session-1', callId: `call-error-${direction}`, direction,
+        agentId: 'agent-1', isRead: true,
+      };
+      const first = await upsertCallTimelineEntry({ ...params, callStatus: 'callIncoming' });
+      assert.equal(first.message.senderType, direction === 'incoming' ? 'assistant' : 'user');
+      const failureInput = {
+        ...params, callStatus: 'callSystemError', actor: 'system', endReason: 'runtimeError',
+        displayText: '【系统错误：系统通知发送失败，无法显示 AI 来电提示】',
+      };
+      const failed = await upsertCallTimelineEntry(failureInput);
+      assert.equal(failed.message.id, first.message.id);
+      assert.equal(failed.inserted, false);
+      const inserted = await upsertCallTimelineEntry({ ...failureInput, callId: `new-error-${direction}` });
+      assert.equal(inserted.inserted, true);
+      for (const { message } of [failed, inserted]) {
+        assert.equal(message.senderType, 'system');
+        assert.equal(message.isMe, false);
+        assert.equal(message.agentId, null);
+        const metadata = JSON.parse(message.metadataJson);
+        assert.equal(metadata.actor, 'system');
+        assert.equal(metadata.initiator, direction === 'incoming' ? 'ai' : 'user');
+        const stored = db.prepare('SELECT * FROM messages WHERE id = ?').get(message.id);
+        assert.equal(stored.sender_type, 'system');
+        assert.equal(stored.is_me, 0);
+        assert.equal(stored.agent_id, null);
+      }
+    }
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM messages').get().count, 4,
+      '每通电话只有一条状态消息，故障更新不创建第二条');
+  } finally { db.close(); }
+});
+
 scenario('Headless 已提交的拒接被 Host 重复消费时不产生第二条状态消息', async () => {
   // durable inbox 语义：前台不在线时 Headless 立即执行 rejectCall() 并保留 pending response；
   // Host 下次启动消费同一 reject response 时 rejectCall() 必须幂等 no-op，
@@ -2340,7 +2407,7 @@ scenario('去电决策晚到不能复活已挂断会话', async () => {
     await waitFor(() => signal, '去电决策未启动');
     await service.endCall(callId);
     assert.equal(signal.aborted, true, '挂断取消去电网络请求');
-    response.resolve({ success: true, text: JSON.stringify({ decision, spokenText: '接通', rejectionReason: '拒接' }) });
+    response.resolve({ success: true, text: decision === 'accept' ? '[[接听]]接通' : '[[拒绝接听]]拒接' });
     const result = await starting;
     assert.equal(result.status, 'ended');
     assert.equal(result.call.state, 'ended');
@@ -2363,9 +2430,7 @@ scenario('去电只在 AI 接听后设置接通标记，拒接不设置', async 
     const starting = service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
     await deciding.promise;
     assert.equal(service.getActiveCallSnapshot(), null, '拨号等待决策时尚未接通');
-    response.resolve({ success: true, text: JSON.stringify(decision === 'accept'
-      ? { decision, spokenText: '接通' }
-      : { decision, rejectionReason: '稍后再聊' }) });
+    response.resolve({ success: true, text: decision === 'accept' ? '[[接听]]接通' : '[[拒绝接听]]稍后再聊' });
     const result = await starting;
     if (decision === 'accept') {
       assert.equal(service.getActiveCallSnapshot(), result.call);
@@ -2376,6 +2441,116 @@ scenario('去电只在 AI 接听后设置接通标记，拒接不设置', async 
       assert.deepEqual(snapshots, []);
     }
     unsubscribe();
+  }
+});
+
+scenario('接听与拒接标记支持任意位置、重复出现及带引号换行的正文', async () => {
+  for (const [marker, decision, field] of [
+    ['[[接听]]', 'accept', 'spokenText'],
+    ['[[拒绝接听]]', 'reject', 'rejectionReason'],
+  ]) {
+    for (const [raw, text] of [
+      [`${marker}你好。`, '你好。'],
+      [`你好。${marker}`, '你好。'],
+      [`哦，${marker}你好。`, '哦，你好。'],
+      [`${marker}哦，${marker}你好。${marker}`, '哦，你好。'],
+      [`${marker}他说“明天见”，我说"好"。\n这回接上了。`, '他说“明天见”，我说"好"。\n这回接上了。'],
+      [`  ${marker}  `, ''],
+    ]) {
+      assert.deepEqual(parseOutgoingCallDecision(raw), { decision, [field]: text });
+    }
+  }
+});
+
+scenario('去电首句抽离接听标记后才交付字幕和朗读', async () => {
+  const repository = createCallRepository([]);
+  const runtime = resetRuntime(repository);
+  const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+  const spokenText = '接了。上一通挂到一半自己断了，不知道你那边有没有听见我说话？';
+  const synthesized = [];
+  const synthesize = fakeRuntime.synthesizeTextToSpeech;
+  fakeRuntime.synthesizeTextToSpeech = async (params) => {
+    synthesized.push(params.text);
+    return synthesize(params);
+  };
+  fakeRuntime.assembleChatPromptPack = async () => ({ systemPrompt: 'call', modelMessages: [] });
+  fakeRuntime.createAIClient = () => ({ async chat(messages, options) {
+    assert.equal(options.responseFormat, undefined, '控制标记使用口语回复，不强制模型输出 JSON');
+    return { success: true, text: `接了。[[接听]]${spokenText.slice(3)}` };
+  } });
+  const result = await service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
+  assert.equal(result.status, 'accepted');
+  assert.deepEqual(repository.events.filter(event => event.kind === 'aiSpeechText').map(event => event.text), [spokenText]);
+  await waitFor(() => synthesized.length > 0, '接听后的口语首句未进入合成');
+  assert.deepEqual(synthesized, [spokenText], '朗读只使用抽离控制标记后的口语正文');
+  assert.deepEqual(runtime.startedAudioCalls, [result.call.id]);
+  await service.endCall(result.call.id);
+});
+
+scenario('拒接正文抽离标记后作为普通消息交付，不接通或朗读', async () => {
+  const repository = createCallRepository([]);
+  const runtime = resetRuntime(repository);
+  const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+  fakeRuntime.assembleChatPromptPack = async () => ({ systemPrompt: 'call', modelMessages: [] });
+  fakeRuntime.createAIClient = () => ({ async chat() {
+    return { success: true, text: '现在不方便，[[拒绝接听]]我们晚点聊。' };
+  } });
+  const result = await service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.rejectionReason, '现在不方便，我们晚点聊。');
+  assert.equal(result.call.aiRejectionReason, result.rejectionReason);
+  assert.equal(result.visibleMessages.at(-1).text, result.rejectionReason);
+  assert.deepEqual(repository.events.filter(event => event.kind === 'aiSpeechText'), []);
+  assert.deepEqual(runtime.startedAudioCalls, []);
+});
+
+scenario('只有控制标记也能接听或拒接，不制造空字幕、空消息或默认台词', async () => {
+  for (const [marker, status] of [['[[接听]]', 'accepted'], ['[[拒绝接听]]', 'rejected']]) {
+    const repository = createCallRepository([]);
+    const runtime = resetRuntime(repository);
+    const synthesized = [];
+    fakeRuntime.synthesizeTextToSpeech = async (params) => { synthesized.push(params.text); };
+    fakeRuntime.assembleChatPromptPack = async () => ({ systemPrompt: 'call', modelMessages: [] });
+    fakeRuntime.createAIClient = () => ({ async chat() { return { success: true, text: marker }; } });
+    const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+    const result = await service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
+    assert.equal(result.status, status);
+    assert.equal(result.visibleMessages.length, 1, '没有正文时只提交通话状态记录');
+    assert.deepEqual(repository.events.filter(event => event.kind === 'aiSpeechText'), []);
+    assert.deepEqual(synthesized, []);
+    if (status === 'accepted') {
+      assert.deepEqual(runtime.startedAudioCalls, [result.call.id]);
+      await service.endCall(result.call.id);
+    } else {
+      assert.deepEqual(runtime.startedAudioCalls, []);
+      assert.equal(result.call.aiRejectionReason, null);
+    }
+  }
+});
+
+scenario('缺少或冲突的标记不猜测接听，普通用户只看到未接通', async () => {
+  for (const raw of [
+    '',
+    '[[ 接听 ]]你好。',
+    '[[接听]]你好。[[拒绝接听]]',
+    '[[拒绝接听]]晚点聊。[[接听]]',
+    JSON.stringify({ decision: 'accept', spokenText: '接了。' }),
+    '{"decision":"accept","spokenText":"接了。\n上一通断了，你听见了吗？"}',
+    '好的，我在。',
+  ]) {
+    const repository = createCallRepository([]);
+    const runtime = resetRuntime(repository);
+    const synthesized = [];
+    fakeRuntime.synthesizeTextToSpeech = async (params) => { synthesized.push(params.text); };
+    fakeRuntime.assembleChatPromptPack = async () => ({ systemPrompt: 'call', modelMessages: [] });
+    fakeRuntime.createAIClient = () => ({ async chat() { return { success: true, text: raw }; } });
+    const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+    const result = await service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
+    assert.equal(result.status, 'failed');
+    assert.equal(result.errorMessage, '这次电话没有接通，请稍后再试。');
+    assert.deepEqual(repository.events.filter(event => event.kind === 'aiSpeechText'), []);
+    assert.deepEqual(runtime.startedAudioCalls, []);
+    assert.deepEqual(synthesized, []);
   }
 });
 
@@ -2601,16 +2776,122 @@ scenario('媒体停止完成前不得释放通信音频，清理异常仍释放�
   }
 });
 
-scenario('原生音频会话启动失败不留下 active 通话', async () => {
+scenario('音频就绪之前保持 connecting，接通时间和开场白只在成功后提交', async () => {
+  for (const direction of ['incoming', 'outgoing']) {
+    const ringing = createCall({ direction, state: 'ringing', acceptedAt: null, endedAt: null });
+    const repository = createCallRepository(direction === 'incoming' ? [ringing] : []);
+    resetRuntime(repository);
+    const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+    fakeRuntime.assembleChatPromptPack = async () => ({ systemPrompt: 'call', modelMessages: [] });
+    fakeRuntime.createAIClient = () => ({ async chat() { return { success: true, text: '[[接听]]你好' }; } });
+    const activating = deferred();
+    const ready = deferred();
+    fakeRuntime.callAudioPlayback.beginSession = async () => { activating.resolve(); await ready.promise; };
+    const accepting = direction === 'incoming'
+      ? service.acceptCall(ringing.id)
+      : service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
+    await activating.promise;
+    const pending = await repository.getActiveSession();
+    assert.equal(pending.state, 'connecting');
+    assert.equal(pending.acceptedAt, null, '系统音频等待时间不算通话时长');
+    assert.equal(service.getActiveCallSnapshot(), null);
+    assert.equal(fakeRuntime.messageRepository.messages.length, 0, '等待音频时不发布通话中消息');
+    assert.equal(repository.events.some(event => event.kind === 'aiSpeechText'), false);
+    if (direction === 'incoming') {
+      const duplicate = await service.acceptCall(ringing.id);
+      assert.equal(duplicate.call.state, 'connecting');
+      assert.deepEqual(duplicate.visibleMessages, []);
+    }
+    const readyAt = Date.now();
+    ready.resolve();
+    const accepted = await accepting;
+    assert.equal(accepted.call.state, 'active');
+    assert.ok(Date.parse(accepted.call.acceptedAt) >= readyAt);
+    assert.equal(service.getActiveCallSnapshot(), accepted.call);
+    await service.endCall(accepted.call.id);
+  }
+});
+
+scenario('音频建立期间挂断，迟到的成功回执不能发布接通或开场白', async () => {
+  for (const direction of ['incoming', 'outgoing']) {
+    const ringing = createCall({ direction, state: 'ringing', acceptedAt: null, endedAt: null });
+    const repository = createCallRepository(direction === 'incoming' ? [ringing] : []);
+    resetRuntime(repository);
+    const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+    fakeRuntime.assembleChatPromptPack = async () => ({ systemPrompt: 'call', modelMessages: [] });
+    fakeRuntime.createAIClient = () => ({ async chat() { return { success: true, text: '[[接听]]你好' }; } });
+    const activating = deferred();
+    const ready = deferred();
+    fakeRuntime.callAudioPlayback.beginSession = async () => { activating.resolve(); await ready.promise; };
+    const accepting = direction === 'incoming'
+      ? service.acceptCall(ringing.id)
+      : service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
+    await activating.promise;
+    const pending = await repository.getActiveSession();
+    await service.endCall(pending.id, 'userEnded');
+    ready.resolve();
+    const result = await accepting;
+    assert.equal(result.call.state, 'ended');
+    assert.equal(result.call.acceptedAt, null);
+    assert.equal(result.call.endReason, 'userEnded');
+    assert.equal(service.getActiveCallSnapshot(), null);
+    assert.equal(repository.events.some(event => event.kind === 'aiSpeechText'), false);
+    assert.deepEqual(result.visibleMessages, []);
+  }
+});
+
+scenario('原生音频建立超时不记录虚假通话时长或用户主动挂断', async () => {
+  for (const direction of ['incoming', 'outgoing']) {
+    const ringing = createCall({ direction, state: 'ringing', acceptedAt: null, endedAt: null });
+    const repository = createCallRepository(direction === 'incoming' ? [ringing] : []);
+    const runtime = resetRuntime(repository);
+    const service = new AICallRuntimeService({ callRepo: repository, chat: fakeRuntime.chat });
+    fakeRuntime.assembleChatPromptPack = async () => ({ systemPrompt: 'call', modelMessages: [] });
+    fakeRuntime.createAIClient = () => ({ async chat() { return { success: true, text: '[[接听]]你好' }; } });
+    let callId;
+    fakeRuntime.callAudioPlayback.beginSession = async id => {
+      callId = id;
+      throw new Error('系统通话音频建立超时');
+    };
+    const accepting = direction === 'incoming'
+      ? service.acceptCall(ringing.id)
+      : service.startOutgoingCall({ chatSessionId: 'session-1', aiConfig: createAIConfig() });
+    await assert.rejects(accepting, /系统通话音频建立超时/);
+    const terminal = await repository.getSessionById(callId);
+    assert.equal(terminal.state, 'ended');
+    assert.equal(terminal.endReason, 'runtimeError');
+    assert.equal(terminal.acceptedAt, null);
+    assert.equal(service.getActiveCallSnapshot(), null);
+    assert.deepEqual(runtime.endedAudioCalls, [callId]);
+    const error = repository.eventInputs.find(event => event.kind === 'error');
+    assert.match(error.text, /系统通话音频建立超时/);
+    assert.equal(JSON.parse(error.payloadJson).type, 'nativeAudioSessionFailure');
+    const ended = repository.eventInputs.find(event => event.kind === 'stateChanged'
+      && JSON.parse(event.payloadJson).to === 'ended');
+    assert.equal(ended.actorType, 'system');
+    assert.match(ended.text, /自动结束/);
+    assert.equal(repository.events.some(event => event.kind === 'aiSpeechText'), false);
+    const messages = fakeRuntime.messageRepository.messages;
+    assert.equal(messages.length, 1);
+    const metadata = JSON.parse(messages[0].metadataJson);
+    assert.equal(metadata.callStatus, 'callSystemError');
+    assert.equal(metadata.actor, 'system');
+    assert.equal(metadata.durationSeconds, null);
+    assert.equal(metadata.displayText, '【通话未接通】');
+  }
+});
+
+scenario('用户挂断导致的原生激活取消不保存为故障', async () => {
   const ringing = createCall({ direction: 'incoming', state: 'ringing', acceptedAt: null, endedAt: null });
   const repository = createCallRepository([ringing]);
-  const runtime = resetRuntime(repository);
-  fakeRuntime.callAudioPlayback.beginSession = async () => { throw new Error('系统拒绝建立通信音频'); };
-  await assert.rejects(aiCallRuntimeService.acceptCall(ringing.id), /系统拒绝建立通信音频/);
-  const terminal = await repository.getSessionById(ringing.id);
-  assert.equal(terminal.state, 'ended');
-  assert.equal(terminal.endReason, 'runtimeError');
-  assert.deepEqual(runtime.endedAudioCalls, [ringing.id]);
+  resetRuntime(repository);
+  fakeRuntime.callAudioPlayback.beginSession = async () => {
+    await aiCallRuntimeService.endCall(ringing.id, 'userEnded');
+    throw new Error('通话已经结束');
+  };
+  await assert.rejects(aiCallRuntimeService.acceptCall(ringing.id), /通话已经结束/);
+  assert.equal((await repository.getSessionById(ringing.id)).endReason, 'userEnded');
+  assert.equal(repository.eventInputs.filter(event => event.kind === 'error').length, 0);
 });
 
 scenario('transcript、camera state 与 error event payload', async () => {
@@ -2789,7 +3070,7 @@ scenario('AI 播放期间隔离麦克风回灌和延迟识别结果', async () =
   assert.equal(guard.shouldIgnoreTranscriptSegment(3, true, 2_100), false);
 });
 
-scenario('AEC 可用时确认用户人声后允许打断 AI 播放', async () => {
+scenario('AEC 可用时声学候选放行识别结果，重新采集后需要新候选', async () => {
   const guard = new CallSpeechDuplexGuard(800);
   const microphoneChunk = new Uint8Array([1, 2, 3, 4]).buffer;
 
@@ -2799,13 +3080,20 @@ scenario('AEC 可用时确认用户人声后允许打断 AI 播放', async () =>
   assert.equal(guard.isMicrophoneSuppressed(1_000), false);
   assert.equal(guard.audioChunkForASR(microphoneChunk, 1_000), microphoneChunk);
   assert.equal(guard.shouldIgnoreTranscriptSegment(4, false, 1_000), true);
-  assert.equal(guard.confirmUserSpeechDuringAIOutput(), true);
+  guard.observeSpeechActivityDuringAIOutput();
   assert.equal(guard.shouldIgnoreTranscriptSegment(4, true, 1_100), false);
+
+  guard.setEchoCancellationEnabled(false);
+  guard.setEchoCancellationEnabled(true);
+  assert.equal(guard.shouldIgnoreTranscriptSegment(5, false, 1_100), true);
+  guard.observeSpeechActivityDuringAIOutput();
+  assert.equal(guard.shouldIgnoreTranscriptSegment(5, true, 1_100), false);
 
   guard.endAIOutput(1_200);
   assert.equal(guard.isMicrophoneSuppressed(1_300), false);
   guard.reset();
-  assert.equal(guard.confirmUserSpeechDuringAIOutput(), false);
+  guard.observeSpeechActivityDuringAIOutput();
+  assert.equal(guard.isMicrophoneSuppressed(1_300), false);
 });
 
 scenario('TTS 同一通话取消会清理当前任务和待播任务', async () => {

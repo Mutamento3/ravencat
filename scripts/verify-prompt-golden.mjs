@@ -57,11 +57,11 @@ const { buildOutgoingCallDecisionBlocks } = load(
 const { getSystemPromptPreset } = load('src/host/prompt/compiler/systemPromptPresets.ts');
 
 assert.deepEqual(
-  parseOutgoingCallDecision('{"decision":"accept","spokenText":"我来啦"}'),
+  parseOutgoingCallDecision('我来啦[[接听]]'),
   { decision: 'accept', spokenText: '我来啦' }
 );
 assert.deepEqual(
-  parseOutgoingCallDecision('{"decision":"reject","rejectionReason":"晚点打给你"}'),
+  parseOutgoingCallDecision('晚点[[拒绝接听]]打给你'),
   { decision: 'reject', rejectionReason: '晚点打给你' }
 );
 

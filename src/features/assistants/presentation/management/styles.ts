@@ -58,7 +58,7 @@ export const createStyles = (theme: PresentationTheme) =>
     // 步骤指示器样式
     stepIndicatorContainer: {
       flexDirection: 'row',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       justifyContent: 'center',
       paddingVertical: theme.spacing.lg,
       paddingHorizontal: theme.spacing.xl,
@@ -90,7 +90,7 @@ export const createStyles = (theme: PresentationTheme) =>
       color: theme.colors.text.secondary,
     },
     stepNumberActive: {
-      color: theme.colors.surface.default,
+      color: theme.colors.brand.onPrimary,
     },
     stepNumberCompleted: {
       color: theme.colors.brand.primary,
@@ -109,8 +109,19 @@ export const createStyles = (theme: PresentationTheme) =>
       height: 2,
       backgroundColor: theme.colors.border.default,
       marginHorizontal: theme.spacing.sm,
+      marginTop: 13,
     },
     stepConnectorCompleted: {
       backgroundColor: theme.colors.brand.primary,
+    },
+    tipSection: {
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.lg,
+    },
+    tipText: {
+      fontSize: 13,
+      color: theme.colors.text.tertiary,
+      textAlign: 'center',
+      lineHeight: 20,
     },
   });

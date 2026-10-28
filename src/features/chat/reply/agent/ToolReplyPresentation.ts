@@ -77,6 +77,7 @@ export function resolveToolDisplayName(toolName: string): string {
     get_app_usage: '读取应用使用时长',
     requestVideoCall: '视频电话',
     send_voice_message: '发送语音',
+    send_image: '发送图片',
     search_stickers: '搜索表情包',
     list_sticker_groups: '表情包分组',
     list_stickers_in_group: '浏览表情包分组',

@@ -2,40 +2,7 @@ import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-depende
 /** PHONE-8B2B2B：网易云工具包的 Catalog、Registry 与 lazy exposure 契约。 */
 
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: absolutePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 存在未声明依赖：${specifier}`);
-    return mocks[specifier];
-  };
-  new Function('exports', 'require', 'module', compiled.outputText)(
-    module.exports,
-    requireMock,
-    module,
-  );
-  return module.exports;
-}
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 
 const expectedNames = [
   'netease_search_songs',
@@ -191,6 +158,7 @@ const registration = loadTypeScriptModule(
     '@features/webTools': featureProxy,
     '@features/media': featureProxy,
     './ApplicationSettingsTools': { applicationSettingsTools: [] },
+    './GroupManagementTools': { groupManagementTools: [] },
     '@shared/aiTools': {},
     '@features/assistants': new Proxy({
       assistantToolPermissionRepository,
@@ -208,6 +176,8 @@ const registration = loadTypeScriptModule(
     '@features/companion': featureProxy,
     '@features/phoneTools': new Proxy({
       getPhoneToolPackageById: catalog.getPhoneToolPackageById,
+      XiaohongshuPrepareTextNoteTool: placeholderTool('xiaohongshu_prepare_text_note'),
+      XiaohongshuPublishPreparedNoteTool: placeholderTool('xiaohongshu_publish_prepared_note'),
     }, {
       get: (target, property) => target[property] ?? placeholderTool(String(property)),
     }),
@@ -303,9 +273,7 @@ const { configurePromptingRuntime } = loadTypeScriptModule('src/host/composition
     getHostAICooldownStatus: async () => ({ appointment: { isInCooldown: false } }),
   },
   '@features/mcpTools': {},
-  '@features/chat/composition': {},
   '../prompt': { validateBuiltInPromptArchitecture: () => {} },
-  '../prompt/preview': {},
   './agent': registration,
 });
 configurePromptingRuntime();
@@ -344,6 +312,7 @@ assert.doesNotMatch(runExposure.instructions().catalog, /"properties"|"required"
 const inputSchemaModule = loadTypeScriptModule('src/shared/aiTools/AgentToolInputSchema.ts', agentToolSchemaDependencies);
 const { AgentToolExecutor } = loadTypeScriptModule('src/platform/agentRuntime/AgentToolExecutor.ts', {
   '@shared/aiTools': inputSchemaModule,
+  './AgentRunState': loadTypeScriptModule('src/platform/agentRuntime/AgentRunState.ts'),
 });
 const executor = new AgentToolExecutor(registry);
 const context = {

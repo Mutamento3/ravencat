@@ -1,13 +1,15 @@
 /** 渲染独立 Sticker 消息卡；媒体通过 MediaAsset resolver 解析，不走普通图片附件链。 */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
+  ActivityIndicator,
   Image,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRecyclingState } from '@shopify/flash-list';
 
 import { resolveMediaAsset } from '@features/media';
 import type { StickerMessageSnapshot } from '@features/chat/messages/domain';
@@ -25,32 +27,38 @@ function clampHeight(height: number): number {
   return Math.max(72, Math.min(height, 130));
 }
 
+type StickerResolutionState =
+  | { status: 'loading' | 'unavailable' }
+  | { status: 'ready'; localUri: string };
+
 export default function StickerMessageCard({ sticker }: StickerMessageCardProps) {
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
-  const [localUri, setLocalUri] = useState<string | null>(null);
+  const [resolution, setResolution] = useRecyclingState<StickerResolutionState>(
+    { status: 'loading' },
+    [sticker.mediaAssetId],
+  );
 
   useEffect(() => {
     let isMounted = true;
-    setLocalUri(null);
 
     void resolveMediaAsset(sticker.mediaAssetId)
       .then((resolved) => {
         if (isMounted) {
-          setLocalUri(resolved.localUri);
+          setResolution({ status: 'ready', localUri: resolved.localUri });
         }
       })
       .catch(() => {
         // backing 缺失是可展示的历史消息状态，卡片保留占位而不改写消息事实。
         if (isMounted) {
-          setLocalUri(null);
+          setResolution({ status: 'unavailable' });
         }
       });
 
     return () => {
       isMounted = false;
     };
-  }, [sticker.mediaAssetId]);
+  }, [sticker.mediaAssetId, setResolution]);
 
   const imageStyle = useMemo(() => {
     const width = sticker.width || 0;
@@ -67,16 +75,22 @@ export default function StickerMessageCard({ sticker }: StickerMessageCardProps)
 
   return (
     <View style={styles.container}>
-      {localUri ? (
+      {resolution.status === 'ready' ? (
         <Image
-          source={{ uri: localUri }}
+          source={{ uri: resolution.localUri }}
           style={imageStyle}
           resizeMode="contain"
         />
       ) : (
-        <View style={[styles.imageFixed, styles.placeholder]}>
-          <Ionicons name="happy-outline" size={28} color={theme.colors.icon.secondary} />
-          <Text style={styles.placeholderText}>表情包不可用</Text>
+        <View style={[imageStyle, styles.placeholder]}>
+          {resolution.status === 'loading' ? (
+            <ActivityIndicator color={theme.colors.icon.secondary} accessibilityLabel="表情包加载中" />
+          ) : (
+            <>
+              <Ionicons name="happy-outline" size={28} color={theme.colors.icon.secondary} />
+              <Text style={styles.placeholderText}>表情包不可用</Text>
+            </>
+          )}
         </View>
       )}
     </View>

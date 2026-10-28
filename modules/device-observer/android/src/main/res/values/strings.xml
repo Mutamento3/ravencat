@@ -1,4 +1,4 @@
 <resources>
   <string name="device_observer_accessibility_service_label">RavenCat 设备观察</string>
-  <string name="device_observer_accessibility_service_description">在用户明确开启后识别当前窗口，并为按需问屏提供系统能力。不会自动点击或操作其他应用。</string>
+  <string name="device_observer_accessibility_service_description">在用户明确开启后识别当前窗口、按需读取页面，并为已授权的手机工具提供点击、滑动和文字输入能力。</string>
 </resources>

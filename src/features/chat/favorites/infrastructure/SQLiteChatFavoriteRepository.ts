@@ -39,6 +39,10 @@ function map(row: FavoriteRow): ChatFavorite {
 }
 export class SQLiteChatFavoriteRepository implements ChatFavoriteRepository {
   private readonly database = databaseCoordinator.openTaskExecutor({ name: 'chat.favorites', feature: 'chat', priority: 'interactive' });
+  async getBySource(messageId: number): Promise<ChatFavorite | null> {
+    const row = await this.database.getFirstAsync<FavoriteRow>('SELECT * FROM chat_favorites WHERE source_message_id = ?', [messageId]);
+    return row ? map(row) : null;
+  }
   async getBySourceInTransaction(transaction: DatabaseTransactionExecutor, messageId: number): Promise<ChatFavorite | null> {
     const row = await transaction.getFirstAsync<FavoriteRow>('SELECT * FROM chat_favorites WHERE source_message_id = ?', [messageId]);
     return row ? map(row) : null;

@@ -35,3 +35,7 @@ export function clearCompanionNativeDataForFactoryReset(): Promise<void> {
 export function getNativeHealth() {
   return getCompanionNative().getNativeHealth();
 }
+
+export function getAIScheduleDiagnostics() {
+  return getCompanionNative().getAIScheduleDiagnostics();
+}

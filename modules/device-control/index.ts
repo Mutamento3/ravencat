@@ -1,4 +1,7 @@
 export {
+  executeXiaohongshuNote,
+  type XiaohongshuNoteCommand,
+  type XiaohongshuNoteResult,
   default,
   dispatchBrowsableUri,
   dispatchMediaSessionCommand,

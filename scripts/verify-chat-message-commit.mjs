@@ -1,4 +1,5 @@
 import { chatReplyVersionModuleUrl, chatMutationModuleUrl, chatTimelineModuleUrl } from './chat-timeline-fixture.mjs';
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 /**
  * Chat 消息原子提交行为测试。
  *
@@ -368,24 +369,23 @@ for (const sessionId of ['direct-delete', 'group-delete']) {
 // ============================================================================
 // 仓储模块：桩掉 @platform/persistence 依赖，直接驱动事务执行器
 // ============================================================================
-const repoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`);
-const stubbedRepoSource = repoSource
-  .replace(
-    /import\s*\{[\s\S]*?\}\s*from\s*['"]@platform\/persistence['"];/,
-    `const databaseCoordinator = {
-  openTaskExecutor() {
-    const holder = globalThis.__TEST_COORDINATOR_HOLDER__;
-    if (!holder) throw new Error('事务方法不得在缺少测试协调器时打开任务执行器');
-    return holder.openTaskExecutor();
-  },
-};`,
-  )
-  .replace(
-    /from\s*['"]\.\.\/domain\/MessageTimeSeparator['"]/,
-    `from '${separatorModuleUrl}'`,
-  );
-const repoModuleUrl = transpileToModuleUrl(stubbedRepoSource);
-const { MessageRepository } = await import(repoModuleUrl);
+const messageMetadata = loadTypeScriptModule('src/features/chat/messages/domain/chatMessageMetadata.ts', {
+  './ChatSticker': loadTypeScriptModule('src/features/chat/messages/domain/ChatSticker.ts'),
+  './SharedChatRecord': loadTypeScriptModule('src/features/chat/messages/domain/SharedChatRecord.ts'),
+});
+const { MessageRepository } = loadTypeScriptModule('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts', {
+  '@platform/persistence': { databaseCoordinator: {
+    openTaskExecutor() {
+      assert.ok(globalThis.__TEST_COORDINATOR_HOLDER__, '事务方法不得在缺少测试协调器时打开任务执行器');
+      return globalThis.__TEST_COORDINATOR_HOLDER__.openTaskExecutor();
+    },
+  } },
+  './ChatTimelineSql': await import(chatTimelineModuleUrl),
+  './ChatMessageMutationSql': await import(chatMutationModuleUrl),
+  '../../reply/infrastructure/ChatReplyVersionSql': await import(chatReplyVersionModuleUrl),
+  '../domain/MessageTimeSeparator': { shouldShowTimeSeparatorBefore },
+  '../domain/chatMessageMetadata': messageMetadata,
+});
 
 const INSERT_COLUMNS = [
   'session_id', 'agent_id', 'client_message_id', 'text', 'is_me', 'sender_type', 'api_message_id',

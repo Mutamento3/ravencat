@@ -1,6 +1,6 @@
 // 朋友圈 V2 仓储：稳定作者身份、AI audience、社交事实与 Inbox 投递。
 
-import { databaseCoordinator } from '@platform/persistence';
+import { CoordinatedDatabaseError, databaseCoordinator } from '@platform/persistence';
 import type {
   CoordinatedDatabaseExecutor,
   DatabaseReadExecutor,
@@ -88,6 +88,7 @@ interface MomentMediaRow {
   analysis_model_config_id: string | null;
   analyzed_at: string | null;
   analysis_error_code: string | null;
+  analysis_error_message: string | null;
   analysis_revision: number;
   created_at: string;
   updated_at: string;
@@ -117,7 +118,7 @@ const SOCIAL_DELIVERY_COLUMNS = [
 const MEDIA_COLUMNS = [
   'id', 'moment_id', 'media_asset_id', 'sort_order', 'analysis_status',
   'analysis_text', 'analysis_source', 'analysis_model_config_id', 'analyzed_at',
-  'analysis_error_code', 'analysis_revision', 'created_at', 'updated_at',
+  'analysis_error_code', 'analysis_error_message', 'analysis_revision', 'created_at', 'updated_at',
 ].join(', ');
 
 /**
@@ -208,6 +209,7 @@ function toMedia(row: MomentMediaRow): MomentMedia {
     analysisModelConfigId: row.analysis_model_config_id,
     analyzedAt: row.analyzed_at,
     analysisErrorCode: row.analysis_error_code,
+    analysisErrorMessage: row.analysis_error_message,
     analysisRevision: row.analysis_revision,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -510,7 +512,7 @@ export class SQLiteMomentRepository implements IMomentRepository {
     for (const media of input.media ?? []) {
       await transaction.runAsync(
         `INSERT INTO moment_media (${MEDIA_COLUMNS})
-         VALUES (?, ?, ?, ?, 'pending', NULL, NULL, NULL, NULL, NULL, 0, ?, ?)`,
+         VALUES (?, ?, ?, ?, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, 0, ?, ?)`,
         [media.id, input.id, media.mediaAssetId, media.sortOrder, createdAt, createdAt]
       );
     }
@@ -579,6 +581,7 @@ export class SQLiteMomentRepository implements IMomentRepository {
       `UPDATE moment_media
        SET analysis_status = 'completed', analysis_text = ?, analysis_source = 'model',
            analysis_model_config_id = ?, analyzed_at = ?, analysis_error_code = NULL,
+           analysis_error_message = NULL,
            analysis_revision = analysis_revision + 1, updated_at = ?
        WHERE id = ? AND analysis_revision = ?${input.expectedPending ? " AND analysis_status = 'pending'" : ''}`,
       [input.text, input.modelConfigId, input.analyzedAt, input.analyzedAt,
@@ -592,6 +595,7 @@ export class SQLiteMomentRepository implements IMomentRepository {
     expectedRevision: number;
     expectedPending?: boolean;
     errorCode: string;
+    errorMessage: string;
     analyzedAt: string;
   }): Promise<boolean> {
     const database = this.#executor('moments.saveAnalysisFailure', 'runtime');
@@ -599,11 +603,12 @@ export class SQLiteMomentRepository implements IMomentRepository {
       `UPDATE moment_media
        SET analysis_status = 'failed', analysis_text = NULL, analysis_source = NULL,
            analysis_model_config_id = NULL, analyzed_at = ?, analysis_error_code = ?,
+           analysis_error_message = ?,
            analysis_revision = analysis_revision + 1, updated_at = ?
        WHERE id = ? AND analysis_revision = ?
          AND NOT (analysis_status = 'completed' AND analysis_text IS NOT NULL)
          ${input.expectedPending ? "AND analysis_status = 'pending'" : ''}`,
-      [input.analyzedAt, input.errorCode, input.analyzedAt, input.mediaId, input.expectedRevision]
+      [input.analyzedAt, input.errorCode, input.errorMessage, input.analyzedAt, input.mediaId, input.expectedRevision]
     );
     return result.changes > 0;
   }
@@ -618,6 +623,7 @@ export class SQLiteMomentRepository implements IMomentRepository {
       `UPDATE moment_media
        SET analysis_status = 'completed', analysis_text = ?, analysis_source = 'user',
            analysis_model_config_id = NULL, analyzed_at = ?, analysis_error_code = NULL,
+           analysis_error_message = NULL,
            analysis_revision = analysis_revision + 1, updated_at = ?
        WHERE id = ?`,
       [input.text, input.analyzedAt, input.analyzedAt, input.mediaId]
@@ -784,6 +790,10 @@ export class SQLiteMomentRepository implements IMomentRepository {
           });
         }
       }
+    }).catch((error: unknown) => {
+      // 回复完整性由本事务裁决，出口恢复领域拒绝，存储故障保留原诊断。
+      if (error instanceof CoordinatedDatabaseError && error.cause instanceof MomentDomainError) throw error.cause;
+      throw error;
     });
 
     return inputs.map((input) => ({

@@ -1,6 +1,7 @@
 package expo.modules.kimiphonenotifications
 
 import android.Manifest
+import android.app.Activity
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -20,6 +21,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.absoluteValue
+import expo.modules.callringtone.CallRingtonePlayback
 
 internal object NotificationPublisher {
   // 子通知/摘要 displayId 前缀：与 TS 侧 Notification.ts 的拼接规则保持一致，撤销时按同规则还原。
@@ -196,7 +198,9 @@ internal object NotificationPublisher {
     }
   }
 
-  fun postIncomingCall(context: Context, payload: Map<String, Any?>): Map<String, Any?> {
+  fun postIncomingCall(context: Context, payload: Map<String, Any?>, foregroundActivity: Activity?): Map<String, Any?> {
+    val ringDurationMs = (payload["ringDurationMs"] as? Number)?.toLong()
+      ?: throw IllegalArgumentException("来电响铃时长不能为空")
     val displayId = payload.requiredString("displayId")
     val callId = payload.requiredString("callId")
     val aiId = payload.requiredString("aiId")
@@ -280,23 +284,42 @@ internal object NotificationPublisher {
         // accept/reject/missed/end 由业务层 dismissIncomingCall() 收口。
         .setAutoCancel(false)
         .setOngoing(true)
+        // 声音由同一个原生铃声 owner 循环播放，避免 Channel 提示音与自定义铃声叠加。
+        .setSilent(true)
         .setWhen(now)
         .setShowWhen(true)
         .setContentIntent(openPendingIntent)
-      // FSI 是否拉起锁屏 Activity 由系统决定；权限关闭时退化为 CallStyle heads-up/锁屏通知。
-      if (fullScreenIntentAllowed) {
-        builder.setFullScreenIntent(openPendingIntent, true)
-      }
+      // 无 FGS 的 CallStyle 必须请求 FSI；即使前台直接展示，也不能删除这个发布资格。
+      // Android 14 在用户禁用全屏展示时自行转为通知，canUseFullScreenIntent 只用于诊断。
+      builder.setFullScreenIntent(openPendingIntent, true)
+      val channel = context.getSystemService(NotificationManager::class.java)
+        .getNotificationChannel(NotificationChannelRegistry.INCOMING_CALL_CHANNEL_ID)
+      CallRingtonePlayback.start(context, callId, payload.optionalString("ringtoneUri"), "incoming", durationMs = ringDurationMs,
+        // Channel 未指定自定义振动节奏时使用应用定义的默认节奏，仍尊重用户关闭振动。
+        vibrationPattern = if (channel.shouldVibrate()) channel.vibrationPattern ?: NotificationChannelRegistry.vibrationPattern else null,
+        soundEnabled = channel.importance >= NotificationManager.IMPORTANCE_DEFAULT && channel.sound != null)
+      // 先排入铃声请求再让通知可点击；快速接听/拒接的停播不能被晚排入的启动覆盖。
       NotificationManagerCompat.from(context).notify(displayId.toNotificationId(), builder.build())
+      var surfaceError: String? = null
+      if (foregroundActivity != null) {
+        try {
+          foregroundActivity.startActivity(callActivityIntent(context, displayId, "open", activityData))
+        } catch (failure: RuntimeException) {
+          // 通知已发布且接听动作仍有效，展示失败独立留诊断，不能谎报通知发布失败。
+          surfaceError = "前台来电界面启动失败：${failure.message ?: failure.javaClass.simpleName}"
+          android.util.Log.e("IncomingCallActivity", surfaceError, failure)
+        }
+      }
       NotificationStateStore.recordDiagnostics(
-        context, INCOMING_CALL_DIAGNOSTICS_SCOPE, aiId, sessionId, true, null,
+        context, INCOMING_CALL_DIAGNOSTICS_SCOPE, aiId, sessionId, true, surfaceError,
         fullScreenIntentAllowed = fullScreenIntentAllowed,
         incomingCallChannelImportance = callChannelImportance,
         incomingCallChannelLockscreenVisibility = callChannelLockscreenVisibility,
         notificationsEnabled = notificationsEnabled,
       )
-      postResult("posted", true, displayId, null)
+      postResult("posted", true, displayId, surfaceError)
     } catch (error: RuntimeException) {
+      CallRingtonePlayback.stop(callId)
       NotificationStateStore.recordDiagnostics(
         context, INCOMING_CALL_DIAGNOSTICS_SCOPE, aiId, sessionId, false,
         error.message ?: error.javaClass.simpleName,
@@ -503,6 +526,7 @@ internal object NotificationPublisher {
   }
 
   fun dismissIncomingCall(context: Context, callId: String) {
+    CallRingtonePlayback.stop(callId)
     NotificationManagerCompat.from(context).cancel(callDisplayId(callId).toNotificationId())
     // 业务层结束通话（reject/missed/accept/end）时同步关闭已弹出的原生来电 surface。
     IncomingCallSurfaceRegistry.dismiss(callId)
@@ -656,25 +680,32 @@ internal object NotificationPublisher {
     action: String,
     data: Map<String, Any?>,
   ): PendingIntent {
-    val intent = Intent(context, IncomingCallActivity::class.java).apply {
-      this.action = "${context.packageName}.INCOMING_CALL.$action.$displayId"
-      putExtra("notificationAction", action)
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-      data.forEach { (key, value) ->
-        when (value) {
-          is String -> putExtra(key, value)
-          is Long -> putExtra(key, value)
-          is Int -> putExtra(key, value)
-          is Boolean -> putExtra(key, value)
-        }
-      }
-    }
     return PendingIntent.getActivity(
       context,
       "$displayId:$action".hashCode(),
-      intent,
+      callActivityIntent(context, displayId, action, data),
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
+  }
+
+  /** 前台展示与通知点击共享同一个原生来电入口及 payload，不复制接听/拒接流程。 */
+  private fun callActivityIntent(
+    context: Context,
+    displayId: String,
+    action: String,
+    data: Map<String, Any?>,
+  ): Intent = Intent(context, IncomingCallActivity::class.java).apply {
+    this.action = "${context.packageName}.INCOMING_CALL.$action.$displayId"
+    putExtra("notificationAction", action)
+    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    data.forEach { (key, value) ->
+      when (value) {
+        is String -> putExtra(key, value)
+        is Long -> putExtra(key, value)
+        is Int -> putExtra(key, value)
+        is Boolean -> putExtra(key, value)
+      }
+    }
   }
 
   /** Together 点击直接进入 Activity，避免 notification -> BroadcastReceiver -> Activity trampoline。 */

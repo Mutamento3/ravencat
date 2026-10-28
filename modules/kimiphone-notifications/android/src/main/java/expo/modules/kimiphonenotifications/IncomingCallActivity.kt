@@ -1,5 +1,6 @@
 package expo.modules.kimiphonenotifications
 
+import expo.modules.androidoverlayruntime.CallPresentationReturn
 import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Intent
@@ -79,7 +80,7 @@ class IncomingCallActivity : Activity() {
   private fun handleAccept(intent: Intent) {
     val callId = intent.getStringExtra("callId")?.takeIf { it.isNotBlank() } ?: return
     NotificationResponseDispatcher.buildResponse(intent, "accept")?.let { response ->
-      CallPresentationReturn.accepted(callId, returnToPreviousApp)
+      CallPresentationReturn.entered(callId, returnToPreviousApp)
       NotificationResponseDispatcher.recordForApp(applicationContext, response)
     }
     dismissSurface(intent)

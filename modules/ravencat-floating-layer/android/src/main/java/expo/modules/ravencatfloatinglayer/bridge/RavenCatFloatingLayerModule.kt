@@ -3,7 +3,9 @@ package expo.modules.ravencatfloatinglayer.bridge
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import expo.modules.androidoverlayruntime.OverlayPermissionGateway
@@ -14,6 +16,7 @@ import expo.modules.ravencatfloatinglayer.retireLegacySelfWakeProjection
 import expo.modules.ravencatfloatinglayer.RavenCatCompanionWakeStore
 import expo.modules.ravencatfloatinglayer.RavenCatAIScheduleProjection
 import expo.modules.ravencatfloatinglayer.RavenCatAIScheduleScheduler
+import expo.modules.ravencatfloatinglayer.RavenCatAIScheduleStore
 import expo.modules.ravencatfloatinglayer.RavenCatFloatingMessageTaskStore
 import expo.modules.ravencatfloatinglayer.RavenCatTogetherListeningPresentationStore
 import expo.modules.ravencatfloatinglayer.companion.RavenCatCompanionExecutionHost
@@ -242,6 +245,27 @@ class RavenCatFloatingLayerModule : Module() {
         "lastCompanionExecutionForegroundRunning" to wakeStatus.lastExecutionForegroundRunning,
         "pendingNativeWakeCount" to wakeStatus.pendingNativeWakeCount,
         "lastPendingWakeAtEpochMs" to wakeStatus.lastPendingWakeAtEpochMs,
+      )
+    }
+
+    AsyncFunction("getAIScheduleDiagnostics") {
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+      val packageInfo = context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0L))
+      mapOf(
+        "device" to mapOf(
+          "manufacturer" to Build.MANUFACTURER,
+          "model" to Build.MODEL,
+          "apiLevel" to Build.VERSION.SDK_INT,
+          "packageName" to context.packageName,
+          "versionName" to packageInfo.versionName,
+          "versionCode" to packageInfo.longVersionCode,
+          "deviceIdleMode" to power.isDeviceIdleMode,
+          "powerSaveMode" to power.isPowerSaveMode,
+          "batteryOptimizationExempt" to power.isIgnoringBatteryOptimizations(context.packageName),
+        ),
+        "companionSchedulingEnabled" to RavenCatAIScheduleStore.isEnabled(context),
+        "events" to RavenCatCompanionWakeStore.scheduleDiagnostics(context),
       )
     }
 

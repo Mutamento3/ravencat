@@ -23,6 +23,8 @@ export function createHttpDiagnosticsStyles(theme: PresentationTheme) {
     detailActions: { paddingHorizontal: theme.spacing.lg, gap: theme.spacing.sm },
     bodyHeader: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, paddingVertical: theme.spacing.md },
     bodyTitle: { flex: 1 },
+    bodyPagination: { gap: theme.spacing.xs },
+    bodyScroll: { maxHeight: 320 },
     raw: {
       fontFamily: 'monospace',
       fontSize: 12,

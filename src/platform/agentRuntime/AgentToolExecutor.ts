@@ -6,7 +6,7 @@ import type {
 } from '@shared/aiTools';
 import { matchesAgentToolInputSchema } from '@shared/aiTools';
 import type { ModelToolCall } from '@platform/ai';
-import type { AgentToolOutcome } from './AgentRunState';
+import { AgentRuntimeTerminalError, type AgentToolOutcome } from './AgentRunState';
 import type { AgentToolRegistry } from './AgentToolRegistry';
 
 type AgentToolPreparationRejectionCode =
@@ -101,6 +101,9 @@ export class AgentToolExecutor {
       if (context.abortSignal.aborted) {
         throw error;
       }
+      // Host 的持久资格检查可能先于协作式 signal 失效；只透传明确的 Runtime 控制信号。
+      const terminal = error instanceof Error && error.cause instanceof AgentRuntimeTerminalError ? error.cause : error;
+      if (terminal instanceof AgentRuntimeTerminalError) throw terminal;
       logUnexpectedToolError(preparation.tool.descriptor.name, context, error);
       return {
         status: 'error',

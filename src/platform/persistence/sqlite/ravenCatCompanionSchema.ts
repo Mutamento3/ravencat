@@ -41,7 +41,7 @@ function buildRavenCatAISchedulesSchema(
       CHECK (completion_disposition IS NULL
         OR completion_disposition IN ('agent_terminal', 'interrupted')),
     cancelled_at TEXT,
-    cancelled_reason TEXT CHECK (cancelled_reason IS NULL OR cancelled_reason = 'owner_revoked'),
+    cancelled_reason TEXT CHECK (cancelled_reason IS NULL OR cancelled_reason IN ('owner_revoked', 'expired', 'merged_schedule', 'merged_chat')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     CHECK (
@@ -78,6 +78,36 @@ export const RAVEN_CAT_AI_SCHEDULES_SCHEMA = buildRavenCatAISchedulesSchema(
   'raven_cat_ai_schedules',
   true,
 );
+
+/** 每个日程只保存一份处理结果及提示词交接身份，没有重新执行入口。 */
+export const RAVEN_CAT_AI_SCHEDULE_CONTEXT_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS raven_cat_ai_schedule_context (
+    schedule_id TEXT PRIMARY KEY REFERENCES raven_cat_ai_schedules(schedule_id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    target_schedule_id TEXT,
+    presented_run_id TEXT,
+    acknowledged_at TEXT,
+    occurred_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_schedule_context_pending
+    ON raven_cat_ai_schedule_context(acknowledged_at, target_schedule_id, occurred_at, schedule_id);
+`;
+
+/** 升级系统终结原因的约束，保留原始计划、领取及历史事实。 */
+export async function migrateAIScheduleContext(db: RavenCatCompanionMigrationExecutor): Promise<void> {
+  const columns = `schedule_id,owner_ai_id,remind_at,summary,details,system_calendar,
+    source_conversation_id,source_message_ids_json,source_excerpt,status,claimed_by_run_id,claimed_at,
+    consumed_at,completion_disposition,cancelled_at,cancelled_reason,created_at,updated_at`;
+  await db.execAsync(`${RAVEN_CAT_AI_SCHEDULES_REBUILD_SCHEMA}
+    INSERT INTO raven_cat_ai_schedules_new (${columns}) SELECT ${columns} FROM raven_cat_ai_schedules;
+    DROP TABLE raven_cat_ai_schedules;
+    ALTER TABLE raven_cat_ai_schedules_new RENAME TO raven_cat_ai_schedules;`);
+  await db.execAsync(RAVEN_CAT_AI_SCHEDULE_CONTEXT_SCHEMA);
+  await db.execAsync([
+    RAVEN_CAT_AI_SCHEDULES_OWNER_STATUS_TIME_INDEX, RAVEN_CAT_AI_SCHEDULES_OWNER_TIME_INDEX,
+    RAVEN_CAT_AI_SCHEDULES_CONSUMED_HISTORY_INDEX, RAVEN_CAT_AI_SCHEDULES_CONSUMED_OCCURRED_HISTORY_INDEX,
+  ].join('\n'));
+}
 
 const RAVEN_CAT_AI_SCHEDULES_REBUILD_SCHEMA = buildRavenCatAISchedulesSchema(
   'raven_cat_ai_schedules_new',

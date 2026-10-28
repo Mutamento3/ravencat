@@ -44,5 +44,3 @@ export interface HistoryScreenProps {
   initialView?: ViewType;
   initialDate?: Date;
 }
-
-export type CardData = DayInfo | WeekInfo | MonthInfo;

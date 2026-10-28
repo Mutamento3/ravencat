@@ -13,7 +13,7 @@ import {
 } from '@features/profile';
 import { changeCallBackgroundFromMediaAsset, getCallBackgroundImageSelection } from '@features/calls';
 import { mediaImageFailure, viewImageSource, ViewImageTool } from '@features/media';
-import type { DatabaseTransactionExecutor } from '@platform/persistence';
+import { CoordinatedDatabaseError, type DatabaseTransactionExecutor } from '@platform/persistence';
 import type { AgentToolExecutionContext, AgentToolExecutionResult, ToolDefinition } from '@shared/aiTools';
 import { SettingChangeConflictError } from '@shared/errors/SettingChangeConflictError';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
@@ -52,13 +52,15 @@ function tool<T>(name: string, description: string, parameters: Parameters, exec
   return { name, definition: { name, description, parameters }, async execute(input: T, context: Context): Promise<Result> {
     throwIfAbortSignalAborted(context.abortSignal);
     try { return await execute(input, context); }
-    catch (error) {
+    catch (caught) {
+      // Host 拥有跨 Feature 设置提交及注入的权限 guard，在这里恢复已知业务拒绝。
+      const error = caught instanceof CoordinatedDatabaseError ? caught.cause : caught;
       if (error instanceof ApplicationSettingsAccessError) return failure('SETTING_ACCESS_DENIED', error.message);
       if (error instanceof SettingChangeConflictError) return failure('SETTING_CHANGE_CONFLICT', error.message);
       if (error instanceof SettingTargetUnavailableError) return failure('SETTING_TARGET_UNAVAILABLE', error.message);
       const mediaFailure = mediaImageFailure(error);
       if (mediaFailure) return mediaFailure;
-      throw error;
+      throw caught;
     }
   } };
 }

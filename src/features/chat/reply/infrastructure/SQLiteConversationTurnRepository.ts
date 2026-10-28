@@ -79,6 +79,96 @@ function mapRowToRun(row: TurnRunRow): ConversationTurnRun {
 }
 
 export class ConversationTurnRepository implements IConversationTurnRepository {
+  interruptAbandonedAutonomousRuns(activeRunIds: readonly string[]): Promise<string[]> {
+    return databaseCoordinator.transaction({ name: 'chat.interrupt-autonomous-orphans', feature: 'chat', priority: 'runtime' }, async tx => {
+      const rows = await tx.getAllAsync<TurnRunRow>("SELECT * FROM conversation_turn_runs WHERE kind = 'autonomous' AND status = 'active'");
+      const sessions: string[] = [];
+      const now = new Date().toISOString();
+      for (const row of rows) {
+        if (activeRunIds.includes(row.run_id)) continue;
+        const released = await tx.runAsync(`UPDATE conversation_turn_state SET active_run_id = NULL,
+          active_run_kind = NULL, revision = revision + 1, updated_at = ?
+          WHERE session_id = ? AND active_run_id = ? AND revision = ?`,
+        [now, row.session_id, row.run_id, row.revision_at_claim]);
+        if (released.changes !== 1) throw new ConversationTurnInvariantError('自主执行孤儿与会话 owner 不一致');
+        await tx.runAsync(`UPDATE conversation_turn_runs SET status = 'failed', terminal_reason = 'process_restarted', terminal_at = ?
+          WHERE run_id = ? AND status = 'active'`, [now, row.run_id]);
+        sessions.push(row.session_id);
+      }
+      return sessions;
+    });
+  }
+
+  getActiveRun(sessionId: string): Promise<ConversationTurnRun | null> {
+    return databaseCoordinator.read({ name: 'chat.active-turn', feature: 'chat', priority: 'runtime' }, async db => {
+      const row = await db.getFirstAsync<TurnRunRow>(`SELECT r.* FROM conversation_turn_runs r
+        JOIN conversation_turn_state s ON s.active_run_id = r.run_id WHERE s.session_id = ?`, [sessionId]);
+      return row ? mapRowToRun(row) : null;
+    });
+  }
+
+  listRunStates(runIds: readonly string[]): Promise<{ runId: string; status: ConversationTurnRun['status'] }[]> {
+    return databaseCoordinator.read({ name: 'chat.turn-states', feature: 'chat', priority: 'runtime' }, async db => {
+      const rows = await db.getAllAsync<{ run_id: string; status: ConversationTurnRun['status'] }>(
+        `SELECT run_id,status FROM conversation_turn_runs WHERE run_id IN (SELECT value FROM json_each(?))`,
+        [JSON.stringify(runIds)]);
+      return rows.map(row => ({ runId: row.run_id, status: row.status }));
+    });
+  }
+
+  claimAutonomousIfIdle(sessionId: string, runId: string): Promise<ConversationTurnRun | null> {
+    return databaseCoordinator.transaction(
+      { name: 'chat.claim-autonomous-turn', feature: 'chat', priority: 'runtime' },
+      async transaction => {
+        await this.ensureTurnStateRowInTransaction(transaction, sessionId);
+        const state = (await transaction.getFirstAsync<TurnStateRow>(
+          'SELECT reply_cursor, revision, active_run_id FROM conversation_turn_state WHERE session_id = ?', [sessionId],
+        ))!;
+        if (state.active_run_id !== null) return null;
+        // T3 已释放执行槽但气泡可能仍在交付；新用户输入也可能尚未被宿主 claim。
+        const pending = await transaction.getFirstAsync(`SELECT 1 WHERE
+          EXISTS (SELECT 1 FROM chat_turn_presentations WHERE session_id = ? AND state = 'open')
+          OR EXISTS (SELECT 1 FROM chat_regeneration_requests WHERE session_id = ?)
+          OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = ? AND m.is_me = 1
+            AND json_extract(m.metadata_json, '$.type') IS NOT 'callStatus' AND m.id > ?
+            AND NOT EXISTS (SELECT 1 FROM conversation_turn_runs r WHERE r.session_id = m.session_id
+              AND r.kind = 'user_reply' AND r.status IN ('failed', 'cancelled') AND r.input_high_watermark >= m.id))`,
+        [sessionId, sessionId, sessionId, state.reply_cursor]);
+        if (pending) return null;
+        const now = new Date().toISOString();
+        const revision = state.revision + 1;
+        await transaction.runAsync(`INSERT INTO conversation_turn_runs
+          (run_id, session_id, kind, reply_cursor_at_claim, input_high_watermark, revision_at_claim, status, created_at)
+          VALUES (?, ?, 'autonomous', ?, ?, ?, 'active', ?)`,
+        [runId, sessionId, state.reply_cursor, state.reply_cursor, revision, now]);
+        const claimed = await transaction.runAsync(`UPDATE conversation_turn_state SET active_run_id = ?,
+          active_run_kind = 'autonomous', revision = revision + 1, updated_at = ?
+          WHERE session_id = ? AND active_run_id IS NULL AND revision = ?`, [runId, now, sessionId, state.revision]);
+        if (claimed.changes !== 1) throw new ConversationTurnInvariantError('自主执行 claim 失去会话所有权');
+        return { runId, sessionId, kind: 'autonomous', replyCursorAtClaim: state.reply_cursor,
+          inputHighWatermark: state.reply_cursor, revisionAtClaim: revision, status: 'active',
+          terminalReason: null, createdAt: now, terminalAt: null };
+      },
+    );
+  }
+
+  finishAutonomous(run: ConversationTurnRun): Promise<void> {
+    return databaseCoordinator.transaction(
+      { name: 'chat.finish-autonomous-turn', feature: 'chat', priority: 'runtime' },
+      async transaction => {
+        const now = new Date().toISOString();
+        const released = await transaction.runAsync(`UPDATE conversation_turn_state SET active_run_id = NULL,
+          active_run_kind = NULL, revision = revision + 1, updated_at = ?
+          WHERE session_id = ? AND active_run_id = ? AND revision = ?`,
+        [now, run.sessionId, run.runId, run.revisionAtClaim]);
+        if (released.changes === 0) return;
+        const completed = await transaction.runAsync(`UPDATE conversation_turn_runs SET status = 'committed', terminal_at = ?
+          WHERE run_id = ? AND kind = 'autonomous' AND status = 'active'`, [now, run.runId]);
+        if (completed.changes !== 1) throw new ConversationTurnInvariantError('自主执行释放时 run 不是 active');
+      },
+    );
+  }
+
   getReplyVersionHistory(sessionId: string, runId: string): Promise<ChatReplyVersionHistory | null> {
     return databaseCoordinator.read({ name: 'chat.reply-versions', feature: 'chat', priority: 'interactive' }, async db => {
       const set = await findReplyVersionSet(db, runId);
@@ -372,6 +462,16 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
         await cancelRegenerationInTransaction(transaction, sessionId);
         return null;
       }
+      if (orphan?.kind === 'autonomous') {
+        // 日程孤儿只收口，不借普通聊天恢复重新执行模型或工具。
+        const failed = await transaction.runAsync(`UPDATE conversation_turn_runs SET status = 'failed',
+          terminal_reason = 'process_restarted', terminal_at = ? WHERE run_id = ? AND status = 'active'`, [now, state.active_run_id]);
+        const released = await transaction.runAsync(`UPDATE conversation_turn_state SET active_run_id = NULL, active_run_kind = NULL,
+          revision = revision + 1, updated_at = ? WHERE session_id = ? AND active_run_id = ? AND revision = ?`,
+        [now, sessionId, state.active_run_id, state.revision]);
+        if (failed.changes !== 1 || released.changes !== 1) throw new ConversationTurnInvariantError('日程孤儿收口失去会话所有权');
+        return this.claimInTransaction(transaction, sessionId, kind, 'claim_if_idle');
+      }
       const toolStarted = await transaction.getFirstAsync(`SELECT 1 FROM chat_turn_display_items
         WHERE run_id = ? AND json_extract(snapshot_json, '$.toolExecutionStarted') = 1 LIMIT 1`, [state.active_run_id]);
       if (toolStarted) {
@@ -557,6 +657,10 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
             [run.sessionId, run.regenerationSourceRunId],
           );
         }
+        const readDisplayItems = await transaction.getAllAsync<{ identity: string }>(
+          'SELECT identity FROM chat_turn_display_items WHERE run_id = ? AND is_read = 1', [run.runId],
+        );
+        const readIdentities = new Set(readDisplayItems.map(item => item.identity));
         const messages = [];
         for (const [index, item] of items.entries()) {
           const materialized = item.materializeInTransaction
@@ -564,6 +668,8 @@ export class ConversationTurnRepository implements IConversationTurnRepository {
             : item.message;
           messages.push({
             ...materialized,
+            // 展示已读与 T3 共用事务边界：先看后提交的气泡不能重新变成未读。
+            ...(readIdentities.has(materialized.clientMessageId!) ? { isRead: true } : {}),
             turnRunId: run.runId,
             turnItemIndex: index + 1,
           });

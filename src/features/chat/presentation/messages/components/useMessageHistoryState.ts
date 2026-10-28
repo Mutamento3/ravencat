@@ -6,6 +6,7 @@ import type { ChatMessage } from '@features/chat/messages/domain/ChatMessage';
 import {
   getSessionTimelineCache,
   setSessionTimelineCache,
+  clearSessionTimelineCache,
 } from './sessionTimelineCache';
 import {
   CHAT_INITIAL_MESSAGE_WINDOW_SIZE,
@@ -61,6 +62,21 @@ export function useMessageHistoryState(sessionId?: string | null) {
   const hasInitializedSessionRef = useRef(false);
   const latestMessageCountRef = useRef(initialSnapshotRef.current.messages.length);
   const latestHasMoreRef = useRef(initialSnapshotRef.current.hasMore);
+
+  const resetHistory = useCallback(() => {
+    loadOwnershipRef.current = beginHistorySession(loadOwnershipRef.current);
+    cursorRef.current = null;
+    lastMessageIdRef.current = null;
+    latestHasMoreRef.current = false;
+    latestMessageCountRef.current = 0;
+    hasInitializedSessionRef.current = true;
+    clearSessionTimelineCache(sessionId);
+    setMessages([]);
+    setHasMore(false);
+    setIsLoading(false);
+    setIsLoadingMore(false);
+    setError(null);
+  }, [sessionId]);
 
   const applyCachedResult = useCallback(
     (result: { messages: ChatMessage[]; hasMore: boolean; nextCursor: number | null; lastMessageId: number | null }) => {
@@ -170,6 +186,7 @@ export function useMessageHistoryState(sessionId?: string | null) {
     }
 
     async function init() {
+      const generation = loadOwnershipRef.current.generation;
       if (!cachedEntry) {
         setIsLoading(true);
       }
@@ -182,7 +199,7 @@ export function useMessageHistoryState(sessionId?: string | null) {
           limit: CHAT_INITIAL_MESSAGE_WINDOW_SIZE,
         });
 
-        if (!isMounted) return;
+        if (!isMounted || generation !== loadOwnershipRef.current.generation) return;
 
         if (result.success) {
           applyInitialResult(result);
@@ -195,7 +212,7 @@ export function useMessageHistoryState(sessionId?: string | null) {
           hasInitializedSessionRef.current = Boolean(cachedEntry);
         }
       } catch (err) {
-        if (!isMounted) return;
+        if (!isMounted || generation !== loadOwnershipRef.current.generation) return;
 
         if (!cachedEntry) {
           setError(err instanceof Error ? err.message : '加载失败');
@@ -203,7 +220,7 @@ export function useMessageHistoryState(sessionId?: string | null) {
 
         hasInitializedSessionRef.current = Boolean(cachedEntry);
       } finally {
-        if (isMounted) {
+        if (isMounted && generation === loadOwnershipRef.current.generation) {
           setIsLoading(false);
         }
       }
@@ -366,6 +383,7 @@ export function useMessageHistoryState(sessionId?: string | null) {
     setError,
     loadMore,
     refresh,
+    resetHistory,
     lastMessageIdRef,
   };
 }

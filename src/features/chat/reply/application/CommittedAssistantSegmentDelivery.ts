@@ -8,6 +8,7 @@ import {
 } from '../delivery/AIMessageEvents';
 import type {
   AIMessageDeliveryKind,
+  AIMessageDeliveryIdentity,
   AIMessageReceivedPayload,
 } from '../delivery/AIMessageEvents';
 import type {
@@ -16,12 +17,14 @@ import type {
   AIReplyRuntimeContext,
   ProcessAIReplyCallbacks,
 } from './ChatReplyTypes';
+import type { ChatTurnDisplaySnapshot } from '../domain/ChatTurnPresentation';
 
 interface DeliverCommittedAssistantSegmentParams {
   sessionId: string;
   text: string;
   metadataJson?: string | null;
   messageId: number;
+  clientMessageId?: string;
   logicalMessageId: string | null;
   segmentIndex: number;
   segmentTotal: number;
@@ -35,6 +38,7 @@ export async function deliverCommittedAssistantSegment({
   text,
   metadataJson,
   messageId,
+  clientMessageId,
   logicalMessageId,
   segmentIndex,
   segmentTotal,
@@ -56,6 +60,7 @@ export async function deliverCommittedAssistantSegment({
       previewText: deliveryText,
       logicalMessageId,
       messageId,
+      clientMessageId,
       segmentIndex,
       segmentTotal,
     });
@@ -64,6 +69,56 @@ export async function deliverCommittedAssistantSegment({
     console.warn('[CommittedAssistantSegmentDelivery] 回复投影失败，保留系统通知：', error);
   }
 
+  await emitAssistantSegment({
+    sessionId, deliveryText, aiConfig, runtimeContext, callbacks,
+    identity: { committedMessageId: messageId, clientMessageId,
+      arrivalAlreadyScheduled: runtimeContext.arrivalAlreadyScheduled },
+    logicalMessageId, segmentIndex, segmentTotal,
+    userNotificationHandled: projectionReceipt ? projectionReceipt.userNotificationHandled : false,
+  });
+}
+
+/** 正文闭合且展示版本已提交后交付；不提前生成正式消息或触发 canonical 投影回调。 */
+export async function deliverAssistantDisplaySegment(params: {
+  sessionId: string;
+  snapshot: ChatTurnDisplaySnapshot;
+  aiConfig?: AIReplyConfig;
+  runtimeContext: AIReplyRuntimeContext;
+  callbacks: ProcessAIReplyCallbacks;
+}): Promise<void> {
+  const { sessionId, snapshot, aiConfig, runtimeContext, callbacks } = params;
+  const deliveryText = snapshot.text.trim();
+  let projectionReceipt: AIReplyProjectionReceipt | void;
+  try {
+    projectionReceipt = await callbacks.onReplyDisplaySegment?.({
+      sessionId, clientMessageId: snapshot.clientMessageId, text: deliveryText, previewText: deliveryText,
+    });
+  } catch (error) {
+    console.warn('[CommittedAssistantSegmentDelivery] 运行正文投影失败，保留系统通知：', error);
+  }
+  await emitAssistantSegment({
+    sessionId, deliveryText, aiConfig, runtimeContext, callbacks,
+    identity: { clientMessageId: snapshot.clientMessageId, arrivalAlreadyScheduled: true, turnRunId: snapshot.runId },
+    logicalMessageId: null, segmentIndex: snapshot.segmentIndex ?? 0,
+    userNotificationHandled: projectionReceipt ? projectionReceipt.userNotificationHandled : false,
+  });
+}
+
+async function emitAssistantSegment({
+  sessionId, deliveryText, aiConfig, runtimeContext, callbacks, identity,
+  logicalMessageId, segmentIndex, segmentTotal, userNotificationHandled,
+}: {
+  sessionId: string;
+  deliveryText: string;
+  aiConfig?: AIReplyConfig;
+  runtimeContext: AIReplyRuntimeContext;
+  callbacks: ProcessAIReplyCallbacks;
+  identity: AIMessageDeliveryIdentity;
+  logicalMessageId: string | null;
+  segmentIndex: number;
+  segmentTotal?: number;
+  userNotificationHandled: boolean;
+}): Promise<void> {
   // 特殊消息正文由 renderer 从 metadata 读取；系统交付始终沿用 Chat 统一预览契约。
   if (
     !aiConfig?.id
@@ -75,8 +130,8 @@ export async function deliverCommittedAssistantSegment({
   }
 
   const deliveryPayload: AIMessageReceivedPayload = {
-    arrivalAlreadyScheduled: runtimeContext.arrivalAlreadyScheduled,
     turnRunId: runtimeContext.arrivalAlreadyScheduled ? runtimeContext.replyRunId : undefined,
+    ...identity,
     aiId: aiConfig.id,
     agentId: aiConfig.agentId || null,
     aiName: aiConfig.name,
@@ -86,7 +141,6 @@ export async function deliverCommittedAssistantSegment({
     logicalMessageId,
     segmentIndex,
     segmentTotal,
-    committedMessageId: messageId,
     deliveryKind: resolveDeliveryKind(runtimeContext),
     triggerSource: runtimeContext.deliveryTriggerSource
       ?? runtimeContext.triggerSource
@@ -99,9 +153,7 @@ export async function deliverCommittedAssistantSegment({
     conversationKind: runtimeContext.groupChat ? 'group' : 'direct',
     groupId: runtimeContext.groupChat?.groupId || null,
     groupName: runtimeContext.groupChat?.groupName || null,
-    userNotificationHandled: projectionReceipt
-      ? projectionReceipt.userNotificationHandled
-      : false,
+    userNotificationHandled,
   };
   const deliveryReceipt = await emitAIMessageReceived(deliveryPayload);
   await callbacks.onAIMessageDelivered?.({

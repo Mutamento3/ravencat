@@ -22,7 +22,7 @@ export async function requestOutgoingCallDecision(params: {
   const runtime = getCallRuntimeDependencies();
   const { aiConfig, chatSessionId, callId } = params;
   // 去电决策是单聊场景的延续：与普通消息共用同一套聊天上下文
-  // （人设、用户身份、附加提示词、全部摘要与未总结原文），只追加决策场景与 JSON 契约。
+  // （人设、用户身份、附加提示词、全部摘要与未总结原文），只追加决策场景与控制标记。
   const recentWindowLimit =
     aiConfig.privateContextPrimaryLimit || DEFAULT_PRIVATE_CONTEXT_PRIMARY_LIMIT;
   const toolContext = new ToolContext({
@@ -84,7 +84,13 @@ export async function requestOutgoingCallDecision(params: {
     };
   }
 
-  const decision = parseOutgoingCallDecision(response.text);
+  let decision: AIOutgoingCallDecision;
+  try {
+    decision = parseOutgoingCallDecision(response.text);
+  } catch (error) {
+    console.warn('[CallDecision] 接听控制标记无效', { model: aiConfig.model, error: (error as Error).message });
+    return { success: false, errorMessage: '这次电话没有接通，请稍后再试。' };
+  }
   console.info('[CallDecision] outgoing call decision', {
     aiId: aiConfig.id,
     model: aiConfig.model,

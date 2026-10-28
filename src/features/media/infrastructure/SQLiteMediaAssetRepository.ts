@@ -170,10 +170,16 @@ const MEDIA_ASSET_CALL_AUDIO_REFERENCE_QUERY = `${MEDIA_ASSET_REPLY_VERSION_REFE
   FROM call_history_entries WHERE media_asset_id IS NOT NULL
 `;
 
-const MEDIA_ASSET_REFERENCE_QUERY = `${MEDIA_ASSET_CALL_AUDIO_REFERENCE_QUERY}
+const MEDIA_ASSET_CALL_IMAGES_REFERENCE_QUERY = `${MEDIA_ASSET_CALL_AUDIO_REFERENCE_QUERY}
   UNION ALL
   SELECT media_asset_id, 'call_snapshot', id, 'call_history_images.media_asset_id'
   FROM call_history_images
+`;
+
+const MEDIA_ASSET_REFERENCE_QUERY = `${MEDIA_ASSET_CALL_IMAGES_REFERENCE_QUERY}
+  UNION ALL
+  SELECT media_asset_id, 'call_ringtone', assistant_id || ':' || direction, 'call_ringtone_selection.media_asset_id'
+  FROM call_ringtone_selection WHERE media_asset_id IS NOT NULL
 `;
 
 /**
@@ -206,6 +212,10 @@ const MEDIA_ASSET_CANDIDATE_UNREFERENCED_QUERY = `
     AND NOT EXISTS (
           SELECT 1 FROM call_background_selection
           WHERE call_background_selection.media_asset_id = candidate.asset_id
+        )
+    AND NOT EXISTS (
+          SELECT 1 FROM call_ringtone_selection
+          WHERE call_ringtone_selection.media_asset_id = candidate.asset_id
         )
     AND NOT EXISTS (
           SELECT 1 FROM user_profile
@@ -387,7 +397,8 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
     // 143 的已安装库存在仅录音和含截图两种结构；恢复预检必须保留实际已有的图片引用。
     const hasCallImages = version!.user_version === 143
       && await executor.getFirstAsync("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'call_history_images'") !== null;
-    const references = version!.user_version >= 144 || hasCallImages ? MEDIA_ASSET_REFERENCE_QUERY
+    const references = version!.user_version >= 146 ? MEDIA_ASSET_REFERENCE_QUERY
+      : version!.user_version >= 144 || hasCallImages ? MEDIA_ASSET_CALL_IMAGES_REFERENCE_QUERY
       : version!.user_version === 143 ? MEDIA_ASSET_CALL_AUDIO_REFERENCE_QUERY
       : version!.user_version >= 137 ? MEDIA_ASSET_REPLY_VERSION_REFERENCE_QUERY : MEDIA_ASSET_LEGACY_REFERENCE_QUERY;
     const rows = await executor.getAllAsync<Omit<MediaAssetRow, 'id'> & { id: string | null; asset_id: string }>(`
@@ -603,6 +614,9 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
       SELECT media_asset_id AS asset_id FROM call_background_selection
       WHERE id = ? AND media_asset_id IS NOT NULL
       UNION
+      SELECT media_asset_id AS asset_id FROM call_ringtone_selection
+      WHERE assistant_id = ? AND media_asset_id IS NOT NULL
+      UNION
       SELECT media_asset_id AS asset_id FROM stickers WHERE owner_assistant_id = ?
       UNION
       SELECT media_asset_id AS asset_id FROM ai_downloaded_images WHERE assistant_id = ?
@@ -612,7 +626,7 @@ export class SQLiteMediaAssetRepository implements MediaAssetRepository, MediaAs
       UNION
       SELECT i.media_asset_id AS asset_id FROM call_history_images i JOIN call_history h ON h.call_id = i.call_id
       WHERE h.assistant_id = ?
-    `, [assistantId, assistantId, assistantId, assistantId, assistantId, assistantId]);
+    `, [assistantId, assistantId, assistantId, assistantId, assistantId, assistantId, assistantId]);
     return rows.map((row) => row.asset_id);
   }
 

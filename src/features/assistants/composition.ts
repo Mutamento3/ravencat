@@ -16,13 +16,6 @@ export function listAIAvatarMediaAssetMigrationCandidates(): Promise<
   return aiAssistantRepository.listAvatarMediaAssetMigrationCandidates();
 }
 
-/** Host-only M3b maintenance：读取提交前的当前头像状态，供 CAS 形成 expected state。 */
-export function getAIAvatarMediaAssetMigrationCandidate(
-  ownerId: string,
-): Promise<AIAvatarMediaAssetMigrationCandidate | null> {
-  return aiAssistantRepository.getAvatarMediaAssetMigrationCandidate(ownerId);
-}
-
 /** Host-only M3b maintenance：与 MediaAsset 行在同一事务内提交 owner 引用。 */
 export function commitAIAvatarMediaAssetReferenceInTransaction(
   transaction: DatabaseTransactionExecutor,

@@ -13,6 +13,8 @@ export interface ChatContextItem {
   content: string;
   timestamp: string;
   logicalMessageId: string | null;
+  /** 语音事实随原文传递，不能靠转写正文中的标签猜测。 */
+  isVoiceMessage?: true;
   /** 流式原文可进入当轮上下文，但摘要游标不能越过仍会更新的条目。 */
   pending?: true;
   sharedRecord?: SharedChatRecord;
@@ -47,6 +49,7 @@ export function projectChatContextMessage(message: ChatMessage, cursor: ChatCano
   return { cursor, messageId: message.id, kind: 'dialogue', role: message.isMe ? 'user' : 'assistant',
     content: [buildReplyQuoteModelText(message), content].filter(Boolean).join('\n'),
     timestamp: message.createdAt, logicalMessageId: message.logicalMessageId ?? null,
+    ...(voice !== null ? { isVoiceMessage: true as const } : {}),
     ...(sharedRecord ? { sharedRecord, sharedComment: message.text } : {}) };
 }
 export function compareChatContextCursor(left: ChatCanonicalCursor, right: ChatCanonicalCursor): number {

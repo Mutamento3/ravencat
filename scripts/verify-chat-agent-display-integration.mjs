@@ -87,10 +87,15 @@ const presentation = load('src/features/chat/reply/application/ChatTurnPresentat
 if (!directory) {
   presentation.configureChatTurnPresentation(displays);
   await presentation.recoverTurnPresentationDisplays();
+  const unreadBeforeRead = await messages.getUnreadCountByAI('ai');
+  await messages.markMessagesAsRead('stream-bubbles-stopped');
+  const unreadAfterRead = await messages.getUnreadCountByAI('ai');
   const orphan = await turns.takeOverOrphan('orphan-tools', 'user_reply');
-  console.log(JSON.stringify({ history: await displays.listHistory('s'), visible: (await messages.getMessages('s', { limit: 100 })).messages,
+  console.log(JSON.stringify({ unreadBeforeRead, unreadAfterRead, history: await displays.listHistory('s'), visible: (await messages.getMessages('s', { limit: 100 })).messages,
     orphan, orphanStatus: db.prepare("SELECT status, terminal_reason FROM conversation_turn_runs WHERE session_id = 'orphan-tools'").get(),
     earlyHistory: await displays.listHistory('early-text'),
+    autonomousFailureHistory: await displays.listHistory('autonomous-model-failure'),
+    autonomousFailureEvidence: await messages.listAgentActivityEvidence(['autonomous-model-failure']),
     streamedVisible: (await messages.getMessages('stream-bubbles', { limit: 100 })).messages,
     streamedInterrupted: await displays.listHistory('stream-bubbles-stopped'),
     completeVisible: (await messages.getMessages('complete-loop', { limit: 100 })).messages,
@@ -105,6 +110,7 @@ const { ChatAgentRunProjector } = load('src/features/chat/reply/agent/ChatAgentR
 const { AgentRuntime } = load('src/platform/agentRuntime/AgentRuntime.ts');
 const { AgentToolRegistry } = load('src/platform/agentRuntime/AgentToolRegistry.ts');
 const { AgentRunEventQueue } = load('src/platform/agentRuntime/AgentRunEventQueue.ts');
+mocks['@platform/agentRuntime'] = { AgentRunEventQueue };
 const runtime = load('src/features/chat/messages/application/ChatMessageRuntime.ts');
 const { commitCanonicalUserMessage } = load('src/features/chat/messages/application/CommitCanonicalUserMessage.ts');
 const defer = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -164,15 +170,18 @@ try {
     CREATE TABLE chat_conversations(id TEXT PRIMARY KEY, kind TEXT);
     CREATE TABLE ai_assistants(id TEXT PRIMARY KEY); INSERT INTO ai_assistants VALUES ('ai');
     CREATE TABLE sessions(id TEXT PRIMARY KEY, last_message TEXT, last_time TEXT, updated_at TEXT,
-      visible_after_message_id INTEGER, visible_after_at TEXT);
+      visible_after_message_id INTEGER, visible_after_at TEXT, ai_assistant_id TEXT);
     INSERT INTO chat_conversations VALUES ('s', 'direct'); INSERT INTO sessions(id) VALUES ('s');
     CREATE TABLE media_assets(id TEXT PRIMARY KEY);
     CREATE TABLE business_effects(id INTEGER PRIMARY KEY, value INTEGER); INSERT INTO business_effects VALUES (1, 0);`);
-  for (const key of ['messages', 'conversationTurnRuns', 'conversationTurnState', 'chatToolPackageExposure', 'chatRegenerationRequests', 'chatTimelineRunAnchors', 'chatTurnPresentations']) {
+  for (const key of ['messages', 'conversationTurnRuns', 'conversationTurnState', 'chatToolPackageExposure', 'chatRegenerationRequests', 'chatTimelineRunAnchors', 'chatTurnPresentations', 'chatSummary', 'groupChats']) {
     if (SCHEMAS[key]) db.exec(SCHEMAS[key]);
   }
   // canonical 排序锚点与生产建库保持同源。
   installChatTimelineSchema(db);
+  mocks['@shared/prompt'] = { estimateTextTokens: text => text.length };
+  const { SQLiteChatSummaryRepository } = load('src/features/chat/summary/infrastructure/SQLiteChatSummaryRepository.ts');
+  const summaries = new SQLiteChatSummaryRepository(async () => []);
   db.exec(INDEXES.idxTurnRunsSingleActive);
   db.exec(INDEXES.idxMessagesTurnItem);
   presentation.configureChatTurnPresentation(displays);
@@ -334,6 +343,7 @@ try {
     runtimeContext: { batchedUserMessageIds: [pendingUsers.at(-1).id] } });
   const toolHistory = resumedHistory.messages.filter(message => message.logicalMessageId === `interrupted:${run.runId}`);
   assert.equal(toolHistory.length, 1, '后续模型必须读到旧执行的真实工具结果');
+  assert.equal(toolHistory[0].role, 'user', '应用执行资料不能冒充助手曾经发给用户的回复');
   assert.ok(toolHistory[0].content.includes('tool-2') && toolHistory[0].content.includes('业务已修改'));
   assert.equal(resumedHistory.messages[1], toolHistory[0], '执行记录属于原输入之后，不能错放到后续用户消息之后');
   assert.equal(db.prepare('SELECT value FROM business_effects').get().value, 2, '读取历史不重放工具');
@@ -343,7 +353,8 @@ try {
   const { buildChatTurnAIInput } = load('src/features/chat/reply/application/BuildChatTurnAIInput.ts');
   const continuedInput = await buildChatTurnAIInput({ repository: messages, sessionId: 's', replyCursorAtClaim: 0,
     inputHighWatermark: pendingUsers.at(-1).id, assistantId: 'ai' });
-  assert.deepEqual(continuedInput.turnInputMessages.map(message => message.role), ['user', 'assistant', 'user', 'user']);
+  assert.deepEqual(continuedInput.turnInputMessages.map(message => message.role), ['user', 'user', 'user', 'user'],
+    '未消费输入中的执行资料也不能作为助手回复示例');
   assert.equal(continuedInput.turnInputMessages[0].content, '开始多轮工具任务');
   assert.ok(continuedInput.turnInputMessages[1].content.includes('tool-2'));
   assert.equal(continuedInput.turnInputMessages[2].content, '打断旧任务');
@@ -390,7 +401,13 @@ try {
   db.prepare('INSERT INTO sessions(id) VALUES (?)').run(streamingSession);
   await commitCanonicalUserMessage({ message: { ...user('边说边分泡'), sessionId: streamingSession } });
   const streamingRun = await turns.claimIfIdle(streamingSession, 'user_reply');
+  db.prepare('UPDATE sessions SET ai_assistant_id = ? WHERE id = ?').run(ai.id, streamingSession);
   const streamingDisplay = new presentation.ChatTurnPresentation(streamingRun, ai.agentId, ai.id);
+  const streamingCommit = createSingleTransactionTurnCommit(streamingRun, ai.id, streamingDisplay);
+  const displayPreviews = [];
+  streamingCommit.configureSegmentDelivery({ aiConfig: ai, runtimeContext: { replyRunId: streamingRun.runId }, callbacks: {
+    onReplyDisplaySegment: payload => { displayPreviews.push(payload); return { userNotificationHandled: true }; },
+  } });
   await streamingDisplay.start();
   const liveStreaming = new ChatAgentTimeline(streamingRun.runId, streamingDisplay.sink, { bubbleDeliveryMode: 'multi-bubble' });
   liveStreaming.startStep(1);
@@ -412,16 +429,44 @@ try {
     assert.equal(pendingPaces.length, waitsBeforeStreaming, '空行闭合与活动尾泡均不增加非流式计时等待');
   }
   assert.deepEqual([...previousBubbles.values()], streamingExpected);
+  const streamingDeliveries = () => deliveryEvents.filter(item => item.sessionId === streamingSession);
+  assert.deepEqual(streamingDeliveries().map(item => item.message), streamingExpected.slice(0, -1),
+    '闭合气泡在模型尚未结束时逐条通知，活动尾泡不按 delta 重复通知');
+  assert.equal((await messages.getLatestArrivedConversationPreview(streamingSession, [])).text, streamingExpected.at(-2),
+    '列表立即同步最后一个已交付完整气泡，不显示尚未闭合的尾泡');
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id = ? AND sender_type = 'assistant'").get(streamingSession).count, 0);
+  assert.equal(await messages.getUnreadCountByAI(ai.id), streamingExpected.length - 1, 'T3 前闭合正文逐泡计入未读，活动尾泡不计入');
+  await messages.markMessagesAsRead(streamingSession);
+  assert.equal(await messages.getUnreadCountByAI(ai.id), 0, '运行中打开会话即可清除已交付正文的未读');
   liveStreaming.reconcileModelTurn(1, { assistantText: streamingText, reasoningText: '', toolCalls: [],
     usage: { totalTokens: 120, promptTokens: 100, completionTokens: 20, cachedTokens: 80 }, messageId: 'stream-model' });
   await streamingDisplay.flush();
+  assert.equal((await messages.getLatestArrivedConversationPreview(streamingSession, [])).text, streamingExpected.at(-1));
+  assert.equal(await messages.getUnreadCountByAI(ai.id), 0, '已看过的活动气泡完成或补齐统计时不重新制造未读');
   const streamingItems = liveStreaming.buildCommitItems({ sessionId: streamingSession, aiConfig: ai,
     policy: { bubbleDeliveryMode: 'multi-bubble' }, finalAssistantPolicy: 'commit_as_reply', finalStepIndex: 1 });
-  const streamingCommit = createSingleTransactionTurnCommit(streamingRun, ai.id, streamingDisplay);
+  assert.deepEqual(streamingDeliveries().map(item => item.message), streamingExpected, '模型本次发言结束即通知尾泡，不等待 T3');
   const streamingResult = await streamingCommit.commitAgentTimeline({ sessionId: streamingSession, aiConfig: ai,
     response: { text: streamingText }, runtimeContext: { replyRunId: streamingRun.runId }, items: streamingItems, callbacks: {} });
   await streamingDisplay.finish();
   assert.equal(streamingResult.outcome, 'committed');
+  assert.equal(await messages.getUnreadCountByAI(ai.id), 0, 'T3 继承展示已读事实');
+  assert.ok(streamingResult.messages.filter(item => item.senderType === 'assistant').every(item => item.isRead));
+  assert.equal((await messages.getLatestArrivedConversationPreview(streamingSession, streamingResult.messages.map(item => item.id))).text,
+    streamingExpected.at(-1), 'T3 身份交接不能把已经显示的列表预览退回用户输入');
+  assert.equal((await messages.getLatestArrivedConversationPreview(streamingSession, streamingResult.messages.slice(1).map(item => item.id))).text,
+    streamingExpected.at(-1), '同一时间生成的正式气泡逐条接管时，预览仍保留已经交付的末泡');
+  db.exec('SAVEPOINT preview_clear_boundary');
+  db.prepare('UPDATE sessions SET visible_after_message_id = (SELECT MAX(id) FROM messages WHERE session_id = ?) WHERE id = ?')
+    .run(streamingSession, streamingSession);
+  assert.equal(await messages.getLatestArrivedConversationPreview(streamingSession, []), null, '清空历史同时隐藏旧运行正文预览');
+  db.exec('ROLLBACK TO preview_clear_boundary');
+  db.exec('RELEASE preview_clear_boundary');
+  assert.deepEqual(streamingDeliveries().map(item => item.message), streamingExpected, 'T3 不重复通知已交付的气泡');
+  assert.deepEqual(streamingDeliveries().map(item => item.clientMessageId), [...previousBubbles.keys()]);
+  assert.deepEqual(displayPreviews.map(item => item.text), streamingExpected, '悬浮预览与通知共享逐泡持久发布边界');
+  assert.ok(streamingDeliveries().every(item => item.userNotificationHandled), '保留消费者的精确展示回执');
+  assert.ok(streamingDeliveries().every(item => item.committedMessageId === undefined && item.arrivalAlreadyScheduled));
   assert.equal(pendingPaces.length, waitsBeforeStreaming, '已流式展示的正文在 T3 后不重播分段间隔');
   const streamingSaved = (await messages.getMessages(streamingSession, { limit: 100 })).messages.filter(message => message.senderType === 'assistant');
   assert.deepEqual(streamingSaved.map(message => message.text), streamingExpected, '最终历史与流式分泡完全一致');
@@ -435,6 +480,7 @@ try {
   await commitCanonicalUserMessage({ message: { ...user('开始'), sessionId: stoppedSession } });
   const stoppedRun = await turns.claimIfIdle(stoppedSession, 'user_reply');
   const stoppedDisplay = new presentation.ChatTurnPresentation(stoppedRun, ai.agentId, ai.id);
+  createSingleTransactionTurnCommit(stoppedRun, ai.id, stoppedDisplay).configureSegmentDelivery({ aiConfig: ai });
   await stoppedDisplay.start();
   const stoppedTimeline = new ChatAgentTimeline(stoppedRun.runId, stoppedDisplay.sink, { bubbleDeliveryMode: 'multi-bubble' });
   stoppedTimeline.startStep(1);
@@ -445,6 +491,9 @@ try {
   await stoppedDisplay.flush();
   await stoppedDisplay.finish();
   assert.deepEqual((await displays.listHistory(stoppedSession))[0].items.map(item => item.snapshot.text), ['已闭合', '活动尾泡']);
+  assert.deepEqual(deliveryEvents.filter(item => item.sessionId === stoppedSession).map(item => item.message), ['已闭合'],
+    '中断保留已经提醒的气泡，不补发活动尾泡或迟到正文');
+  assert.equal((await messages.getLatestArrivedConversationPreview(stoppedSession, [])).text, '停止', '后续用户输入优先于旧 run 已交付的正文');
   holdArrival = false;
   const commit = createSingleTransactionTurnCommit(next, ai.id, nextDisplay);
   const streamingScenarioWrites = writes - streamingWritesBefore;
@@ -489,12 +538,17 @@ try {
   await mediaDisplay.finish();
   assert.ok(await messages.getMessageById(media.messages[0].id));
   assert.equal(await displays.getExecutionStatus('s'), null, '完成展示后不应保留运行状态');
+  const autonomousStatusOwner = await turns.claimAutonomousIfIdle('s', 'autonomous-status-isolation');
+  assert.ok(autonomousStatusOwner);
+  assert.equal(await displays.getExecutionStatus('s'), null, '自主执行 owner 不冒充普通用户回复的准备阶段');
+  await turns.finishAutonomous(autonomousStatusOwner);
   // 完整多轮 Loop：页面从未展开过程，也没有任何绘制回执，交付必须自行到达终态。
   const completeSession = 'complete-loop';
   db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(completeSession, 'direct');
   db.prepare('INSERT INTO sessions(id) VALUES (?)').run(completeSession);
   await commitCanonicalUserMessage({ message: { ...user('按顺序做完两项操作'), sessionId: completeSession } });
   const completeRun = await turns.claimIfIdle(completeSession, 'user_reply');
+  db.prepare('UPDATE sessions SET ai_assistant_id = ? WHERE id = ?').run(ai.id, completeSession);
   const completeDisplay = new presentation.ChatTurnPresentation(completeRun, ai.agentId, ai.id);
   await completeDisplay.start();
   foreground.setChatForegroundContext({ appActive: true, chatRouteActive: true, isChatVisible: true, aiId: 'ai', sessionId: completeSession, groupId: null });
@@ -509,6 +563,7 @@ try {
     }
   });
   const completionCommit = createSingleTransactionTurnCommit(completeRun, ai.id, completeDisplay);
+  completionCommit.configureSegmentDelivery({ aiConfig: ai, runtimeContext: { replyRunId: completeRun.runId } });
   const completionProjector = new ChatAgentRunProjector({ sessionId: completeSession, repository: messages, aiConfig: ai,
     callbacks: {}, runtimeContext: { replyRunId: completeRun.runId },
     policy: { bubbleDeliveryMode: 'multi-bubble', modelTransport: 'stream', enableTools: true },
@@ -548,9 +603,18 @@ try {
     initialHistory: [], eventSink: completeQueue.enqueue.bind(completeQueue) });
   await firstToolStarted.promise;
   await firstPreludePresented.promise;
+  await completeDisplay.flush();
+  assert.deepEqual(deliveryEvents.filter(item => item.sessionId === completeSession).map(item => item.message), ['前言1'],
+    '工具尚未完成时，模型已说出的正文应立即逐泡交付通知');
   assert.deepEqual([...firstExposure.values()], [{ text: '前言1', usage: [121, 100, 21, 80] }],
     '工具仍执行时，已经展示的前言必须自带本次模型统计');
   assert.equal(db.prepare('SELECT status FROM conversation_turn_runs WHERE run_id = ?').get(completeRun.runId).status, 'active');
+  assert.equal((await messages.getLatestArrivedConversationPreview(completeSession, [])).text, '前言1',
+    '工具仍未完成、正式消息尚未写入时，会话列表已经显示前言');
+  assert.equal(await messages.getUnreadCountByAI(ai.id), 1, '前言通知到达时，首页未读数同步增加');
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id = ? AND sender_type = 'assistant'").get(completeSession).count, 0);
+  assert.equal(db.prepare('SELECT last_message FROM sessions WHERE id = ?').get(completeSession).last_message, '按顺序做完两项操作',
+    '即时列表预览只读取交付事实，不提前回写持久会话预览');
   finishFirstTool.resolve();
   const completeResult = await completing;
   await completeQueue.drain();
@@ -563,12 +627,19 @@ try {
   ], '前言与最终分段的首次展示已具有完整统计，零命中与未提供不能混淆');
   assert.equal(completeResult.terminalCode, 'COMPLETED');
   assert.equal(completedEffects, 2);
+  assert.deepEqual(deliveryEvents.filter(item => item.sessionId === completeSession).map(item => item.message),
+    ['前言1', '前言2', '最终第一段', '最终第二段'], '多轮模型发言逐条通知，T3 不重复、思考与工具过程不通知');
   assert.equal(await displays.getExecutionStatus(completeSession), null, '折叠过程不得让完成回复永久停在交付中');
   assert.equal(db.prepare('SELECT state FROM chat_turn_presentations WHERE run_id = ?').get(completeRun.runId).state, 'completed');
   const completeMessages = (await messages.getMessages(completeSession, { limit: 100 })).messages;
   assert.equal(completeMessages.filter(message => message.senderType === 'reasoning').length, 3);
   assert.equal(completeMessages.filter(message => message.senderType === 'system').length, 2);
   assert.deepEqual(completeMessages.filter(message => message.senderType === 'assistant').map(message => message.text), ['前言1', '前言2', '最终第一段', '最终第二段']);
+  assert.equal(await messages.getUnreadCountByAI(ai.id), 4, '正式身份接管后每条气泡仍只计算一次');
+  assert.equal(await messages.getUnreadCountByAI(ai.id, completeMessages.map(item => item.id)), 4,
+    '已经交付的完整正文在 canonical 到达身份交接时不从未读数中消失');
+  await messages.markMessagesAsRead(completeSession);
+  assert.equal(await messages.getUnreadCountByAI(ai.id), 0);
   assert.deepEqual(completeMessages.filter(message => message.senderType === 'assistant').map(usageOf),
     [...firstExposure.values()].map(item => item.usage), 'T3 后历史接管不得突然补出或改写用量');
   assert.equal(store.snapshotAgentTransientTimelineWithReplacements(completeSession).some(message => message.text.includes('待交付') || message.text.includes('已中断')), false);
@@ -854,17 +925,36 @@ try {
   const { runChatVisibleAgent } = load('src/features/chat/reply/application/RunChatVisibleAgent.ts');
   const { AUTONOMOUS_SILENT_REPLY } = load('src/features/chat/reply/application/AutonomousReplyContract.ts');
   const autonomousDeliveries = deliveryEvents;
-  configureChatReplyRuntime({ agent: { run: request => new AgentRuntime({
+  // Headless 日程不等待页面恢复；保护当前 owner 的展示，同时收口旧进程遗留的交付。
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run('schedule-orphan-display', 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run('schedule-orphan-display');
+  await commitCanonicalUserMessage({ message: { ...user('交付恢复'), sessionId: 'schedule-orphan-display' } });
+  const displayOwner = await turns.claimIfIdle('schedule-orphan-display', 'user_reply');
+  await displays.open(displayOwner);
+  await turns.commitTurn(displayOwner, [{ message: { sessionId: 'schedule-orphan-display', text: '已完成生成',
+    clientMessageId: 'orphan-display-reply', isMe: false, senderType: 'assistant', createdAt: stamp, time: '18:00' } }],
+  { assistantId: ai.id, changes: [] });
+  await presentation.recoverTurnPresentationDisplays([displayOwner.runId]);
+  assert.equal(await turns.claimAutonomousIfIdle('schedule-orphan-display', 'blocked-by-delivery'), null);
+  await presentation.recoverTurnPresentationDisplays();
+  const recoveredSchedule = await turns.claimAutonomousIfIdle('schedule-orphan-display', 'after-orphan-delivery');
+  assert.ok(recoveredSchedule, '旧进程遗留的展示记录不能永久阻挡 Headless 日程');
+  await turns.finishAutonomous(recoveredSchedule);
+  configureChatReplyRuntime({ mutations: { isRunCurrent: (tx, runId) => turns.isRunCurrentInTransaction(tx, runId) },
+    agent: { run: request => new AgentRuntime({
     registry: new AgentToolRegistry(), modelGateway: request.modelGateway,
   }).run(request) } });
   for (const transport of ['complete', 'stream']) for (const silent of [false, true]) {
     const sessionId = `autonomous-${transport}-${silent}`;
     db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(sessionId, 'direct');
     db.prepare('INSERT INTO sessions(id) VALUES (?)').run(sessionId);
+    const autonomousOwner = await turns.claimAutonomousIfIdle(sessionId, sessionId);
+    assert.ok(autonomousOwner, '自主执行必须先取得与普通聊天共享的持久 owner');
     const turn = { assistantText: silent ? AUTONOMOUS_SILENT_REPLY : '今天过得怎么样？\n\n想你了。',
       reasoningText: '根据最近的对话决定是否联系', toolCalls: [], historyItems: [], finishReason: 'stop',
       messageId: sessionId, usage: { totalTokens: 10, promptTokens: 6, completionTokens: 4 } };
     let requests = 0;
+    let streamedIdentity;
     const result = await runChatVisibleAgent({
       sessionId, runId: sessionId, aiConfig: ai, runtimeContext: { triggerSource: 'raven_cat_ai_schedule' },
       finalAssistantPolicy: 'autonomous_reply',
@@ -876,13 +966,29 @@ try {
           runTurn: async (request, emit) => {
             requests++;
             assert.deepEqual(request.tools, []);
+            assert.ok((await summaries.readContext(sessionId, [])).raw.some(item => item.pending),
+              '日程仍在执行时，摘要不能越过触发来源提前总结这一轮');
             if (transport === 'stream') {
               await emit({ type: 'reasoning_delta', text: turn.reasoningText });
-              for (const text of [turn.assistantText.slice(0, 4), turn.assistantText.slice(4)]) {
-                await emit({ type: 'assistant_text_delta', text });
-              }
+              await emit({ type: 'assistant_text_delta', text: turn.assistantText.slice(0, 4) });
+              if (!silent) await new Promise((resolve, reject) => {
+                const stop = store.subscribeAgentTransientTimeline(sessionId, () => check());
+                const timer = setTimeout(() => { stop(); reject(new Error('日程正文未在模型结束前进入独立气泡')); }, 2000);
+                const check = () => {
+                  const bubble = store.snapshotAgentTransientTimelineWithReplacements(sessionId).find(message => message.senderType === 'assistant');
+                  if (!bubble) return;
+                  assert.equal(bubble.text, turn.assistantText.slice(0, 4));
+                  assert.notEqual(JSON.parse(bubble.metadataJson).type, 'agentActivity');
+                  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id = ? AND sender_type = 'assistant'").get(sessionId).count, 0,
+                    '实时显示沿共享展示表交付，正式正文仍等待 T3');
+                  streamedIdentity = bubble.clientMessageId;
+                  clearTimeout(timer); stop(); resolve();
+                };
+                check();
+              });
+              await emit({ type: 'assistant_text_delta', text: turn.assistantText.slice(4) });
             }
-            assert.equal(autonomousDeliveries.filter(item => item.sessionId === sessionId).length, 0, '模型尚未结束时不能发送正文');
+            assert.equal(autonomousDeliveries.filter(item => item.sessionId === sessionId).length, 0, '模型尚未结束时不能发出正式提交交付事件');
             return turn;
           },
           takeCompletedTurn: () => turn,
@@ -890,9 +996,16 @@ try {
       }),
     });
     assert.equal(result.terminalCode, 'COMPLETED');
+    await turns.finishAutonomous(autonomousOwner);
     assert.equal(requests, 1, '无需追加工具调用或第二轮生成');
     const saved = (await messages.getMessages(sessionId, { limit: 30 })).messages;
     const bodies = saved.filter(message => message.senderType === 'assistant');
+    if (streamedIdentity) assert.equal(bodies[0].clientMessageId, streamedIdentity, 'T3 不能把正文搬成另一条气泡');
+    const evidence = (await messages.listAgentActivityEvidence([sessionId]))[0];
+    assert.equal(evidence.terminalCode, 'COMPLETED');
+    assert.ok(evidence.respondedAt);
+    assert.ok(saved.every(message => !['responded', 'terminal'].includes(JSON.parse(message.metadataJson).phase)),
+      '不另写已响应和结束消息，证据来自共享回合与展示');
     const deliveries = autonomousDeliveries.filter(item => item.sessionId === sessionId);
     assert.deepEqual(bodies.map(message => message.text), silent ? [] : ['今天过得怎么样？', '想你了。']);
     assert.equal(deliveries.length, silent ? 0 : 2);
@@ -900,14 +1013,102 @@ try {
     assert.equal(db.prepare('SELECT last_message FROM sessions WHERE id = ?').get(sessionId).last_message, silent ? null : '想你了。');
     assert.ok(saved.every(message => !message.text.includes(AUTONOMOUS_SILENT_REPLY)));
     if (silent) assert.ok(saved.some(message => message.text === '本次选择不发送消息'));
-    else assert.deepEqual(deliveries.map(item => [item.segmentIndex, item.segmentTotal]), [[0, 2], [1, 2]]);
+    else {
+      assert.deepEqual(deliveries.map(item => item.segmentIndex), [0, 1]);
+      assert.deepEqual(deliveries.map(item => item.clientMessageId), bodies.map(message => message.clientMessageId),
+        '日程通知沿正文稳定身份逐条交付，T3 不另造通知');
+    }
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id = ? AND sender_type = ?').get(sessionId, 'reasoning').count, 1);
+    assert.equal((await summaries.readContext(sessionId, [])).raw.some(item => item.pending), false,
+      '共享展示完成后，隐藏触发来源不能让摘要永久等待不存在的结束消息');
   }
+  // 准备失败、半段模型失败、取消和用户接管复用相同持久展示，不能补发正文。
+  for (const mode of ['prepare-failure', 'model-failure', 'cancelled', 'superseded']) {
+    const sessionId = `autonomous-${mode}`;
+    db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run(sessionId, 'direct');
+    db.prepare('INSERT INTO sessions(id) VALUES (?)').run(sessionId);
+    const owner = await turns.claimAutonomousIfIdle(sessionId, sessionId);
+    const controller = new AbortController();
+    const partial = '收到的半段';
+    const turn = { assistantText: partial, reasoningText: '', toolCalls: [], historyItems: [], finishReason: 'stop',
+      messageId: sessionId, usage: { totalTokens: 4, promptTokens: 2, completionTokens: 2 } };
+    const running = runChatVisibleAgent({ sessionId, runId: sessionId, aiConfig: ai,
+      runtimeContext: { triggerSource: 'raven_cat_ai_schedule' }, finalAssistantPolicy: 'autonomous_reply', signal: controller.signal,
+      prepare: async () => {
+        if (mode === 'prepare-failure') throw new Error('准备失败');
+        return { request: { task: { id: sessionId, type: 'raven_cat_autonomous', source: 'raven_cat_ai_schedule',
+          goal: '中断验证', assistantId: ai.id, sessionId, allowedToolNames: [], modelTransport: 'stream',
+          maxSteps: 10, maxToolCalls: 30, maxToolCallsPerStep: 3, createdAt: stamp }, initialHistory: [] },
+        modelGateway: { runTurn: async (_request, emit) => {
+          await emit({ type: 'assistant_text_delta', text: partial });
+          await new Promise((resolve, reject) => {
+            const stop = store.subscribeAgentTransientTimeline(sessionId, () => {
+              if (!store.snapshotAgentTransientTimelineWithReplacements(sessionId).some(message => message.text === partial)) return;
+              clearTimeout(timer); stop(); resolve();
+            });
+            const timer = setTimeout(() => { stop(); reject(new Error('半段正文未交付')); }, 2000);
+          });
+          if (mode === 'model-failure') throw new Error('模型请求失败');
+          if (mode === 'cancelled') controller.abort('CANCELLED_BY_USER');
+          if (mode === 'superseded') await commitCanonicalUserMessage({ message: { ...user('用户继续说话'), sessionId } });
+          return turn;
+        }, takeCompletedTurn: () => turn }, createLegacyContext: () => ({}) };
+      },
+    });
+    if (mode === 'prepare-failure') await assert.rejects(running, /准备失败/);
+    else await running;
+    await turns.finishAutonomous(owner);
+    assert.equal((await messages.getMessages(sessionId, { limit: 30 })).messages.filter(message => message.senderType === 'assistant').length, 0);
+    assert.equal(autonomousDeliveries.filter(item => item.sessionId === sessionId).length, 0);
+    const history = await displays.listHistory(sessionId);
+    assert.equal(history[0].state, 'interrupted');
+    assert.deepEqual(history[0].items.map(item => item.snapshot.text), mode === 'prepare-failure' ? [] : [partial]);
+    const evidence = (await messages.listAgentActivityEvidence([sessionId]))[0];
+    assert.equal(evidence.respondedAt !== null, mode !== 'prepare-failure');
+    assert.equal(evidence.terminalCode, mode === 'prepare-failure' ? 'EXECUTION_FAILED'
+      : mode === 'model-failure' ? 'MODEL_REQUEST_FAILED' : 'CANCELLED_BY_USER');
+    const context = await displays.listInterruptedContext(sessionId, 0);
+    assert.deepEqual(context.flatMap(run => run.items.map(item => item.text)), mode === 'prepare-failure' ? [] : [partial],
+      '日程失败后，后续模型也应沿共享上下文读取已交付片段');
+    assert.equal((await summaries.readContext(sessionId, [])).raw.some(item => item.pending), false);
+    if (mode === 'cancelled') {
+      const origin = db.prepare("SELECT id FROM messages WHERE client_message_id = ?").get(`agent_activity:${sessionId}:started`);
+      db.prepare('UPDATE sessions SET visible_after_message_id = ? WHERE id = ?').run(origin.id, sessionId);
+      assert.deepEqual(await displays.listHistory(sessionId), [], '清空聊天后不能重新注入隐藏日程来源之前的展示');
+      assert.deepEqual(await displays.listInterruptedContext(sessionId, 0), [], '清空聊天同样关闭旧日程的模型上下文可见范围');
+    }
+  }
+  mocks['@features/chat'].getChatSummaryContext = (sessionId, protectedIds = []) => summaries.readContext(sessionId, protectedIds);
+  const continuedScheduleInput = await commitCanonicalUserMessage({ message: { ...user('刚才怎么了'), sessionId: 'autonomous-model-failure' } });
+  const scheduleHistory = await promptHistoryBuilder.loadPrivateSummaryContext({ sessionId: 'autonomous-model-failure', aiConfig: ai,
+    runtimeContext: { batchedUserMessageIds: [continuedScheduleInput.id] } });
+  assert.equal(scheduleHistory.messages.filter(message => message.logicalMessageId === 'interrupted:autonomous-model-failure'
+    && message.content.includes('收到的半段') && message.role === 'user').length, 1,
+  '用户接着说话时，日程半段输出应按触发来源位置作为历史资料进入模型一次');
+  db.prepare('UPDATE sessions SET ai_assistant_id = ? WHERE id = ?').run(ai.id, stoppedSession);
+  assert.equal(await messages.getUnreadCountByAI(ai.id), 1, '中断保留已交付完整气泡的未读，活动尾泡不计入');
+  db.prepare('INSERT INTO chat_conversations VALUES (?, ?)').run('schedule-replaced', 'direct');
+  db.prepare('INSERT INTO sessions(id) VALUES (?)').run('schedule-replaced');
+  const replaced = await turns.claimAutonomousIfIdle('schedule-replaced', 'replaced-schedule');
+  await turns.revoke(replaced, 'cancelled', 'newer_schedule');
+  const latestScheduleRun = await turns.claimAutonomousIfIdle('schedule-replaced', 'latest-schedule');
+  const staleScheduleCommit = await turns.commitTurn(replaced, [{ message: { ...user('旧日程迟到回复'),
+    sessionId: 'schedule-replaced', isMe: false, senderType: 'assistant' } }], { assistantId: 'ai', changes: [] });
+  assert.equal(staleScheduleCommit.outcome, 'fence_failed', '新日程接管后旧模型返回也不能提交');
+  await turns.finishAutonomous(replaced);
+  assert.equal((await turns.getActiveRun('schedule-replaced')).runId, latestScheduleRun.runId, '旧 finally 不能释放最新 owner');
+  assert.deepEqual((await turns.listRunStates([replaced.runId])).map(run => run.status), ['cancelled']);
+  await turns.finishAutonomous(latestScheduleRun);
   await writer;
   db.close();
   const child = spawnSync(process.execPath, ['--no-warnings', import.meta.filename, '--read', filename], { encoding: 'utf8' });
   assert.equal(child.status, 0, child.stderr);
   const restored = JSON.parse(child.stdout);
+  assert.equal(restored.unreadBeforeRead, 1, '独立进程恢复后未读仍来自持久交付事实');
+  assert.equal(restored.unreadAfterRead, 0, '恢复后打开会话可清除尚无正式消息 ID 的未读');
+  assert.deepEqual(restored.autonomousFailureHistory[0].items.map(item => item.snapshot.text), ['收到的半段'],
+    '没有用户输入的日程失败后，独立进程仍能读回已交付正文');
+  assert.equal(restored.autonomousFailureEvidence[0].terminalCode, 'MODEL_REQUEST_FAILED');
   assert.deepEqual(restored.history[0].items.map(item => item.snapshot.text), publishedPrefix);
   assert.deepEqual(restored.streamedVisible.filter(message => message.senderType === 'assistant').map(message => message.text), streamingExpected,
     '独立进程恢复不重新分泡或重复正文');

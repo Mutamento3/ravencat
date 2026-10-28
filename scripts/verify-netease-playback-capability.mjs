@@ -1,47 +1,15 @@
 /** PHONE-8D3A：Phone Tools 网易云播放产品能力行为与边界验证。 */
 
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadTypeScriptModule, readRepoFile as read } from './helpers/load-typescript-module.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 const stripComments = (source) => source
   .replace(/\/\*[\s\S]*?\*\//gu, '')
   .replace(/\/\/[^\n]*/gu, '');
-
-const require = createRequire(import.meta.url);
-const ts = require('typescript');
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const sourcePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: sourcePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 存在未声明的依赖：${specifier}`);
-    return mocks[specifier];
-  };
-  new Function('exports', 'require', 'module', compiled.outputText)(
-    module.exports,
-    requireMock,
-    module,
-  );
-  return module.exports;
-}
 
 const runtimeSlotMock = {
   '@shared/runtime/RuntimeSlot': {

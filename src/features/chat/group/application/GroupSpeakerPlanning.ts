@@ -132,7 +132,7 @@ async function callAdminScheduler(params: {
     if (!response.success) {
       return {
         selectedAIIds: [],
-        requestFailureMessage: getErrorDisplayInfo(response.error || '管理员模型请求失败').message,
+        requestFailureMessage: getErrorDisplayInfo(response.error || '管理员模型请求失败', { includeDetails: true }).message,
       };
     }
     if (!response.text.trim()) {
@@ -153,6 +153,7 @@ async function callAdminScheduler(params: {
       selectedAIIds: [],
       requestFailureMessage: getErrorDisplayInfo(
         error instanceof Error ? error : String(error),
+        { includeDetails: true },
       ).message,
     };
   }

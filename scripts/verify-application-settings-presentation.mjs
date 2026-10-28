@@ -130,6 +130,17 @@ await act(async () => { previewGate.resolve(); await pendingPreview; });
 assert.equal(aiReads, readsBeforePreviewChange, '预览期间的新到达只补读预览，不重新解析全部头像');
 assert.equal(assistantsSnapshot.aiList[0].lastMessage, '刚到达的新消息');
 assert.equal(previewReads, 3);
+previewGate = deferred();
+await act(async () => { pendingPreview = assistantsSnapshot.loadAIAssistants(); });
+const readsBeforeDisplay = aiReads;
+await act(async () => {
+  // Agent 正文在 T3 前交付，不改变正式消息的原生到达快照。
+  previewText = '工具执行前已经说出的正文';
+  assistantsSnapshot.loadAIAssistants();
+});
+await act(async () => { previewGate.resolve(); await pendingPreview; });
+assert.equal(assistantsSnapshot.aiList[0].lastMessage, '工具执行前已经说出的正文', '在途读取不能丢失无原生到达版本变化的正文交付');
+assert.equal(aiReads, readsBeforeDisplay, '只重读失效的预览，不重复解析头像或重新加载资料');
 previewGate = null;
 nextAIError = new Error('模拟列表读取失败');
 await act(async () => { await assert.rejects(assistantsSnapshot.loadAIAssistants(), /模拟列表读取失败/u); });

@@ -1,5 +1,5 @@
 /** 正文与派生任务在同一事务标记，所有运行时访问经单写者协调器。 */
-import { databaseCoordinator, type DatabaseReadExecutor, type DatabaseTransactionExecutor } from '@platform/persistence';
+import { CoordinatedDatabaseError, databaseCoordinator, type DatabaseReadExecutor, type DatabaseTransactionExecutor } from '@platform/persistence';
 import { MemoryNotFoundError, MemoryTriggerNotFoundError, MemoryVectorDimensionError, normalizeMemoryText, type MemoryEntry, type MemoryRecallSettings, type MemoryTriggerKeyword, type PassiveTriggerGroup } from '../domain/Memory';
 import type { CreateMemoryRecord, MemoryEmbeddingClaim, MemoryEmbeddingModel, MemoryRepository } from '../domain/MemoryRepository';
 
@@ -37,6 +37,16 @@ function mapEntry(row: EntryRow): MemoryEntry {
 
 function executor(name: string) {
   return databaseCoordinator.openTaskExecutor({ name: `memory.${name}`, feature: 'memory', priority: 'maintenance' });
+}
+async function memoryTransaction<T>(name: string, operation: (tx: DatabaseTransactionExecutor) => Promise<T>): Promise<T> {
+  try {
+    return await executor(name).withExclusiveTransactionAsync(operation);
+  } catch (error) {
+    // 只恢复 Memory 自己的业务拒绝，SQL 故障继续携带协调器诊断。
+    if (error instanceof CoordinatedDatabaseError
+      && (error.cause instanceof MemoryNotFoundError || error.cause instanceof MemoryTriggerNotFoundError)) throw error.cause;
+    throw error;
+  }
 }
 
 async function readEntry(db: DatabaseReadExecutor, poolId: string, memoryId: string): Promise<MemoryEntry> {
@@ -116,7 +126,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async createEntry(input: CreateMemoryRecord) {
-    return executor('createEntry').withExclusiveTransactionAsync((tx) => this.createEntryInTransaction(tx, input));
+    return memoryTransaction('createEntry', (tx) => this.createEntryInTransaction(tx, input));
   }
 
   /** 已删除的写入回执仍有效，重复转换不能悄悄恢复用户删除的记忆。 */
@@ -152,7 +162,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async updateEntry(poolId: string, memoryId: string, content: string, normalizedContent: string, now: string, summary?: string | null) {
-    return executor('updateEntry').withExclusiveTransactionAsync(async (tx) => {
+    return memoryTransaction('updateEntry', async (tx) => {
       const summarySet = summary === undefined ? '' : 'summary = ?, normalized_summary = ?,';
       const summaryParams = summary === undefined ? [] : [summary, normalizeMemoryText(summary ?? '')];
       const result = await tx.runAsync(`UPDATE memory_items SET content = ?, normalized_content = ?, ${summarySet}
@@ -180,7 +190,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async getRecallSettings(poolId: string) {
-    return executor('getSettings').withExclusiveTransactionAsync(async (tx) => {
+    return memoryTransaction('getSettings', async (tx) => {
       await tx.runAsync('INSERT OR IGNORE INTO memory_recall_settings (pool_id) VALUES (?)', [poolId]);
       const row = await tx.getFirstAsync<{ passive_limit: number; active_page_size: number }>(
         'SELECT passive_limit, active_page_size FROM memory_recall_settings WHERE pool_id = ?', [poolId]);
@@ -195,7 +205,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async listTriggers(poolId: string): Promise<PassiveTriggerGroup[]> {
-    return executor('listTriggers').withExclusiveTransactionAsync(async (tx) => {
+    return memoryTransaction('listTriggers', async (tx) => {
       const rows = await tx.getAllAsync<{
         id: string; auto_associate: number; associated_count: number; enabled_count: number;
       }>(`SELECT t.id, t.auto_associate, COUNT(m.id) AS associated_count,
@@ -214,7 +224,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async createTriggerGroup(poolId: string, groupId: string, keywords: MemoryTriggerKeyword[], memoryIds: string[], autoAssociate: boolean) {
-    await executor('createTriggerGroup').withExclusiveTransactionAsync(async (tx) => {
+    await memoryTransaction('createTriggerGroup', async (tx) => {
       await tx.runAsync('INSERT INTO memory_trigger_groups (id, pool_id, auto_associate) VALUES (?, ?, ?)', [groupId, poolId, autoAssociate ? 1 : 0]);
       await writeTriggerKeywords(tx, groupId, keywords);
       for (const memoryId of memoryIds) {
@@ -225,7 +235,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async updateTriggerGroup(poolId: string, groupId: string, keywords: MemoryTriggerKeyword[], autoAssociate: boolean) {
-    await executor('updateTriggerGroup').withExclusiveTransactionAsync(async (tx) => {
+    await memoryTransaction('updateTriggerGroup', async (tx) => {
       await requireTriggerGroup(tx, poolId, groupId);
       await tx.runAsync('UPDATE memory_trigger_groups SET auto_associate = ? WHERE id = ?', [autoAssociate ? 1 : 0, groupId]);
       await tx.runAsync('DELETE FROM memory_trigger_keywords WHERE group_id = ?', [groupId]);
@@ -248,7 +258,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async setAutoRecall(poolId: string, triggerId: string, memoryId: string, enabled: boolean) {
-    await executor('setAutoRecall').withExclusiveTransactionAsync(async (tx) => {
+    await memoryTransaction('setAutoRecall', async (tx) => {
       await requireTriggerGroup(tx, poolId, triggerId);
       await readEntry(tx, poolId, memoryId);
       if (enabled) {
@@ -277,7 +287,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async syncEmbeddingModel(model: MemoryEmbeddingModel | null) {
-    await executor('syncEmbeddingModel').withExclusiveTransactionAsync(async (tx) => {
+    await memoryTransaction('syncEmbeddingModel', async (tx) => {
       const fingerprint = model?.fingerprint ?? null;
       await tx.runAsync(`UPDATE memory_item_embeddings SET model_fingerprint = ?, model_name = ?,
         status = CASE WHEN ? IS NULL THEN 'not_requested' WHEN vector_json IS NULL THEN 'pending' ELSE 'stale' END,
@@ -289,7 +299,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async readRecallCandidates(poolId: string, fingerprint: string | null, dimension: number | null) {
-    return executor('recallCandidates').withExclusiveTransactionAsync(async (tx) => {
+    return memoryTransaction('recallCandidates', async (tx) => {
       const rows = await tx.getAllAsync<EntryRow>(`${ENTRY_QUERY} WHERE m.pool_id = ?`, [poolId]);
       const vectors = fingerprint !== null && dimension !== null ? await readValidVectors(tx, poolId, fingerprint, dimension) : [];
       return { entries: rows.map(mapEntry), vectors };
@@ -297,7 +307,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async claimEmbedding(fingerprint: string, claimId: string, now: string, expiresAt: string) {
-    return executor('claimEmbedding').withExclusiveTransactionAsync(async (tx) => {
+    return memoryTransaction('claimEmbedding', async (tx) => {
       const row = await tx.getFirstAsync<{ memory_id: string; content: string; summary: string | null; content_revision: number; attempts: number }>(
         `SELECT e.memory_id, m.content, m.summary, m.content_revision, e.attempts FROM memory_item_embeddings e
          JOIN memory_items m ON m.id = e.memory_id WHERE e.model_fingerprint = ?
@@ -314,7 +324,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async completeEmbedding(claim: MemoryEmbeddingClaim, vector: number[]) {
-    return executor('completeEmbedding').withExclusiveTransactionAsync(async (tx) => {
+    return memoryTransaction('completeEmbedding', async (tx) => {
     const state = await tx.getFirstAsync<{ dimension: number | null }>(
       'SELECT dimension FROM memory_v3_state WHERE id = 1 AND model_fingerprint = ?', [claim.modelFingerprint]);
     if (!state) return 'discarded';
@@ -350,7 +360,7 @@ export class SQLiteMemoryEntryRepository implements MemoryRepository {
   }
 
   async retryEmbedding(poolId: string, memoryId: string) {
-    await executor('retryEmbedding').withExclusiveTransactionAsync(async (tx) => {
+    await memoryTransaction('retryEmbedding', async (tx) => {
       await readEntry(tx, poolId, memoryId);
       await markContentPending(tx, memoryId);
     });

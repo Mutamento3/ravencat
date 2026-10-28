@@ -45,7 +45,6 @@ function buildDirectVisionContext(contextText: string): string {
     contextText,
     '',
     '[视觉输入状态：原图已直接提供]',
-    '本轮输入实际包含图片。只可根据这张图片中可见的证据回答，不得声称看见图片之外的内容。',
   ].join('\n');
 }
 

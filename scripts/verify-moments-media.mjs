@@ -318,7 +318,7 @@ const retried = await repository.getMedia(failedMedia.id);
 assert.equal(retried.analysisStatus, 'completed');
 assert.equal(retried.analysisModelConfigId, 'model-b');
 
-// 首次模型失败只落稳定错误码，不能保存 provider 原文，也不能撤销 Moment。
+// 未分类内部异常不作为接口原文持久化，也不能撤销 Moment。
 analysisBehavior = async () => { throw new Error('secret provider response'); };
 const failedMoment = await publishModule.createUserMomentWithMedia(directory, { content: '首次失败', media: [drafts[0]] });
 for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -329,6 +329,24 @@ for (let attempt = 0; attempt < 20; attempt += 1) {
 const initialFailure = db.prepare('SELECT analysis_error_code, analysis_text FROM moment_media WHERE moment_id = ?').get(failedMoment.id);
 assert.deepEqual({ ...initialFailure }, { analysis_error_code: 'model_request_failed', analysis_text: null });
 assert.ok(db.prepare('SELECT id FROM moments WHERE id = ?').get(failedMoment.id));
+
+// 客户端已脱敏的模型失败随状态保存，重新打开图片仍能查看，成功或手动编辑清除旧原因。
+const { MomentImageAnalysisError } = load('src/features/moments/domain/MomentImageAnalysis.ts');
+const providerReason = 'HTTP 400: unsupported multipart type for this model, only support text and audio';
+analysisBehavior = async () => { throw new MomentImageAnalysisError('model_request_failed', providerReason); };
+const failedItem = (await repository.listMedia(failedMoment.id))[0];
+const failedRetry = await analysisModule.reanalyzeMomentMedia(failedItem.id);
+assert.equal(failedRetry.errorMessage, providerReason);
+assert.equal((await repository.getMedia(failedItem.id)).analysisErrorMessage, providerReason);
+const snapshotBeforeRetry = await repository.getMedia(first.id);
+const protectedFailure = await analysisModule.reanalyzeMomentMedia(first.id);
+assert.equal(protectedFailure.errorMessage, providerReason, '已有描述时也返回本次失败的具体原因');
+assert.deepEqual(await repository.getMedia(first.id), snapshotBeforeRetry, '失败不覆盖可靠描述或 revision');
+analysisBehavior = async () => '成功识别';
+assert.equal((await analysisModule.reanalyzeMomentMedia(failedItem.id)).success, true);
+assert.equal((await repository.getMedia(failedItem.id)).analysisErrorMessage, null);
+await analysisModule.editMomentMediaAnalysis(failedItem.id, '用户编辑');
+assert.equal((await repository.getMedia(failedItem.id)).analysisErrorMessage, null);
 
 // Detail snapshot 必须按 sort_order 带出已保存 media 语义。
 const detail = await repository.captureMomentDetailForAgent('agent-reader', published.id);

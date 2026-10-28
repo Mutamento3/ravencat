@@ -235,11 +235,9 @@ async function loadGroupParticipantDirectory() {
 }
 
 async function loadGroupSpeakerPlanning() {
+  const errorMappingUrl = transpileToModuleUrl(read('src/platform/ai/errorMapping.ts'));
   const aiUrl = transpileToModuleUrl(`
-    export function getErrorDisplayInfo(error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { message: '统一错误：' + message };
-    }
+    export { getErrorDisplayInfo } from '${errorMappingUrl}';
     export function createAIClient() {
       return {
         async chat() {
@@ -783,9 +781,8 @@ async function verifyAdminSelectionSemantics(prepareGroupSpeechPlan) {
     ['ai-A', 'ai-B', 'ai-C'],
     '管理员请求失败时不得发起第二次请求，必须直接召唤全部可用成员',
   );
-  assert.equal(
-    failedSelection.adminRequestFailureNotice.text,
-    '管理员调度失败，本次已切换为全量召唤：统一错误：network down',
+  assert.ok(
+    failedSelection.adminRequestFailureNotice.text.includes('network down'),
     '管理员请求失败必须使用统一错误映射并明确告知已切换全量召唤',
   );
   assert.equal(state.adminCalls, 3);
@@ -799,11 +796,17 @@ async function verifyAdminSelectionSemantics(prepareGroupSpeechPlan) {
     rejectedRequest.sequenceMembers.map((member) => member.aiAssistantId),
     ['ai-A', 'ai-B', 'ai-C'],
   );
-  assert.equal(
-    rejectedRequest.adminRequestFailureNotice.text,
-    '管理员调度失败，本次已切换为全量召唤：统一错误：401 invalid api key',
+  assert.ok(
+    rejectedRequest.adminRequestFailureNotice.text.includes('401 invalid api key'),
     '模型客户端返回失败结果时也必须提示统一错误并全量召唤',
   );
+  const providerReason = 'unsupported multipart type for this model, only support text and audio';
+  state.adminRequestResult = { success: false, text: '', error: `HTTP 400: ${providerReason}` };
+  const unsupportedInput = await prepareGroupSpeechPlan(details, [{
+    id: 6, text: '输入不被支持', isMe: true, senderType: 'user', metadataJson: null,
+  }]);
+  assert.ok(unsupportedInput.adminRequestFailureNotice.text.includes(providerReason));
+  assert.doesNotMatch(unsupportedInput.adminRequestFailureNotice.text, /模型服务暂时无法完成回复/);
 }
 
 async function verifyGroupParticipantDirectory(getGroupParticipantDirectory) {

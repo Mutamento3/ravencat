@@ -2,7 +2,7 @@
 import type { AgentTask, ModelTransportMode } from '@shared/aiTools';
 
 export const CHAT_AGENT_TASK_BUDGET_PRESET = {
-  maxSteps: 10,
+  maxSteps: 30,
   maxToolCalls: 30,
   maxToolCallsPerStep: 3,
 } as const;

@@ -46,8 +46,10 @@
                 ├── file-preview.tsx
                 ├── index.tsx
                 ├── menu.tsx
+                ├── message-context.tsx
                 ├── model-settings.tsx
                 ├── protocol.tsx
+                ├── search.tsx
                 ├── statistics.tsx
                 └── summary
                     ├── edit.tsx
@@ -58,6 +60,8 @@
                     ├── admin-settings.tsx
                     ├── file-preview.tsx
                     ├── menu.tsx
+                    ├── message-context.tsx
+                    ├── search.tsx
                     └── summary
                         └── index.tsx
                 ├── [groupId].tsx
@@ -85,11 +89,13 @@
             └── [field].tsx
         ├── profile.tsx
         ├── prompt-center
+            ├── conditional.tsx
             ├── custom
                 ├── [promptId].tsx
                 └── new.tsx
             ├── custom.tsx
             ├── index.tsx
+            ├── other.tsx
             ├── persona.tsx
             ├── registry.tsx
             ├── rules
@@ -124,7 +130,6 @@
                 ├── AssistantVoiceModels.ts
                 ├── AuxiliaryModelInitialization.ts
                 ├── HostAuthorityCoordinator.ts
-                ├── index.ts
                 └── modelTypes.ts
             ├── AssistantNickname.ts
             ├── AuxiliaryModelAvailability.ts
@@ -230,6 +235,7 @@
                 ├── CallNotificationFacade.ts
                 ├── CallPromptBlocks.ts
                 ├── CallPromptDefinitions.ts
+                ├── CallRingtoneSettings.ts
                 ├── events
                     ├── AppendCallCameraStateEvent.ts
                     ├── AppendCallSystemEvent.ts
@@ -274,6 +280,7 @@
                 ├── CallHistory.ts
                 ├── CallParticipant.ts
                 ├── CallRepository.ts
+                ├── CallRingtoneRepository.ts
                 ├── CallSession.ts
                 └── CallSummary.ts
             ├── index.ts
@@ -283,12 +290,14 @@
                 ├── NativeCallExecutionAdapter.ts
                 ├── SQLiteCallBackgroundRepository.ts
                 ├── SQLiteCallHistoryRepository.ts
-                └── SQLiteCallRepository.ts
+                ├── SQLiteCallRepository.ts
+                └── SQLiteCallRingtoneRepository.ts
             └── presentation
                 ├── CallActiveScreen.tsx
                 ├── CallHistoryDetailScreen.tsx
                 ├── CallHistoryScreen.tsx
                 ├── callHistoryStyles.ts
+                ├── CallRingtoneSettings.tsx
                 ├── CallRuntimeProvider.tsx
                 ├── CallScreen.tsx
                 ├── components
@@ -312,13 +321,17 @@
                     ├── ChatCallGateway.ts
                     ├── ChatConversationRuntime.ts
                     ├── ChatPresentation.ts
+                    ├── ChatTextDraftRuntime.ts
+                    ├── ChatTextDraftStore.ts
                     ├── ChatTogetherListeningGateway.ts
                     ├── ConversationPin.ts
                     └── ResolveCanonicalConversation.ts
                 ├── domain
+                    ├── ChatTextDraftRepository.ts
                     ├── ConversationRef.ts
                     └── SessionRepository.ts
                 └── infrastructure
+                    ├── SQLiteChatTextDraftRepository.ts
                     └── SQLiteSessionRepository.ts
             ├── favorites
                 ├── application
@@ -361,6 +374,9 @@
                     └── SQLiteGroupMembershipRepository.ts
             ├── index.ts
             ├── messages
+                ├── aiTools
+                    ├── ReadChatMessageContextTool.ts
+                    └── SearchChatMessagesTool.ts
                 ├── application
                     ├── AgentTransientTimeline.ts
                     ├── AppendExternalAssistantMessages.ts
@@ -382,9 +398,11 @@
                     ├── MigrateLegacyChatAttachments.ts
                     ├── PersistChatImageAttachment.ts
                     ├── PrepareChatAttachments.ts
+                    ├── ReadChatMessageContext.ts
                     ├── ReceiveExternalAIMessage.ts
                     ├── RecordAssistantNicknameChange.ts
                     ├── ResolveChatAttachmentMedia.ts
+                    ├── SearchChatMessages.ts
                     ├── SendUserMessage.ts
                     ├── ShareChatMessages.ts
                     ├── UpsertCallTimelineEntry.ts
@@ -398,8 +416,10 @@
                     ├── ChatAttachment.ts
                     ├── ChatMessage.ts
                     ├── ChatMessageActions.ts
+                    ├── ChatMessageContext.ts
                     ├── ChatMessageEditing.ts
                     ├── chatMessageMetadata.ts
+                    ├── ChatMessageSearch.ts
                     ├── ChatMessageSelection.ts
                     ├── ChatRecordStatistics.ts
                     ├── ChatSticker.ts
@@ -450,6 +470,8 @@
                         ├── useChatRegeneration.ts
                         ├── useChatSendFlow.ts
                         └── useChatTurnExecutionStatus.ts
+                    ├── ChatMessageContextScreen.tsx
+                    ├── ChatMessageSearchScreen.tsx
                     ├── components
                         ├── bottomTabBar
                             ├── FloatingBallTabBar.tsx
@@ -506,7 +528,6 @@
                         ├── useChatMessageSelection.ts
                         ├── useChatMessageShare.ts
                         ├── useChatTimelineSync.ts
-                        ├── useIsAppActive.ts
                         └── useMessageHistoryState.ts
                     ├── FilePreview.tsx
                     └── MessageBubble
@@ -541,6 +562,7 @@
                     ├── ChatRouteScreens.tsx
                     ├── ChatScreen.tsx
                     ├── chatScreenTypes.ts
+                    ├── ChatTextDraftProvider.tsx
                     ├── conversationPreloadCandidates.ts
                     ├── ConversationPreparationController.ts
                     ├── useAIAssistants.ts
@@ -558,6 +580,7 @@
                     ├── ChatAgentTimeline.ts
                     ├── ChatAgentToolTimelineProjector.ts
                     ├── ChatStreamingReplyProjector.ts
+                    ├── SendImageTool.ts
                     ├── SendVoiceMessageTool.ts
                     └── ToolReplyPresentation.ts
                 ├── application
@@ -583,6 +606,7 @@
                     ├── ExecuteUserReplyTurn.ts
                     ├── MemoryParticipationPolicy.ts
                     ├── ProcessAIReply.ts
+                    ├── QueryChatTurnStates.ts
                     ├── RegenerateChatReply.ts
                     ├── ReplyPolicy.ts
                     ├── ReplyTaskPromptBlocks.ts
@@ -638,6 +662,7 @@
                 └── AIScheduleTools.ts
             ├── application
                 ├── AIScheduleApplication.ts
+                ├── AIScheduleContext.ts
                 ├── AIScheduleProjectionOwner.ts
                 ├── AIScheduleProjectionRepairCoordinator.ts
                 ├── AIScheduleRecovery.ts
@@ -654,7 +679,6 @@
                 ├── CompanionRuntimeDependencies.ts
                 ├── CompanionScreenCapture.ts
                 ├── CompanionSettingsFacade.ts
-                ├── CompanionTime.ts
                 ├── CompanionWakeHeadlessTask.ts
                 ├── ExecuteFloatingMessage.ts
                 ├── index.ts
@@ -666,6 +690,7 @@
             ├── composition.ts
             ├── domain
                 ├── AISchedule.ts
+                ├── AIScheduleContext.ts
                 ├── AIScheduleRepository.ts
                 ├── CompanionRepositories.ts
                 ├── CompanionSettings.ts
@@ -681,10 +706,12 @@
             └── presentation
                 ├── CompanionBlacklistScreen.tsx
                 ├── CompanionControls.tsx
+                ├── CompanionDiagnosticsReport.ts
+                ├── CompanionDiagnosticsSheet.styles.ts
+                ├── CompanionDiagnosticsSheet.tsx
                 ├── CompanionSettingsScreen.tsx
                 ├── CompanionSettingsShared.styles.ts
                 ├── CompanionSystemAccessScreen.tsx
-                ├── index.ts
                 ├── ProactiveLifeScreen.styles.ts
                 ├── ProactiveLifeScreen.tsx
                 ├── proactiveLifeViewModel.ts
@@ -746,8 +773,7 @@
                 ├── BubbleSkinSettings.styles.ts
                 ├── BubbleSkinSettings.tsx
                 ├── FloatingInteractionScreen.styles.ts
-                ├── FloatingInteractionScreen.tsx
-                └── index.ts
+                └── FloatingInteractionScreen.tsx
         ├── integrations
             ├── application
                 ├── TranslationModels.ts
@@ -950,7 +976,9 @@
                 ├── NetEaseResolveShareLinkTool.ts
                 ├── NetEaseSearchPublicPlaylistsTool.ts
                 ├── NetEaseSearchSongsTool.ts
-                └── NetEaseToolExecution.ts
+                ├── NetEaseToolExecution.ts
+                ├── ReadClipboardTool.ts
+                └── XiaohongshuNoteTools.ts
             ├── application
                 ├── CurrentProtectedAppsPolicy.ts
                 ├── ForegroundAppRuntimeDependencies.ts
@@ -1005,12 +1033,10 @@
         ├── prompting
             ├── application
                 ├── GetPromptCenterSnapshot.ts
-                ├── GetPromptManagementSnapshot.ts
                 ├── ManageAssistantPrompts.ts
                 ├── ManageMcpServices.ts
                 ├── ManagePromptCustomBlocks.ts
                 ├── ManagePromptDefaults.ts
-                ├── PreviewResolvedPromptPack.ts
                 ├── PromptingRuntimeDependencies.ts
                 └── ResolveLegacyPromptPreset.ts
             ├── composition.ts
@@ -1025,11 +1051,8 @@
                 └── SQLitePromptingRepository.ts
             └── presentation
                 ├── CustomPromptRow.tsx
-                ├── promptCenterLabels.ts
                 ├── PromptCenterScreen.tsx
-                ├── promptCenterStyles.ts
-                ├── PromptPackInspector.tsx
-                └── promptPackInspectorStyles.ts
+                └── promptCenterStyles.ts
         ├── protocol
             ├── aiTools
                 ├── AddProtocolTool.ts
@@ -1054,7 +1077,6 @@
                 ├── ReadScreenAccessibilityTool.ts
                 └── ReadScreenOcrTool.ts
             ├── application
-                ├── index.ts
                 ├── ScreenCapture.ts
                 ├── ScreenCapturePolicy.ts
                 ├── ScreenObservationPolicy.ts
@@ -1169,11 +1191,11 @@
                 └── SearchLedgerTool.ts
             ├── application
                 ├── AddRecord.ts
-                ├── index.ts
                 ├── QueueLedgerAIReply.ts
                 ├── TriggerLedgerAIReply.ts
                 ├── UseQuickAction.ts
-                └── WalletPresentation.ts
+                ├── WalletPresentation.ts
+                └── WalletRecordSubmission.ts
             ├── composition.ts
             ├── domain
                 ├── LedgerRepository.ts
@@ -1206,7 +1228,6 @@
                     ├── styles.ts
                     ├── types.ts
                     └── useHistoryScreen.ts
-                ├── index.ts
                 ├── Overview.tsx
                 ├── QuickActionModal.tsx
                 ├── QuickActions.tsx
@@ -1279,7 +1300,6 @@
             ├── createChatTogetherListeningGateway.ts
             ├── createWalletChatReplyGateway.ts
             ├── ensureHostDatabaseReady.ts
-            ├── index.ts
             ├── migrateLegacyAvatarReferences.ts
             ├── MomentImageAnalysisModelGateway.ts
             ├── runPendingBackupRestoreCompletion.ts
@@ -1315,9 +1335,6 @@
                 └── systemPromptPresets.ts
             ├── DeviceBatteryPromptBlock.ts
             ├── index.ts
-            ├── preview
-                ├── index.ts
-                └── PromptPreviewService.ts
             ├── PromptBuiltInContent.ts
             ├── PromptHistoryBuilder.ts
             ├── PromptPackAssembler.ts
@@ -1381,11 +1398,13 @@
             ├── OpenAIClient.ts
             └── types.ts
         ├── device
+            ├── CallPresentationSurface.ts
+            ├── CallRingtone.ts
             ├── chat
                 ├── captureChatPhoto.ts
                 ├── index.ts
                 ├── selectChatDocument.ts
-                └── selectChatImage.ts
+                └── selectChatImages.ts
             ├── Clipboard.ts
             ├── ConversationTurnExecutionHost.ts
             ├── CropImageToAspect.ts
@@ -1414,7 +1433,8 @@
             ├── TemporarySpeechAudioStore.ts
             ├── TextSelection.tsx
             ├── usePersistentAvatarDraft.ts
-            └── VoiceRecording.ts
+            ├── VoiceRecording.ts
+            └── XiaohongshuAutomation.ts
         ├── index.ts
         ├── mcp
             ├── index.ts
@@ -1451,6 +1471,7 @@
                 ├── backupSnapshot.ts
                 ├── callBackgroundSchema.ts
                 ├── callHistorySchema.ts
+                ├── callRingtoneSchema.ts
                 ├── chatFavoriteSchema.ts
                 ├── chatRegenerationSchema.ts
                 ├── chatReplyVersionSchema.ts
@@ -1605,7 +1626,6 @@
             └── UserAvatar.tsx
         └── utils
             ├── conversationListOrdering.ts
-            ├── functionUtils.ts
             ├── presentationLoadRevision.ts
             └── timeFormat.ts
 ```
@@ -1622,6 +1642,7 @@
                         └── expo
                             └── modules
                                 └── androidoverlayruntime
+                                    ├── CallPresentationReturn.kt
                                     ├── DraggableOverlayBehavior.kt
                                     ├── OverlayBoundsResolver.kt
                                     ├── OverlayGeometry.kt
@@ -1690,6 +1711,23 @@
         ├── index.ts
         └── src
             └── CallAudioPlaybackModule.ts
+    ├── call-ringtone
+        ├── android
+            └── src
+                ├── main
+                    └── java
+                        └── expo
+                            └── modules
+                                └── callringtone
+                                    ├── CallRingtoneModule.kt
+                                    └── CallRingtonePlayback.kt
+                └── test
+                    └── java
+                        └── expo
+                            └── modules
+                                └── callringtone
+                                    └── CallRingtonePlaybackTest.kt
+        └── index.ts
     ├── call-runtime
         ├── android
             └── src
@@ -1704,16 +1742,20 @@
                                     ├── CallExecutionService.kt
                                     ├── CallFloatingFrame.kt
                                     ├── CallOverlayController.kt
-                                    └── CallRuntimeModule.kt
+                                    ├── CallPresentationView.kt
+                                    ├── CallRuntimeModule.kt
+                                    └── CallTelecomSession.kt
                 └── test
                     └── java
                         └── expo
                             └── modules
                                 └── callruntime
                                     ├── CallAudioRouteControllerTest.kt
+                                    ├── CallExecutionRegistryTest.kt
                                     ├── CallFloatingFrameTest.kt
                                     ├── CallLifecycleThreadingTest.kt
-                                    └── CallOverlayContinuityTest.kt
+                                    ├── CallOverlayContinuityTest.kt
+                                    └── CallTelecomSessionTest.kt
         └── index.ts
     ├── conversation-turn-runtime
         ├── android
@@ -1755,7 +1797,11 @@
                                         ├── NotificationListenerAccessReader.kt
                                         ├── SoftLockController.kt
                                         ├── SoftLockWindowOwner.kt
-                                        └── SystemCalendarController.kt
+                                        ├── SystemCalendarController.kt
+                                        ├── XiaohongshuNoteAutomation.kt
+                                        ├── XiaohongshuPage.kt
+                                        ├── XiaohongshuPublishReceipts.kt
+                                        └── XiaohongshuTextInput.kt
                                     ├── model
                                         ├── AppLaunchResult.kt
                                         ├── DeviceControlRuntimeLifecycle.kt
@@ -1792,7 +1838,10 @@
                                         ├── NotificationListenerAccessReaderTest.kt
                                         ├── SoftLockControllerTest.kt
                                         ├── SoftLockWindowOwnerTest.kt
-                                        └── SystemCalendarControllerTest.kt
+                                        ├── SystemCalendarControllerTest.kt
+                                        ├── XiaohongshuPageTest.kt
+                                        ├── XiaohongshuPublishReceiptsTest.kt
+                                        └── XiaohongshuTextInputTest.kt
                                     ├── model
                                         └── SoftLockCommandTest.kt
                                     ├── runtime
@@ -1815,6 +1864,7 @@
                                     ├── AccessibilityScreenshotWriter.kt
                                     ├── AppUsageQuery.kt
                                     ├── DeviceBatteryQuery.kt
+                                    ├── DeviceClipboardQuery.kt
                                     ├── DeviceCurrentWindowFence.kt
                                     ├── DeviceForegroundWindowResolver.kt
                                     ├── DeviceLocationQuery.kt
@@ -1856,7 +1906,6 @@
                             └── modules
                                 └── kimiphonenotifications
                                     ├── CallNotificationActionHeadlessTaskService.kt
-                                    ├── CallPresentationReturn.kt
                                     ├── IncomingCallActivity.kt
                                     ├── IncomingCallSurfaceRegistry.kt
                                     ├── KimiPhoneNotificationsModule.kt
@@ -1875,6 +1924,8 @@
                             └── modules
                                 └── kimiphonenotifications
                                     ├── CallPresentationReturnTest.kt
+                                    ├── IncomingCallPresentationTest.kt
+                                    ├── IncomingCallRingtoneTest.kt
                                     ├── NotificationDiagnosticsTest.kt
                                     └── TurnDisplayProgressTest.kt
         ├── index.ts
@@ -2059,12 +2110,14 @@
                             └── modules
                                 └── realtimespeechaudiosource
                                     ├── RealtimeSpeechAudioSourceModule.kt
+                                    ├── SpeechActivityDetector.kt
                                     └── SpeechSegmentArchive.kt
                 └── test
                     └── java
                         └── expo
                             └── modules
                                 └── realtimespeechaudiosource
+                                    ├── SpeechActivityDetectorTest.kt
                                     └── SpeechSegmentArchiveTest.kt
         ├── index.ts
         └── src

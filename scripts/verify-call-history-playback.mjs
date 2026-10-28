@@ -18,6 +18,8 @@ const theme = { colors: { brand: { primary: 'blue' }, text: { primary: 'black', 
   spacing: { lg: 20, md: 12, sm: 8 }, radius: { lg: 16, md: 8 } };
 let focused = true, activeCall = null, listener, delayedStart, started;
 let nickname = 'D老师', userName = '枫渡';
+let emptyHistory = false;
+const historyErrors = [];
 const sessions = [], dialogs = [], marked = [];
 const nativePlayer = { async play(uri) {
   let snapshot = { state: 'playing', positionMs: 0, durationMs: 2300 };
@@ -37,14 +39,15 @@ const dependencies = {
   'react-native': {
     ActivityIndicator: 'loading', Pressable: 'button', Text: 'text', View: 'view', Image: 'image',
     StyleSheet: { create: value => value, hairlineWidth: 0.5 },
-    FlatList: ({ data, renderItem, ListFooterComponent }) => React.createElement('list', null, data.map(item => React.createElement(React.Fragment, { key: item.id }, renderItem({ item }))), ListFooterComponent),
+    FlatList: ({ data, renderItem, ListHeaderComponent, ListFooterComponent, ListEmptyComponent }) => React.createElement('list', null,
+      ListHeaderComponent, data.length ? data.map(item => React.createElement(React.Fragment, { key: item.id }, renderItem({ item }))) : ListEmptyComponent, ListFooterComponent),
   },
   '@react-navigation/native': { useFocusEffect(effect) { const visible = focused; React.useEffect(() => visible ? effect() : undefined, [effect, visible]); } },
   'react-native-safe-area-context': { SafeAreaView: 'screen' },
   'lucide-react-native': { Pause: 'pause-icon', Play: 'play-icon', AlertCircle: 'error-icon', Trash2: 'trash-icon' },
   '@shared/theme': { ThemedSurface: pass, useTheme: () => theme, useThemedStyles: factory => factory(theme) },
   '@shared/ui': { NavigationHeader: 'header', showAppDialog(options) { dialogs.push(options); } },
-  '../application/CallHistory': { async getCallHistory() { return { record: { title: '2026-10-24 12:30:00' }, entries,
+  '../application/CallHistory': { async getCallHistory() { return { record: { title: '2026-10-24 12:30:00' }, entries: emptyHistory ? [] : entries, errors: historyErrors,
     images: [{ id: 'photo', callId: 'call', mediaAssetId: 'photo', createdAt: '2026-10-24T12:30:00Z' }] }; } },
   '../../application/CallHistory': { async deleteCallHistoryImage(...args) { assert.deepEqual(args, ['photo', 'call', 'ai']); } },
   '../application/runtime/AICallRuntimeService': { aiCallRuntimeService: {
@@ -140,6 +143,17 @@ try {
   assert.equal(chatSession.stops, 0, '历史页退出不能停止已被聊天接管的播放器');
   assert.equal(listener, null);
   await chat.stop();
+
+  emptyHistory = true;
+  historyErrors.push({ id: 'failure', createdAt: '2026-10-24T12:30:01Z',
+    text: '原生通话建立失败（等待当前音频端点）：系统通话音频建立超时' });
+  await act(async () => { renderer = create(tree()); });
+  assert.ok(JSON.stringify(renderer.toJSON()).includes('这通电话没有留下对话内容'));
+  assert.ok(JSON.stringify(renderer.toJSON()).includes(historyErrors[0].text), '空记录仍展示原生失败原因');
+  await act(async () => { renderer.root.findByProps({ accessibilityLabel: '查看通话异常详情' }).props.onPress(); });
+  assert.match(dialogs.at(-1).message, /通话 ID：call/);
+  assert.ok(dialogs.at(-1).message.includes(historyErrors[0].text));
+  await act(async () => { renderer.unmount(); });
 
   let stopped = 0, unsubscribed = 0;
   const immediateEnd = new playbackModule.LocalAudioPlaybackCoordinator({ async play() {

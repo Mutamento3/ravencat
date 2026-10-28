@@ -42,6 +42,7 @@ const group = { id: 'group-a', name: '测试群', lastMessage: '持久预览', c
 const preparation = load('src/features/chat/presentation/shell/ConversationPreparationController.ts');
 const { ChatRouterProvider, useChatRouter } = load('src/features/chat/presentation/shell/ChatRouterContext.tsx', {
   './useChatScreen': { __esModule: true, default: () => screen },
+  './ChatTextDraftProvider': { ChatTextDraftProvider: ({ children }) => children },
   './ConversationPreparationController': preparation,
   './conversationPreloadCandidates': {
     buildConversationPreloadCandidates: () => [],

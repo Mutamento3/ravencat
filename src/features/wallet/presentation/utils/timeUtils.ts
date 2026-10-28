@@ -335,11 +335,3 @@ export function getMonday(date: Date): Date {
   return new Date(d.setDate(diff));
 }
 
-/**
- * 获取指定日期所在周的周日
- */
-export function getSunday(date: Date): Date {
-  const monday = getMonday(date);
-  return new Date(monday.setDate(monday.getDate() + 6));
-}
-

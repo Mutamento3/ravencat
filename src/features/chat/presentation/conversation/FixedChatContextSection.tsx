@@ -2,7 +2,7 @@
 import React, { useCallback, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { useThemedStyles } from '@shared/theme';
+import { ThemedSurface, useThemedStyles } from '@shared/theme';
 import { showAppDialog } from '@shared/ui';
 import { getChatSummaryContext, setFixedChatContextStart } from '../../summary/application/ChatSummary';
 import { subscribeChatSummaryChanged } from '../../summary/application/ChatSummaryRuntime';
@@ -46,23 +46,23 @@ export default function FixedChatContextSection({ conversationId, onChoose, onFi
     catch (failure) { showAppDialog({ title: '取消固定失败', message: failure instanceof Error ? failure.message : '请稍后再试', tone: 'error' }); }
     finally { setBusy(false); }
   };
-  return <View style={styles.settingsSection}>
-    <Text style={styles.sectionLabel}>固定消息上下文起点</Text>
-    <Text style={styles.paramDescription}>仅影响这个 AI。设置后，从选中的消息到最新消息全部进入上下文，近期条数暂时失效，原参数保留。</Text>
-    <Text style={styles.paramDescription}>对话增长可能增加 Token 消耗并超出模型的上下文额度，请按需使用。</Text>
+  return <ThemedSurface variant="card" style={styles.settingsSection}>
+    <Text style={styles.cardTitle}>固定消息起点</Text>
+    <Text style={styles.rowDescription}>{fixedStart ? '已固定 · 从选中消息起持续带入' : '从某条消息开始，保留之后的全部原文'}</Text>
     {error && <Text accessibilityRole="alert" style={styles.contextLimitError}>{error}</Text>}
     {fixedStart && <>
       <Text numberOfLines={4} style={styles.fixedPreview}>{fixedStart.content}</Text>
-      <Text style={styles.paramDescription}>从此处到最新：{fixedStart.messageCount} 条逻辑对话。自动生成摘要已暂停，已有摘要是否注入由摘要页面控制。</Text>
+      <Text style={styles.rowDescription}>{fixedStart.messageCount} 条逻辑对话 · 自动摘要已暂停</Text>
+      <Text style={styles.rowDescription}>范围会随对话增长，可能超出模型额度并增加用量。</Text>
     </>}
     <View style={styles.fixedActions}>
       <Pressable disabled={!loaded || busy} accessibilityRole="button" onPress={onChoose}>
-        <Text style={styles.fixedAction}>{fixedStart ? '重新设置' : loaded ? '去设置' : '读取中…'}</Text>
+        <Text style={styles.fixedAction}>{fixedStart ? '更换起点' : loaded ? '选择起点' : '读取中…'}</Text>
       </Pressable>
       {fixedStart && <Pressable disabled={busy} accessibilityRole="button" onPress={() => { void cancel(); }}>
         <Text style={styles.fixedAction}>取消固定</Text>
       </Pressable>}
     </View>
-    <Text style={styles.paramDescription}>进入消息列表后，找到消息，长按选择「固定」。取消或删除起点会恢复近期条数；自动生成摘要需手动重新开启。</Text>
-  </View>;
+    <Text style={styles.rowDescription}>在聊天中长按消息，选择「固定」。</Text>
+  </ThemedSurface>;
 }

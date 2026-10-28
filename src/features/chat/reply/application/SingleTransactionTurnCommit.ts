@@ -1,5 +1,5 @@
 /**
- * @fileoverview SingleTransactionTurnCommit —— canonical user_reply 的 T3 提交策略（方案 16.5）。
+ * @fileoverview 普通回复、重写和日程共用的 T3 提交策略；自主回合不推进用户回复游标。
  *
  * 把 processAIReply 的最终落库替换为单事务 commitTurn：fence + 全量 items +
  * preview + run 终态 + 游标推进。fence 失败 = 安静结束本 run：不落错误气泡、
@@ -32,7 +32,7 @@ import type {
   AIReplyRuntimeContext,
   ProcessAIReplyCallbacks,
 } from './ChatReplyTypes';
-import { deliverCommittedAssistantSegment } from './CommittedAssistantSegmentDelivery';
+import { deliverAssistantDisplaySegment, deliverCommittedAssistantSegment } from './CommittedAssistantSegmentDelivery';
 import { beginAssistantMessageArrival, finishAssistantMessageArrival } from '../delivery/AssistantMessageArrival';
 import { releaseMediaAssetCandidates } from '@features/media';
 import { emitChatMessagesReloadRequested, emitChatTurnExecutionChanged } from '../../messages/events/ChatEvents';
@@ -181,7 +181,10 @@ export function createSingleTransactionTurnCommit(
           segmentTotal,
           sessionId,
           aiConfig,
-          runtimeContext: presentation ? { ...runtimeContext, arrivalAlreadyScheduled: true } : runtimeContext,
+          runtimeContext: presentation ? { ...runtimeContext, arrivalAlreadyScheduled: true,
+            suppressAIMessageReceivedEvent: runtimeContext.suppressAIMessageReceivedEvent
+              || presentation.hasNotifiedSegment(message.clientMessageId!),
+          } : runtimeContext,
           callbacks,
         });
       }
@@ -228,6 +231,12 @@ export function createSingleTransactionTurnCommit(
 
   return {
     persistsIntermediates: false,
+    configureSegmentDelivery: ({ aiConfig, runtimeContext = {}, callbacks = {} }) => {
+      if (!presentation) return;
+      presentation.configureSegmentDelivery(snapshot => deliverAssistantDisplaySegment({
+        sessionId: run.sessionId, snapshot, aiConfig, runtimeContext, callbacks,
+      }));
+    },
     decorateCommitRepository: repository => new Proxy(repository, {
       get(target, key) {
         if (key === 'commitMessage') return (input: Parameters<IMessageRepository['commitMessage']>[0]) => databaseCoordinator.transaction(
@@ -310,6 +319,7 @@ async function notifyCommittedSegment(params: {
     text,
     metadataJson: message.metadataJson,
     messageId: message.id,
+    clientMessageId: message.clientMessageId ?? undefined,
     logicalMessageId: message.logicalMessageId || null,
     segmentIndex,
     segmentTotal,

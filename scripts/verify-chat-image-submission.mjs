@@ -105,6 +105,7 @@ function load(relativePath) {
     if (boundaries[specifier]) return boundaries[specifier];
     if (specifier === '@shared/prompt') return load('src/shared/prompt/messageTimestamp.ts');
     if (specifier === './ChatTurnPresentationRuntime') return { getChatInterruptedTurnContext: async () => [] };
+    if (specifier === './ChatReplyRuntimeDependencies') return { getChatReplyRuntimeDependencies: () => ({ prompt: { readImageGroundingReminder: async () => null } }) };
     if (specifier === '@features/chat/messages/domain') return load('src/features/chat/messages/domain/chatMessageMetadata.ts');
     if (specifier.endsWith('/ChatMessageRuntime') || specifier === './ChatMessageRuntime') {
       return { getChatMessageRuntimeDependencies: () => runtime };

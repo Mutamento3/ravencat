@@ -48,11 +48,20 @@ export function filterActionStepsForPresentation(
 /** anchor 命中任意 child 时定位到承载它的整个 ActionGroup。 */
 export function renderedItemContainsMessageId(
   item: RenderedActionGroupItemLike,
-  messageId: number
+  messageId: number,
+  anchorSource?: ChatMessage,
 ): boolean {
-  return item.actionGroup
-    ? item.actionGroup.children.some((child) => child.id === messageId)
-    : item.msg.id === messageId;
+  const children = item.actionGroup ? item.actionGroup.children : [item.msg];
+  if (children.some(child => child.id === messageId)) return true;
+  // 隐藏触发来源仍是持久导航锚点，定位到该 run 的真实过程或正文。
+  return Boolean(anchorSource?.turnRunId && isHiddenActivityLifecycle(anchorSource)
+    && children.some(child => child.turnRunId === anchorSource.turnRunId));
+}
+
+function isHiddenActivityLifecycle(message: ChatMessage): boolean {
+  const metadata = parseMessageMetadata(message);
+  return metadata?.type === 'agentActivity'
+    && (metadata.phase === 'started' || metadata.phase === 'responded' || metadata.phase === 'terminal');
 }
 
 /** 时间分隔以 presentation item 覆盖的最后一条真实 timeline message 为准。 */
@@ -122,11 +131,14 @@ export function segmentContiguousAgentActions(
   const result: ChatPresentationTimelineItem[] = [];
   // 真实语音／贴纸会切开过程组，但同一 run 的各组必须共享最终状态，避免前组永远显示处理中。
   const activityLifecycles = new Map<string, AgentActivityLifecycle>();
+  const legacyLifecycleRuns = new Set<string>();
   for (const message of messages) {
     const metadata = parseMessageMetadata(message);
     if (metadata?.type !== 'agentActivity') continue;
+    if (metadata.phase === 'started') continue;
     const runKey = resolvePresentationRunIdentity(message).key;
     if (!runKey) continue;
+    if (metadata.phase === 'responded' || metadata.phase === 'terminal') legacyLifecycleRuns.add(runKey);
     const lifecycle = activityLifecycles.get(runKey) ?? {
       triggerReason: metadata.triggerReason, responded: false, finished: false, terminalCode: null,
     };
@@ -139,6 +151,10 @@ export function segmentContiguousAgentActions(
       lifecycle.terminalCode = metadata.terminalCode ?? null;
     }
     activityLifecycles.set(runKey, lifecycle);
+  }
+  // 新回合只有真实过程项；静默选择等单项记录不构成另一套运行生命周期。
+  for (const runKey of activityLifecycles.keys()) {
+    if (!legacyLifecycleRuns.has(runKey)) activityLifecycles.delete(runKey);
   }
   let currentRunKey: string | null = null;
   let currentChildren: ChatMessage[] = [];
@@ -157,6 +173,8 @@ export function segmentContiguousAgentActions(
   };
 
   for (const message of messages) {
+    // 生命周期只提供卡片状态；聊天不额外插入开始、响应和结束说明。
+    if (isHiddenActivityLifecycle(message)) continue;
     if (!isActionProcessMessage(message)) {
       if (currentRunKey && message.senderType === 'system'
         && parseMessageMetadata(message)?.type === 'groupMembershipChanged'

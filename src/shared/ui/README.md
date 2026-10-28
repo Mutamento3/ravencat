@@ -31,10 +31,12 @@
 | `ModelPickerModal` | 模型选择弹窗 |
 | `NavigationHeader` | 通用页面导航头，可在标题后显示主题主色问号并打开锚定悬浮说明 |
 | `Toggle` | 统一的二元开关，包含读屏状态及原生动画 |
-| `ToggleField` | 带标题和说明的开关字段，内部使用 `Toggle` |
+| `ToggleField` | 带标题和说明的开关字段，支持页面注入布局、字体、编号和自定义内容，内部使用 `Toggle` |
 | `Slider` | 原生手势数值滑杆，支持范围、步长、实时变化及松手通知 |
 | `SliderField` | 带标题、数值输入、范围和错误提示的滑杆字段 |
 | `UserAvatar` | 用户头像 |
+
+开关设置项统一使用 `ToggleField`：`layout="stacked"` 将说明放在行下方，`layout="inline"` 将说明放在开关左侧。页面通过 `rowStyle` 提供完整行布局时，组件直接使用该布局；未提供时保留默认表单容器。`contentStyle`、`labelStyle`、`hintStyle` 可替换各部分的默认样式，`style` 和 `toggleStyle` 分别补充外层与开关样式。编号或图标通过 `leading` 传入，状态标签和操作按钮等复杂内容可作为 `children` 保留原有结构。卡片材质与分组由页面负责，组件不保存业务状态；已有列表插槽中的独立开关仍使用 `Toggle`。
 
 页面只通过 `help.sections` 提供自己拥有的小标题和正文。导航头内部的 `NavigationHeaderHelp` 负责测量问号位置、打开带尖角的悬浮气泡，以及点击外部、系统返回和页面失焦时关闭；页面无需维护提示状态或监听根容器触摸。气泡以透明原生 `Modal` 显示，不占据页面布局，外部点击只关闭气泡，正文内部可滚动阅读。
 

@@ -1,6 +1,14 @@
 /** Phone Tools 产品目录与受保护应用策略公共出口。 */
 export { GetAppUsageTool } from './aiTools/GetAppUsageTool';
 export { GetCurrentLocationTool } from './aiTools/GetCurrentLocationTool';
+export { ReadClipboardTool } from './aiTools/ReadClipboardTool';
+export {
+  XiaohongshuGetPageTool, XiaohongshuEnterPublishingTool, XiaohongshuOpenTextEntryTool,
+  XiaohongshuStartTextNoteTool, XiaohongshuSetCardTextTool, XiaohongshuSetTitleTool,
+  XiaohongshuSetBodyTool, XiaohongshuAddTopicTool, XiaohongshuSelectStyleTool,
+  XiaohongshuSetVisibilityTool, XiaohongshuNextTool, XiaohongshuGoBackTool,
+  XiaohongshuPreparePublishTool, XiaohongshuPublishPreparedNoteTool,
+} from './aiTools/XiaohongshuNoteTools';
 
 export {
   PHONE_TOOL_CATALOG,

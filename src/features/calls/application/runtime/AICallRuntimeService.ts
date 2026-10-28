@@ -1,6 +1,7 @@
 /** 维护通话会话生命周期，并协调通知、消息时间线与 AI 决策。 */
 
 import { discardCallSnapshots } from '../snapshots/CallSnapshotLifetime';
+import { loadCallRingtoneUri } from '../CallRingtoneSettings';
 
 import type { ChatMessage } from '@features/chat';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
@@ -17,6 +18,7 @@ import {
   sendAIIncomingCallNotification,
 } from '@platform/device';
 import { saveCallStatusMessage } from '../events/CreateCallStatusMessage';
+import { appendCallErrorEvent } from '../events/AppendCallSystemEvent';
 import { runCallPreflight } from './CallPreflight';
 import { requestOutgoingCallDecision } from './OutgoingCallDecision';
 import { completeHostedCallExecution, refreshHostedCallMedia } from './CallMediaRuntimeRegistry';
@@ -161,6 +163,7 @@ export class AICallRuntimeService {
       };
     }
 
+    const ringtoneUri = await loadCallRingtoneUri(params.aiConfig.id, 'incoming');
     // 来电业务事实的唯一提交点在 createSession；预检完成后重新读取同一执行信号，
     // 已取消的 Legacy Tool 不得再创建 ringing 会话。提交之后必须继续完成事件、通知
     // 与 missed timeout 收口，避免留下半成品生命周期。
@@ -211,6 +214,8 @@ export class AICallRuntimeService {
       sessionId: params.chatSessionId,
       openingLine: params.payload.openingLine,
       reason: params.payload.reason,
+      ringtoneUri,
+      ringDurationMs: INCOMING_CALL_RINGING_TIMEOUT_MS,
     });
 
     if (!notificationSent) {
@@ -259,18 +264,16 @@ export class AICallRuntimeService {
       };
     }
 
-    const now = new Date().toISOString();
-    const activeCall = await this.getCallRepository().updateSessionIfState(call.id, ['ringing', 'requested'], {
-      state: 'active',
-      acceptedAt: now,
+    const connectingCall = await this.getCallRepository().updateSessionIfState(call.id, ['ringing', 'requested'], {
+      state: 'connecting',
     });
-    if (!activeCall) {
+    if (!connectingCall) {
       const current = await this.getCallRepository().getSessionById(call.id);
       if (!current) throw new Error(`Call ${call.id} disappeared while accepting`);
       return { call: current, visibleMessages: [] };
     }
-    this.setActiveCallSnapshot(activeCall);
-    await this.beginAudioSession(activeCall);
+    const activeCall = await this.connectCall(connectingCall);
+    if (activeCall.state !== 'active') return { call: activeCall, visibleMessages: [] };
     await this.getCallRepository().appendEvent({
       callId: call.id,
       chatSessionId: call.chatSessionId,
@@ -309,7 +312,7 @@ export class AICallRuntimeService {
         includeInAIContext: true,
       });
       // 开场白必须真实进 TTS 播放队列；字幕经 subscribeCallSentencePlayback 推送，双工保护跟随播放事件。
-      // 只播一次由状态机保证：ringing/requested→active 只会发生一次，刷新/重挂载/轮询不会重播。
+      // 接听由 connecting 的持久领取保证只执行一次；刷新和重复接听不会重播。
       void callTTSPlaybackQueue.enqueueAISpeech({
         callId: call.id,
         assistantId: call.aiAssistantId,
@@ -527,12 +530,12 @@ export class AICallRuntimeService {
     const decision = decisionResult.decision;
     if (decision.decision === 'reject') {
       const now = new Date().toISOString();
-      const rejectionReason = decision.rejectionReason.trim() || '我现在不太方便接电话，但可以先在这里陪你说。';
+      const rejectionReason = decision.rejectionReason;
       const rejectedCall = await this.getCallRepository().updateSessionIfState(call.id, ['dialing'], {
         state: 'rejected',
         endedAt: now,
         endReason: 'aiRejected',
-        aiRejectionReason: rejectionReason,
+        aiRejectionReason: rejectionReason || null,
       });
       if (!rejectedCall) return this.readEndedOutgoingCall(call.id);
       call = rejectedCall;
@@ -561,12 +564,14 @@ export class AICallRuntimeService {
           // 用户主动拨出并在通话页看到 AI 拒接结果，直接已读。
           isRead: true,
         }));
-        visibleMessages.push(await createCallAssistantTextMessage(this.getChat(), {
-          sessionId: chatSessionId,
-          aiConfig,
-          text: rejectionReason,
-          triggerReason: 'outgoing_call_rejected',
-        }));
+        if (rejectionReason) {
+          visibleMessages.push(await createCallAssistantTextMessage(this.getChat(), {
+            sessionId: chatSessionId,
+            aiConfig,
+            text: rejectionReason,
+            triggerReason: 'outgoing_call_rejected',
+          }));
+        }
 
         this.notifyCallTerminated(call);
 
@@ -581,16 +586,14 @@ export class AICallRuntimeService {
       }
     }
 
-    const now = new Date().toISOString();
-    const spokenText = decision.spokenText.trim() || '我接到了。';
-    const connectedCall = await this.getCallRepository().updateSessionIfState(call.id, ['dialing'], {
-      state: 'active',
-      acceptedAt: now,
+    const spokenText = decision.spokenText;
+    const connectingCall = await this.getCallRepository().updateSessionIfState(call.id, ['dialing'], {
+      state: 'connecting',
     });
-    if (!connectedCall) return this.readEndedOutgoingCall(call.id);
+    if (!connectingCall) return this.readEndedOutgoingCall(call.id);
+    const connectedCall = await this.connectCall(connectingCall);
+    if (connectedCall.state !== 'active') return this.readEndedOutgoingCall(call.id);
     call = connectedCall;
-    this.setActiveCallSnapshot(call);
-    await this.beginAudioSession(call);
     visibleMessages.push(await saveCallStatusMessage(this.getChat(), {
       sessionId: chatSessionId,
       callId: call.id,
@@ -601,29 +604,31 @@ export class AICallRuntimeService {
       // 用户主动拨出且通话已接通，直接已读。
       isRead: true,
     }));
-    const firstEvent = await this.getCallRepository().appendEvent({
-      callId: call.id,
-      chatSessionId,
-      kind: 'aiSpeechText',
-      actorType: 'ai',
-      actorId: aiConfig.agentId,
-      text: spokenText,
-      visibleInChat: false,
-      includeInAIContext: true,
-    });
-    // 去电首句同样进 TTS 播放队列；每个会话只创建一次，天然只播一次。
-    void callTTSPlaybackQueue.enqueueAISpeech({
-      callId: call.id,
-      assistantId: aiConfig.id,
-      text: spokenText,
-    }).catch((error) => {
-      console.warn('[AICallRuntimeService] Failed to enqueue outgoing first speech playback:', error);
-    });
+    // 控制标记可以单独决定接听；没有口语正文时不写空字幕，也不编造默认台词。
+    if (spokenText) {
+      await this.getCallRepository().appendEvent({
+        callId: call.id,
+        chatSessionId,
+        kind: 'aiSpeechText',
+        actorType: 'ai',
+        actorId: aiConfig.agentId,
+        text: spokenText,
+        visibleInChat: false,
+        includeInAIContext: true,
+      });
+      // 去电首句同样进 TTS 播放队列；每个会话只创建一次，天然只播一次。
+      void callTTSPlaybackQueue.enqueueAISpeech({
+        callId: call.id,
+        assistantId: aiConfig.id,
+        text: spokenText,
+      }).catch((error) => {
+        console.warn('[AICallRuntimeService] Failed to enqueue outgoing first speech playback:', error);
+      });
+    }
 
     return {
       status: 'accepted',
       call,
-      firstEvent,
       visibleMessages,
     };
   }
@@ -768,13 +773,17 @@ export class AICallRuntimeService {
     this.outgoingDecisions.get(call.id)?.abort();
     try {
       await finishCallMediaSession(endedCall);
+      const endActor = reason === 'aiEnded' ? 'ai'
+        : reason === 'userEnded' || reason === 'userRejected' ? 'user' : 'system';
       await this.getCallRepository().appendEvent({
         callId: call.id,
         chatSessionId: call.chatSessionId,
         kind: 'stateChanged',
-        actorType: reason === 'aiEnded' ? 'ai' : 'user',
+        actorType: endActor,
         actorId: reason === 'aiEnded' ? call.agentId : null,
-        text: reason === 'aiEnded'
+        text: endActor === 'system'
+          ? '通话因系统或执行异常自动结束。'
+          : reason === 'aiEnded'
           ? 'AI 主动挂断了视频电话。'
           : '用户主动挂断了视频电话。',
         payloadJson: JSON.stringify({
@@ -784,14 +793,16 @@ export class AICallRuntimeService {
       });
 
       const durationSeconds = computeCallDurationSeconds(endedCall);
-      const statusActor = endedCall.acceptedAt ? 'system' : (reason === 'aiEnded' ? 'ai' : 'user');
+      const failedToConnect = !endedCall.acceptedAt && reason === 'runtimeError';
+      const statusActor = endedCall.acceptedAt ? 'system' : endActor;
       const visibleMessages = [
         await saveCallStatusMessage(this.getChat(), {
           sessionId: call.chatSessionId,
           callId: call.id,
           direction: call.direction,
-          callStatus: endedCall.acceptedAt ? 'callDuration' : 'callEnded',
+          callStatus: failedToConnect ? 'callSystemError' : endedCall.acceptedAt ? 'callDuration' : 'callEnded',
           actor: statusActor,
+          displayText: failedToConnect ? '【通话未接通】' : null,
           endReason: reason,
           durationSeconds: endedCall.acceptedAt ? durationSeconds : null,
           agentId: call.agentId,
@@ -814,14 +825,39 @@ export class AICallRuntimeService {
     }
   }
 
-  private async beginAudioSession(call: CallSession): Promise<void> {
+  private async connectCall(call: CallSession): Promise<CallSession> {
     try {
       await getCallRuntimeDependencies().native.execution.start(call);
-      await getCallRuntimeDependencies().native.audioPlayback.beginSession(call.id);
       await refreshHostedCallMedia(call.id);
+      await getCallRuntimeDependencies().native.audioPlayback.beginSession(call.id);
+      // AI/用户同意接听只领取连接流程；音频真正就绪后才提交接通时间和聊天占用标记。
+      const connected = await this.getCallRepository().updateSessionIfState(call.id, ['connecting'], {
+        state: 'active',
+        acceptedAt: new Date().toISOString(),
+      });
+      if (!connected) {
+        const current = await this.getCallRepository().getSessionById(call.id);
+        if (!current) throw new Error(`Call ${call.id} disappeared while connecting`);
+        return current;
+      }
+      this.setActiveCallSnapshot(connected);
+      await refreshHostedCallMedia(call.id);
+      return connected;
     } catch (error) {
-      // 外部音频资源获取失败时收口已经提交的 active，不留下无法工作的通话。
-      await this.endCall(call.id, 'runtimeError');
+      try {
+        const current = await this.getCallRepository().getSessionById(call.id);
+        // 用户已挂断引起的激活取消不是故障；原生先收口的 runtimeError 仍需留下具体原因。
+        if (current && (!current.endedAt || current.endReason === 'runtimeError')) {
+          await appendCallErrorEvent({
+            callId: call.id,
+            text: `通话音频建立失败：${error instanceof Error ? error.message : String(error)}`,
+            payload: { type: 'nativeAudioSessionFailure' },
+          });
+        }
+      } finally {
+        // 错误记录失败也必须执行释放，不把持久化诊断放在资源释放的必经成功路径上。
+        await this.endCall(call.id, 'runtimeError');
+      }
       throw error;
     }
   }

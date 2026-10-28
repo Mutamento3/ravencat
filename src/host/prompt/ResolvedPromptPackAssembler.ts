@@ -14,6 +14,7 @@ import { promptPackAssembler } from './PromptPackAssembler';
 import { promptPackCompiler } from './compiler';
 import { createDeviceBatteryPromptBlocks } from './DeviceBatteryPromptBlock';
 import { promptPackBlockFactory } from './PromptPackBlockFactory';
+import { PARAGRAPH_BREAK_SCENARIOS } from './PromptBuiltInContent';
 
 const BATTERY_PRESET_ITEM = {
   definitionId: 'context.device_battery', slot: 'dynamic_context' as const,
@@ -120,6 +121,8 @@ async function resolveParams(
     ...legacyCustomBlocks.filter((block) => !userContents.has(block.content)),
     ...userBlocks,
   ];
+  const paragraphBreaksEnabled = includeDynamicContext && assistantConfiguration.paragraphBreaksEnabled
+    && PARAGRAPH_BREAK_SCENARIOS.some((scenario) => scenario === scenarioId);
   return {
     ...params,
     aiConfig: {
@@ -146,11 +149,17 @@ async function resolveParams(
           : item
       )).filter((item) => item.definitionId !== BATTERY_PRESET_ITEM.definitionId).concat({
         ...BATTERY_PRESET_ITEM, enabled: assistantConfiguration.batteryEnabled,
+      }).filter((item) => item.definitionId !== 'output.paragraph_breaks').concat({
+        definitionId: 'output.paragraph_breaks', slot: 'foundation', sortOrder: 25,
+        enabled: paragraphBreaksEnabled, required: false, protection: 'overridable',
       }),
     },
     additionalBlocks: [
       ...(params.additionalBlocks || []),
       ...(includeDynamicContext ? await createDeviceBatteryPromptBlocks(assistantConfiguration.batteryEnabled, scenarioId) : []),
+      ...(paragraphBreaksEnabled ? [promptPackBlockFactory.createParagraphBreaksBlock({
+        ...params.aiConfig, promptDefinitionOverrides: assistantConfiguration.overrides,
+      })] : []),
       ...customBlocks,
     ],
   };

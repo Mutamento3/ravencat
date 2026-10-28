@@ -4,6 +4,7 @@ import React, { useCallback, useEffect } from 'react';
 import {
   ScrollView,
   Keyboard,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import NavigationHeader from '@shared/ui/NavigationHeader';
@@ -139,7 +140,9 @@ export default function AddAIScreen({ onBack, onAdded }: AddAIScreenProps) {
           {/* AI名称 */}
           <NameInput value={name} onChangeText={setName} />
 
-          <GeneralModelPrefill onFill={handleFillModelConfig} disabled={isTesting || isLoadingModels} />
+          <View style={styles.section}>
+            <GeneralModelPrefill onFill={handleFillModelConfig} disabled={isTesting || isLoadingModels} />
+          </View>
 
           {/* API 地址 */}
           <ApiUrlInput

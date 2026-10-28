@@ -12,6 +12,7 @@ import { promptPackCompiler } from './compiler/PromptPackCompiler';
 import { getSystemPromptPreset } from './compiler/systemPromptPresets';
 import { renderHostPromptProviderBlock } from './providers';
 import { resolvePromptBlockMetadata } from './compiler/promptBlockMetadata';
+import { loadAIScheduleContext } from '@features/companion';
 
 const MOMENTS_SOCIAL_INBOX_PRESET_ITEM = {
   definitionId: 'context.moments_social_inbox',
@@ -98,7 +99,12 @@ export class PromptPackAssembler {
         required: true, status: 'ready', source: 'runtime.currentInput', truncatable: false,
         scenario, placement: 'input' });
     }
-    blocks.push(promptPackBlockFactory.createInteractionEnvironmentBlock(scenario, resolvedParams.runtimeContext!));
+    const runtime = resolvedParams.runtimeContext!;
+    const scheduleContext = scenario === 'chat.private_reply' && runtime.replyRunId && !runtime.isRegeneration
+      && (runtime.triggerSource === 'chat' || runtime.triggerSource === 'raven_cat_ai_schedule')
+      ? await loadAIScheduleContext({ ownerAIId: params.aiConfig.id, runId: runtime.replyRunId,
+          targetScheduleId: runtime.triggerSource === 'raven_cat_ai_schedule' ? runtime.relatedEntityId! : null }) : '';
+    blocks.push(promptPackBlockFactory.createInteractionEnvironmentBlock(scenario, runtime, scheduleContext));
 
     return promptPackCompiler.compile({
       scenario,
@@ -130,10 +136,6 @@ export class PromptPackAssembler {
     userIdentity: ResolvedUserIdentity,
   ): Promise<PromptPackBlock[]> {
     const blocks = await this.createStableScenarioBlocks(scenario, params, userIdentity);
-
-    if (this.hasCurrentTurnVisualContext(params)) {
-      blocks.push(promptPackBlockFactory.createVisualGroundingRulesBlock(params.aiConfig));
-    }
 
     if (params.toolsDescription?.trim()) {
       blocks.push(await renderHostPromptProviderBlock('context.tool_explanation', { scenario, params }));
@@ -195,9 +197,6 @@ export class PromptPackAssembler {
       await renderHostPromptProviderBlock('context.group_chat', { scenario, params }),
       promptPackBlockFactory.createGroupMemberReplyConfidentialityBlock(params.aiConfig, userIdentity.displayName),
     ];
-    if (this.hasCurrentTurnVisualContext(params)) {
-      blocks.push(promptPackBlockFactory.createVisualGroundingRulesBlock(params.aiConfig));
-    }
     if (params.toolsDescription?.trim()) {
       blocks.push(await renderHostPromptProviderBlock('context.tool_explanation', { scenario, params }));
     }
@@ -222,7 +221,8 @@ export class PromptPackAssembler {
     if (params.runtimeContext?.triggerSource === 'raven_cat_ai_schedule') {
       runtimeItems.push(
         { definitionId: 'scenario.raven_cat_ai_schedule', slot: 'output_contract', sortOrder: 210, enabled: true, required: true, protection: 'locked' },
-        { definitionId: 'context.raven_cat_ai_schedule', slot: 'dynamic_context', sortOrder: 136, enabled: true, required: true, protection: 'locked' },
+        { definitionId: 'context.raven_cat_ai_schedule', slot: 'dynamic_context', sortOrder: 136,
+          enabled: true, required: true, protection: 'locked' },
       );
     }
     if (this.isPrivateConversationScenario(scenario) || scenario === 'chat.group_member_reply') {
@@ -259,15 +259,6 @@ export class PromptPackAssembler {
         ...runtimeItems,
       ],
     };
-  }
-
-  private hasCurrentTurnVisualContext(
-    params: AssemblePromptPackParams
-  ): boolean {
-    return Boolean(
-      params.runtimeContext?.capabilities?.some((capability) => capability.startsWith('vision.'))
-      || params.currentInput.includes('[视觉输入状态：')
-    );
   }
 
   private isPrivateConversationScenario(scenario: PromptPackScenario): boolean {

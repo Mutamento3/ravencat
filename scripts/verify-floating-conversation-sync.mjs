@@ -1,22 +1,8 @@
 import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /** 验证有限 SQLite 查询及 Host 消息同步，不读取用户数据库，也不锁定源码形状。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import ts from 'typescript';
-
-function load(relative, dependencies = {}) {
-  const output = ts.transpileModule(fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: relative,
-  }).outputText;
-  const module = { exports: {} };
-  new Function('require', 'module', 'exports', output)((id) => {
-    assert.ok(Object.hasOwn(dependencies, id), `${relative} 缺少依赖 ${id}`);
-    return dependencies[id];
-  }, module, module.exports);
-  return module.exports;
-}
+import { loadTypeScriptModule as load } from './helpers/load-typescript-module.mjs';
 
 const db = new DatabaseSync(':memory:');
 db.exec(`
@@ -36,6 +22,10 @@ db.exec(`
 `);
 installChatTimelineSchema(db);
 const messagesRoot = 'src/features/chat/messages/';
+const metadata = load(`${messagesRoot}domain/chatMessageMetadata.ts`, {
+  './SharedChatRecord': load(`${messagesRoot}domain/SharedChatRecord.ts`),
+  './ChatSticker': load(`${messagesRoot}domain/ChatSticker.ts`),
+});
 const { MessageRepository } = load(`${messagesRoot}infrastructure/SQLiteMessageRepository.ts`, {
   '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => ({
     getAllAsync: async (sql, params) => db.prepare(sql).all(...params),
@@ -45,12 +35,9 @@ const { MessageRepository } = load(`${messagesRoot}infrastructure/SQLiteMessageR
       '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
       './ChatTimelineSql': load(`${messagesRoot}infrastructure/ChatTimelineSql.ts`),
   '../domain/MessageTimeSeparator': load(`${messagesRoot}domain/MessageTimeSeparator.ts`),
+  '../domain/chatMessageMetadata': metadata,
 });
 const messages = new MessageRepository();
-const metadata = load(`${messagesRoot}domain/chatMessageMetadata.ts`, {
-  './SharedChatRecord': load(`${messagesRoot}domain/SharedChatRecord.ts`),
-  './ChatSticker': load(`${messagesRoot}domain/ChatSticker.ts`),
-});
 let pendingMessageIds = [];
 const { listRecentChatPreviewMessages } = load(`${messagesRoot}application/ChatReadQueries.ts`, {
   './ChatMessageRuntime': { getChatMessageRuntimeDependencies: () => ({ messages }) },

@@ -13,7 +13,10 @@ import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
-import kotlin.math.abs
+import com.konovalov.vad.webrtc.VadWebRTC
+import com.konovalov.vad.webrtc.config.FrameSize
+import com.konovalov.vad.webrtc.config.Mode
+import com.konovalov.vad.webrtc.config.SampleRate
 import kotlin.math.max
 import java.io.File
 import android.net.Uri
@@ -31,8 +34,6 @@ class RealtimeSpeechAudioSourceModule : Module() {
   private var echoCancellationEnabled = false
   private var recordThread: Thread? = null
   private var chunkIndex = 0
-  private var lastSpeechDetectedAt = 0L
-  private var consecutiveSpeechChunks = 0
   private var segmentArchive: SpeechSegmentArchive? = null
 
   override fun definition() = ModuleDefinition {
@@ -115,9 +116,22 @@ class RealtimeSpeechAudioSourceModule : Module() {
     }
 
     val echoCanceler = createAcousticEchoCanceler(recorder.audioSessionId)
+    // VAD 与录音共用一次会话；保留原始 PCM 给 ASR 和录音归档，不在这里裁掉声音。
+    val vad = try {
+      VadWebRTC(
+        sampleRate = SampleRate.entries.first { it.value == sampleRate },
+        frameSize = FrameSize.entries.first { it.value == sampleRate / 50 },
+        mode = Mode.AGGRESSIVE,
+      )
+    } catch (error: Exception) {
+      echoCanceler?.release()
+      recorder.release()
+      throw AudioRecordStartException(error.message ?: "Unable to initialize speech detection")
+    }
     try {
       recorder.startRecording()
     } catch (error: Exception) {
+      vad.close()
       echoCanceler?.release()
       recorder.release()
       throw AudioRecordStartException(error.message ?: "Unable to start Android AudioRecord")
@@ -128,23 +142,33 @@ class RealtimeSpeechAudioSourceModule : Module() {
     echoCancellationEnabled = echoCanceler?.enabled == true
     recording = true
     chunkIndex = 0
-    lastSpeechDetectedAt = 0L
-    consecutiveSpeechChunks = 0
 
     recordThread = Thread {
-      val buffer = ByteArray(chunkSize)
-      while (recording) {
-        val read = recorder.read(buffer, 0, buffer.size)
-        if (read > 0) {
-          try { segmentArchive?.append(buffer, read) }
-          catch (error: Exception) {
-            sendEvent("onError", mapOf("message" to "通话录音写入失败：${error.message}"))
+      vad.use {
+        val speechDetector = SpeechActivityDetector(sampleRate / 50) { vad.isSpeech(it) }
+        val buffer = ByteArray(chunkSize)
+        while (recording) {
+          val read = recorder.read(buffer, 0, buffer.size)
+          if (read > 0) {
+            try { segmentArchive?.append(buffer, read) }
+            catch (error: Exception) {
+              sendEvent("onError", mapOf("message" to "通话录音写入失败：${error.message}"))
+              break
+            }
+            val payload = buffer.copyOf(read)
+            val speechDetected = try { speechDetector.accept(payload) }
+            catch (error: Exception) {
+              sendEvent("onError", mapOf("message" to "通话人声检测失败：${error.message}"))
+              break
+            }
+            if (speechDetected) {
+              sendEvent("onSpeechDetected", mapOf("detectedAt" to System.currentTimeMillis()))
+            }
+            emitAudioChunk(payload, sampleRate, bytesPerSample)
+          } else if (read < 0) {
+            sendEvent("onError", mapOf("message" to "Android AudioRecord read failed: $read"))
             break
           }
-          emitAudioChunk(buffer, read, sampleRate, bytesPerSample)
-        } else if (read < 0) {
-          sendEvent("onError", mapOf("message" to "Android AudioRecord read failed: $read"))
-          break
         }
       }
     }.apply {
@@ -155,13 +179,10 @@ class RealtimeSpeechAudioSourceModule : Module() {
   }
 
   private fun emitAudioChunk(
-    buffer: ByteArray,
-    read: Int,
+    payload: ByteArray,
     sampleRate: Int,
     bytesPerSample: Int,
   ) {
-    val payload = buffer.copyOf(read)
-    detectSpeech(payload)
     sendEvent(
       "onAudioChunk",
       mapOf(
@@ -172,39 +193,6 @@ class RealtimeSpeechAudioSourceModule : Module() {
         "chunkIndex" to chunkIndex++,
       ),
     )
-  }
-
-  private fun detectSpeech(payload: ByteArray) {
-    var maxAmplitude = 0
-    var index = 0
-    while (index + 1 < payload.size) {
-      val low = payload[index].toInt() and 0xff
-      val high = payload[index + 1].toInt()
-      val sample = (high shl 8) or low
-      maxAmplitude = max(maxAmplitude, abs(sample))
-      index += 2
-    }
-
-    val now = System.currentTimeMillis()
-    consecutiveSpeechChunks = if (maxAmplitude >= SPEECH_AMPLITUDE_THRESHOLD) {
-      consecutiveSpeechChunks + 1
-    } else {
-      0
-    }
-    if (
-      consecutiveSpeechChunks >= SPEECH_CONFIRMATION_CHUNKS &&
-      now - lastSpeechDetectedAt >= SPEECH_DETECTED_COOLDOWN_MS
-    ) {
-      lastSpeechDetectedAt = now
-      consecutiveSpeechChunks = 0
-      sendEvent(
-        "onSpeechDetected",
-        mapOf(
-          "maxAmplitude" to maxAmplitude,
-          "detectedAt" to now,
-        ),
-      )
-    }
   }
 
   private fun stopRecording() {
@@ -249,9 +237,4 @@ class RealtimeSpeechAudioSourceModule : Module() {
     return context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
   }
 
-  companion object {
-    private const val SPEECH_AMPLITUDE_THRESHOLD = 900
-    private const val SPEECH_CONFIRMATION_CHUNKS = 2
-    private const val SPEECH_DETECTED_COOLDOWN_MS = 800L
-  }
 }

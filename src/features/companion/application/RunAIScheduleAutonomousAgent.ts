@@ -7,6 +7,7 @@ import { runHostAutonomousAgent } from './RunHostAutonomousAgent';
 
 export interface RunAIScheduleAutonomousAgentInput {
   runId: string;
+  sessionId: string;
   claimedSchedule: AISchedule;
   triggeredAt: string;
   signal?: AbortSignal;
@@ -17,6 +18,7 @@ export async function runAIScheduleAutonomousAgent(
 ): Promise<AgentRunResult> {
   return runHostAutonomousAgent({
     runId: input.runId,
+    sessionId: input.sessionId,
     ownerAIId: input.claimedSchedule.ownerAIId,
     triggeredAt: input.triggeredAt,
     correlationId: input.claimedSchedule.scheduleId,

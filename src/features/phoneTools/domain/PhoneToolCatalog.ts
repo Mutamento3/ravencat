@@ -15,6 +15,7 @@ export type PhoneToolCatalogItemId =
   | 'foregroundApp'
   | 'appUsage'
   | 'currentLocation'
+  | 'clipboardRead'
   | 'accessibilityScreenRead'
   | 'ocrScreenRead'
   | 'appLaunch'
@@ -31,6 +32,14 @@ export interface PhoneToolCatalogItem {
 }
 
 export const PHONE_TOOL_CATALOG = [
+  {
+    id: 'clipboardRead',
+    toolName: 'read_clipboard',
+    category: 'awareness',
+    title: '读取剪贴板',
+    description: '按需读取当前剪贴板首项文字，最多 12000 个字符；需要 RavenCat 页面拥有焦点，不读取图片、文件或历史。',
+    implementationStatus: 'available',
+  },
   {
     id: 'installedAppSearch',
     toolName: 'search_installed_apps',

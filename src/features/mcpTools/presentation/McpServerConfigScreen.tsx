@@ -1,6 +1,6 @@
 /** MCP Server 配置页：编辑元数据、连接测试、启停与工具授权。 */
 
-import { Toggle, showAppDialog } from '@shared/ui';
+import { ToggleField, showAppDialog } from '@shared/ui';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -457,17 +457,16 @@ export default function McpServerConfigScreen({
           <Text style={styles.infoValue}>Streamable HTTP</Text>
         </View>
 
-        <View style={styles.infoRow}>
+        <ToggleField layout="inline" rowStyle={styles.infoRow}
+          label="启用 Server"
+          value={enabled}
+          onValueChange={(next) => {
+            void handleToggleEnabled(next);
+          }}
+          disabled={saving || testing}
+        >
           <Text style={styles.infoLabel}>启用 Server</Text>
-          <Toggle
-            accessibilityLabel="启用 Server"
-            value={enabled}
-            onValueChange={(next) => {
-              void handleToggleEnabled(next);
-            }}
-            disabled={saving || testing}
-          />
-        </View>
+        </ToggleField>
 
         {savedConnection !== null && savedConnection.connectionStatus === 'available' && (
           <View style={styles.infoRow}>
@@ -551,17 +550,16 @@ export default function McpServerConfigScreen({
                       : '工具已从最近一次发现快照中消失'}
                   </Text>
                 ) : null}
-                <View style={styles.toolSwitchRow}>
+                <ToggleField layout="inline" rowStyle={styles.toolSwitchRow} label="允许 AI 请求"
+                  accessibilityLabel={`允许 AI 请求：${grant.remoteToolName}`}
+                  value={grant.enabled}
+                  onValueChange={(next) => {
+                    void handleToggleToolGrant(grant.remoteToolName, next);
+                  }}
+                  disabled={!grant.canAuthorize || testing}
+                >
                   <Text style={styles.toolDescription}>允许 AI 请求</Text>
-                  <Toggle
-                    accessibilityLabel={`允许 AI 请求：${grant.remoteToolName}`}
-                    value={grant.enabled}
-                    onValueChange={(next) => {
-                      void handleToggleToolGrant(grant.remoteToolName, next);
-                    }}
-                    disabled={!grant.canAuthorize || testing}
-                  />
-                </View>
+                </ToggleField>
               </View>
             ))}
           </ThemedSurface>

@@ -25,6 +25,7 @@ import {
   findFirstVisibleTimelineAnchorsByRunIds,
   runChatVisibleAgent,
   listChatAgentActivityEvidence,
+  listChatTurnStates,
 } from '@features/chat';
 import {
   deletePersistedChatAttachment,
@@ -51,6 +52,7 @@ import {
 } from './agent';
 import { completePendingBackupRestore } from './completePendingBackupRestore';
 import { prepareHostModelRun } from '../runtime/HostModelRunPreparation';
+import { getConversationTurnCoordinator } from '../runtime/ConversationTurnCoordinator';
 
 let configured = false;
 
@@ -62,6 +64,9 @@ export function configureCompanionRuntime(): void {
 
   configureCompanionRuntimeDependencies({
     chat: {
+      runInConversation: (sessionId, runId, priority, execute, signal) =>
+        getConversationTurnCoordinator().runAutonomousFromHost(sessionId, runId, priority, execute, signal),
+      listTurnStates: listChatTurnStates,
       listAgentActivityEvidence: listChatAgentActivityEvidence,
       getCanonicalConversation: getCanonicalChatConversation,
       resolveCanonicalConversation,
@@ -80,6 +85,7 @@ export function configureCompanionRuntime(): void {
         deliveryTiming: 'immediate',
         correlationId,
         replyCallbacks: {
+          onReplyDisplaySegment: (payload) => replyCallbacks.onReplyDisplaySegment?.(payload),
           onReplySegment: (payload) => replyCallbacks.onReplySegment?.(payload),
           onFinalReply: (payload) => replyCallbacks.onFinalReply?.({
             sessionId: payload.sessionId,

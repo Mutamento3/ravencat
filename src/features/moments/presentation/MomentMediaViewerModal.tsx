@@ -77,10 +77,10 @@ export default function MomentMediaViewerModal({
     setBusy(true);
     try {
       const result = await retryMomentMediaAnalysis(current.id);
-      if (!result.success) showAppDialog({ title: '重新识别失败', message: '原有的可靠描述（如有）已保留。', tone: 'error' });
+      if (result.success === false) showAppDialog({ title: '重新识别失败', message: `${result.errorMessage}\n\n原有的可靠描述（如有）已保留。`, tone: 'error' });
       onUpdated();
-    } catch {
-      showAppDialog({ title: '重新识别失败', message: '请稍后重试，原有描述未被修改。', tone: 'error' });
+    } catch (error) {
+      showAppDialog({ title: '重新识别失败', message: error instanceof Error ? error.message : '请稍后重试，原有描述未被修改。', tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -127,6 +127,18 @@ export default function MomentMediaViewerModal({
             <Text style={styles.status}>{statusText}</Text>
             {canManage ? (
               <View style={styles.actions}>
+                {current.analysisStatus === 'failed' ? (
+                  <TouchableOpacity
+                    style={styles.action}
+                    onPress={() => showAppDialog({
+                      title: '图片识别失败',
+                      message: current.analysisErrorMessage ?? '这条记录未保存具体原因，请重新识别以获取当前错误信息。',
+                      tone: 'error',
+                    })}
+                  >
+                    <Text style={styles.actionText}>失败原因</Text>
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity style={styles.action} onPress={retry} disabled={busy}>
                   {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionText}>重新识别</Text>}
                 </TouchableOpacity>

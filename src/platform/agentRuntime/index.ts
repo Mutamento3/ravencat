@@ -2,6 +2,7 @@
 export { AgentToolRegistry } from './AgentToolRegistry';
 export { AgentRuntime } from './AgentRuntime';
 export { AgentRunEventQueue } from './AgentRunEventQueue';
+export { AgentRuntimeTerminalError } from './AgentRunState';
 export {
   BaseAIClientAgentModelGateway,
   BaseAIClientAgentModelRequestError,

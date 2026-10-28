@@ -24,11 +24,18 @@ Host 在业务查询前通过 `ensureHostDatabaseReady()` 完成恢复事务门�
 - 启动恢复（recoverConversationTurns）同样只负责发现待恢复会话并启动
   execution host，不得在页面 runtime claim/执行恢复出的 run；多个恢复会话在
   同一个 Headless 任务内串行执行，孤儿接管与终态覆盖判定由 executeTurnFromHost 承担。
-- assistant message commit 后的交付判定统一在 `AIMessageDeliveryCoordinator`
+- assistant 消息持久交付后的判定统一在 `AIMessageDeliveryCoordinator`
   （每个 JS runtime 注册一次）：前台正在查看的会话抑制系统通知（已读由 Host UI 同序完成），
   其余走 Native NotificationManager 聚合通知，`userNotificationHandled` 尊重
   RavenCat overlay preview 消费者；Chat 页面 / KimiPhoneHost / RavenCat / 通知模块
   不得各自维护一套「回复来了怎么办」的判定。
+- 普通正文在完整气泡的展示版本持久发布后立即交付通知，不等待工具循环结束或 T3。
+  流式活动尾泡只更新展示，闭合或本次模型发言结束才通知；reasoning/tool 不发消息通知。
+  通知使用稳定 `clientMessageId`，不伪造正式消息 ID；T3 继续原子提交整轮，
+  对已经交付的正文只完成 canonical 投影回调，不重复系统通知。语音、图片等在 T3
+  取得正式消息和媒体所有权后逐条交付。中断或恢复不会补发未闭合正文。
+  悬浮预览通过运行正文投影回执表达已展示，统一协调器继续尊重
+  `userNotificationHandled`；正式身份交接不得重复弹出预览。
 - canonical 回复仍在 T3 一次提交全部分段。运行片段在独立展示表中保存快照，
   不作为正式 assistant 消息、回复游标或工具重放依据。非流式正文使用原生约 1 秒
   到达时钟；流式正文按持久批次逐步交付并在自然边界继续下一泡，后续 reasoning/tool
@@ -39,8 +46,14 @@ Host 在业务查询前通过 `ensureHostDatabaseReady()` 完成恢复事务门�
   pending 开放消息，冷启动由持久交付事实恢复；不渲染交付占位或中断替代气泡。
   具体边界见 [Chat 展示与中断历史](./chat-turn-presentation-invariant.md)。
 - Tab、会话红点与实时列表预览查询排除尚未到达的消息 ID，非流式多气泡聊天页
-  消费同一进度，不再单独计时。SQL 仍按真实 `is_read` 计数，进入会话批量已读后，
+  消费同一进度，不再单独计时。未读统计合并正式消息与尚未绑定正式 ID 的完整交付正文，
+  两者分别使用各自持久 `is_read`，同一身份只计一次。进入会话在同一事务标记两种事实；
+  T3 在消息提交事务继承运行正文的已读状态，
   后续分段到达不得重新制造未读。展示查询不得回写 session/group 持久预览。
+  会话列表预览同时读取已持久交付的完整运行正文，不能因尚未 T3 而停留在旧消息；
+  活动尾泡、思考和工具过程不抢占摘要。正式消息与运行正文在同一 SQLite 快照中选择，
+  清空历史和后续用户输入继续生效；预览返回文字与时间，不伪造消息 ID。
+  读取期间收到新的正文交付，即使 canonical 到达版本未改变，也须作废旧预览并合并补读。
 - 回合诊断统一用 `@shared/diagnostics/TurnTimelineLog` 的里程碑事件
   （runId / correlationId 串联），禁止输出 prompt、key 与消息正文。
 

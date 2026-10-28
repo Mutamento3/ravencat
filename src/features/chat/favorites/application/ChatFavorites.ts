@@ -16,6 +16,10 @@ export function listChatFavorites(category: ChatFavoriteCategory | null, cursor:
   return getChatFavoriteRepository().list(category, cursor);
 }
 
+export function getChatFavoriteByMessage(messageId: number): Promise<ChatFavorite | null> {
+  return getChatFavoriteRepository().getBySource(messageId);
+}
+
 export async function createChatFavorite(input: { messageId: number; sourceName: string; assistantId?: string }): Promise<ChatFavorite> {
   const messages = getChatMessageRuntimeDependencies().messages;
   const original = await messages.getMessageById(input.messageId);

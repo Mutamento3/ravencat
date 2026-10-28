@@ -23,12 +23,13 @@ internal object CallExecutionRegistry {
 
   suspend fun start(context: ReactContext, options: Map<String, Any?>) = admission.withLock {
     val id = options["callId"] as String
-    if (alive) {
+    check(callId != id || (alive && host?.finishing != true)) { "通话已经结束" }
+    if (alive && host?.finishing != true) {
       check(callId == id) { "另一通电话正在执行" }
       ready.await()
       return@withLock
     }
-    // 这是资源释放 barrier，不重试、不猜测 Android 何时完成 stopSelf。
+    // 同时等待系统断开结果与服务销毁；失败不能伪装为空闲并注册下一通电话。
     released.await()
     callId = id
     executionContext = context
@@ -43,6 +44,8 @@ internal object CallExecutionRegistry {
         putExtra("avatarUri", options["avatarUri"] as String?)
         putExtra("direction", options["direction"] as String)
         putExtra("returnUri", options["returnUri"] as String)
+        putExtra("ringtoneUri", options["ringtoneUri"] as String?)
+        putExtra("ringing", options["ringing"] as Boolean)
       }
       context.startForegroundService(intent)
       withTimeout(30_000) { ready.await() }
@@ -60,6 +63,19 @@ internal object CallExecutionRegistry {
   fun requireHost(id: String): CallExecutionService {
     check(alive && callId == id) { "通话执行已经结束" }
     return checkNotNull(host)
+  }
+
+  suspend fun finish(id: String) {
+    if (callId != id) return
+    val completion = released
+    alive = false
+    val service = host
+    if (service == null) {
+      ready.completeExceptionally(IllegalStateException("通话已经结束"))
+      return
+    }
+    service.finish().await()
+    completion.await()
   }
 
   suspend fun command(action: String, muted: Boolean = false) {
@@ -85,13 +101,18 @@ internal object CallExecutionRegistry {
     if (error == null) reply.complete(Unit) else reply.completeExceptionally(IllegalStateException(error))
   }
 
-  fun cancelled(service: CallExecutionService) {
+  fun cancelled(service: CallExecutionService, failure: Throwable?) {
     if (host !== service) return
+    val id = checkNotNull(callId)
     alive = false
+    // 唤醒启动等待者时仍保留宿主，避免它将“宿主刚销毁”误判为“服务从未启动”。
+    if (!ready.isCompleted) ready.completeExceptionally(IllegalStateException("通话宿主已停止"))
     host = null
     executionContext = null
-    released.complete(Unit)
-    if (!ready.isCompleted) ready.completeExceptionally(IllegalStateException("通话宿主已停止"))
-    emit?.invoke("onCancelled", mapOf("callId" to checkNotNull(callId)))
+    // 唤醒新电话前发布旧身份，不能让同步恢复的 start 改写 callId 后再发送取消。
+    try { emit?.invoke("onCancelled", mapOf("callId" to id)) }
+    finally {
+      if (failure == null) released.complete(Unit) else released.completeExceptionally(failure)
+    }
   }
 }

@@ -6,7 +6,7 @@
  * @module platform/ai/modelDiscovery
  */
 
-import { getErrorDisplayInfo } from './errorMapping';
+import { redactAIErrorMessage } from './errorMapping';
 import { normalizeAIBaseURL } from './baseUrl';
 import type { ModelInfo } from './types';
 
@@ -30,10 +30,8 @@ export async function fetchModelList(baseURL: string, apiKey: string): Promise<M
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { error?: { message?: string } };
-      throw new Error(
-        errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`
-      );
+      const errorBody = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorBody || response.statusText}`);
     }
 
     const data = await response.json() as { data?: { id?: string }[] };
@@ -46,8 +44,7 @@ export async function fetchModelList(baseURL: string, apiKey: string): Promise<M
       }))
       .sort((a, b) => a.id.localeCompare(b.id));
   } catch (error) {
-    const displayInfo = getErrorDisplayInfo(error instanceof Error ? error : String(error));
-    console.warn('[modelDiscovery] Failed to fetch model list:', displayInfo.title);
-    throw new Error(displayInfo.message);
+    // 展示分类属于调用方；这里仅保留并脱敏外部失败，避免多次映射丢失原因与状态。
+    throw new Error(redactAIErrorMessage(error instanceof Error ? error.message : String(error), apiKey));
   }
 }

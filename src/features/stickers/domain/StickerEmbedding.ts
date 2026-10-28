@@ -24,12 +24,6 @@ export interface StickerEmbeddingIndexStatus {
   pendingEmbeddings: number;
 }
 
-/** 当前生效的 embedding 模型判定输入，用于区分“缺配置”与“有配置但向量缺失”。 */
-export interface StickerEmbeddingValidityContext {
-  modelConfigId: string;
-  modelConfigUpdatedAt: string;
-}
-
 /**
  * 语义文本是 embedding 输入的唯一 canonical 形状：只包含 name / description /
  * tags / emotion。分组、收藏、使用计数等浏览与 rerank 维度不属于图片本身语义，

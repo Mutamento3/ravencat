@@ -27,11 +27,12 @@ function load(relative) {
   const mocks = {
     react: React,
     'react-native': { ...Object.fromEntries(['ActivityIndicator', 'Pressable', 'ScrollView', 'Text', 'View'].map(name => [name, name])), StyleSheet: { create: value => value } },
-    '@shared/theme': { useTheme: () => theme, useThemedStyles: () => ({}) },
+    '@shared/theme': { ThemedSurface: 'ThemedSurface', useTheme: () => theme, useThemedStyles: () => ({}) },
     '@shared/ui': { ...Object.fromEntries(['Button', 'InputField', 'ToggleField', 'AIAvatar'].map(name => [name, name])),
       ModalSheet: props => props.visible ? React.createElement('ModalSheet', props, props.children) : null,
       showAppDialog: value => { dialogs.push(value); } },
-    'lucide-react-native': { Plus: 'Plus' },
+    'lucide-react-native': { Plus: 'Plus', ChevronRight: 'ChevronRight' },
+    './chatSettingsStyles': { createStyles: () => ({}) },
     '../../group/application/GroupMembership': commands,
   };
   const module = { exports: {} };

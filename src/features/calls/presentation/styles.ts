@@ -78,7 +78,8 @@ export const createCallStyles = (theme: PresentationTheme) =>
       marginBottom: theme.spacing.md,
       paddingHorizontal: theme.spacing.md,
       paddingVertical: 6,
-      borderRadius: theme.radius.round,
+      // 多行增长时保持固定圆角，避免胶囊两端的弧线侵入文字区域。
+      borderRadius: theme.radius.xl,
       backgroundColor: theme.colors.chat.inputBar,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: theme.colors.border.light,

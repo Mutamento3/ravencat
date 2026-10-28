@@ -10,7 +10,7 @@
 import type { ChatMessage, CreateMessageInput } from '../../messages/domain/ChatMessage';
 import type { ToolPackageExposureChange } from '@shared/aiTools';
 
-/** 普通回复与重写共用回合状态机。 */
+/** 自主行动共用会话执行槽；用户回复游标只由普通回复与重写推进。 */
 export type ConversationTurnRunStatus =
   | 'active'
   | 'committed'
@@ -18,7 +18,7 @@ export type ConversationTurnRunStatus =
   | 'cancelled'
   | 'failed';
 
-export type ConversationTurnKind = 'user_reply' | 'regenerate';
+export type ConversationTurnKind = 'user_reply' | 'regenerate' | 'autonomous';
 
 export type ConversationTurnTerminalStatus = 'cancelled' | 'failed';
 

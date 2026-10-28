@@ -192,11 +192,6 @@ export class ChatAgentRunProjector {
   async completeRun(result: AgentRunTerminalResult): Promise<void> {
     if (this.canonicalTimeline) {
       this.canonicalTimeline.closeRun(result.terminalCode);
-      // 自主执行的行动记录是已经发生的事实；失败、取消也不能像未提交回复一样丢弃。
-      if (this.finalAssistantPolicy === 'autonomous_reply') {
-        await this.commitActivityTimeline(true, result.terminalCode === 'COMPLETED');
-        return;
-      }
       // 通话提交后由投影层停止模型续轮；这次内部停止不能丢弃已完成的工具记录。
       if (!this.waitingForExternalAction && (
         result.terminalCode === 'CANCELLED_BY_USER' || result.terminalCode === 'SUPERSEDED'
@@ -290,10 +285,6 @@ export class ChatAgentRunProjector {
   async failRun(result: AgentRunTerminalResult): Promise<void> {
     if (this.canonicalTimeline) {
       this.canonicalTimeline.closeRun(result.terminalCode);
-      if (this.finalAssistantPolicy === 'autonomous_reply') {
-        await this.commitActivityTimeline();
-        return;
-      }
       this.canonicalTimeline.clear('model_failure');
       return;
     }
@@ -305,39 +296,6 @@ export class ChatAgentRunProjector {
 
   private assertActive(): void {
     assertChatReplyNotAborted(this.runtimeContext);
-  }
-
-  async failActivityRun(): Promise<void> {
-    this.canonicalTimeline!.closeRun('MODEL_REQUEST_FAILED');
-    await this.commitActivityTimeline();
-  }
-
-  /** 自主执行过程是事实，增量到达后立即存档；普通 user_reply 仍只走 T3。 */
-  async checkpointActivityTimeline(): Promise<void> {
-    await this.commitActivityTimeline(false);
-  }
-
-  private async commitActivityTimeline(terminal = true, commitAutonomousReply = false): Promise<void> {
-    const timeline = this.canonicalTimeline!;
-    const lastStepIndex = [...this.modelTurns.keys()].at(-1) ?? 0;
-    const items = timeline.buildCommitItems({
-      sessionId: this.sessionId, aiConfig: this.aiConfig, runtimeContext: this.runtimeContext,
-      policy: this.policy, finalAssistantPolicy: 'autonomous_reply', finalStepIndex: lastStepIndex,
-      commitAutonomousReply,
-    });
-    const turn = this.modelTurns.get(lastStepIndex);
-    try {
-      const committed = await this.requireTimelineCommitPort().commitAgentTimeline({
-        sessionId: this.sessionId, items,
-        response: turn ? toAIResponse(turn) : { success: false, text: '' },
-        repository: this.repository, callbacks: this.callbacks, aiConfig: this.aiConfig,
-        runtimeContext: this.runtimeContext, policy: this.policy,
-      });
-      if (terminal) timeline.commit(committed.messages, committed.outcome);
-    } catch (error) {
-      timeline.clear('model_failure');
-      throw error;
-    }
   }
 
   private requireModelTurn(stepIndex: number): ChatAgentModelTurn {

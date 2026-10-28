@@ -1,44 +1,8 @@
 import * as legacyWakeSchema from './legacy-self-wake-schema-fixture.mjs';
 import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
-import fs from 'node:fs';
-import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
-
-const require = createRequire(import.meta.url);
-const ts = require('typescript');
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function read(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const sourcePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: sourcePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-  const module = { exports: {} };
-  new Function('exports', 'require', 'module', '__filename', '__dirname', compiled.outputText)(
-    module.exports,
-    (specifier) => {
-      assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 缺少 mock：${specifier}`);
-      return mocks[specifier];
-    },
-    module,
-    sourcePath,
-    path.dirname(sourcePath),
-  );
-  return module.exports;
-}
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 
 const companionSchema = loadTypeScriptModule(
   'src/platform/persistence/sqlite/ravenCatCompanionSchema.ts',
@@ -243,6 +207,7 @@ const messageRepositoryModule = loadTypeScriptModule(
       '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
       './ChatTimelineSql': loadTypeScriptModule('src/features/chat/messages/infrastructure/ChatTimelineSql.ts'),
     '../domain/MessageTimeSeparator': { shouldShowTimeSeparatorBefore: () => false },
+    '../domain/chatMessageMetadata': {},
   },
 );
 const messageRepository = new messageRepositoryModule.MessageRepository();

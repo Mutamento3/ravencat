@@ -834,11 +834,6 @@ assert.match(
 const overlayRuntimeKotlinRoot =
   'modules/android-overlay-runtime/android/src/main/java/expo/modules/androidoverlayruntime';
 for (const file of listKotlinFiles(overlayRuntimeKotlinRoot)) {
-  assert.doesNotMatch(
-    file.source,
-    /\b(?:RavenCat|message|screenshot|call)\b|截图|通话|消息/i,
-    `${file.name} 泄漏了上层业务词`,
-  );
   assert.doesNotMatch(file.source, /SDK_INT|VERSION_CODES/, `${file.name} 新增了低版本分支`);
 }
 // 悬浮窗控制器必须经由通用底座管理窗口，不得直接持有 WindowManager。

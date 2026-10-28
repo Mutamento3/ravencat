@@ -7,6 +7,7 @@ import {
   RAVEN_CAT_AI_SCHEDULES_CONSUMED_HISTORY_INDEX,
   RAVEN_CAT_AI_SCHEDULES_CONSUMED_OCCURRED_HISTORY_INDEX,
   RAVEN_CAT_AI_SCHEDULES_SCHEMA,
+  RAVEN_CAT_AI_SCHEDULE_CONTEXT_SCHEMA,
   RAVEN_CAT_COMPANION_STATE_SCHEMA,
 } from './ravenCatCompanionSchema';
 import {
@@ -69,6 +70,7 @@ import {
 } from './momentsSchema';
 
 import { CALL_BACKGROUND_SELECTION_SCHEMA } from './callBackgroundSchema';
+import { CALL_RINGTONE_SELECTION_SCHEMA } from './callRingtoneSchema';
 import { WALLPAPER_SELECTION_SCHEMA } from './wallpaperSelectionSchema';
 
 import { AGENT_RUNS_SCHEMA, AGENT_STEPS_SCHEMA, AGENT_TOOL_RECEIPTS_SCHEMA } from './agentRuntimeSchema';
@@ -81,6 +83,7 @@ export const SCHEMAS: Record<string, string> = {
   webSearch: WEB_SEARCH_SCHEMA,
   chatFavorites: CHAT_FAVORITES_SCHEMA,
   callBackgroundSelection: CALL_BACKGROUND_SELECTION_SCHEMA,
+  callRingtoneSelection: CALL_RINGTONE_SELECTION_SCHEMA,
   wallpaperSelections: WALLPAPER_SELECTION_SCHEMA,
   // 1. ai_assistants 表 - AI助手列表
   aiAssistants: `
@@ -164,6 +167,13 @@ export const SCHEMAS: Record<string, string> = {
     CREATE TABLE IF NOT EXISTS chat_conversations (
       id TEXT PRIMARY KEY,
       kind TEXT NOT NULL CHECK (kind IN ('direct', 'group'))
+    );
+  `,
+
+  chatTextDrafts: `
+    CREATE TABLE IF NOT EXISTS chat_text_drafts (
+      conversation_id TEXT PRIMARY KEY REFERENCES chat_conversations(id) ON DELETE CASCADE,
+      text TEXT NOT NULL
     );
   `,
 
@@ -607,6 +617,7 @@ export const SCHEMAS: Record<string, string> = {
   ravenCatCompanionState: RAVEN_CAT_COMPANION_STATE_SCHEMA,
 
   ravenCatAISchedules: RAVEN_CAT_AI_SCHEDULES_SCHEMA,
+  ravenCatAIScheduleContext: RAVEN_CAT_AI_SCHEDULE_CONTEXT_SCHEMA,
 
   ravenCatFloatingInteractionSettings: RAVEN_CAT_FLOATING_INTERACTION_SETTINGS_SCHEMA,
 

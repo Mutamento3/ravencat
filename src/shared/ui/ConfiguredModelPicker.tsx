@@ -3,7 +3,7 @@ import { showAppDialog } from './appDialogStore';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Check, ChevronRight } from 'lucide-react-native';
-import { useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
 import ModalSheet from './ModalSheet';
 import type { ModelSelectionSettings } from './modelSelectionTypes';
 
@@ -16,9 +16,10 @@ interface Props {
   onSelect(modelConfigId: string | null): Promise<void>;
   subscribeChanged(listener: () => void): () => void;
   onManageModels?: () => void;
+  disabled?: boolean;
 }
 
-export default function ConfiguredModelPicker({ title, description, unconfiguredLabel = '未选择模型', clearSelectionLabel = '取消选择', getSettings, onSelect, subscribeChanged, onManageModels }: Props) {
+export default function ConfiguredModelPicker({ title, description, unconfiguredLabel = '未选择模型', clearSelectionLabel = '取消选择', getSettings, onSelect, subscribeChanged, onManageModels, disabled = false }: Props) {
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
   const [settings, setSettings] = useState<ModelSelectionSettings | null>(null);
@@ -56,13 +57,15 @@ export default function ConfiguredModelPicker({ title, description, unconfigured
     : settings?.status === 'unavailable' ? `${settings.selectedModelName ?? '所选模型'} · ${settings.unavailableReason}`
       : settings ? unconfiguredLabel : '无法读取当前选择';
   return <>
-    <Pressable accessibilityLabel={`选择${title}`} style={styles.card} onPress={() => { setVisible(true); void reload(); }}>
-      <View style={styles.row}>
-        <View style={styles.grow}><Text style={styles.label}>{title}</Text><Text style={styles.subtitle}>{loading && !settings ? '正在读取…' : selectionLabel}</Text></View>
-        <ChevronRight size={20} color={theme.colors.text.tertiary} />
-      </View>
-      {error && <Text style={styles.danger}>{error}</Text>}
-    </Pressable>
+    <ThemedSurface variant="card" style={styles.card}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`选择${title}`} disabled={disabled || saving} style={styles.button} onPress={() => { setVisible(true); void reload(); }}>
+        <View style={styles.row}>
+          <View style={styles.grow}><Text style={styles.label}>{title}</Text><Text style={styles.subtitle}>{loading && !settings ? '正在读取…' : selectionLabel}</Text></View>
+          <ChevronRight size={20} color={theme.colors.text.tertiary} />
+        </View>
+        {error && <Text style={styles.danger}>{error}</Text>}
+      </Pressable>
+    </ThemedSurface>
     <ModalSheet visible={visible} onClose={() => { if (!saving) setVisible(false); }} title={`选择${title}`}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         {!loading && !error && <Text style={styles.hint}>{description}选择后立即保存。</Text>}
@@ -70,16 +73,16 @@ export default function ConfiguredModelPicker({ title, description, unconfigured
           <Text style={styles.danger}>{error}</Text><Pressable onPress={() => { void reload(); }}><Text style={styles.action}>重新读取</Text></Pressable>
         </> : settings && <>
           {settings.status === 'unavailable' && <Text style={styles.danger}>{selectionLabel}，请检查配置或重新选择。</Text>}
-          {settings.models.map((model) => <Pressable key={model.id} disabled={saving} style={styles.card} onPress={() => { void select(model.id); }}>
+          {settings.models.map((model) => <ThemedSurface key={model.id} variant="card" style={styles.card}><Pressable disabled={disabled || saving} style={styles.button} onPress={() => { void select(model.id); }}>
             <View style={styles.row}>
               <View style={styles.grow}><Text style={styles.label}>{model.name}</Text><Text style={styles.subtitle}>{model.model}</Text></View>
               {settings.selectedModelId === model.id && <Check size={20} color={theme.colors.brand.primary} />}
             </View>
-          </Pressable>)}
+          </Pressable></ThemedSurface>)}
           {settings.models.length === 0 && <Text style={styles.subtitle}>暂无配置可用的模型，请先新增或完善模型配置。</Text>}
-          <Pressable disabled={saving} style={styles.card} onPress={() => { void select(null); }}>
+          <ThemedSurface variant="card" style={styles.card}><Pressable disabled={disabled || saving} style={styles.button} onPress={() => { void select(null); }}>
             <View style={styles.row}><Text style={styles.label}>{clearSelectionLabel}</Text>{settings.selectedModelId === null && <Check size={20} color={theme.colors.brand.primary} />}</View>
-          </Pressable>
+          </Pressable></ThemedSurface>
         </>}
         {saving && <Text style={styles.subtitle}>正在保存选择…</Text>}
         {onManageModels && <Pressable disabled={saving} onPress={() => { setVisible(false); onManageModels(); }}><Text style={styles.action}>管理模型配置</Text></Pressable>}
@@ -89,8 +92,10 @@ export default function ConfiguredModelPicker({ title, description, unconfigured
 }
 
 const createStyles = (theme: PresentationTheme) => StyleSheet.create({
-  // 内联选择器的表面与列表卡片一致，不再用页面背景色自成一块。
-  card: { padding: theme.spacing.md, marginVertical: theme.spacing.sm, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surface.default, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light },
+  // 玻璃材质和边框归主题表面拥有，普通主题保留原有卡片轮廓。
+  card: { marginVertical: theme.spacing.sm, borderRadius: theme.radius.lg, overflow: 'hidden',
+    ...(!theme.effects.glass.enabled ? { borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.light } : {}) },
+  button: { padding: theme.spacing.md },
   row: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm },
   grow: { flex: 1 },
   label: { fontSize: 16, fontWeight: '600', color: theme.colors.text.primary },

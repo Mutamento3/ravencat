@@ -590,8 +590,9 @@ function ChatMessageList({
     if (anchorMessageId == null || anchorConsumedRef.current || renderedData.length === 0) {
       return;
     }
+    const anchorSource = messages.find(message => message.id === anchorMessageId);
     const anchorIndex = renderedData.findIndex(
-      (item) => renderedItemContainsMessageId(item, anchorMessageId)
+      (item) => renderedItemContainsMessageId(item, anchorMessageId, anchorSource)
     );
     if (anchorIndex >= 0) {
       anchorConsumedRef.current = true;
@@ -611,7 +612,7 @@ function ChatMessageList({
     }
     anchorPageAttemptsRef.current += 1;
     void requestOlderPageRef.current('anchor');
-  }, [anchorMessageId, renderedData, hasMore, isLoadingMore, stopFollowingBottom]);
+  }, [anchorMessageId, messages, renderedData, hasMore, isLoadingMore, stopFollowingBottom]);
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const isUserScrollActive = updateBottomFollowOnScroll(event);

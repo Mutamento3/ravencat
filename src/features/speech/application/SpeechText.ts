@@ -13,6 +13,8 @@ const fishAudioTagExamples = [
 ];
 const MAX_AUDIO_TAG_LENGTH = 100;
 const AUDIO_TAG_CLOSERS: Record<string, string> = { '[': ']', '［': '］', '【': '】' };
+const CONTROL_TAG_CLOSERS: Record<string, string> = { ...AUDIO_TAG_CLOSERS, '<': '>', '(': ')', '（': '）' };
+const SPEECH_TOKEN_PATTERN = /<[^>\r\n]*>|[\[［【][^\[\]［］【】\r\n]*[\]］】]|[（(][^（）()\r\n]*[）)]/g;
 
 interface SpeechTextRules {
   tags: string[];
@@ -73,31 +75,34 @@ export function hasSpeechPause(text: string): boolean {
   return /<#|<break\b|[\[［【][^\[\]［］【】\r\n]*(?:\bpauses?\b|\b(?:long-)?break\b|停顿)[^\[\]［］【】\r\n]*[\]］】]/i.test(text);
 }
 
-/** 模型输出的语音文本边界：规范化合成标签，并从转写中移除当前模型允许的控制标记。 */
+/** 模型输出的语音文本边界：保留模型支持的标记，移除不支持的完整标记，让正文仍可朗读。 */
 export function prepareSpeechText(text: string, provider: SpeechProviderId, model: string): {
   synthesisText: string;
   transcript: string;
 } {
   const rules = speechTextRules(provider, model);
   const source = text.trim();
-  const tokens = [...source.matchAll(/<[^>\r\n]*>|[\[［【][^\[\]［］【】\r\n]*[\]］】]|[（(][^（）()\r\n]*[）)]/g)];
+  const tokens = [...source.matchAll(SPEECH_TOKEN_PATTERN)];
   let cursor = 0;
   let pauseCursor = 0;
   let transcript = '';
   let synthesisText = '';
+  let removedUnsupportedTag = false;
   for (let index = 0; index < tokens.length; index++) {
     const match = tokens[index];
     const token = match[0];
     const start = match.index;
     let normalized = token;
-    if (rules.audioTags && AUDIO_TAG_CLOSERS[token[0]]) {
+    if (CONTROL_TAG_CLOSERS[token[0]] !== token.at(-1)
+      || /[<>\[\]［］【】()（）]/.test(token.slice(1, -1)))
+      throw new Error(`语音正文包含不匹配或嵌套的控制标记：${token}`);
+    if (AUDIO_TAG_CLOSERS[token[0]]) {
       const body = token.slice(1, -1).trim();
-      if (AUDIO_TAG_CLOSERS[token[0]] !== token.at(-1)
-        || !body || [...body].length > MAX_AUDIO_TAG_LENGTH
+      if (!body || [...body].length > MAX_AUDIO_TAG_LENGTH
         || !/^[\p{L}\p{M}\p{N}\p{Zs}'’‘"“”,.!?:;，。！？、；：…\-‐‑‒–—]+$/u.test(token.slice(1, -1))
         || !/[\p{L}\p{N}]/u.test(body))
         throw new Error(`Audio Tag 语法无效：${token}`);
-      normalized = `[${body.replace(/\p{Zs}+/gu, ' ')}]`;
+      normalized = rules.audioTags ? `[${body.replace(/\p{Zs}+/gu, ' ')}]` : ' ';
     } else if (!rules.tags.includes(token)) {
       const pause = rules.pause === 'minimax'
         ? /^<#(\d+(?:\.\d{1,2})?)#>$/.exec(token)
@@ -105,21 +110,22 @@ export function prepareSpeechText(text: string, provider: SpeechProviderId, mode
       const seconds = pause ? Number(pause[1]) : 0;
       const max = rules.pause === 'minimax' ? 99.99 : 3;
       const min = rules.pause === 'minimax' ? 0.01 : 0;
-      if (!pause || seconds < min || seconds === 0 || seconds > max)
+      if (!pause && ((rules.pause === 'minimax' && token.startsWith('<#'))
+        || (rules.pause === 'ssml' && /^<break\b/.test(token))))
         throw new Error(`当前语音模型不支持该标记或停顿时长：${token}`);
-      if (rules.pause === 'minimax') {
+      if (pause && (seconds < min || seconds === 0 || seconds > max))
+        throw new Error(`当前语音模型不支持该停顿时长：${token}`);
+      if (!pause) normalized = ' ';
+      if (pause && rules.pause === 'minimax') {
         const next = tokens.slice(index + 1).find((candidate) => candidate[0].startsWith('<#'))?.index ?? source.length;
-        let before = source.slice(pauseCursor, start);
-        let after = source.slice(start + token.length, next);
-        for (const tag of rules.tags) {
-          before = before.replaceAll(tag, '');
-          after = after.replaceAll(tag, '');
-        }
+        const before = source.slice(pauseCursor, start).replace(SPEECH_TOKEN_PATTERN, '');
+        const after = source.slice(start + token.length, next).replace(SPEECH_TOKEN_PATTERN, '');
         if (!/[\p{L}\p{N}]/u.test(before) || !/[\p{L}\p{N}]/u.test(after))
           throw new Error('MiniMax 停顿必须位于可朗读正文之间，不能连续使用');
         pauseCursor = start + token.length;
       }
     }
+    if (normalized === ' ') removedUnsupportedTag = true;
     synthesisText += source.slice(cursor, start) + normalized;
     transcript += source.slice(cursor, start) + ' ';
     cursor = start + token.length;
@@ -127,6 +133,7 @@ export function prepareSpeechText(text: string, provider: SpeechProviderId, mode
   synthesisText += source.slice(cursor);
   transcript = (transcript + source.slice(cursor)).trim();
   if (tokens.length) transcript = transcript.replace(/[ \t]{2,}/g, ' ').replace(/ +([，。！？、；：,.!?;:])/g, '$1');
+  if (removedUnsupportedTag) synthesisText = synthesisText.trim().replace(/[ \t]{2,}/g, ' ').replace(/ +([，。！？、；：,.!?;:])/g, '$1');
   if (/[<>\[\]［］【】()（）]/.test(transcript)) throw new Error('语音正文包含不完整或嵌套的控制标记');
   if (!transcript) throw new Error('语音正文不能为空，不能只有声音或停顿标记');
   return { synthesisText, transcript };

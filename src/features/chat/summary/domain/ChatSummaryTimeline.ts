@@ -17,6 +17,7 @@ export interface ConversationContextItem {
   eventId?: string;
   callId?: string;
   callBoundary?: 'start' | 'end';
+  isVoiceMessage?: true;
 }
 
 export function buildConversationTimeline(raw: readonly ChatContextItem[], calls: readonly CallSummarySource[]): ConversationContextItem[] {
@@ -50,6 +51,7 @@ export function buildConversationTimeline(raw: readonly ChatContextItem[], calls
     timeline.push({ source: 'chat', kind: item.kind, speaker: item.kind === 'app_event' ? 'application' : item.role,
       timestamp: item.timestamp, content: item.content, messageId: item.messageId,
       ...(item.actor ? { actor: item.actor } : {}),
+      ...(item.isVoiceMessage ? { isVoiceMessage: true as const } : {}),
       ...(item.sharedRecord ? { sharedRecord: item.sharedRecord, sharedComment: item.sharedComment } : {}),
       logicalIdentity: item.kind === 'dialogue'
         ? item.logicalMessageId === null ? 'chat:message:' + item.messageId : 'chat:logical:' + item.logicalMessageId : null });

@@ -231,10 +231,6 @@ export function subscribeAIAssistantUpdated(
   return () => aiAssistantUpdatedListeners.delete(listener);
 }
 
-export async function getLedgerAIAssistant(): Promise<AIProfile | null> {
-  return aiAssistantRepository.getLedgerAI();
-}
-
 export async function setLedgerAIAssistant(aiId: string | null): Promise<boolean> {
   return aiAssistantRepository.setLedgerAI(aiId);
 }

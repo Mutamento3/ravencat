@@ -29,11 +29,10 @@ export const createPromptCenterStyles = (theme: PresentationTheme) => StyleSheet
   starButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   body: { color: theme.colors.text.secondary, fontSize: 13, lineHeight: 21 },
   action: { color: theme.colors.brand.primary, fontSize: 14, fontWeight: '600' },
-  actionCurrent: { color: theme.colors.text.tertiary, fontSize: 14, fontWeight: '600' },
   danger: { color: theme.colors.feedback.error, fontSize: 13 },
   actions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  input: { padding: 14, borderRadius: theme.radius.md, backgroundColor: theme.colors.surface.default, color: theme.colors.text.primary, fontSize: 15 },
-  editor: { minHeight: 320, textAlignVertical: 'top', lineHeight: 23 },
+  // 固定多行编辑覆盖 InputField 的默认高度，避免原生最小高度与父布局的固定高度冲突。
+  editor: { height: 320, textAlignVertical: 'top', lineHeight: 23 },
   button: { padding: 15, alignItems: 'center', borderRadius: theme.radius.lg, backgroundColor: theme.colors.brand.primary },
   buttonText: { color: theme.colors.brand.onPrimary, fontSize: 15, fontWeight: '600' },
   dragging: { borderColor: theme.colors.brand.primary, opacity: 0.8 },

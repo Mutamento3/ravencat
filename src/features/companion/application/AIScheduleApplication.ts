@@ -237,6 +237,7 @@ export class AIScheduleApplication {
     runId: string;
     consumedAt: string;
     completionDisposition: AIScheduleCompletionDisposition;
+    failureCode?: string;
   }): Promise<AIScheduleApplicationOutcome<'consumed', { schedule: AISchedule }>> {
     if (!isAbsoluteTime(input.consumedAt)) return { status: 'error', code: 'invalid_time' };
     const outcome = await this.dependencies.schedules.consumeClaimed({
@@ -359,4 +360,5 @@ export const consumeAIScheduleCommand = (input: {
   runId: string;
   consumedAt: string;
   completionDisposition: AIScheduleCompletionDisposition;
+  failureCode?: string;
 }) => aiScheduleApplication.consume(input);

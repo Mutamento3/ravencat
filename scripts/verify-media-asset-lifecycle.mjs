@@ -51,6 +51,7 @@ const { MEDIA_ASSET_SCHEMA, MEDIA_ASSET_CONTENT_HASH_INDEX } = await loadTypeScr
   'src/platform/persistence/sqlite/mediaAssetSchema.ts',
 );
 const { CALL_BACKGROUND_SELECTION_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callBackgroundSchema.ts');
+const { CALL_RINGTONE_SELECTION_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callRingtoneSchema.ts');
 const { CALL_HISTORY_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callHistorySchema.ts');
 const { CHAT_FAVORITES_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatFavoriteSchema.ts');
 const { CHAT_REPLY_VERSIONS_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatReplyVersionSchema.ts');
@@ -115,6 +116,7 @@ function createDatabase() {
   db.exec(`
     CREATE TABLE profile_wallpaper_selections (selection_key TEXT PRIMARY KEY, media_asset_id TEXT, legacy_uri TEXT, revision INTEGER);
     ${CALL_BACKGROUND_SELECTION_SCHEMA}
+    ${CALL_RINGTONE_SELECTION_SCHEMA}
     CREATE TABLE user_profile (id TEXT PRIMARY KEY, avatar_media_asset_id TEXT, moments_cover_media_asset_id TEXT);
     CREATE TABLE ai_assistants (id TEXT PRIMARY KEY, avatar_media_asset_id TEXT, moments_cover_media_asset_id TEXT);
     CREATE TABLE group_chats (id TEXT PRIMARY KEY, avatar_media_asset_id TEXT, moments_cover_media_asset_id TEXT);

@@ -33,6 +33,7 @@ factory.resolveUserIdentity = async () => ({ displayName: '枫渡', source: 'pro
 const history = [{ role: 'user', content: '先前的真实用户输入' }, { role: 'assistant', content: '先前回复' },
   { role: 'user', content: '最后一条真实用户发言，应用触发时也不能被删除' }];
 const { promptPackAssembler: assembler } = load('src/host/prompt/PromptPackAssembler.ts', {
+  '@features/companion': { loadAIScheduleContext: async () => '- 测试日程结果：错过任务已跳过，不补跑。' },
   './PromptPackBlockFactory': { promptPackBlockFactory: factory },
   './compiler/PromptPackCompiler': compiler, './compiler/systemPromptPresets': presets,
   './PromptHistoryBuilder': { promptHistoryBuilder: {
@@ -84,9 +85,17 @@ assert.deepEqual(autonomous.modelMessages.slice(0, history.length), history);
 assert.equal(autonomous.modelMessages.at(-1).role, 'system');
 assert.equal(autonomous.stableSystemPrompt, chat.stableSystemPrompt, '日程复用单聊固定背景，不把触发规则塞进前缀');
 assert.match(autonomous.dynamicSystemPrompt, /自主活动时间[\s\S]*due-schedule[\s\S]*约好的问候/);
-assert.match(autonomous.outputRequirement, /行动记录/);
+assert.match(autonomous.outputRequirement, /独立气泡/);
 assert.doesNotMatch(autonomous.dynamicSystemPrompt, /普通 assistant\/final 文本作为行动记录/);
 assert.equal(autonomous.modelMessages.length, history.length + 1, '机器触发不额外伪造 user 消息');
+const feedback = await assembler.assembleChatPromptPack({ ...params,
+  runtimeContext: { triggerSource: 'chat', replyRunId: 'feedback-run' } });
+assert.equal(feedback.stableSystemPrompt, chat.stableSystemPrompt, '日程结果只进入动态环境，不污染稳定前缀');
+assert.match(feedback.blocks.find(block => block.key === 'interaction_environment').content, /错过任务已跳过/);
+assert.match(feedback.modelMessages.at(-2).content, /错过任务已跳过/, '结果真实进入请求，而不是只存在于展示块');
+const regenerated = await assembler.assembleChatPromptPack({ ...params,
+  runtimeContext: { triggerSource: 'chat', replyRunId: 'regenerate-run', isRegeneration: true } });
+assert.doesNotMatch(regenerated.dynamicSystemPrompt, /错过任务已跳过/, '显式重写不消费新的日程交接');
 // 单聊、群聊与应用触发的本轮状态必须遵循中心顺序，不能被旧预设的排序数值覆盖。
 for (const pack of [chat, group, ledger, autonomous]) {
   const stateKeys = ['interaction_environment', 'host_cooldown', 'time_awareness'];
@@ -110,4 +119,51 @@ assert.equal(walletRequest.triggerSource, 'ledger');
 assert.equal(walletRequest.sessionId, 'wallet-chat');
 assert.match(walletRequest.currentInput, /午饭[\s\S]*20/);
 assert.doesNotMatch(walletRequest.currentInput, /你正在接收|回复控制|保持你自己|不是用户/);
-console.log('上下文装配：单聊、群聊身份、冷静期、账本和日程的角色、顺序及共同前缀验证通过。');
+// 换行规则只影响普通聊天正文，开关、覆盖正文与窄任务隔离由真实组装器验证。
+let paragraphBreaksEnabled = false;
+let coreOverride;
+const paragraphOverride = '本轮自定义分段规则';
+const resolvedAssembler = load('src/host/prompt/ResolvedPromptPackAssembler.ts', {
+  '@features/prompting': {
+    listPromptCustomBlocks: async () => [],
+    resolveLegacyPromptPreset: async ({ scenarioId }) => ({ preset: presets.getSystemPromptPreset(scenarioId) }),
+    resolveAssistantPromptConfiguration: async () => ({
+      paragraphBreaksEnabled, timeEnabled: true, batteryEnabled: false, userStateEnabled: true, socialEnabled: true,
+      disabledDefinitionIds: [], overrides: { 'output.paragraph_breaks': paragraphOverride, ...(coreOverride === undefined ? {} : { 'foundation.default_core': coreOverride }) }, userPrompts: [],
+      agentRegistryExcludedAssistantIds: [], messageTimestampsEnabled: false,
+    }),
+  },
+  './PromptPackAssembler': { promptPackAssembler: assembler }, './compiler': compiler,
+  './PromptPackBlockFactory': { promptPackBlockFactory: factory },
+  './DeviceBatteryPromptBlock': { createDeviceBatteryPromptBlocks: async () => [] },
+});
+assert.equal((await resolvedAssembler.assembleResolvedChatPromptPack(params)).blocks.some((block) => block.content.includes(paragraphOverride)), false);
+paragraphBreaksEnabled = true;
+for (const input of [params, { ...params, runtimeContext: { groupChat: groupContext } },
+  { ...params, runtimeContext: { triggerSource: 'ledger', inputSource: 'application' } },
+  { ...params, currentInput: '', additionalBlocks: scheduleBlocks, runtimeContext: { triggerSource: 'raven_cat_ai_schedule', inputSource: 'application' } }]) {
+  const result = await resolvedAssembler.assembleResolvedChatPromptPack(input);
+  assert.ok(result.stableSystemPrompt.includes(paragraphOverride), `${result.scenario} 应在稳定前缀使用编辑后的换行规则`);
+  assert.equal(result.outputRequirement.includes(paragraphOverride), false);
+  const foundationEnd = result.stableSystemPrompt.indexOf(result.blocks.find((block) => block.definitionId === 'foundation.default_core').content);
+  assert.ok(foundationEnd < result.stableSystemPrompt.indexOf(paragraphOverride));
+  assert.ok(result.stableSystemPrompt.indexOf(paragraphOverride) < result.stableSystemPrompt.indexOf('角色人设'), '换行规则位于系统基础规则与人设之间');
+  assert.equal(result.recentMessages.some((message) => message.content.includes(paragraphOverride)), false);
+}
+const callBlocks = load('src/features/calls/application/CallPromptBlocks.ts');
+const callPack = await resolvedAssembler.assembleResolvedChatPromptPack({ ...params,
+  runtimeContext: { triggerSource: 'call' }, additionalBlocks: callBlocks.buildCallLivePromptBlocks() });
+assert.equal(callPack.blocks.some((block) => block.content.includes(paragraphOverride)), false, '通话口语不注入换行规则');
+const summaryTask = { key: 'chat_summary_task', definitionId: 'internal.chat_summary', slot: 'output_contract',
+  protection: 'locked', title: '摘要任务', content: '只输出摘要 JSON', required: true, status: 'ready', placement: 'system' };
+const summaryPack = await resolvedAssembler.assembleResolvedSummaryPromptPack(params, summaryTask);
+assert.equal(summaryPack.blocks.some((block) => block.content.includes(paragraphOverride)), false, '摘要不继承聊天排版要求');
+coreOverride = '';
+for (const result of [await resolvedAssembler.assembleResolvedChatPromptPack(params), await resolvedAssembler.assembleResolvedSummaryPromptPack(params, summaryTask)]) {
+  const core = result.blocks.find((block) => block.definitionId === 'foundation.default_core');
+  assert.equal(core.content, '');
+  assert.equal(core.status, 'omitted');
+  assert.equal(result.systemPrompt.includes(factory.createFoundationBlock(params.aiConfig).content), false, '空基础规则不得回填代码默认正文');
+  assert.ok(result.stableSystemPrompt.includes('角色人设'), '省略基础规则仍保留人设');
+}
+console.log('上下文装配：单聊、群聊身份、冷静期、账本和日程的角色、顺序及共同前缀，以及换行规则开关、正文覆盖与任务隔离验证通过。');

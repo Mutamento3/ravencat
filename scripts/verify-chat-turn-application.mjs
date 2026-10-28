@@ -61,6 +61,7 @@ const turnDomainModuleUrl = transpileToModuleUrl(
   read('src/features/chat/reply/domain/ConversationTurn.ts'),
 );
 const messageDomainModuleUrl = transpileToModuleUrl(`
+  export function buildGroupMentionModelText(text) { return text; }
   export function buildSessionPreviewTextFromMessage(message) {
     const metadata = message?.metadataJson ? JSON.parse(message.metadataJson) : null;
     if (metadata?.kind === 'voice') return '[语音消息]';
@@ -88,6 +89,7 @@ const coordinatorStub = `const databaseCoordinator = {
 
 const messageRepoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`);
 const stubbedMessageRepoSource = messageRepoSource
+  .replace("from '../domain/chatMessageMetadata'", `from '${messageDomainModuleUrl}'`)
   .replace(
     /import\s*\{[\s\S]*?\}\s*from\s*['"]@platform\/persistence['"];/,
     coordinatorStub,
@@ -795,16 +797,16 @@ async function setupTurnFixture() {
   assert.equal(await messages.getUnreadCountByAI('ai1', ids.slice(1)), 3);
   assert.equal(await messages.getUnreadCountByAI('ai1', ids.slice(2)), 4);
   assert.equal(await messages.getUnreadCountByAI('ai1', []), 5);
-  assert.equal((await messages.getLatestArrivedPreviewMessage('s1', ids)).text, '原有未读1');
-  assert.equal((await messages.getLatestArrivedPreviewMessage('s1', ids.slice(1))).text, '第一段');
-  assert.equal((await messages.getLatestArrivedPreviewMessage('s1', ids.slice(2))).text, '第二段');
+  assert.equal((await messages.getLatestArrivedConversationPreview('s1', ids)).text, '原有未读1');
+  assert.equal((await messages.getLatestArrivedConversationPreview('s1', ids.slice(1))).text, '第一段');
+  assert.equal((await messages.getLatestArrivedConversationPreview('s1', ids.slice(2))).text, '第二段');
   assert.equal(db.prepare("SELECT last_message FROM sessions WHERE id = 's1'").get().last_message, '第三段', '到达投影不得回写持久预览');
 
   await messages.commitMessage({ message: {
     sessionId: 's1', text: '工具过程', isMe: false, senderType: 'system', time: '12:00',
     createdAt: '2026-08-01T11:03:00.000Z', metadataJson: JSON.stringify({ type: 'toolStatus' }),
   }, previewText: '第三段' });
-  assert.equal((await messages.getLatestArrivedPreviewMessage('s1', ids.slice(1))).text, '第一段', '工具过程不抢占到达预览');
+  assert.equal((await messages.getLatestArrivedConversationPreview('s1', ids.slice(1))).text, '第一段', '工具过程不抢占到达预览');
   await messages.markMessagesAsRead('s1');
   assert.equal(await messages.getUnreadCountByAI('ai1', ids.slice(1)), 0);
   assert.equal(await messages.getUnreadCountByAI('ai1', []), 0, '已读后剩余分段到达不能重新亮红点');
@@ -820,9 +822,9 @@ async function setupTurnFixture() {
   assert.equal(await messages.getUnreadCountByGroup('arrival-group', [groupBatch[1].id]), 1, '删除未到达分段不扣除别的未读');
 
   addMessage(db, { sessionId: 's1', text: '用户的新消息', isMe: true, createdAt: '2026-08-01T11:05:00.000Z' });
-  assert.equal((await messages.getLatestArrivedPreviewMessage('s1', ids.slice(1))).text, '用户的新消息', '旧分段到达不能覆盖更新的用户消息');
+  assert.equal((await messages.getLatestArrivedConversationPreview('s1', ids.slice(1))).text, '用户的新消息', '旧分段到达不能覆盖更新的用户消息');
   db.prepare('UPDATE sessions SET visible_after_message_id = (SELECT MAX(id) FROM messages WHERE session_id = ?) WHERE id = ?').run('s1', 's1');
-  assert.equal(await messages.getLatestArrivedPreviewMessage('s1', ids), null, '清空历史边界不能被到达投影绕过');
+  assert.equal(await messages.getLatestArrivedConversationPreview('s1', ids), null, '清空历史边界不能被到达投影绕过');
 }
 
 // commit 后 UI 观察者失败也必须结束隐藏投影，不能丢失已提交事实。

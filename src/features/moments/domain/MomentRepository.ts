@@ -64,6 +64,7 @@ export interface MomentMedia {
   analysisModelConfigId: string | null;
   analyzedAt: string | null;
   analysisErrorCode: string | null;
+  analysisErrorMessage: string | null;
   analysisRevision: number;
   createdAt: string;
   updatedAt: string;
@@ -244,6 +245,7 @@ export interface IMomentRepository {
     expectedRevision: number;
     expectedPending?: boolean;
     errorCode: string;
+    errorMessage: string;
     analyzedAt: string;
   }): Promise<boolean>;
   editMediaAnalysis(input: {

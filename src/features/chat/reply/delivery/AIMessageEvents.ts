@@ -1,9 +1,9 @@
-/** 定义 AI 消息提交后的事件与统一系统交付契约，区分 UI 观察者和唯一交付处理器。 */
+/** 定义 AI 消息持久交付后的事件与统一系统交付契约，区分 UI 观察者和唯一交付处理器。 */
 import type { ConversationKind } from '../../conversation/domain/ConversationRef';
 
 export type AIMessageDeliveryKind = 'passive' | 'proactive';
 
-/** AI 消息提交后的统一系统交付结果；UI 投影观察者不参与该回执。 */
+/** AI 消息持久交付后的统一系统交付结果；UI 投影观察者不参与该回执。 */
 export type AIMessageDeliveryStatus =
   | 'shown'
   | 'suppressed_foreground'
@@ -33,8 +33,7 @@ export interface AIMessageObserverPayload {
   groupId?: string | null;
 }
 
-export interface AIMessageReceivedPayload {
-  arrivalAlreadyScheduled?: boolean;
+interface AIMessageReceivedDetails {
   turnRunId?: string;
   aiId: string;
   agentId?: string | null;
@@ -45,8 +44,6 @@ export interface AIMessageReceivedPayload {
   logicalMessageId?: string | null;
   segmentIndex?: number;
   segmentTotal?: number;
-  /** 已提交消息的稳定数据库 ID，用于通知幂等键。 */
-  committedMessageId: number;
   deliveryKind: AIMessageDeliveryKind;
   triggerSource?: string | null;
   relatedEntityType?: string | null;
@@ -61,6 +58,13 @@ export interface AIMessageReceivedPayload {
   /** 群名，供群聊通知标题使用 */
   groupName?: string | null;
 }
+
+/** 正式消息或已持久交付的运行正文；运行正文不伪造 canonical 数据库 ID。 */
+export type AIMessageDeliveryIdentity =
+  | { committedMessageId: number; clientMessageId?: string; arrivalAlreadyScheduled?: boolean }
+  | { committedMessageId?: never; clientMessageId: string; arrivalAlreadyScheduled: true; turnRunId: string };
+
+export type AIMessageReceivedPayload = AIMessageReceivedDetails & AIMessageDeliveryIdentity;
 
 export type AIMessageReceivedListener = (
   payload: AIMessageObserverPayload

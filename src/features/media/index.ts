@@ -34,7 +34,7 @@ export type {
 export type { ResolvedMediaAsset } from './application/MediaAssetResolver';
 export { MediaAssetNotFoundError, MediaAssetMissingError } from './application/MediaAssetResolver';
 export { mediaImageFailure } from './application/MediaImageToolResult';
-export { DownloadImageTool, ViewImageTool, viewImageSource } from './application/AIImageTools';
+export { DownloadImageTool, QueryDownloadedImagesTool, ViewImageTool, viewImageSource } from './application/AIImageTools';
 export { commitCroppedImageSelection } from './application/CommitCroppedImageSelection';
 export type { CroppedImageSelectionInput } from './application/CommitCroppedImageSelection';
 export {

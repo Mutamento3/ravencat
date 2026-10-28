@@ -55,6 +55,7 @@ import { deleteChatMessage } from '../../messages/application/DeleteChatMessage'
 import { voiceMessagePlaybackCoordinator } from '../../messages/application/VoiceMessagePlaybackCoordinator';
 import type { MessageTranslationBlock } from '../messages/components/chatMessageRenderUtils';
 import { useChatComposerSurface } from '../messages/components/useChatComposerSurface';
+import { useChatTextDraft } from '../shell/ChatTextDraftProvider';
 
 type GroupChatCurrentUser = Pick<UserProfile, 'name' | 'avatar'>;
 type SelectedMention = Pick<GroupAssistantParticipant, 'assistantId' | 'displayName'>;
@@ -219,7 +220,7 @@ export default function GroupChatDetail({
   const [isInvoking, setIsInvoking] = useState(false);
   const [isTerminating, setIsTerminating] = useState(false);
   const [queueOverlayVisible, setQueueOverlayVisible] = useState(false);
-  const [inputText, setInputText] = useState('');
+  const { text: inputText, setText: setInputText, ready: draftReady, store: textDrafts } = useChatTextDraft(sessionId, isActive);
   const [selectedMentions, setSelectedMentions] = useState<SelectedMention[]>([]);
   const {
     activeSurface,
@@ -236,7 +237,7 @@ export default function GroupChatDetail({
   const [messageTranslations, setMessageTranslations] = useState<Record<number, MessageTranslationBlock>>({});
   const [replyTo, setReplyTo] = useState<ChatReplyTarget | null>(null);
   const {
-    draftAttachment,
+    draftAttachments,
     readyAttachments,
     withAttachmentSubmission,
     isPreparingAttachment,
@@ -244,6 +245,7 @@ export default function GroupChatDetail({
     capturePhotoAttachment,
     selectDocumentAttachment,
     clearAttachment,
+    removeAttachment,
   } = useAttachmentDraft();
   const attachmentSessionIdRef = useRef(sessionId);
   const participantDirectoryRevision = useMemo(() => JSON.stringify({
@@ -264,6 +266,7 @@ export default function GroupChatDetail({
     isLoadingMore,
     hasMore,
     loadMore,
+    resetHistory,
   } = useMessageHistoryState(sessionId);
 
   const handleSelectionDeleted = useCallback((ids: readonly number[]) => {
@@ -315,6 +318,7 @@ export default function GroupChatDetail({
     setIsTyping,
     setMessages,
     lastMessageIdRef,
+    resetHistory,
   });
 
   const refreshGroupDetails = useCallback(async () => {
@@ -455,7 +459,8 @@ export default function GroupChatDetail({
       return;
     }
 
-    setInputText('');
+    textDrafts.change(sessionId, '');
+    const clearedDraft = textDrafts.read(sessionId);
     const currentReplyTo = replyTo;
     const committedMentions = resolveSelectedMentions(text, selectedMentions);
     setReplyTo(null);
@@ -479,10 +484,10 @@ export default function GroupChatDetail({
       setSelectedMentions([]);
     } catch (error) {
       showAppDialog({ title: '发送失败', message: error instanceof Error ? error.message : '发送失败', tone: 'error' });
-      setInputText(text);
+      textDrafts.replaceIfUnchanged(sessionId, clearedDraft, inputText);
       setReplyTo(currentReplyTo);
     }
-  }, [inputText, readyAttachments, selectedMentions, sessionId, replyTo, withAttachmentSubmission]);
+  }, [inputText, readyAttachments, selectedMentions, sessionId, replyTo, withAttachmentSubmission, textDrafts]);
 
   const handleStickerPress = useCallback(async (sticker: StickerMessageSnapshot) => {
     try {
@@ -532,7 +537,7 @@ export default function GroupChatDetail({
       assistantId: candidate.assistantId,
       displayName: candidate.displayName,
     }]);
-  }, [inputText]);
+  }, [inputText, setInputText]);
 
   const handleInsertAtMention = useCallback(() => {
     setInputText((prev) => {
@@ -542,7 +547,7 @@ export default function GroupChatDetail({
       const trimmed = prev.trimEnd();
       return trimmed ? `${trimmed} @`.trimStart() : '@';
     });
-  }, []);
+  }, [setInputText]);
 
   const handleMessageLongPress = useCallback((msg: ChatMessage, position: { x: number; y: number }) => {
     if (msg.senderType !== 'user' && msg.senderType !== 'assistant') return;
@@ -757,12 +762,13 @@ export default function GroupChatDetail({
 
       <ChatInputArea
         value={inputText}
+        disabled={!draftReady}
         onChangeText={setInputText}
         onSend={handleSend}
-        attachmentDraft={draftAttachment}
+        attachmentDrafts={draftAttachments}
         hasReadyAttachment={readyAttachments.length > 0}
         isPreparingAttachment={isPreparingAttachment}
-        onRemoveAttachment={clearAttachment}
+        onRemoveAttachment={removeAttachment}
         onImagePress={selectImageAttachment}
         onCameraPress={capturePhotoAttachment}
         onFilePress={selectDocumentAttachment}
@@ -852,7 +858,8 @@ export default function GroupChatDetail({
         onForward={selectedMessage && selection.availableKeys.has(getChatSelectionKey(selectedMessage)) ? handleShareMessage : undefined}
         onQuote={messageActions?.quote ? handleQuoteMessage : undefined}
         onTranslate={messageActions?.translate ? handleTranslateMessage : undefined}
-        onFavorite={messageActions?.favorite ? favoriteMessage : undefined}
+        onFavorite={messageActions?.favorite ? favoriteMessage.toggle : undefined}
+        isFavorited={favoriteMessage.isFavorited}
       />
       <ChatShareSheet share={share} onPreviewFile={(params) => { share.close(); onOpenFilePreview(params); }} />
 

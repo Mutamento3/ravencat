@@ -6,11 +6,13 @@ import { createCallStyles } from '../styles';
 
 interface CallBackgroundLayerProps {
   backgroundUri?: string | null;
+  onImageReady?: (uri: string) => void;
   children: React.ReactNode;
 }
 
 export default function CallBackgroundLayer({
   backgroundUri,
+  onImageReady,
   children,
 }: CallBackgroundLayerProps) {
   const theme = useTheme();
@@ -20,7 +22,12 @@ export default function CallBackgroundLayer({
     // 用户自行设定的背景图不加 scrim 遮罩，保持原图观感；
     // 文字可读性由用户选图时自行负责（后续会做固定屏幕尺寸的裁剪）。
     return (
-      <ImageBackground source={{ uri: backgroundUri }} style={styles.backgroundImage} resizeMode="cover">
+      <ImageBackground
+        source={{ uri: backgroundUri }}
+        style={styles.backgroundImage}
+        resizeMode="cover"
+        onLoadEnd={() => onImageReady?.(backgroundUri)}
+      >
         {children}
       </ImageBackground>
     );

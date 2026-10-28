@@ -432,6 +432,7 @@ assert.ok(
 // ---------------------------------------------------------------------------
 const MODULE_STUBS = {
   '@platform/persistence': [
+    ts.transpileModule(read('src/platform/persistence/runtime/DatabaseErrors.ts'), { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText,
     'export const databaseCoordinator = {',
     '  openTaskExecutor() {',
     '    if (!globalThis.__stickerVerifyExecutor) {',

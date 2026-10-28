@@ -1,10 +1,12 @@
-/** 稳定设置只保存未进入 SQLite 的主题及原生装扮，不重复保存背景选择。 */
+/** 稳定设置保存未进入 SQLite 的主题、原生装扮与搜索凭据，不重复保存背景选择。 */
 
 export interface ParsedStableSettingsBackup {
   /** 仍有真实 legacy owner 时用于数据库重定位，收口后移除。 */
   legacyMediaRootUri: string;
   theme: unknown;
   bubbleSkins: unknown;
+  /** 早期 schema 5 未导出搜索凭据，缺少此字段时保留原有恢复行为。 */
+  searchCredentials?: unknown;
 }
 
 /** schema 5：背景已进入 SQLite，临时快照默认排除；来源根只服务剩余历史头像/附件。 */
@@ -40,5 +42,6 @@ export function parseStableSettingsBackupJson(json: string): ParsedStableSetting
     legacyMediaRootUri,
     theme: settings.theme,
     bubbleSkins: settings.bubbleSkins,
+    ...(Object.hasOwn(settings, 'searchCredentials') ? { searchCredentials: settings.searchCredentials } : {}),
   };
 }

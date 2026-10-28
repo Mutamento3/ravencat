@@ -35,6 +35,7 @@ import {
 } from './ConversationPreparationController';
 import type { ChatSubScreen, FilePreviewParams, GroupChatSubScreen } from './chatScreenTypes';
 import useChatScreen from './useChatScreen';
+import { ChatTextDraftProvider } from './ChatTextDraftProvider';
 import { 
   markConversationListFailed,
   markConversationListReady,
@@ -516,7 +517,11 @@ export function ChatRouterProvider({
     unreadMessages,
   ]);
 
-  return <ChatRouterContext.Provider value={value}>{children}</ChatRouterContext.Provider>;
+  return (
+    <ChatRouterContext.Provider value={value}>
+      <ChatTextDraftProvider enabled={chatParams.dbReady === true}>{children}</ChatTextDraftProvider>
+    </ChatRouterContext.Provider>
+  );
 }
 
 export function useChatRouter(): ChatRouterContextValue {

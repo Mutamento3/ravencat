@@ -1,25 +1,10 @@
 import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 /** 协议空间的旧库迁移、常驻注入与用户 / AI 共同编辑行为。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+import { loadTypeScriptModule as load } from './helpers/load-typescript-module.mjs';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-function load(relative, mocks = {}) {
-  const compiled = ts.transpileModule(fs.readFileSync(path.join(root, relative), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  new Function('require', 'module', 'exports', compiled)((id) => {
-    assert.ok(Object.hasOwn(mocks, id), `${relative} 未装配边界 ${id}`);
-    return mocks[id];
-  }, module, module.exports);
-  return module.exports;
-}
 const { PROTOCOL_SCHEMA, migrateProtocolPermanentInjection } = load('src/platform/persistence/sqlite/protocolSchema.ts');
 const { PROMPTING_SCHEMA } = load('src/platform/persistence/sqlite/promptingSchema.ts');
 function createDatabase(legacy) {
@@ -239,6 +224,7 @@ const providerKeys = { 'context.agent_registry': 'agent_registry_summary', 'cont
   'context.passive_memory': 'passive_memory', 'context.group_chat': 'group_chat_context', 'context.assistant_nickname': 'assistant_nickname',
   'context.host_cooldown': 'host_cooldown' };
 const { promptPackAssembler: assembler } = load('src/host/prompt/PromptPackAssembler.ts', {
+  '@features/companion': { loadAIScheduleContext: async () => '' },
   './PromptPackBlockFactory': { promptPackBlockFactory: factoryBoundary },
   './PromptHistoryBuilder': { promptHistoryBuilder: { loadPrivateSummaryContext: async () => ({ messages: [] }),
     loadGroupSummaryContext: async () => ({ messages: [] }), loadBackgroundContext: async () => '', loadRecentMessages: async () => [] } },

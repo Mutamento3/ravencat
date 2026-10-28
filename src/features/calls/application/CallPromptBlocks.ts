@@ -5,6 +5,8 @@ import type { CallAIConfig } from '../domain/CallAIConfig';
 import type { CallSession } from '../domain/CallSession';
 
 export const CALL_END_MARKER = '[[END_CALL]]';
+export const CALL_ACCEPT_MARKER = '[[接听]]';
+export const CALL_REJECT_MARKER = '[[拒绝接听]]';
 
 // 口语输出格式由 CALL_PLAIN_SPOKEN_TEXT_PROMPT 承担，这里只说「你在通话里」与「输入只有文字转写」。
 export const CALL_LIVE_SPEECH_PROMPT = [
@@ -21,11 +23,7 @@ export const CALL_PLAIN_SPOKEN_TEXT_PROMPT = [
 ].join('\n\n');
 
 // 这里仅声明视觉事实边界；查看画面的调用指导由已授权工具的 schema 承担。
-export const CALL_VISUAL_SNAPSHOT_PROMPT = [
-  '当前是视频通话体验，但你不会持续接收摄像头画面；摄像头关闭时你看不见用户及其周围环境。',
-  '只有本轮实际收到的图片或可靠 OCR 文本能作为当前画面的证据；不要根据之前的快照、历史聊天或记忆描述当前画面。',
-  '系统没有提供可靠视觉上下文时，就说明自己看不到，不要返回虚假描述。',
-].join('\n\n');
+export const CALL_VISUAL_SNAPSHOT_PROMPT = '你不会持续接收摄像头画面，摄像头开启不代表已经看见；旧快照不代表当前画面。';
 
 export const CALL_END_CONTROL_PROMPT = [
   `你可以主动挂断当前通话。决定结束通话（包括回应用户的挂断请求）时，在本轮回复中输出 ${CALL_END_MARKER}，并说一句自然的告别语。`,
@@ -40,12 +38,13 @@ export const OUTGOING_CALL_DECISION_PROMPT = [
   '接听后会进入自然的口语对话场景；摄像头开启不代表已经收到用户画面。',
 ].join('\n\n');
 
-export const OUTGOING_CALL_JSON_CONTRACT = [
-  '只返回以下两种形状之一的严格 JSON：',
-  '{"decision":"accept","spokenText":"通话接通后你要说的第一句话"}',
-  '{"decision":"reject","rejectionReason":"自然的拒接原因"}',
-  'spokenText 使用纯口语，可自然使用语气词和标点停顿，不含厂商控制标记；接通后的实时回复会另行声明当前语音模型能力。',
-  '不要返回 XML，也不要使用 Markdown 包裹 JSON。',
+export const OUTGOING_CALL_CONTROL_PROMPT = [
+  `决定接听时，在本轮回复中输出 ${CALL_ACCEPT_MARKER}；决定拒绝接听时，输出 ${CALL_REJECT_MARKER}。两种标记只能选择一种。`,
+  '标记可以放在口语正文之前、之后或中间；应用会抽离标记并执行接听或拒接，标记不会显示或朗读。',
+  `例如“${CALL_ACCEPT_MARKER}你好。”、“你好。${CALL_ACCEPT_MARKER}”、“哦，${CALL_ACCEPT_MARKER}你好。”都表示接听。`,
+  `拒接时可以输出“${CALL_REJECT_MARKER}我现在不方便，晚点聊。”；标记之外的正文会作为普通聊天回复交给用户。`,
+  '其余内容直接使用自然口语，可自然使用语气词、引号、换行和标点停顿；也可以只输出标记而不附带正文。',
+  '不要输出 JSON、字段名、XML 或 Markdown 代码块，不含厂商语音控制标记；接通后的实时回复会另行声明当前语音模型能力。',
 ].join('\n\n');
 
 export const CALL_POST_USER_HANGUP_PROMPT = [
@@ -82,12 +81,12 @@ export function buildCallLivePromptBlocks(call?: CallSession, speechTextGuidance
 
 /**
  * 去电决策走 resolved Chat Pack：人设、用户身份、附加提示词与近期历史由聊天管线统一提供，
- * 这里只追加决策场景与 JSON 契约，避免 persona 重复注入。
+ * 这里只追加决策场景与接听控制标记，避免 persona 重复注入。
  */
 export function buildOutgoingCallDecisionBlocks(): PromptPackBlock[] {
   return [
     block('scenario.call_outgoing_decision', '用户去电决策', OUTGOING_CALL_DECISION_PROMPT, 'scenario'),
-    block('output.call_outgoing_decision_json', '去电决策 JSON 契约', OUTGOING_CALL_JSON_CONTRACT, 'output_contract'),
+    block('output.call_outgoing_decision_json', '去电接听控制标记', OUTGOING_CALL_CONTROL_PROMPT, 'output_contract'),
   ];
 }
 

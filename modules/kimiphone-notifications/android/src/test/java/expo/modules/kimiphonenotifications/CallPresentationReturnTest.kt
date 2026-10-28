@@ -1,5 +1,6 @@
 package expo.modules.kimiphonenotifications
 
+import expo.modules.androidoverlayruntime.CallPresentationReturn
 import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Intent
@@ -40,23 +41,29 @@ class CallPresentationReturnTest {
     val activity = mainActivity()
     CallPresentationReturn.started(activity)
     assertTrue(CallPresentationReturn.isAppVisible)
-    CallPresentationReturn.accepted("internal", false)
-    CallPresentationReturn.leave("internal", true, activity)
+    CallPresentationReturn.entered("internal", false)
+    CallPresentationReturn.leave("internal", activity)
     assertEquals(0, activity.backgroundCount)
     CallPresentationReturn.stopped(activity)
     assertFalse(CallPresentationReturn.isAppVisible)
   }
 
   @Test
-  fun `external calls return to the previous task through minimize restore and hangup`() {
+  fun `each external restoration returns once and does not inherit the previous entry`() {
     val activity = mainActivity()
-    CallPresentationReturn.accepted("external", true)
-    CallPresentationReturn.leave("old-call", true, activity)
+    CallPresentationReturn.entered("external", true)
+    CallPresentationReturn.leave("old-call", activity)
     assertEquals(0, activity.backgroundCount)
-    CallPresentationReturn.leave("external", false, activity)
-    CallPresentationReturn.leave("external", true, activity)
+    CallPresentationReturn.leave("external", activity)
+    CallPresentationReturn.leave("external", activity)
+    assertEquals(1, activity.backgroundCount)
+    CallPresentationReturn.entered("external", false)
+    CallPresentationReturn.leave("external", activity)
+    assertEquals(1, activity.backgroundCount)
+    CallPresentationReturn.entered("external", true)
+    CallPresentationReturn.leave("external", activity)
     assertEquals(2, activity.backgroundCount)
-    CallPresentationReturn.leave("external", true, activity)
+    CallPresentationReturn.leave("external", activity)
     assertEquals(2, activity.backgroundCount)
   }
 
@@ -75,7 +82,7 @@ class CallPresentationReturnTest {
     // 原生来电页已经盖住主界面，接听仍应保留进入前的来源。
     CallPresentationReturn.stopped(main)
     shell.newIntent(incomingIntent("accept"))
-    CallPresentationReturn.leave("incoming", true, main)
+    CallPresentationReturn.leave("incoming", main)
     assertEquals(0, main.backgroundCount)
   }
 
@@ -88,7 +95,7 @@ class CallPresentationReturnTest {
     CallPresentationReturn.started(main)
     val restored = Robolectric.buildActivity(IncomingCallActivity::class.java, incomingIntent("open")).create(savedState)
     restored.newIntent(incomingIntent("accept"))
-    CallPresentationReturn.leave("incoming", true, main)
+    CallPresentationReturn.leave("incoming", main)
     assertEquals(1, main.backgroundCount)
     CallPresentationReturn.stopped(main)
   }

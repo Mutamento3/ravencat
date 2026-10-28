@@ -37,7 +37,7 @@ const shared = {
   '@shared/theme': { ThemedSurface: 'ThemedSurface', useTheme: () => theme, useThemedStyles: (factory) => factory(theme) },
   '@shared/ui': { NavigationHeader: 'NavigationHeader', AIInfoCard: 'AIInfoCard' },
   '@shared/ui/NavigationHeader': { __esModule: true, default: 'NavigationHeader' },
-  'lucide-react-native': { HeartHandshake: 'HeartHandshake', BookOpen: 'BookOpen', History: 'History' },
+  'lucide-react-native': { HeartHandshake: 'HeartHandshake', BookOpen: 'BookOpen', History: 'History', Search: 'Search' },
   '@expo/vector-icons': { Ionicons: 'Ionicons' },
   '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname || assistant.name },
 };
@@ -57,7 +57,7 @@ const screen = load('src/features/chat/presentation/conversation/ChatStatisticsS
   '../../messages/events/ChatEvents': { setChatEventBus: () => () => {} },
 });
 const stack = StackRouter({ initialRouteName: 'conversation' });
-const stackOptions = { routeNames: ['conversation', 'menu', 'statistics'], routeParamList: {}, routeGetIdList: {} };
+const stackOptions = { routeNames: ['conversation', 'menu', 'statistics', 'search'], routeParamList: {}, routeGetIdList: {} };
 let navigationState = stack.getInitialState(stackOptions);
 function dispatch(action) {
   navigationState = stack.getStateForAction(navigationState, action, stackOptions);
@@ -83,6 +83,7 @@ const routeDependencies = Object.fromEntries([
   '../../summary/presentation/ChatSummaryScreen', '../../summary/presentation/ChatSummaryEditorScreen',
   '../../summary/presentation/ChatSummarySettingsScreen', '../../summary/presentation/ChatSummaryTaskScreen', '../../summary/presentation/ChatSecondarySummaryScreen',
   '../messages/ChatDetail', '../messages/FilePreview', '../messages/components/ChatBackground',
+  '../messages/ChatMessageSearchScreen', '../messages/ChatMessageContextScreen',
   '../../group/application', '../../group/application/GroupMembership', '../../conversation/application/ChatPresentation', '../messages/components/sessionTimelineCache',
 ].map((id) => [id, defaults]));
 const routes = load('src/features/chat/presentation/shell/ChatRouteScreens.tsx', {
@@ -105,7 +106,12 @@ try {
   const menuTitles = menuRenderer.root.findAllByType('TouchableOpacity').map((item) =>
     item.findAllByType('Text').map((text) => text.children.join('')).join(''));
   // 菜单顺序可随页面调整；导航契约要求入口完整，不冻结当前排列。
-  assert.deepEqual(menuTitles.sort(), ['模型设置', '协议空间', '聊天摘要', '对话设置', '通话记录', '相遇痕迹', '清除聊天记录', '删除当前 AI'].sort());
+  assert.deepEqual(menuTitles.sort(), ['模型设置', '协议空间', '聊天摘要', '搜索聊天记录', '对话设置', '通话记录', '相遇痕迹', '清除聊天记录', '删除当前 AI'].sort());
+  const searchEntry = menuRenderer.root.findAllByType('TouchableOpacity').find(item =>
+    item.findAllByType('Text').some(text => text.children.join('') === '搜索聊天记录'));
+  await act(async () => { searchEntry.props.onPress(); });
+  assert.equal(navigationState.routes.at(-1).name, 'search');
+  dispatch(StackActions.pop());
   const entry = menuRenderer.root.findAllByType('TouchableOpacity').find((item) =>
     item.findAllByType('Text').some((text) => text.children.join('') === '相遇痕迹'));
   assert.ok(entry, '更多中应有与其他功能相同的可点击菜单入口');

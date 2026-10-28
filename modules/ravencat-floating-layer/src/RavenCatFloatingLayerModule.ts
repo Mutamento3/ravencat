@@ -91,6 +91,31 @@ export type RavenCatCompanionExecutionOutcome =
   | 'TIMED_OUT'
   | 'WORKER_STOPPED';
 
+export type RavenCatAIScheduleDiagnostics = {
+  device: {
+    manufacturer: string;
+    model: string;
+    apiLevel: number;
+    packageName: string;
+    versionName: string;
+    versionCode: number;
+    deviceIdleMode: boolean;
+    powerSaveMode: boolean;
+    batteryOptimizationExempt: boolean;
+  };
+  companionSchedulingEnabled: boolean;
+  events: {
+    deliveryEventId: string;
+    stage: string;
+    recordedAtEpochMs: number;
+    expectedRemindAtEpochMs: number | null;
+    outcome: string | null;
+    deviceIdleMode: boolean;
+    powerSaveMode: boolean;
+    batteryOptimizationExempt: boolean;
+  }[];
+};
+
 export type RavenCatNativeHealth = {
   floatingServiceRunning: boolean;
   /** Overlay FGS：owner 是 Floating Interaction，不代表 Companion 在运行。 */
@@ -223,6 +248,7 @@ declare class RavenCatFloatingLayerModule extends NativeModule {
   setAppForeground(active: boolean): Promise<void>;
   isFloatingLayerRunning(): Promise<boolean>;
   getNativeHealth(): Promise<RavenCatNativeHealth>;
+  getAIScheduleDiagnostics(): Promise<RavenCatAIScheduleDiagnostics>;
   clearNativeDataForFactoryReset(): Promise<void>;
   setCompanionSchedulingEnabled(enabled: boolean): Promise<void>;
   scheduleAIScheduleTrigger(
@@ -360,6 +386,10 @@ export function isFloatingLayerRunning(): Promise<boolean> {
 
 export function getNativeHealth(): Promise<RavenCatNativeHealth> {
   return RavenCatFloatingLayer.getNativeHealth();
+}
+
+export function getAIScheduleDiagnostics(): Promise<RavenCatAIScheduleDiagnostics> {
+  return RavenCatFloatingLayer.getAIScheduleDiagnostics();
 }
 
 /** 恢复出厂：清空全部 RavenCat 原生持久化状态，不暴露任何原生存储命名。 */

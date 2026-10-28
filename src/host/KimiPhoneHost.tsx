@@ -160,13 +160,13 @@ interface HostRouteRuntime {
   unreadCount: number;
   closeCallScreen: (callId: string) => void;
   minimizeCallScreen: (callId: string) => void;
-  activateCallScreen: (callId: string) => void;
+  activateCallScreen: (callId: string) => (() => void) | undefined;
 }
 
 const HostRouteRuntimeContext = createContext<HostRouteRuntime | null>(null);
 
-// Headless 让通话跨越 Activity 销毁；首次发起/接听的位置必须同样独立于 React 页面存活。
-// 只保留当前通话的完整地址（含会话参数），小窗重开和深链重建不覆盖来源。
+// 展示来源随 Headless 跨越 Activity 重建；每次从小窗进入前，以最近的 App 内页面更新来源。
+// App 外来源由原生窗口记录，Host 只保留整理 App 路由所需的完整地址（含会话参数）。
 let callScreenOrigin: { callId: string; href: Href } | null = null;
 
 function useHostRouteRuntime(): HostRouteRuntime {
@@ -240,6 +240,11 @@ function HostLifecycle({
   const [isProcessingExternalNavigation, setIsProcessingExternalNavigation] = useState(false);
   const [minimizedCallId, setMinimizedCallId] = useState<string | null>(null);
   const [callRuntimeId, setCallRuntimeId] = useState<string | null>(null);
+  useEffect(() => {
+    if (callRuntimeId && !pathname.startsWith('/calls/')) {
+      callScreenOrigin = { callId: callRuntimeId, href: currentHref as Href };
+    }
+  }, [callRuntimeId, currentHref, pathname]);
   const [interruptedCallId, setInterruptedCallId] = useState<string | null>(null);
   const [activeChatContext, setActiveChatContext] = useState<ActiveChatContext>({
     ownerId: 'none',
@@ -795,14 +800,8 @@ function HostLifecycle({
     trackHostTask,
   ]);
 
-  const activateCallScreen = useCallback((callId: string) => {
-    autoRestoreSuppressedCallIdRef.current = callId;
-    setCallRuntimeId(callId);
-    setMinimizedCallId(null);
-  }, []);
-
   const openCallScreen = useCallback((callId: string) => {
-    if (callScreenOrigin?.callId !== callId && !pathname.startsWith('/calls/')) {
+    if (!pathname.startsWith('/calls/')) {
       callScreenOrigin = { callId, href: currentHref as Href };
     }
     setCallRuntimeId(callId);
@@ -821,12 +820,12 @@ function HostLifecycle({
     router.replace('/' as Href);
   }, [router]);
 
-  const returnFromCallScreen = useCallback((callId: string, finished: boolean) => {
+  const returnFromCallScreen = useCallback((callId: string) => {
     const origin = callScreenOrigin?.callId === callId ? callScreenOrigin : null;
-    if (finished && origin) callScreenOrigin = null;
-    void leaveCallScreen(callId, finished).finally(() => {
+    if (origin) callScreenOrigin = null;
+    void leaveCallScreen(callId).finally(() => {
       if (origin) {
-        // 原页面仍在栈中就弹回；Activity 已重建时替换通话页，恢复首次进入的位置。
+        // 原页面仍在栈中就弹回；Activity 已重建时恢复这次进入前的位置。
         router.dismissTo(origin.href);
       } else {
         // 直接冷启动打开的通话链接没有 App 内来源，沿用普通栈退出语义。
@@ -854,15 +853,33 @@ function HostLifecycle({
     setMinimizedCallId(null);
     setCallRuntimeId((current) => current === callId ? null : current);
     void refreshCallConversationTimeline(callId);
-    returnFromCallScreen(callId, true);
+    returnFromCallScreen(callId);
   }, [refreshCallConversationTimeline, returnFromCallScreen]);
+
+  const activateCallScreen = useCallback((callId: string) => {
+    if (!dbReady) return;
+    let current = true;
+    // 深链和开发重载可能恢复旧通话地址；在 Host 的数据库就绪边界按持久事实准入。
+    // 终态已无媒体 runtime，不能让页面无限等待一个不会再创建的执行宿主。
+    void trackHostTask(getCallSession(callId).then((call) => {
+      if (!current) return;
+      if (!call || !shouldRestoreCallScreen(call)) {
+        closeCallScreen(callId);
+        return;
+      }
+      autoRestoreSuppressedCallIdRef.current = callId;
+      setCallRuntimeId(callId);
+      setMinimizedCallId(null);
+    })).catch(error => console.warn('[Calls] 通话路由准入失败：', error));
+    return () => { current = false; };
+  }, [closeCallScreen, dbReady, trackHostTask]);
 
   const minimizeCallScreen = useCallback((callId: string) => {
     setCallRuntimeId(callId);
     autoRestoreSuppressedCallIdRef.current = callId;
     setMinimizedCallId(callId);
     void refreshCallConversationTimeline(callId);
-    returnFromCallScreen(callId, false);
+    returnFromCallScreen(callId);
   }, [refreshCallConversationTimeline, returnFromCallScreen]);
 
   const openAddAIScreen = useCallback(() => {
@@ -929,7 +946,7 @@ function HostLifecycle({
     if (payload.notificationAction === 'accept') {
       const accepted = await acceptCall(payload.callId);
       if (accepted.call.state !== 'active') {
-        await leaveCallScreen(payload.callId, true);
+        await leaveCallScreen(payload.callId);
         return;
       }
       currentCall = accepted.call;
@@ -1424,6 +1441,7 @@ function HostLifecycle({
         }}
         onOpenGroupSubScreen={(groupId, screen: GroupChatSubScreen) => {
           const segments: Record<GroupChatSubScreen, string> = {
+            search: 'search',
             menu: 'menu',
             adminSettings: 'admin-settings',
             summary: 'summary',
@@ -1432,6 +1450,7 @@ function HostLifecycle({
         }}
         onOpenSubScreen={(aiId, screen: ChatSubScreen) => {
           const segments: Record<ChatSubScreen, string> = {
+            search: 'search',
             menu: 'menu',
             protocol: 'protocol',
             modelSettings: 'model-settings',

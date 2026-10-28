@@ -6,7 +6,6 @@ import type { PresentationTheme } from '@shared/theme';
 export const createStyles = (theme: PresentationTheme) =>
   StyleSheet.create({
     contentContainer: {
-      paddingHorizontal: theme.spacing.lg,
       paddingBottom: 40,
     },
     avatarSection: {
@@ -24,16 +23,14 @@ export const createStyles = (theme: PresentationTheme) =>
     },
     avatarEditBadge: {
       position: 'absolute',
-      bottom: -4,
-      right: -4,
-      width: 28,
-      height: 28,
-      borderRadius: 14,
+      bottom: -2,
+      right: -2,
+      width: 24,
+      height: 24,
+      borderRadius: 12,
       backgroundColor: theme.colors.brand.primary,
       justifyContent: 'center',
       alignItems: 'center',
-      borderWidth: 2,
-      borderColor: theme.colors.surface.default,
     },
     emptyHint: {
       fontSize: 14,
@@ -69,39 +66,8 @@ export const createStyles = (theme: PresentationTheme) =>
       borderColor: theme.colors.brand.primary,
     },
     section: {
-      paddingTop: theme.spacing.lg,
-    },
-    fullWidthButton: {
-      width: '100%',
-      marginTop: theme.spacing.sm,
-    },
-    selectedModelContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: theme.colors.surface.muted,
-      borderRadius: theme.radius.md,
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.md,
-      marginTop: theme.spacing.sm,
-    },
-    selectedModelText: {
-      flex: 1,
-      fontSize: 14,
-      color: theme.colors.text.primary,
-      fontWeight: '500',
-    },
-    changeModelBtn: {
-      paddingHorizontal: theme.spacing.sm,
-      paddingVertical: theme.spacing.xs,
-    },
-    changeModelText: {
-      fontSize: 14,
-      color: theme.colors.brand.primary,
-      fontWeight: '600',
-    },
-    modelHint: {
-      marginTop: theme.spacing.sm,
-      fontSize: 13,
-      color: theme.colors.text.secondary,
+      padding: theme.spacing.lg,
+      borderBottomWidth: 0.5,
+      borderBottomColor: theme.colors.border.light,
     },
   });

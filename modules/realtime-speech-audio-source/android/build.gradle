@@ -4,6 +4,7 @@ plugins {
 }
 
 dependencies {
+  implementation 'com.github.gkonovalov.android-vad:webrtc:2.0.10'
   testImplementation 'junit:junit:4.13.2'
 }
 

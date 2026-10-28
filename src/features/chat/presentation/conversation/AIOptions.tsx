@@ -2,7 +2,8 @@
 import { getAssistantDisplayName } from '@features/assistants';
 
 import React from 'react';
-import { StyleSheet, ScrollView } from 'react-native';
+import { Search } from 'lucide-react-native';
+import { StyleSheet, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
@@ -29,6 +30,7 @@ interface AIOptionsProps {
   onModelSettings?: () => void;
   onChatSettings?: () => void;
   onChatSummary?: () => void;
+  onSearchMessages?: () => void;
   onCallHistory?: () => void;
   onChatStatistics?: () => void;
   onDeleteAI?: () => void | Promise<void>;
@@ -100,6 +102,7 @@ export default function AIOptions({
   onModelSettings,
   onChatSettings,
   onChatSummary,
+  onSearchMessages,
   onCallHistory,
   onChatStatistics,
   onDeleteAI,
@@ -128,7 +131,7 @@ export default function AIOptions({
     if (!onClearHistory) return;
     showAppDialog({
       title: '清除聊天记录',
-      message: '清除后，聊天界面将隐藏此前消息。\n聊天摘要和记忆会继续保留，AI 仍记得摘要中的内容。',
+      message: '将永久删除与当前 AI 的全部聊天记录，包括此前隐藏的消息和重写版本，无法撤销。\n聊天摘要和记忆空间的内容会继续保留。',
       buttons: [
         { text: '取消', style: 'cancel' },
         {
@@ -160,6 +163,10 @@ export default function AIOptions({
   ];
 
   const primaryMenuItems = [
+    ...(conversationId ? [{
+      key: 'search-messages', icon: <View style={styles.iconBox}><Search size={22} color={theme.colors.brand.primary} /></View>,
+      title: '搜索聊天记录', onPress: onSearchMessages,
+    }] : []),
     {
       key: 'protocol-space',
       icon: <ProtocolIcon color={theme.colors.brand.primary} />,

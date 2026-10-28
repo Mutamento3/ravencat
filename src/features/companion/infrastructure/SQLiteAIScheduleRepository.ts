@@ -5,6 +5,7 @@ import {
   createAISchedule,
   createAIScheduleFromRow,
   AI_SCHEDULE_CANCELLED_REASON_OWNER_REVOKED,
+  AI_SCHEDULE_START_GRACE_MS,
   type AISchedule,
   type AIScheduleCompletionDisposition,
   type AIScheduleRow,
@@ -19,8 +20,122 @@ import type {
   UpdateAIScheduleInput,
 } from '../domain/AIScheduleRepository';
 import { COMPANION_STATE_ID, type CompanionStateRow } from '../domain/CompanionState';
+import type { AIScheduleContextItem, AIScheduleDispatchInput } from '../domain/AIScheduleContext';
 
 export class SQLiteAIScheduleRepository implements AIScheduleRepository {
+  async prepareDispatch(input: AIScheduleDispatchInput): Promise<AISchedule | null> {
+    return this.openExecutor('prepare-dispatch').withExclusiveTransactionAsync(async tx => {
+      if (await this.validateCompanionAuthority(tx, input.ownerAIId)) return null;
+      const origin = await this.getByScheduleIdWithExecutor(tx, input.scheduleId);
+      if (!origin || origin.ownerAIId !== input.ownerAIId || origin.status !== 'scheduled'
+        || origin.remindAt !== input.expectedRemindAt || origin.updatedAt !== input.projectionToken
+        || Date.parse(origin.remindAt) > Date.parse(input.occurredAt)) return null;
+      await this.expireInTransaction(tx, input.occurredAt, input.ownerAIId);
+      if (Date.parse(input.occurredAt) - Date.parse(origin.remindAt) > AI_SCHEDULE_START_GRACE_MS) return null;
+      const due = await tx.getAllAsync<AIScheduleRow>(`SELECT * FROM raven_cat_ai_schedules
+        WHERE owner_ai_id = ? AND status = 'scheduled' AND julianday(remind_at) <= julianday(?)
+        ORDER BY julianday(remind_at) DESC, updated_at DESC, schedule_id DESC`, [input.ownerAIId, input.occurredAt]);
+      const latest = createAIScheduleFromRow(due[0])!;
+      for (const old of due.slice(1)) await this.mergeInTransaction(tx, old.schedule_id, latest.scheduleId, input.occurredAt);
+      return latest;
+    });
+  }
+
+  async expireScheduled(occurredAt: string, ownerAIId?: string): Promise<void> {
+    await this.openExecutor('expire').withExclusiveTransactionAsync(tx => this.expireInTransaction(tx, occurredAt, ownerAIId));
+  }
+
+  private async expireInTransaction(tx: DatabaseTransactionExecutor, occurredAt: string, ownerAIId?: string): Promise<void> {
+    const cutoff = new Date(Date.parse(occurredAt) - AI_SCHEDULE_START_GRACE_MS).toISOString();
+    const rows = await tx.getAllAsync<{ schedule_id: string }>(`SELECT schedule_id FROM raven_cat_ai_schedules
+      WHERE status = 'scheduled' AND julianday(remind_at) < julianday(?) ${ownerAIId ? 'AND owner_ai_id = ?' : ''}`,
+    ownerAIId ? [cutoff, ownerAIId] : [cutoff]);
+    for (const row of rows) {
+      await tx.runAsync(`UPDATE raven_cat_ai_schedules SET status='cancelled', cancelled_reason='expired',
+        cancelled_at=?, updated_at=? WHERE schedule_id=? AND status='scheduled'`, [occurredAt, occurredAt, row.schedule_id]);
+      await this.writeContext(tx, row.schedule_id, 'expired', null, occurredAt);
+      await this.retargetContext(tx, row.schedule_id, null);
+    }
+  }
+
+  async mergeDueIntoChat(ownerAIId: string, occurredAt: string): Promise<void> {
+    await this.openExecutor('merge-chat').withExclusiveTransactionAsync(async tx => {
+      await this.expireInTransaction(tx, occurredAt, ownerAIId);
+      const due = await tx.getAllAsync<{ schedule_id: string }>(`SELECT schedule_id FROM raven_cat_ai_schedules
+        WHERE owner_ai_id=? AND status='scheduled' AND julianday(remind_at)<=julianday(?)`, [ownerAIId, occurredAt]);
+      for (const row of due) await this.mergeInTransaction(tx, row.schedule_id, null, occurredAt);
+    });
+  }
+
+  async mergeScheduled(scheduleId: string, targetScheduleId: string | null, occurredAt: string, failureCode?: string): Promise<void> {
+    if (scheduleId === targetScheduleId) return;
+    await this.openExecutor('merge-schedule').withExclusiveTransactionAsync(tx =>
+      this.mergeInTransaction(tx, scheduleId, targetScheduleId, occurredAt, failureCode));
+  }
+
+  private async mergeInTransaction(tx: DatabaseTransactionExecutor, scheduleId: string, target: string | null, at: string, failureCode?: string): Promise<void> {
+    const result = await tx.runAsync(`UPDATE raven_cat_ai_schedules SET status='cancelled', cancelled_at=?,
+      cancelled_reason=?, updated_at=? WHERE schedule_id=? AND status='scheduled'`,
+    [at, target === null ? 'merged_chat' : 'merged_schedule', at, scheduleId]);
+    if (!result.changes) return;
+    await this.writeContext(tx, scheduleId, failureCode ?? (target === null ? 'merged_chat' : 'merged_schedule'), target, at);
+    await this.retargetContext(tx, scheduleId, target);
+  }
+
+  /** 调用方已撤销对应 Chat owner；这里只收口该 run 的日程，不重放已发生的动作。 */
+  async mergeClaimedRun(runId: string, target: string | null, at: string): Promise<void> {
+    await this.openExecutor('merge-claimed').withExclusiveTransactionAsync(async tx => {
+      const rows = await tx.getAllAsync<{ schedule_id: string }>(`SELECT schedule_id FROM raven_cat_ai_schedules
+        WHERE claimed_by_run_id=? AND status IN ('claimed','consumed')`, [runId]);
+      for (const row of rows) {
+        await tx.runAsync(`UPDATE raven_cat_ai_schedules SET status='consumed', consumed_at=?,
+          completion_disposition='interrupted', updated_at=? WHERE schedule_id=? AND status='claimed'`, [at, at, row.schedule_id]);
+        await this.writeContext(tx, row.schedule_id, target === null ? 'merged_chat' : 'merged_schedule', target, at);
+        await this.retargetContext(tx, row.schedule_id, target);
+      }
+    });
+  }
+
+  private async writeContext(tx: DatabaseTransactionExecutor, id: string, reason: string, target: string | null, at: string): Promise<void> {
+    await tx.runAsync(`INSERT INTO raven_cat_ai_schedule_context(schedule_id,reason,target_schedule_id,occurred_at)
+      VALUES (?,?,?,?) ON CONFLICT(schedule_id) DO UPDATE SET reason=excluded.reason,
+      target_schedule_id=excluded.target_schedule_id, occurred_at=excluded.occurred_at,
+      presented_run_id=NULL, acknowledged_at=NULL`, [id, reason, target, at]);
+  }
+
+  private async retargetContext(tx: DatabaseTransactionExecutor, old: string, target: string | null): Promise<void> {
+    await tx.runAsync(`UPDATE raven_cat_ai_schedule_context SET target_schedule_id=?
+      WHERE target_schedule_id=? AND acknowledged_at IS NULL`, [target, old]);
+  }
+
+  async listPendingContext(ownerAIId: string, targetScheduleId: string | null): Promise<AIScheduleContextItem[]> {
+    const rows = await this.openExecutor('context').getAllAsync<{ schedule_id: string; remind_at: string; summary: string;
+      details: string; source_excerpt: string | null; reason: string; target_schedule_id: string | null; presented_run_id: string | null }>(
+      `SELECT s.schedule_id,s.remind_at,s.summary,s.details,s.source_excerpt,c.reason,c.target_schedule_id,c.presented_run_id
+       FROM raven_cat_ai_schedule_context c JOIN raven_cat_ai_schedules s ON s.schedule_id=c.schedule_id
+       WHERE s.owner_ai_id=? AND c.target_schedule_id IS ? AND c.acknowledged_at IS NULL
+       ORDER BY c.occurred_at,s.schedule_id`, [ownerAIId, targetScheduleId]);
+    return rows.map(row => ({ scheduleId: row.schedule_id, remindAt: row.remind_at, summary: row.summary,
+      details: row.details, sourceExcerpt: row.source_excerpt, reason: row.reason,
+      targetScheduleId: row.target_schedule_id, presentedRunId: row.presented_run_id }));
+  }
+
+  async bindContext(input: { runId: string; occurredAt: string; acknowledge: AIScheduleContextItem[];
+    present: AIScheduleContextItem[] }): Promise<AIScheduleContextItem[]> {
+    return this.openExecutor('bind-context').withExclusiveTransactionAsync(async tx => {
+      for (const item of input.acknowledge) await tx.runAsync(`UPDATE raven_cat_ai_schedule_context SET acknowledged_at=?
+        WHERE schedule_id=? AND acknowledged_at IS NULL AND presented_run_id IS ? AND target_schedule_id IS ? AND reason=?`,
+      [input.occurredAt, item.scheduleId, item.presentedRunId, item.targetScheduleId, item.reason]);
+      const bound: AIScheduleContextItem[] = [];
+      for (const item of input.present) {
+        const result = await tx.runAsync(`UPDATE raven_cat_ai_schedule_context SET presented_run_id=?
+          WHERE schedule_id=? AND acknowledged_at IS NULL AND presented_run_id IS ? AND target_schedule_id IS ? AND reason=?`,
+        [input.runId, item.scheduleId, item.presentedRunId, item.targetScheduleId, item.reason]);
+        if (result.changes) bound.push(item);
+      }
+      return bound;
+    });
+  }
   async createScheduled(
     data: AISchedule,
     occurredAt: string,
@@ -188,6 +303,8 @@ export class SQLiteAIScheduleRepository implements AIScheduleRepository {
       if (current.remindAt !== input.expectedRemindAt) return { status: 'stale_projection' };
       if (current.updatedAt !== input.projectionToken) return { status: 'stale_projection' };
       if (Date.parse(current.remindAt) > Date.parse(input.claimedAt)) return { status: 'not_due' };
+      await this.expireInTransaction(tx, input.claimedAt, input.ownerAIId);
+      if (Date.parse(input.claimedAt) - Date.parse(current.remindAt) > AI_SCHEDULE_START_GRACE_MS) return { status: 'already_past' };
 
       // due-time CAS 作为最终并发边界：只允许 scheduled → claimed 且版本完全匹配。
       const result = await tx.runAsync(
@@ -219,6 +336,7 @@ export class SQLiteAIScheduleRepository implements AIScheduleRepository {
     runId: string;
     consumedAt: string;
     completionDisposition: AIScheduleCompletionDisposition;
+    failureCode?: string;
   }): Promise<AIScheduleCommandOutcome<'consumed'>> {
     return this.openExecutor('consume').withExclusiveTransactionAsync(async (tx) => {
       const current = await this.getByScheduleIdWithExecutor(tx, input.scheduleId);
@@ -246,6 +364,13 @@ export class SQLiteAIScheduleRepository implements AIScheduleRepository {
       );
       if (result.changes !== 1) {
         throw new Error('AI Schedule consume 原子条件在 exclusive transaction 内失效');
+      }
+      const failure = input.failureCode ?? (input.completionDisposition === 'interrupted' ? 'interrupted' : null);
+      if (failure) {
+        await tx.runAsync(`INSERT INTO raven_cat_ai_schedule_context(schedule_id,reason,occurred_at)
+          VALUES (?,?,?) ON CONFLICT(schedule_id) DO NOTHING`, [input.scheduleId, failure, input.consumedAt]);
+        // 最新安排未完成时，继承的旧背景也交给正常聊天，不能挂在已失败的目标上。
+        await this.retargetContext(tx, input.scheduleId, null);
       }
       return {
         status: 'consumed',

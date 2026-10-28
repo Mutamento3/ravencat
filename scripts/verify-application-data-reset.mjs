@@ -12,29 +12,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import ts from 'typescript';
-
-const root = process.cwd();
-
-function readSrc(relativePath) {
-  return readFileSync(join(root, relativePath), 'utf8');
-}
-
-function loadTypeScriptModuleWithMocks(relativePath, mocks) {
-  const source = readSrc(relativePath);
-  const output = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `未声明的运行时依赖：${specifier}`);
-    return mocks[specifier];
-  };
-  new Function('exports', 'require', 'module', output)(module.exports, requireMock, module);
-  return module.exports;
-}
+import { loadTypeScriptModule as loadTypeScriptModuleWithMocks, readRepoFile as readSrc } from './helpers/load-typescript-module.mjs';
 
 const errors = [];
 

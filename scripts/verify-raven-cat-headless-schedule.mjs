@@ -1,37 +1,5 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-function read(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-function loadModule(relativePath, mocks) {
-  const code = read(relativePath);
-  const compiled = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: relativePath,
-    reportDiagnostics: true,
-  });
-  assert.deepEqual(
-    (compiled.diagnostics ?? []).filter((item) => item.category === ts.DiagnosticCategory.Error),
-    [],
-    `${relativePath} 无法编译`,
-  );
-  const module = { exports: {} };
-  new Function('exports', 'require', 'module', compiled.outputText)(
-    module.exports,
-    (specifier) => {
-      assert.ok(Object.hasOwn(mocks, specifier), `未声明运行时 mock：${specifier}`);
-      return mocks[specifier];
-    },
-    module,
-  );
-  return module.exports;
-}
+import { loadTypeScriptModule as loadModule } from './helpers/load-typescript-module.mjs';
 
 const callback = { eventId: 'wake-old', deliveryEventId: 'wake-old', triggerKind: 'ai_schedule', source: 'work-manager' };
 const runnerCompletions = [];
@@ -216,6 +184,5 @@ assert.equal(registry.cancel('live'), true, '重复取消必须幂等');
 assert.equal(registry.cancel('absent'), false);
 registry.release('live');
 assert.equal(registry.cancel('live'), false, '释放后不得再被取消入口命中');
-
 
 console.log("Companion Headless cancellation and completion verified.");

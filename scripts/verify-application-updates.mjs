@@ -296,6 +296,7 @@ let openedInstallSettings = 0;
 let onForeground;
 const nativeComponents = Object.fromEntries(['ActivityIndicator', 'ScrollView', 'Text', 'TouchableOpacity', 'View', 'RefreshControl'].map((name) => [name, name]));
 const { default: PermissionScreen } = load('src/features/companion/presentation/CompanionSystemAccessScreen.tsx', {
+  './CompanionDiagnosticsSheet': { CompanionDiagnosticsSheet: () => null },
   '@expo/vector-icons': { Ionicons: 'Icon' },
   '@shared/theme': { ThemedSurface: 'Surface', useTheme: () => ({ colors: { brand: { primary: '#333' }, text: { tertiary: '#999' } } }), useThemedStyles: () => ({}) },
   '@shared/ui/NavigationHeader': () => null,

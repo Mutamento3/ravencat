@@ -34,18 +34,50 @@ class WebSearchResultsTest {
   }
 
   @Test fun apiResponsesRetainUsefulMetadataAndRejectMalformedResults() {
-    val tavily = WebSearchResults.tavily("""{"results":[{"title":"资料","url":"https://example.com/","content":"相关片段","score":0.9,"published_date":"2026-10-16"}]}""", "资料", 5)
+    val tavily = WebSearchResults.tavily("""{"results":[{"title":"资料","url":"https://example.com/","content":"相关片段","score":0.9,"published_date":"2026-10-16"}]}""", "资料", 5, false)
     val item = (tavily["items"] as List<*>).first() as Map<*, *>
     assertEquals(0.9, item["score"])
     assertEquals("2026-10-16", item["publishedAt"])
     val brave = WebSearchResults.brave("""{"query":{"original":"资料"},"web":{"results":[{"title":"资料","url":"https://example.com/","description":"摘要","extra_snippets":["额外片段"]}]}}""", "资料", 5)
     assertTrue(((brave["items"] as List<*>).first() as Map<*, *>)["snippet"].toString().contains("额外片段"))
     assertEquals(emptyList<Any>(), WebSearchResults.brave("""{"query":{"original":"无结果"}}""", "无结果", 5)["items"])
-    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("<html>error</html>", "资料", 5) }
-    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("""{"results":[{"url":"https://example.com"}]}""", "资料", 5) }
+    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("<html>error</html>", "资料", 5, false) }
+    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("""{"results":[{"url":"https://example.com"}]}""", "资料", 5, false) }
     assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.brave("""{"error":{"message":"invalid key"}}""", "资料", 5) }
     assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.brave("""{"query":{},"web":"broken"}""", "资料", 5) }
-    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("""{"results":[{"title":"资料","url":"javascript:alert(1)","content":"片段"}]}""", "资料", 5) }
+    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("""{"results":[{"title":"资料","url":"javascript:alert(1)","content":"片段"}]}""", "资料", 5, false) }
+  }
+
+  @Test fun tavilyImagesRetainDownloadUrlsDescriptionsAndSourcePages() {
+    val json = """{"results":[{"title":"鲸鱼","url":"https://example.com/whales","content":"网页摘要","images":[
+      {"url":"https://images.example.com/whale.jpg?w=1200&sig=first","description":"逐页描述"},
+      {"url":"https://images.example.com/whale.jpg?w=800&sig=second","description":"另一尺寸"}
+    ]}],"images":[
+      {"url":"https://images.example.com/whale.jpg?w=1200&sig=first","description":"<b>鲸鱼</b>跃出水面"},
+      {"url":"https://images.example.com/ocean.jpg","description":"海面"}
+    ]}"""
+    val result = WebSearchResults.tavily(json, "鲸鱼", 5, true)
+    val images = result["images"] as List<*>
+    assertEquals(3, images.size)
+    val first = images[0] as Map<*, *>
+    assertEquals("https://images.example.com/whale.jpg?w=1200&sig=first", first["url"])
+    assertEquals("鲸鱼跃出水面", first["description"])
+    assertEquals("https://example.com/whales", first["sourceUrl"])
+    assertEquals("https://images.example.com/whale.jpg?w=800&sig=second", (images[2] as Map<*, *>)["url"])
+    assertEquals(1, (result["items"] as List<*>).size)
+    assertEquals(1, (WebSearchResults.tavily(json, "鲸鱼", 1, true)["images"] as List<*>).size)
+    assertFalse(WebSearchResults.tavily(json, "鲸鱼", 5, false).containsKey("images"))
+  }
+
+  @Test fun tavilyImagesDistinguishEmptyResultsFromMalformedResponses() {
+    assertEquals(emptyList<Any>(), WebSearchResults.tavily("""{"results":[],"images":[]}""", "鲸鱼", 5, true)["images"])
+    val imageOnly = WebSearchResults.tavily("""{"results":[],"images":[{"url":"https://example.com/image.jpg","description":"鲸鱼"}]}""", "鲸鱼", 5, true)
+    assertEquals(1, (imageOnly["images"] as List<*>).size)
+    assertEquals(emptyList<Any>(), imageOnly["items"])
+    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("""{"results":[]}""", "鲸鱼", 5, true) }
+    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("""{"results":[],"images":"broken"}""", "鲸鱼", 5, true) }
+    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("""{"results":[],"images":[{"url":"javascript:alert(1)","description":"鲸鱼"}]}""", "鲸鱼", 5, true) }
+    assertFailure("WEB_INVALID_RESPONSE") { WebSearchResults.tavily("""{"results":[],"images":[{"description":"鲸鱼"}]}""", "鲸鱼", 5, true) }
   }
 
   @Test fun pageCanContinueLocateAndDetectChangedContent() {

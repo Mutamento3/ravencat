@@ -71,7 +71,10 @@ const ModalSheet = load('src/shared/ui/ModalSheet.tsx', {
 const styles = load('src/features/memory/presentation/memoryGalaxyStyles.ts', { 'react-native': native, '@shared/theme': themed });
 const icons = Object.fromEntries(['Check', 'ChevronRight', 'Plus', 'Search', 'X', 'ChevronLeft', 'Settings2'].map(name => [name, name]));
 const commands = { selectMemorySpace: async () => {}, addMemoryTrigger: async () => {} };
-const ui = { ModalSheet, Toggle: 'Toggle', AppTextInput: 'AppTextInput', showAppDialog: () => {} };
+const ToggleField = load('src/shared/ui/ToggleField.tsx', {
+  'react-native': native, '@shared/theme': themed, './Toggle': { default: 'Toggle' },
+}).default;
+const ui = { ModalSheet, ToggleField, AppTextInput: 'AppTextInput', showAppDialog: () => {} };
 const Panel = load('src/features/memory/presentation/MemorySpacePanel.tsx', {
   'react-native': native, 'lucide-react-native': icons, '@shared/ui': ui, '@shared/theme': themed,
   '../domain/Memory': { normalizeMemoryText: text => text.trim(), memorySearchText: entry => entry.content },

@@ -1,7 +1,6 @@
 /** 通话生命周期与运行时对外使用的输入、结果类型。 */
 
 import type { ChatMessage } from '@features/chat';
-import type { CallEvent } from '../../domain/CallEvent';
 import type { CallAIConfig } from '../../domain/CallAIConfig';
 import type {
   CallEndReason,
@@ -26,7 +25,7 @@ export interface CallPreflightOptions {
 
 export type StartOutgoingCallResult =
   | { status: 'ended'; call: CallSession; visibleMessages: ChatMessage[] }
-  | { status: 'accepted'; call: CallSession; firstEvent: CallEvent; visibleMessages: ChatMessage[] }
+  | { status: 'accepted'; call: CallSession; visibleMessages: ChatMessage[] }
   | { status: 'rejected'; call: CallSession; rejectionReason: string; visibleMessages: ChatMessage[] }
   | { status: 'failed'; call: CallSession | null; errorMessage: string; visibleMessages: ChatMessage[] };
 

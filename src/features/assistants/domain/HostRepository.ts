@@ -71,8 +71,6 @@ export interface IAIHostRepository {
   releaseAppointmentCooldown(actorAIId: string): Promise<boolean>;
   blockAI(params: BlockAIParams): Promise<BlockedAIRecord>;
   unblockAI(blacklistId: string): Promise<boolean>;
-  getBlockedAIs(blockedByAIId?: string): Promise<BlockedAIRecord[]>;
   isAIBlocked(aiId: string): Promise<{ isBlocked: boolean; blockInfo: BlockedAIRecord | null }>;
   cleanupExpiredBlocks(): Promise<boolean>;
-  cleanupBlocksByHostAI(hostAIId: string): Promise<boolean>;
 }

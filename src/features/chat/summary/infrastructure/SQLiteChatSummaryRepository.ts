@@ -1,5 +1,5 @@
 /** 摘要与进度同事务交接；消息删除没有摘要副作用，清摘要独立递增 generation。 */
-import { databaseCoordinator, type DatabaseReadExecutor, type DatabaseTransactionExecutor, type DatabaseTaskPriority } from '@platform/persistence';
+import { CoordinatedDatabaseError, databaseCoordinator, type DatabaseReadExecutor, type DatabaseTransactionExecutor, type DatabaseTaskPriority } from '@platform/persistence';
 import { estimateTextTokens } from '@shared/prompt';
 import type { ChatMessage } from '../../messages/domain/ChatMessage';
 import { buildGroupMentionModelText } from '../../group/application/GroupMentionModelText';
@@ -122,6 +122,15 @@ interface ContextRow {
 function executor(name: string, priority: DatabaseTaskPriority = 'maintenance') {
   return databaseCoordinator.openTaskExecutor({ name: 'chat.summary.' + name, feature: 'chat', priority });
 }
+async function assistantSummaryTransaction<T>(name: string, operation: (tx: DatabaseTransactionExecutor) => Promise<T>): Promise<T> {
+  try {
+    return await executor(name).withExclusiveTransactionAsync(operation);
+  } catch (error) {
+    // Repository 恢复自己的业务拒绝类型，工具才能回传具体原因；存储故障保留协调器诊断。
+    if (error instanceof CoordinatedDatabaseError && error.cause instanceof ChatSummaryEditError) throw error.cause;
+    throw error;
+  }
+}
 async function readState(db: DatabaseTransactionExecutor, conversationId: string): Promise<StateRow> {
   await db.runAsync('INSERT OR IGNORE INTO chat_summary_state (conversation_id) VALUES (?)', [conversationId]);
   return (await db.getFirstAsync<StateRow>('SELECT * FROM chat_summary_state WHERE conversation_id = ?', [conversationId]))!;
@@ -183,7 +192,7 @@ async function readItemPage(
     timeline_order_item_index: after[2], id: after[3],
   }) : null;
   // 已处理历史在 SQL 边界排除，避免每次 claim 都在独占事务中解析、排序并传回整段历史。
-  // 自主 run 状态按会话聚合一次；逐消息关联扫描会让长历史占住事务，阻塞菜单等交互读取。
+  // 自主 run 状态按会话聚合一次；共享回合由展示状态裁决，旧记录仍读取自身终态。
   const rows = await db.getAllAsync<ContextRow>(`${timelineOrderedMessagesCte(`m.session_id = ?
     ${messageId !== undefined ? 'AND m.id = ?' : ''}
     ${visibleOnly ? 'AND m.id > COALESCE((SELECT visible_after_message_id FROM sessions WHERE id = m.session_id), 0)' : ''}`)}
@@ -193,7 +202,9 @@ async function readItemPage(
         AND json_valid(metadata_json) AND json_extract(metadata_json, '$.type') = 'agentActivity'
       GROUP BY turn_run_id
       HAVING MAX(json_extract(metadata_json, '$.phase') = 'started') = 1
-        AND MAX(json_extract(metadata_json, '$.phase') = 'terminal') = 0
+        AND (EXISTS (SELECT 1 FROM chat_turn_presentations p WHERE p.run_id = messages.turn_run_id AND p.state = 'open')
+          OR (NOT EXISTS (SELECT 1 FROM chat_turn_presentations p WHERE p.run_id = messages.turn_run_id)
+            AND MAX(json_extract(metadata_json, '$.phase') = 'terminal') = 0))
     )
     SELECT o.*, p.turn_run_id IS NOT NULL AS agent_activity_pending
     FROM ordered_messages o
@@ -622,14 +633,14 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
     return { entries: rows.slice(0, 20).map(mapSegment), nextOffset: rows.length > 20 ? offset + 20 : null };
   }
   async readSecondaryForAssistant(assistantId: string, conversationId: string) {
-    return executor('readSecondaryForAssistant').withExclusiveTransactionAsync(async (tx) => {
+    return assistantSummaryTransaction('readSecondaryForAssistant', async (tx) => {
       await requireAssistantConversation(tx, assistantId, conversationId);
       const segments = (await readSegments(tx, conversationId)).filter((segment) => segment.level === 'secondary');
       return { conversationId, content: combinedSecondaryContent(segments) };
     });
   }
   async editSecondaryForAssistant(assistantId: string, conversationId: string, input: ChatSummaryTextEdit, now: string) {
-    return executor('editSecondaryForAssistant').withExclusiveTransactionAsync(async (tx) => {
+    return assistantSummaryTransaction('editSecondaryForAssistant', async (tx) => {
       await requireAssistantConversation(tx, assistantId, conversationId);
       const current = (await readSegments(tx, conversationId)).filter((segment) => segment.level === 'secondary');
       const content = editChatSummaryText(combinedSecondaryContent(current), input);
@@ -638,7 +649,7 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
     });
   }
   async editPrimaryForAssistant(assistantId: string, conversationId: string, segmentId: string, input: ChatSummaryTextEdit, now: string) {
-    return executor('editPrimaryForAssistant').withExclusiveTransactionAsync(async (tx) => {
+    return assistantSummaryTransaction('editPrimaryForAssistant', async (tx) => {
       const segment = await requireAssistantPrimarySegment(tx, assistantId, conversationId, segmentId);
       const content = editChatSummaryText(segment.content, input);
       await editSegmentInTransaction(tx, conversationId, segmentId, content, now);
@@ -646,7 +657,7 @@ export class SQLiteChatSummaryRepository implements ChatSummaryRepository {
     });
   }
   async deletePrimaryForAssistant(assistantId: string, conversationId: string, segmentId: string, expectedContent: string) {
-    await executor('deletePrimaryForAssistant').withExclusiveTransactionAsync(async (tx) => {
+    await assistantSummaryTransaction('deletePrimaryForAssistant', async (tx) => {
       const segment = await requireAssistantPrimarySegment(tx, assistantId, conversationId, segmentId);
       if (segment.content !== expectedContent) throw new ChatSummaryEditError('一级摘要已变化，请重新查询后再删除');
       await deleteSegmentInTransaction(tx, conversationId, segmentId);

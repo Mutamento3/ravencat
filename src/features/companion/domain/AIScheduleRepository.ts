@@ -5,6 +5,7 @@ import type {
   AIScheduleCompletionDisposition,
   AIScheduleStatus,
 } from './AISchedule';
+import type { AIScheduleContextItem, AIScheduleDispatchInput } from './AIScheduleContext';
 
 export type AIScheduleCommandErrorCode =
   | 'companion_disabled'
@@ -62,6 +63,15 @@ export interface UpdateAIScheduleInput {
 }
 
 export interface AIScheduleRepository {
+  /** 对当前投递作版本裁决，收口过期安排，并将已到期的旧安排归并到最新安排。 */
+  prepareDispatch(input: AIScheduleDispatchInput): Promise<AISchedule | null>;
+  expireScheduled(occurredAt: string, ownerAIId?: string): Promise<void>;
+  mergeDueIntoChat(ownerAIId: string, occurredAt: string): Promise<void>;
+  mergeScheduled(scheduleId: string, targetScheduleId: string | null, occurredAt: string, failureCode?: string): Promise<void>;
+  mergeClaimedRun(runId: string, targetScheduleId: string | null, occurredAt: string): Promise<void>;
+  listPendingContext(ownerAIId: string, targetScheduleId: string | null): Promise<AIScheduleContextItem[]>;
+  bindContext(input: { runId: string; occurredAt: string; acknowledge: AIScheduleContextItem[];
+    present: AIScheduleContextItem[] }): Promise<AIScheduleContextItem[]>;
   createScheduled(schedule: AISchedule, occurredAt: string): Promise<
     AIScheduleCommandOutcome<'created'>
   >;
@@ -91,6 +101,7 @@ export interface AIScheduleRepository {
     consumedAt: string;
     /** consume 与 completionDisposition 必须由同一个 SQLite transaction 提交。 */
     completionDisposition: AIScheduleCompletionDisposition;
+    failureCode?: string;
   }): Promise<AIScheduleCommandOutcome<'consumed'>>;
   /** 供 projection reconcile 读取全部 scheduled 真值（不依赖 owner 或时间范围）。 */
   listAllScheduled(): Promise<AISchedule[]>;

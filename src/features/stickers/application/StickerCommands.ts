@@ -7,7 +7,6 @@ import {
   normalizeStickerName,
   normalizeStickerOptionalText,
   normalizeStickerTags,
-  STICKER_ANNOTATION_LEASE_MS,
   STICKER_MAX_DIMENSION_PX,
   STICKER_MAX_FILE_SIZE_BYTES,
   StickerGroupNotFoundError,
@@ -69,11 +68,6 @@ export interface ReleaseStickerAnnotationInput {
   stickerId: string;
   claimId: string;
   now?: string;
-}
-
-export interface RecoverStickerAnnotationClaimsInput {
-  now?: string;
-  staleAfterMs?: number;
 }
 
 /**
@@ -347,25 +341,6 @@ export async function releaseStickerAnnotation(
   return released;
 }
 
-/** 冷启动或前台恢复时，将超时 processing 重新放回 pending。 */
-export async function recoverStickerAnnotationClaims(
-  input: RecoverStickerAnnotationClaimsInput = {},
-): Promise<number> {
-  const runtime = getStickersRuntimeDependencies();
-  const now = input.now ?? runtime.now();
-  const staleAfterMs = input.staleAfterMs ?? STICKER_ANNOTATION_LEASE_MS;
-  if (!Number.isFinite(staleAfterMs) || staleAfterMs <= 0) {
-    throw new Error('标注 claim 的过期时长必须为正数');
-  }
-  const cutoff = new Date(Date.parse(now) - staleAfterMs).toISOString();
-  const recovered = await runtime.repository.recoverAnnotationClaims(cutoff, now);
-  if (recovered > 0) {
-    emitStickerAnnotationChanged();
-    emitStickerAnnotationPending();
-  }
-  return recovered;
-}
-
 /** Host 确认同一 JS 进程没有旧 worker 后调用，立即回收全部 processing。 */
 export async function recoverInterruptedStickerAnnotations(): Promise<number> {
   const runtime = getStickersRuntimeDependencies();
@@ -375,16 +350,6 @@ export async function recoverInterruptedStickerAnnotations(): Promise<number> {
     emitStickerAnnotationPending();
   }
   return recovered;
-}
-
-export async function retryStickerAnnotation(stickerId: string): Promise<Sticker> {
-  const runtime = getStickersRuntimeDependencies();
-  const retried = await runtime.repository.retryAnnotation(
-    requireId(stickerId, 'Sticker'),
-    runtime.now(),
-  );
-  emitStickerAnnotationPending();
-  return retried;
 }
 
 function normalizeAnnotationMetadata(metadata: StickerAnnotationMetadata): StickerAnnotationMetadata {

@@ -58,12 +58,17 @@ export interface CallRuntimeView {
   toggleCamera: () => Promise<void>;
   switchCameraFacing: () => Promise<void>;
   sendCallText: (text: string) => Promise<void>;
+  textDraft: string;
+  changeTextDraft: (text: string) => void;
   refresh: () => Promise<void>;
 }
 
 export function createCallMediaRuntime(callId: string) {
   const listeners = new Set<() => void>();
   let snapshot: CallRuntimeView;
+  let textDraft = '';
+  let textDraftRevision = 0;
+  const changeTextDraft = (text: string) => { textDraft = text; textDraftRevision++; publish(); };
   function publish() { snapshot = buildView(); for (const listener of listeners) listener(); }
   let call: CallSession | null = null;
   const setCall = (value: CallSession | null) => { call = value; publish(); };
@@ -98,7 +103,7 @@ export function createCallMediaRuntime(callId: string) {
   let isEnding: boolean = false;
   const setIsEnding = (value: boolean) => { isEnding = value; publish(); };
   let shouldExit: boolean = false;
-  const setShouldExit = (value: boolean) => { shouldExit = value; publish(); };
+  const setShouldExit = (value: boolean) => { shouldExit = value; if (value) textDraft = ''; publish(); };
   let elapsedSeconds: number = 0;
   const setElapsedSeconds = (value: number) => { elapsedSeconds = value; publish(); };
   let isLoading: boolean = true;
@@ -286,8 +291,8 @@ export function createCallMediaRuntime(callId: string) {
   };
 
   const pendingInputs = new Set<Promise<void>>();
-  const sendCallText = (text: string, audio?: Promise<CallInputAudio | null>): Promise<void> => {
-    const operation = processCallText(text, audio).finally(async () => {
+  const sendCallText = (text: string, audio?: Promise<CallInputAudio | null>, onUserTextCommitted?: () => void): Promise<void> => {
+    const operation = processCallText(text, audio, onUserTextCommitted).finally(async () => {
       const segment = await audio;
       if (segment) await temporarySpeechAudioStore.deleteIfExists(segment.uri);
     });
@@ -295,7 +300,7 @@ export function createCallMediaRuntime(callId: string) {
     void operation.then(() => pendingInputs.delete(operation), () => pendingInputs.delete(operation));
     return operation;
   };
-  const processCallText = async (text: string, audio?: Promise<CallInputAudio | null>) => {
+  const processCallText = async (text: string, audio?: Promise<CallInputAudio | null>, onUserTextCommitted?: () => void) => {
       const normalizedText = text.trim();
       const currentCall = call;
       if (
@@ -319,6 +324,7 @@ export function createCallMediaRuntime(callId: string) {
           callId: currentCall.id,
           userText: normalizedText,
           userAudio: audio,
+          onUserTextCommitted,
           aiConfig: {
             id: aiProfile.id,
             agentId: aiProfile.agentId,
@@ -480,27 +486,18 @@ export function createCallMediaRuntime(callId: string) {
       if (!isCurrentRun()) return;
       const abortController = new AbortController();
       realtimeSpeechAbortController = abortController;
+      const receiveLiveTranscript = (result: { index: number; text: string }) => {
+        if (!isCurrentRun() || speechDuplexGuard.shouldIgnoreTranscriptSegment(result.index, false)) return;
+        // 声学人声只是候选；实际识别出内容后才停播，避免呼吸/回声只触发 VAD 就掐断 AI。
+        if (result.text.trim()) interruptAISpeechPlaybackForUserSpeech();
+        setInterimSpeechText(result.text || null);
+      };
       const speechResult = await startRealtimeSpeechToText({
         assistantId: aiProfile.id,
         consumer: 'call',
         signal: abortController.signal,
-        onSpeechStart: (result) => {
-          if (!isCurrentRun()) {
-            return;
-          }
-          if (speechDuplexGuard.shouldIgnoreTranscriptSegment(result.index, false)) {
-            return;
-          }
-        },
-        onInterimTranscript: (result) => {
-          if (!isCurrentRun()) {
-            return;
-          }
-          if (speechDuplexGuard.shouldIgnoreTranscriptSegment(result.index, false)) {
-            return;
-          }
-          setInterimSpeechText(result.text || null);
-        },
+        onSpeechStart: receiveLiveTranscript,
+        onInterimTranscript: receiveLiveTranscript,
         onFinalTranscript: (result) => {
           if (!isCurrentRun()) {
             return;
@@ -580,13 +577,7 @@ export function createCallMediaRuntime(callId: string) {
             if (!isCurrentRun()) {
               return;
             }
-            const duplexGuard = speechDuplexGuard;
-            if (
-              duplexGuard.confirmUserSpeechDuringAIOutput() ||
-              !duplexGuard.isMicrophoneSuppressed()
-            ) {
-              interruptAISpeechPlaybackForUserSpeech();
-            }
+            speechDuplexGuard.observeSpeechActivityDuringAIOutput();
           },
           onError: (error) => {
             if (!isCurrentRun()) {
@@ -651,8 +642,15 @@ export function createCallMediaRuntime(callId: string) {
 
       await startRealtimeSpeech();
     };
+  const submitTextDraft = (text: string) => {
+    const expectedRevision = textDraftRevision;
+    return sendCallText(text, undefined, () => {
+      // 语音输入不消费文字草稿；旧提交不能清掉用户继续输入的新文字。
+      if (textDraftRevision === expectedRevision && !shouldExit) changeTextDraft('');
+    });
+  };
   function buildView(): CallRuntimeView {
-    return { call, events, aiProfile, userProfile, backgroundUri, cameraEnabled, cameraFacing, isCameraReady, isListening, interimSpeechText, pendingUserSpeechText, isSendingText, turnPhase, isEnding, shouldExit, elapsedSeconds, isLoading, refresh, accept, reject, cycleAudioRoute, toggleCamera, switchCameraFacing, sendCallText, stopRealtimeSpeech, hangUp, startRealtimeSpeech, toggleRealtimeSpeech,
+    return { call, events, aiProfile, userProfile, backgroundUri, cameraEnabled, cameraFacing, isCameraReady, isListening, interimSpeechText, pendingUserSpeechText, isSendingText, turnPhase, isEnding, shouldExit, elapsedSeconds, isLoading, refresh, accept, reject, cycleAudioRoute, toggleCamera, switchCameraFacing, sendCallText: submitTextDraft, textDraft, changeTextDraft, stopRealtimeSpeech, hangUp, startRealtimeSpeech, toggleRealtimeSpeech,
       audioRoute: audioRouteState?.route ?? null,
       availableAudioRoutes: audioRouteState?.availableRoutes ?? [],
       isAudioRouteSwitching: isRequestingAudioRoute || audioRouteState?.pendingRoute != null,

@@ -9,7 +9,7 @@ class WebToolsRealNetworkTest {
   @Test fun duckDuckGoReturnsSourcesOrAnExplicitUpstreamFailure() {
     assumeTrue(System.getProperty("webTools.realNetwork") == "true")
     try {
-      val result = WebSearchClient(WebHttpClient()).search("duckduckgo", "jsoup HTML parser", 5, null, "basic", null, WebRequest())
+      val result = WebSearchClient(WebHttpClient()).search("duckduckgo", "jsoup HTML parser", 5, null, "basic", null, false, WebRequest())
       assertTrue((result["items"] as List<*>).isNotEmpty())
     } catch (failure: WebFailure) {
       // 真实探针保留上游拒绝原因；不把验证码包装成成功验收。

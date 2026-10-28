@@ -115,7 +115,7 @@ export async function testAuxiliaryModelConnection(
       success: false,
       result,
       rawError: result.error,
-      errorInfo: getErrorDisplayInfo(result.error || ''),
+      errorInfo: getErrorDisplayInfo(result.error || '', { includeDetails: true }),
     };
   } catch (error) {
     const rawError = error instanceof Error ? error.message : String(error || '');
@@ -124,7 +124,7 @@ export async function testAuxiliaryModelConnection(
       skipReason: null,
       success: false,
       rawError,
-      errorInfo: getErrorDisplayInfo(error as Error | string),
+      errorInfo: getErrorDisplayInfo(error as Error | string, { includeDetails: true }),
     };
   }
 }

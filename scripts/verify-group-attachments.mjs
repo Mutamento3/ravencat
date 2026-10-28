@@ -147,6 +147,8 @@ async function loadBuildChatBatchAIInput() {
     }
   `);
   const source = read('src/features/chat/reply/application/BuildChatBatchAIInput.ts')
+    .replace(/from ['"]\.\/ChatReplyRuntimeDependencies['"]/g,
+      `from '${transpileToModuleUrl('export function getChatReplyRuntimeDependencies() { return { prompt: { readImageGroundingReminder: async () => null } }; }')}'`)
     .replace(/from ['"]@features\/media['"]/g,
       `from '${transpileToModuleUrl('export function mediaImageFailure() { return null; }')}'`)
     .replace(/from ['"]\.\.\/\.\.\/messages\/domain\/SharedChatRecord['"]/g,

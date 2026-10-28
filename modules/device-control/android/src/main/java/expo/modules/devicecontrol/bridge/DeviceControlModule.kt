@@ -14,6 +14,7 @@ import expo.modules.devicecontrol.controller.MediaSessionSnapshotReader
 import expo.modules.devicecontrol.controller.MediaSessionTransportController
 import expo.modules.devicecontrol.controller.NotificationListenerAccessReader
 import expo.modules.devicecontrol.controller.SystemCalendarController
+import expo.modules.devicecontrol.controller.XiaohongshuNoteAutomation
 import expo.modules.devicecontrol.model.SoftLockCommand
 import expo.modules.devicecontrol.model.SoftLockCommandParseResult
 import expo.modules.devicecontrol.model.SoftLockReconcileResult
@@ -21,6 +22,7 @@ import expo.modules.devicecontrol.runtime.ProcessDeviceControlRuntimeHost
 import expo.modules.devicecontrol.service.RavenCatMediaNotificationListenerService
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.functions.Queues
+import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -39,6 +41,13 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class DeviceControlModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RavenCatDeviceControl")
+
+    Function("beginXiaohongshuNote") { XiaohongshuNoteAutomation.begin() }
+    Function("cancelXiaohongshuNote") { id: String -> XiaohongshuNoteAutomation.cancel(id) }
+    AsyncFunction("executeXiaohongshuNote") Coroutine { id: String, actor: String, command: Map<String, Any?> ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      XiaohongshuNoteAutomation.execute(context, id, actor, command)
+    }
 
     AsyncFunction("prepareSystemCalendar") {
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()

@@ -319,6 +319,9 @@ export default function CompanionSettingsScreen({
             {transitioning ? <View style={styles.progressRow}><ActivityIndicator size="small" color={theme.colors.brand.primary} /><Text style={styles.progressText}>{toggleState === 'enabling' ? '正在开启…' : '正在关闭…'}</Text></View> : null}
             {toggleState === 'enabling' ? <Button title="取消开启" variant="outline" onPress={() => void disableCompanion()} /> : null}
           </View>
+          <View style={styles.hostNotice}>
+            <Text style={styles.hostNoticeText}>实验性功能：AI 日程与主动联系仍在持续优化。受系统后台限制、网络或模型服务影响，可能出现延迟、跳过或执行失败，暂不保证准时触达。</Text>
+          </View>
         </ThemedSurface>
 
         {errorMessage ? <View style={styles.errorCard}><Text style={styles.errorText}>{errorMessage}</Text></View> : null}

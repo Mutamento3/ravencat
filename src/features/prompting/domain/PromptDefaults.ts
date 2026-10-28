@@ -11,6 +11,8 @@ export interface PromptDefaults {
   overrides: Record<string, string>;
   userPrompts: DefaultUserPrompt[];
   toolPermissions: Record<string, boolean>;
+  /** 特定应用工具包的全局总开关；未设置时关闭，单项权限与星标独立保留。 */
+  appToolPackages: Record<string, boolean>;
   /** 身份池名单属于全局提示词配置；未设置的 AI 默认入选。 */
   agentRegistryExcludedAssistantIds: string[];
 }

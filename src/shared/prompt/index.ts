@@ -24,7 +24,7 @@ export type {
   PromptToolInstructionsSlot,
   PromptToolInstructions,
 } from './types';
-export { estimateTextTokens, clipTextToTokenBudget } from './estimateTextTokens';
+export { estimateTextTokens } from './estimateTextTokens';
 export { renderPromptMessageWithTimestamp } from './messageTimestamp';
 export { CHAT_PROMPT_READING_FLOW } from './readingFlow';
 export type { ChatPromptReadingStep } from './readingFlow';

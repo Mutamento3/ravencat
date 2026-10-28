@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
 import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-dependencies.mjs';
+import { createCoordinatedSqliteFixture, databaseErrors } from './helpers/coordinated-sqlite-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const db = new DatabaseSync(':memory:');
@@ -64,6 +65,25 @@ const { matchesAgentToolInputSchema } = load('src/shared/aiTools/AgentToolInputS
 const { getWalletRecordDate, createWalletRecord, DEFAULT_WALLET_CATEGORIES } = load(`${wallet}domain/WalletRecord.ts`);
 const { getWalletCategories, getWalletScreenData } = load(`${wallet}application/WalletPresentation.ts`);
 const context = { repositories: { ledger: repository } };
+// 真实查询故障保留诊断，但 observation 不包含 SQL、task 名或原始存储错误。
+const brokenFixture = createCoordinatedSqliteFixture(executor);
+const brokenLedger = { getRecords: () => brokenFixture.databaseCoordinator.read(
+  { feature: 'wallet', name: 'wallet.private-query-name', priority: 'interactive' },
+  tx => tx.getAllAsync('SELECT * FROM missing_private_wallet_table'),
+) };
+const oldErrorLog = console.error, walletErrors = [];
+console.error = (...args) => walletErrors.push(args);
+try {
+  for (const [tool, input, message] of [
+    [search, { keyword: '测试' }, '账本搜索失败，请稍后再试。'],
+    [query, { mode: 'recent' }, '账本查询失败，请稍后再试。'],
+  ]) {
+    const result = await tool.execute(input, { repositories: { ledger: brokenLedger } });
+    assert.deepEqual(result, { success: false, error: message });
+  }
+  assert.equal(walletErrors.length, 2);
+  assert.ok(walletErrors.every(([, error]) => error instanceof databaseErrors.CoordinatedDatabaseError));
+} finally { console.error = oldErrorLog; }
 function adapter(tool) {
   return new LegacyAgentToolAdapter(tool, { owner: 'wallet', risk: 'reversible_write', idempotency: 'not_idempotent' }, () => context);
 }
@@ -144,6 +164,21 @@ let queued = 0;
 const manual = await addWalletRecord(lunch, {}, { repository, queueAIReply: async () => { queued += 1; return { queued: true }; } });
 assert.equal(manual.queuedAIReply, true);
 assert.equal(queued, 1);
+
+// 两个命令共用同一收尾：排队失败只回调错误、不撤销已写入账单；写入失败仍返回失败。
+const { applyQuickActionAndReply } = load(`${wallet}application/UseQuickAction.ts`);
+const quickForReply = await repository.insertQuickAction({ name: '地铁', type: 'expense', category: '交通', amount: 5 });
+let callbackError;
+const applied = await applyQuickActionAndReply({ quickActionId: quickForReply.id }, { onError: (error) => { callbackError = error.message; } }, {
+  repository, queueAIReply: async () => { throw new Error('队列不可用'); },
+});
+assert.equal(applied.success, true);
+assert.equal(applied.queuedAIReply, false);
+assert.equal(callbackError, '队列不可用');
+assert.ok((await repository.getRecords()).some((item) => item.id === applied.record.id), '排队失败不能撤销已写入账单');
+assert.equal((await applyQuickActionAndReply({ quickActionId: 'missing' }, {}, { repository, queueAIReply: async () => ({ queued: true }) })).success, false);
+await repository.deleteRecord(applied.record.id);
+await repository.deleteQuickAction(quickForReply.id);
 
 // 分类查询包含预设、历史自定义和仅在快捷记账中使用的分类，并按收支类型去重。
 assert.deepEqual(await repository.getCategories('income'), DEFAULT_WALLET_CATEGORIES.income);

@@ -160,6 +160,10 @@ export interface ToolExecutionResult {
 export interface ProcessAIReplyCallbacks {
   notifyUI?: (sessionId: string) => void;
   onReplyCommitted?: () => void;
+  /** 已持久交付的完整运行正文，可由悬浮预览消费；此时尚无正式数据库消息 ID。 */
+  onReplyDisplaySegment?: (
+    payload: AIReplyDisplaySegmentPayload
+  ) => void | AIReplyProjectionReceipt | Promise<void | AIReplyProjectionReceipt>;
   onReplySegment?: (
     payload: AIReplySegmentPayload
   ) => void | AIReplyProjectionReceipt | Promise<void | AIReplyProjectionReceipt>;
@@ -188,8 +192,16 @@ export interface AIReplySegmentPayload {
   previewText: string;
   logicalMessageId: string | null;
   messageId: number;
+  clientMessageId?: string;
   segmentIndex: number;
   segmentTotal: number;
+}
+
+export interface AIReplyDisplaySegmentPayload {
+  sessionId: string;
+  clientMessageId: string;
+  text: string;
+  previewText: string;
 }
 
 export interface AIReplyFinalSegment {

@@ -429,7 +429,7 @@ const baseURLModule = load('src/platform/ai/baseUrl.ts');
 const baseClientModule = load('src/platform/ai/BaseAIClient.ts', {
   './HttpExchangeCapture': { beginAIHttpCapture: async () => null },
   './baseUrl': baseURLModule,
-  './errorMapping': { getErrorDisplayInfo: (error) => ({ message: String(error) }) },
+  './errorMapping': load('src/platform/ai/errorMapping.ts'),
 });
 const factory = load('src/platform/ai/OpenAIClient.ts', {
   './moonshotEndpoint': load('src/platform/ai/moonshotEndpoint.ts'),

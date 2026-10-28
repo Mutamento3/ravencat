@@ -103,6 +103,7 @@ function createFakes() {
   };
   const executions = new Map(); // runId -> { signal, gate, params }
   const turns = {
+    interruptAbandonedAutonomousRuns: async () => [],
     claimIfIdle: async (sessionId, kind) => {
       const run = {
         runId: `run-${++runSeq}`,

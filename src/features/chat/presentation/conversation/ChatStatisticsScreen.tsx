@@ -99,7 +99,7 @@ export default function ChatStatisticsScreen({ assistantCreatedAt, conversationI
         <Text style={styles.retry}>{showDetails ? '收起统计口径' : '查看统计口径'}</Text>
       </Pressable>
       {showDetails && <>
-        <Text style={styles.detail}>统计仍保存的单聊原文，不统计摘要、思考过程、工具状态和通话正文。AI 分段及同一次 Agent 完整回复合计一条，你的消息逐条计数。字数按正文字符计，包含标点和空白；语音计转写正文，图片和表情不折算字数。清除历史仅隐藏的原文仍参与，已删除的原文不参与。</Text>
+        <Text style={styles.detail}>统计仍保存的单聊原文，不统计摘要、思考过程、工具状态和通话正文。AI 分段及同一次 Agent 完整回复合计一条，你的消息逐条计数。字数按正文字符计，包含标点和空白；语音计转写正文，图片和表情不折算字数。清除聊天记录或删除消息后，对应原文不再参与统计。</Text>
         <Text style={styles.detail}>Token 累计聊天调用已保存的实际用量，包含 Agent 工具循环；不会另加摘要生成用量。输入用量是模型处理的完整上下文，可能包含历史消息和摘要。相遇天数按已度过的完整 24 小时计算。</Text>
       </>}
     </>}

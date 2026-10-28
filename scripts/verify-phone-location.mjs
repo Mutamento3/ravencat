@@ -1,33 +1,19 @@
 /** 验证定位的身份边界、真实结果输出、取消，以及用户触发的权限申请。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import ts from 'typescript';
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 
-function load(relative, mocks = {}) {
-  const source = fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8');
-  const code = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)((id) => {
-    assert.ok(Object.hasOwn(mocks, id), `未提供依赖：${id}`);
-    return mocks[id];
-  }, module, module.exports);
-  return module.exports;
-}
-
-const abortRuntime = load('src/shared/runtime/abortSignal.ts');
+const abortRuntime = loadTypeScriptModule('src/shared/runtime/abortSignal.ts');
 let hostId = 'host';
 let reads = 0;
 let snapshot = { status: 'permission_not_granted' };
 let duringRead = () => {};
-const { GetCurrentLocationTool: tool } = load('src/features/phoneTools/aiTools/GetCurrentLocationTool.ts', {
+const { GetCurrentLocationTool: tool } = loadTypeScriptModule('src/features/phoneTools/aiTools/GetCurrentLocationTool.ts', {
   '@features/assistants': { runAsCurrentHostAuthority: async (actor, action) => actor === hostId
     ? { status: 'authorized', value: await action() } : { status: 'not_current_host' } },
   '@platform/device': { getCurrentDeviceLocation: async () => { reads++; duringRead(); return snapshot; } },
   '@shared/runtime/abortSignal': abortRuntime,
 });
-const { LegacyAgentToolAdapter } = load('src/host/composition/agent/LegacyAgentToolAdapter.ts');
+const { LegacyAgentToolAdapter } = loadTypeScriptModule('src/host/composition/agent/LegacyAgentToolAdapter.ts');
 let controller = new AbortController();
 let actor = 'host';
 const context = { getAIId: () => actor, get abortSignal() { return controller.signal; } };
@@ -75,7 +61,7 @@ let access = { permission: 'not_granted', servicesEnabled: true };
 let permissionResult = { coarse: 'denied', fine: 'denied' };
 const requests = [];
 let settingsOpened = 0;
-const { manageDeviceLocationPermission } = load('src/platform/device/DeviceLocation.ts', {
+const { manageDeviceLocationPermission } = loadTypeScriptModule('src/platform/device/DeviceLocation.ts', {
   'react-native': {
     Linking: { openSettings: async () => { settingsOpened++; } },
     PermissionsAndroid: { PERMISSIONS: permissions, RESULTS: statuses,

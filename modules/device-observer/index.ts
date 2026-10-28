@@ -1,4 +1,6 @@
 export {
+  readDeviceClipboardText,
+  type DeviceClipboardSnapshot,
   getDeviceLocationAccessState,
   getCurrentDeviceLocation,
   openDeviceLocationSettings,

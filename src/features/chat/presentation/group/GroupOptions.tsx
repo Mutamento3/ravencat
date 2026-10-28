@@ -28,6 +28,7 @@ interface GroupOptionsProps {
   onBack?: () => void;
   onAdminSettings?: () => void;
   onSummary(): void;
+  onSearchMessages(): void;
   onDeleteGroup?: () => void | Promise<void>;
   onUpdateProfile?: (input: UpdateGroupChatProfileInput, draft?: PersistentAvatarDraft | null) => Promise<GroupChat>;
 }
@@ -124,6 +125,7 @@ export default function GroupOptions({
   onBack,
   onAdminSettings,
   onSummary,
+  onSearchMessages,
   onDeleteGroup,
   onUpdateProfile,
 }: GroupOptionsProps) {
@@ -309,6 +311,11 @@ export default function GroupOptions({
         </View>
 
         <GroupMembersSection groupId={groupId} members={groupDetails?.members ?? []} />
+
+        <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={onSearchMessages}>
+          <Text style={styles.menuItemTitle}>搜索聊天记录</Text>
+          <ChevronRight size={18} color={theme.colors.text.tertiary} />
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.menuItem}

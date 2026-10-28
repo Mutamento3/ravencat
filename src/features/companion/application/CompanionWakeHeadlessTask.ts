@@ -134,9 +134,9 @@ export function cancelCompanionWakeExecution(deliveryEventId: string): boolean {
 
 function buildCompletionError(outcome: HeadlessOutcome, prefix: string): string | null {
   if (outcome.status === 'ignored') {
-    return outcome.reason === 'not_current_host'
-      ? `${prefix}_ignored:not_current_host`
-      : `${prefix}_claim:${outcome.claimStatus}`;
+    return outcome.reason === 'claim_rejected'
+      ? `${prefix}_claim:${outcome.claimStatus}`
+      : `${prefix}_ignored:${outcome.reason}`;
   }
   return outcome.result.terminalCode === 'COMPLETED'
     ? null

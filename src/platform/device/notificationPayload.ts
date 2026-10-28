@@ -87,6 +87,8 @@ export interface SendAIMessageNotificationParams {
 }
 
 export interface SendAIIncomingCallNotificationParams {
+  ringtoneUri: string | null;
+  ringDurationMs: number;
   callId: string;
   aiId: string;
   aiName: string;

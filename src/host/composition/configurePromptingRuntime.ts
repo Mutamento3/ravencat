@@ -16,14 +16,13 @@ import {
   type McpServerConfig,
   type McpServerListItemWithEnabledToolCount,
 } from '@features/mcpTools';
-import { groupChatRepository } from '@features/chat/composition';
 import { resolveMoonshotAPIBaseURL } from '@platform/ai';
+import { getAssistantChatSummaryGenerationState } from '@features/chat';
 import {
   getSystemPromptPreset,
   promptCatalog,
   validateBuiltInPromptArchitecture,
 } from '../prompt';
-import { promptPreviewService } from '../prompt/preview';
 import {
   getToolPermissionDescriptors,
 } from './agent';
@@ -38,6 +37,7 @@ export function configurePromptingRuntime(): void {
     presets: sqlitePromptingRepository,
     bindings: sqlitePromptingRepository,
     assistantPrompts: sqlitePromptingRepository,
+    summary: { getGenerationState: getAssistantChatSummaryGenerationState },
     assistants: {
       async listOptions() {
         const { appointment } = await getHostAICooldownStatus();
@@ -96,30 +96,6 @@ export function configurePromptingRuntime(): void {
         return toPromptMcpServiceSummary(server);
       },
     },
-    targets: {
-      async exists(targetType, targetId) {
-        if (targetType === 'assistant') {
-          return Boolean(await aiAssistantRepository.getById(targetId));
-        }
-        if (targetType === 'group') {
-          return Boolean(await groupChatRepository.getById(targetId));
-        }
-        return false;
-      },
-      async list(targetType) {
-        if (targetType === 'assistant') {
-          return (await aiAssistantRepository.getAll()).map((assistant) => ({
-            id: assistant.id,
-            name: getAssistantDisplayName(assistant),
-          }));
-        }
-        return (await groupChatRepository.getAll()).map((group) => ({
-          id: group.id,
-          name: group.name,
-        }));
-      },
-    },
-    preview: promptPreviewService,
   });
 }
 

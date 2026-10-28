@@ -48,9 +48,10 @@ export class ChatTurnPresentationRepository implements IChatTurnPresentationRepo
           p.state AS display_state, p.updated_at, p.phase, p.phase_at
          FROM messages i JOIN sessions c ON c.id = i.session_id
          JOIN conversation_turn_state s ON s.session_id = i.session_id
-         LEFT JOIN conversation_turn_runs r ON r.run_id = COALESCE(s.active_run_id,
+         LEFT JOIN conversation_turn_runs r ON r.run_id = COALESCE(
+           CASE WHEN s.active_run_kind IN ('user_reply', 'regenerate') THEN s.active_run_id END,
            (SELECT run_id FROM conversation_turn_runs WHERE session_id = i.session_id AND input_high_watermark = i.id
-            ORDER BY created_at DESC, rowid DESC LIMIT 1))
+            AND kind IN ('user_reply', 'regenerate') ORDER BY created_at DESC, rowid DESC LIMIT 1))
          LEFT JOIN chat_turn_presentations p ON p.run_id = r.run_id
          WHERE i.session_id = ? AND i.id > COALESCE(c.visible_after_message_id, 0)
            AND i.id = (SELECT MAX(id) FROM messages WHERE session_id = ? AND is_me = 1
@@ -113,9 +114,10 @@ export class ChatTurnPresentationRepository implements IChatTurnPresentationRepo
     return databaseCoordinator.read({ name: 'chat.presentation-history', feature: 'chat', priority: 'interactive' }, async db => {
       const runs = await db.getAllAsync<{ run_id: string; kind: ChatTurnPresentationHistory['kind']; state: ChatTurnPresentationHistory['state']; reason: string | null; execution_status: string; created_at: string }>(
         `SELECT p.run_id, r.kind, p.state, p.reason, r.status AS execution_status, r.created_at FROM chat_turn_presentations p
-         JOIN conversation_turn_runs r ON r.run_id = p.run_id JOIN sessions s ON s.id = p.session_id
-         WHERE p.session_id = ? AND r.input_high_watermark > COALESCE(s.visible_after_message_id, 0)
-         AND (r.input_high_watermark >= ? OR r.run_id IN (SELECT value FROM json_each(?)))
+           JOIN conversation_turn_runs r ON r.run_id = p.run_id JOIN sessions s ON s.id = p.session_id
+           LEFT JOIN messages origin ON origin.client_message_id = 'agent_activity:' || r.run_id || ':started'
+           WHERE p.session_id = ? AND CASE WHEN r.kind = 'autonomous' THEN origin.id ELSE r.input_high_watermark END > COALESCE(s.visible_after_message_id, 0)
+           AND (CASE WHEN r.kind = 'autonomous' THEN origin.id ELSE r.input_high_watermark END >= ? OR r.run_id IN (SELECT value FROM json_each(?)))
          ORDER BY r.created_at, r.run_id`, [sessionId, window?.fromMessageId ?? 0, JSON.stringify(window?.runIds ?? [])]);
       const rows = await db.getAllAsync<{ run_id: string; shown_version: number; shown_json: string }>(
         `SELECT run_id, shown_version, shown_json FROM chat_turn_display_items
@@ -143,16 +145,21 @@ export class ChatTurnPresentationRepository implements IChatTurnPresentationRepo
   async listInterruptedContext(sessionId: string, fromInputId: number, toInputId?: number): Promise<ChatInterruptedTurnContext[]> {
     const rows = await databaseCoordinator.openTaskExecutor({ name: 'chat.interrupted-context', feature: 'chat', priority: 'runtime' })
       .getAllAsync<{ run_id: string; input_high_watermark: number; created_at: string; shown_json: string }>(
-        `SELECT r.run_id, r.input_high_watermark, r.created_at,
+        `WITH context_runs AS (
+           SELECT r.rowid AS run_order, r.*, CASE WHEN r.kind = 'autonomous' THEN origin.id ELSE r.input_high_watermark END AS context_anchor_id
+           FROM conversation_turn_runs r
+           LEFT JOIN messages origin ON origin.client_message_id = 'agent_activity:' || r.run_id || ':started'
+         ) SELECT r.run_id, r.context_anchor_id AS input_high_watermark, r.created_at,
            CASE WHEN json_extract(i.snapshot_json, '$.kind') = 'tool' THEN i.snapshot_json ELSE i.shown_json END AS shown_json
-         FROM conversation_turn_runs r
+         FROM context_runs r
          JOIN chat_turn_presentations p ON p.run_id = r.run_id JOIN chat_turn_display_items i ON i.run_id = r.run_id
          JOIN sessions s ON s.id = r.session_id
-         WHERE r.session_id = ? AND r.kind = 'user_reply' AND r.status IN ('superseded', 'cancelled', 'failed')
-           AND r.input_high_watermark >= ? AND r.input_high_watermark > COALESCE(s.visible_after_message_id, 0)
-           AND (? IS NULL OR r.input_high_watermark < ?) AND i.shown_json IS NOT NULL
+         WHERE r.session_id = ? AND ((r.kind = 'user_reply' AND r.status IN ('superseded', 'cancelled', 'failed'))
+             OR (r.kind = 'autonomous' AND p.state = 'interrupted'))
+           AND r.context_anchor_id >= ? AND r.context_anchor_id > COALESCE(s.visible_after_message_id, 0)
+           AND (? IS NULL OR r.context_anchor_id < ?) AND i.shown_json IS NOT NULL
            AND json_extract(i.shown_json, '$.kind') <> 'reasoning'
-         ORDER BY r.created_at, r.rowid, json_extract(i.shown_json, '$.sequence'), json_extract(i.shown_json, '$.segmentIndex')`,
+         ORDER BY r.created_at, r.run_order, json_extract(i.shown_json, '$.sequence'), json_extract(i.shown_json, '$.segmentIndex')`,
         [sessionId, fromInputId, toInputId ?? null, toInputId ?? null]);
     const contexts = new Map<string, ChatInterruptedTurnContext & { items: ChatTurnDisplaySnapshot[] }>();
     for (const row of rows) {

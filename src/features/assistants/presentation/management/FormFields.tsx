@@ -186,10 +186,10 @@ export function SystemPromptInput({ value, onChangeText }: SystemPromptInputProp
 }
 
 export function TipSection() {
-  const { commonStyles } = useAddAIStyles();
+  const { styles } = useAddAIStyles();
   return (
-    <View style={commonStyles.emptyContainer}>
-      <Text style={commonStyles.emptyText}>
+    <View style={styles.tipSection}>
+      <Text style={styles.tipText}>
         建议先填写 API 地址和 API Key，再获取模型列表并测试连接，确认无误后保存。
       </Text>
     </View>

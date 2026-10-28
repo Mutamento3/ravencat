@@ -1,56 +1,6 @@
 import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-dependencies.mjs';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function read(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: absolutePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(
-      Object.hasOwn(mocks, specifier),
-      `${relativePath} 存在未声明的运行时依赖：${specifier}`
-    );
-    return mocks[specifier];
-  };
-  const executeModule = new Function(
-    'exports',
-    'require',
-    'module',
-    '__filename',
-    '__dirname',
-    compiled.outputText
-  );
-  executeModule(
-    module.exports,
-    requireMock,
-    module,
-    absolutePath,
-    path.dirname(absolutePath)
-  );
-  return module.exports;
-}
+import { loadTypeScriptModule, readRepoFile as read } from './helpers/load-typescript-module.mjs';
 
 const abortSignalRuntime = loadTypeScriptModule(
   'src/shared/runtime/abortSignal.ts',
@@ -281,6 +231,7 @@ const builtInTools = [
   { module: '@features/webTools', symbol: 'WebFetchTool', name: 'web_fetch', owner: 'webTools', ...SAFE_READ },
   { module: '@features/webTools', symbol: 'DownloadFileTool', name: 'download_file', owner: 'webTools', ...REVERSIBLE_ACTION },
   { module: '@features/media', symbol: 'DownloadImageTool', name: 'download_image', owner: 'media', ...REVERSIBLE_ACTION },
+  { module: '@features/media', symbol: 'QueryDownloadedImagesTool', name: 'query_downloaded_images', owner: 'media', ...PRIVATE_READ },
   { module: '@features/media', symbol: 'ViewImageTool', name: 'view_image', owner: 'media', ...PRIVATE_READ },
   ...[
     ['get_user_avatar', 'profile', false, false], ['get_ai_avatar', 'assistants', false, false],
@@ -332,6 +283,17 @@ const builtInTools = [
   { module: '@features/phoneTools', symbol: 'GetForegroundAppTool', name: 'get_foreground_app', owner: 'phoneTools', ...PRIVATE_READ },
   { module: '@features/phoneTools', symbol: 'GetAppUsageTool', name: 'get_app_usage', owner: 'phoneTools', ...PRIVATE_READ },
   { module: '@features/phoneTools', symbol: 'GetCurrentLocationTool', name: 'get_current_location', owner: 'phoneTools', ...PRIVATE_READ },
+  { module: '@features/phoneTools', symbol: 'ReadClipboardTool', name: 'read_clipboard', owner: 'phoneTools', ...PRIVATE_READ },
+  { module: '@features/phoneTools', symbol: 'XiaohongshuGetPageTool', name: 'xiaohongshu_get_page', owner: 'phoneTools', ...PRIVATE_READ },
+  ...[
+    ['XiaohongshuEnterPublishingTool', 'xiaohongshu_enter_publishing'], ['XiaohongshuOpenTextEntryTool', 'xiaohongshu_open_text_entry'],
+    ['XiaohongshuStartTextNoteTool', 'xiaohongshu_start_text_note'], ['XiaohongshuSetCardTextTool', 'xiaohongshu_set_card_text'],
+    ['XiaohongshuSetTitleTool', 'xiaohongshu_set_title'], ['XiaohongshuSetBodyTool', 'xiaohongshu_set_body'],
+    ['XiaohongshuAddTopicTool', 'xiaohongshu_add_topic'], ['XiaohongshuSelectStyleTool', 'xiaohongshu_select_style'],
+    ['XiaohongshuSetVisibilityTool', 'xiaohongshu_set_visibility'], ['XiaohongshuNextTool', 'xiaohongshu_next'],
+    ['XiaohongshuGoBackTool', 'xiaohongshu_go_back'], ['XiaohongshuPreparePublishTool', 'xiaohongshu_prepare_publish'],
+  ].map(([symbol, name]) => ({ module: '@features/phoneTools', symbol, name, owner: 'phoneTools', ...REVERSIBLE_ACTION })),
+  { module: '@features/phoneTools', symbol: 'XiaohongshuPublishPreparedNoteTool', name: 'xiaohongshu_publish_prepared_note', owner: 'phoneTools', ...EXTERNAL_SIDE_EFFECT },
   { module: '@features/screenCapture', symbol: 'ReadScreenAccessibilityTool', name: 'read_screen_accessibility', owner: 'screenCapture', ...PRIVATE_READ },
   { module: '@features/screenCapture', symbol: 'ReadScreenOcrTool', name: 'read_screen_ocr', owner: 'screenCapture', ...PRIVATE_READ },
   { module: '@features/companion', symbol: 'CreateAIScheduleTool', name: 'create_ai_schedule', owner: 'companion', ...REVERSIBLE_ACTION },
@@ -340,11 +302,14 @@ const builtInTools = [
   { module: '@features/companion', symbol: 'UpdateAIScheduleTool', name: 'update_ai_schedule', owner: 'companion', ...REVERSIBLE_WRITE },
   { module: '@features/companion', symbol: 'CancelAIScheduleTool', name: 'cancel_ai_schedule', owner: 'companion', ...SENSITIVE_ACTION },
   { module: '@features/chat', symbol: 'SearchChatSummariesTool', name: 'search_chat_summaries', owner: 'chat', ...PRIVATE_READ },
+  { module: '@features/chat', symbol: 'SearchChatMessagesTool', name: 'search_chat_messages', owner: 'chat', ...PRIVATE_READ },
+  { module: '@features/chat', symbol: 'ReadChatMessageContextTool', name: 'read_chat_message_context', owner: 'chat', ...PRIVATE_READ },
   { module: '@features/chat', symbol: 'GetSecondarySummaryTool', name: 'get_secondary_summary', owner: 'chat', ...PRIVATE_READ },
   { module: '@features/chat', symbol: 'EditSecondarySummaryTool', name: 'edit_secondary_summary', owner: 'chat', ...REVERSIBLE_WRITE },
   { module: '@features/chat', symbol: 'EditPrimarySummaryTool', name: 'edit_primary_summary', owner: 'chat', ...REVERSIBLE_WRITE },
   { module: '@features/chat', symbol: 'DeletePrimarySummaryTool', name: 'delete_primary_summary', owner: 'chat', ...REVERSIBLE_WRITE },
   { module: '@features/chat', symbol: 'SendVoiceMessageTool', name: 'send_voice_message', owner: 'chat', ...EXTERNAL_SIDE_EFFECT },
+  { module: '@features/chat', symbol: 'SendImageTool', name: 'send_image', owner: 'chat', ...EXTERNAL_SIDE_EFFECT },
   { module: '@features/stickers', symbol: 'SearchStickersTool', name: 'search_stickers', owner: 'stickers', ...SAFE_READ },
   { module: '@features/stickers', symbol: 'ListStickerGroupsTool', name: 'list_sticker_groups', owner: 'stickers', ...SAFE_READ },
   { module: '@features/stickers', symbol: 'ListStickersInGroupTool', name: 'list_stickers_in_group', owner: 'stickers', ...SAFE_READ },
@@ -397,7 +362,10 @@ for (const tool of builtInTools) {
     || tool.module === './ApplicationSettingsTools'
     || tool.module === './GroupManagementTools'
     || tool.symbol === 'SendVoiceMessageTool'
+    || tool.symbol === 'SendImageTool'
     || tool.symbol === 'SearchChatSummariesTool'
+    || tool.symbol === 'SearchChatMessagesTool'
+    || tool.symbol === 'ReadChatMessageContextTool'
     || tool.symbol === 'GetSecondarySummaryTool'
     || tool.symbol === 'EditSecondarySummaryTool'
     || tool.symbol === 'EditPrimarySummaryTool'
@@ -407,6 +375,9 @@ for (const tool of builtInTools) {
     : createLegacyTool(tool.name);
 }
 featureMocks['@features/memory'].releaseMemoryRecallRun = () => {};
+featureMocks['@features/phoneTools'].getPhoneToolPackageById = loadTypeScriptModule(
+  'src/features/phoneTools/toolPackages/ToolPackageCatalog.ts',
+).getPhoneToolPackageById;
 let momentPreparationCount = 0;
 const momentSnapshotTool = {
   ...featureMocks['@features/moments'].AICreateMomentTool,
@@ -419,7 +390,8 @@ featureMocks['./ApplicationSettingsTools'] = { applicationSettingsTools: builtIn
 featureMocks['./GroupManagementTools'] = { groupManagementTools: builtInTools.filter(tool => tool.module === './GroupManagementTools')
   .map(entry => ({ tool: createAgentNativeBuiltInTool(entry.name), hostOnly: entry.hostOnly, readOnly: entry.readOnly })) };
 const defaultToolPermissions = {};
-featureMocks['@features/prompting'] = { readPromptDefaults: async () => ({ toolPermissions: defaultToolPermissions }) };
+const appToolPackages = {};
+featureMocks['@features/prompting'] = { readPromptDefaults: async () => ({ toolPermissions: defaultToolPermissions, appToolPackages }) };
 assert.ok(featureMocks['@features/stickers'].SearchStickersTool, 'Sticker 搜索工具 mock 必须存在');
 assert.ok(featureMocks['@features/stickers'].SelectStickerTool, 'Sticker 选择工具 mock 必须存在');
 
@@ -453,7 +425,7 @@ const productionRegistry = createAgentToolRegistry({
   },
 });
 const productionDescriptors = productionRegistry.list();
-for (const name of ['search_chat_summaries', 'get_secondary_summary', 'edit_secondary_summary', 'edit_primary_summary', 'delete_primary_summary']) {
+for (const name of ['search_chat_messages', 'read_chat_message_context', 'search_chat_summaries', 'get_secondary_summary', 'edit_secondary_summary', 'edit_primary_summary', 'delete_primary_summary']) {
   assert.equal(getToolPackageRuntimeBindings(productionRegistry).find(binding => binding.tool.descriptor.name === name).packageId, 'memory');
 }
 assert.deepEqual(
@@ -509,6 +481,62 @@ const {
   },
 );
 const allToolNames = builtInTools.map((tool) => tool.name);
+
+// 总开关、单项偏好与拆包/星标经过生产授权链验证，不能靠 UI 隐藏工具。
+const appPackageRegistry = loadTypeScriptModule('src/host/composition/agent/createAgentToolRegistry.ts', {
+  '@platform/agentRuntime': { AgentToolRegistry },
+  './LegacyAgentToolAdapter': { LegacyAgentToolAdapter },
+  ...featureMocks,
+  '@features/assistants': { ...featureMocks['@features/assistants'], assistantToolPermissionRepository: { list: async () => [] } },
+  '@features/phoneTools/neteaseComposition': { productionNetEaseChildTools:
+    featureMocks['@features/phoneTools'].getPhoneToolPackageById('neteaseMusic').tools.map(({ toolName }) => createLegacyTool(toolName)) },
+});
+const { registerToolPackagesForHostRun: exposeAppPackages } = loadTypeScriptModule('src/host/composition/agent/ToolPackageExposure.ts');
+const appPackages = ['xiaohongshu', 'neteaseMusic'].map(id => featureMocks['@features/phoneTools'].getPhoneToolPackageById(id));
+const allAppNames = appPackages.flatMap(entry => entry.tools.map(tool => tool.toolName));
+async function appPackageExposure(directToolNames = allAppNames) {
+  const registry = appPackageRegistry.createAgentToolRegistry({ createLegacyContext: () => legacyContext });
+  const allowedToolNames = appPackageRegistry.getRuntimeAllowedToolNamesForAI({
+    enableTools: true, isHostAI: true, triggerSource: 'chat',
+    allowedToolNames: await appPackageRegistry.resolveAllowedToolNames('host'),
+  });
+  const exposure = exposeAppPackages({ registry, allowedToolNames,
+    bindings: appPackageRegistry.getToolPackageRuntimeBindings(registry),
+    openPackageIds: appPackages.map(entry => entry.id), directToolNames,
+  });
+  return { registry, exposure, allowedToolNames };
+}
+let appState = await appPackageExposure();
+assert.ok(allAppNames.every(name => !appState.allowedToolNames.includes(name)), '默认关闭时特批和已展开包都不得提供应用工具');
+assert.doesNotMatch(appState.exposure.instructions().catalog, /xiaohongshu|netease_|小红书|网易云音乐包/u);
+assert.ok(allAppNames.every(name => !appState.exposure.visibleToolNames().includes(name)));
+assert.ok(!appState.registry.get('open_tool_package').descriptor.inputSchema.properties.package_id.enum.includes('xiaohongshu'));
+appState = await appPackageExposure([]);
+assert.doesNotMatch(appState.exposure.instructions().catalog, /xiaohongshu|netease_|小红书|网易云音乐包/u);
+appToolPackages.xiaohongshu = true;
+appState = await appPackageExposure();
+assert.ok(appPackages[0].tools.every(({ toolName }) => appState.exposure.visibleToolNames().includes(toolName)), '开启后沿用单项授权与星标');
+assert.ok(appPackages[1].tools.every(({ toolName }) => !appState.allowedToolNames.includes(toolName)), '各应用包开关互不影响');
+appToolPackages.neteaseMusic = true;
+appState = await appPackageExposure();
+assert.ok(allAppNames.every(name => appState.exposure.visibleToolNames().includes(name)));
+const nonHostNames = appPackageRegistry.getRuntimeAllowedToolNamesForAI({ enableTools: true, isHostAI: false,
+  triggerSource: 'chat', allowedToolNames: appState.allowedToolNames });
+assert.ok(allAppNames.every(name => !nonHostNames.includes(name)), '全局总开关开启仍只供主理 AI 使用');
+defaultToolPermissions.xiaohongshu_add_topic = false;
+appState = await appPackageExposure();
+assert.ok(!appState.allowedToolNames.includes('xiaohongshu_add_topic'), '总开关开启不能越过单项关闭');
+delete defaultToolPermissions.xiaohongshu_add_topic;
+appToolPackages.xiaohongshu = false;
+appState = await appPackageExposure();
+assert.ok(appPackages[0].tools.every(({ toolName }) => !appState.exposure.visibleToolNames().includes(toolName)), '关闭后已展开与特批偏好不能恢复 schema');
+assert.doesNotMatch(appState.exposure.instructions().catalog, /xiaohongshu|小红书/u);
+appState = await appPackageExposure([]);
+assert.doesNotMatch(appState.exposure.instructions().catalog, /xiaohongshu|小红书/u);
+assert.match(appState.exposure.instructions().catalog, /netease_search_songs/u);
+delete appToolPackages.xiaohongshu;
+delete appToolPackages.neteaseMusic;
+
 const availableNames = (config) => getAuthorizedToolDefinitionsForAI({
   enableTools: true,
   allowedToolNames: allToolNames,
@@ -535,6 +563,15 @@ const settingsRegistry = createAgentToolRegistry({ createLegacyContext: () => le
 const settingsBindings = getToolPackageRuntimeBindings(settingsRegistry).filter(binding => binding.packageId === 'applicationSettings');
 assert.deepEqual(settingsBindings.map(binding => binding.tool.descriptor.name).sort(), [...settingsNames].sort(), '不同 owner 的设置工具归入同一产品工具包');
 const { registerToolPackagesForHostRun } = loadTypeScriptModule('src/host/composition/agent/ToolPackageExposure.ts', {});
+const imageRegistry = createAgentToolRegistry({ createLegacyContext: () => legacyContext });
+const imageExposure = registerToolPackagesForHostRun({ registry: imageRegistry,
+  allowedToolNames: ['download_image', 'query_downloaded_images', 'view_image', 'send_image'],
+  bindings: getToolPackageRuntimeBindings(imageRegistry), openPackageIds: [],
+});
+assert.deepEqual(imageExposure.visibleToolNames(), []);
+await imageRegistry.get('open_tool_package').execute({ package_id: 'media' }, executionContext);
+assert.deepEqual(new Set(imageExposure.visibleToolNames()), new Set(['download_image', 'query_downloaded_images', 'view_image', 'send_image']),
+  '展开图片包后可直接下载、找回、查看与发送图片');
 const cooldownRegistry = createAgentToolRegistry({ createLegacyContext: () => legacyContext });
 const cooldownExposure = registerToolPackagesForHostRun({ registry: cooldownRegistry,
   allowedToolNames: ['release_host_cooldown'], bindings: getToolPackageRuntimeBindings(cooldownRegistry),
@@ -556,16 +593,28 @@ await settingsRegistry.get('open_tool_package').execute({ package_id: 'applicati
 assert.ok(settingsExposure.visibleToolNames().includes('set_chat_background'));
 assert.ok(!settingsExposure.visibleToolNames().includes('set_user_avatar'));
 assert.ok(!regularChatNames.includes('get_current_location'), '普通 AI 不得获得定位工具');
+assert.ok(!regularChatNames.includes('read_clipboard'), '普通 AI 不得获得剪贴板工具');
+for (const { toolName: name } of featureMocks['@features/phoneTools'].getPhoneToolPackageById('xiaohongshu').tools) {
+  assert.ok(!regularChatNames.includes(name), '普通 AI 不得操作小红书');
+  assert.ok(availableNames({ triggerSource: 'chat', isHostAI: true }).includes(name));
+  assert.ok(!availableNames({ triggerSource: 'chat', isHostAI: true, allowedToolNames: [] }).includes(name), '主理身份不得绕过单项授权');
+}
+assert.ok(availableNames({ triggerSource: 'chat', isHostAI: true }).includes('read_clipboard'), '已授权主理 AI 可以读取剪贴板');
+assert.ok(!availableNames({ triggerSource: 'chat', isHostAI: true, allowedToolNames: [] }).includes('read_clipboard'), '主理身份不能绕过剪贴板单项授权');
 assert.ok(availableNames({ triggerSource: 'chat', isHostAI: true }).includes('get_current_location'), '已授权主理 AI 必须获得定位 schema');
 assert.ok(!availableNames({ triggerSource: 'chat', isHostAI: true, allowedToolNames: [] }).includes('get_current_location'), '主理身份不能绕过定位调用授权');
 assert.ok(regularChatNames.includes('search_stickers'), '普通单聊必须暴露 Sticker 搜索工具');
 assert.ok(regularChatNames.includes('select_sticker'), '普通单聊必须暴露 Sticker 选择工具');
 assert.ok(regularChatNames.includes('send_voice_message'), '普通单聊必须暴露语音消息工具');
+assert.ok(regularChatNames.includes('send_image'), '普通单聊必须暴露图片消息工具');
 const autonomousNames = availableNames({ triggerSource: 'raven_cat_wake', capabilities: ['raven_cat.autonomous'] });
 assert.ok(autonomousNames.includes('send_voice_message'), '自主执行已接入同事务媒体存档，必须使用正常授权的语音工具');
 assert.ok(autonomousNames.includes('select_sticker'), '自主执行必须使用正常授权的贴纸工具');
+assert.ok(autonomousNames.includes('send_image'), '自主执行必须使用正常授权的图片消息工具');
 const groupNames=availableNames({triggerSource:'group_chat',memoryParticipation:'read_write'});
-for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_summaries','get_secondary_summary','edit_secondary_summary','edit_primary_summary','delete_primary_summary','download_image','view_image','set_ai_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
+assert.ok(groupNames.includes('send_image'), '群聊必须提供已授权的图片消息工具');
+assert.ok(!availableNames({ triggerSource: 'chat', allowedToolNames: [] }).includes('send_image'), '图片发送不能绕过工具授权');
+for(const name of ['search_stickers','select_sticker','send_voice_message','search_chat_messages','read_chat_message_context','search_chat_summaries','get_secondary_summary','edit_secondary_summary','edit_primary_summary','delete_primary_summary','download_image','view_image','set_ai_avatar','add_own_sticker','maintain_own_sticker','recall_memory','update_memory','forget_memory']) {
   assert.ok(groupNames.includes(name),`群聊应提供已授权工具：${name}`);
 }
 assert.ok(!groupNames.includes('requestVideoCall'),'群聊不能发起视频通话');
@@ -577,6 +626,7 @@ for (const triggerSource of ['call', 'ledger', 'internal_feature', 'raven_cat_wa
   assert.ok(!names.includes('search_stickers'), `${triggerSource} 不得暴露 Sticker 搜索工具`);
   assert.ok(!names.includes('select_sticker'), `${triggerSource} 不得暴露 Sticker 选择工具`);
   assert.ok(!names.includes('send_voice_message'), `${triggerSource} 不得暴露语音消息工具`);
+  assert.ok(!names.includes('send_image'), `${triggerSource} 不得暴露图片消息工具`);
 }
 for (const forbiddenName of [
   'blockAIAssistant',
@@ -828,6 +878,7 @@ const { resolveAllowedToolNames: resolveAllowedToolNamesWithOverrides } = loadTy
           { toolName: 'open_app', enabled: false },
           { toolName: 'get_foreground_app', enabled: false },
           { toolName: 'get_current_location', enabled: false },
+          { toolName: 'read_clipboard', enabled: false },
           { toolName: 'read_screen_accessibility', enabled: false },
           { toolName: 'read_screen_ocr', enabled: false },
           { toolName: 'create_ai_schedule', enabled: false },
@@ -847,6 +898,7 @@ delete defaultToolPermissions.recall_memory;
 delete defaultToolPermissions.open_app;
 const overriddenAllowedNames = await resolveAllowedToolNamesWithOverrides('assistant-1');
 assert.ok(!overriddenAllowedNames.includes('get_current_location'), '定位调用开关沿用共用的 AI 单项授权');
+assert.ok(!overriddenAllowedNames.includes('read_clipboard'), '剪贴板调用开关沿用共用的 AI 单项授权');
 assert.ok(!overriddenAllowedNames.includes('search_protocols'), '普通工具必须继续服从 per-assistant override');
 assert.ok(!overriddenAllowedNames.includes('blockAIAssistant'), '单项权限必须可以关闭 blockAIAssistant');
 assert.ok(!overriddenAllowedNames.includes('unblockAIAssistant'), '单项权限必须可以关闭 unblockAIAssistant');

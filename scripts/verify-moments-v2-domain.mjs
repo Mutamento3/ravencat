@@ -20,6 +20,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
 import { fileURLToPath } from 'node:url';
+import { createCoordinatedSqliteFixture, databaseErrors } from './helpers/coordinated-sqlite-fixture.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -78,6 +79,7 @@ let currentExecutor = null;
 
 const mocks = {
   '@platform/persistence': {
+    ...databaseErrors,
     databaseCoordinator: { openTaskExecutor: () => currentExecutor },
   },
   '@features/profile': {
@@ -153,7 +155,7 @@ mocks['@shared/runtime/abortSignal'] = load('src/shared/runtime/abortSignal.ts')
 // ── SQLite 执行器 ────────────────────────────────────────
 
 function createExecutor(db) {
-  const executor = {
+  const raw = {
     getFirstAsync: async (sql, params = []) => db.prepare(sql).get(...params) ?? null,
     getAllAsync: async (sql, params = []) => db.prepare(sql).all(...params),
     runAsync: async (sql, params = []) => {
@@ -166,19 +168,8 @@ function createExecutor(db) {
     execAsync: async (sql) => {
       db.exec(sql);
     },
-    async withExclusiveTransactionAsync(task) {
-      db.exec('BEGIN;');
-      try {
-        const result = await task(executor);
-        db.exec('COMMIT;');
-        return result;
-      } catch (error) {
-        db.exec('ROLLBACK;');
-        throw error;
-      }
-    },
   };
-  return executor;
+  return createCoordinatedSqliteFixture(raw).executor;
 }
 
 // ── 生产模块 ─────────────────────────────────────────────
@@ -1048,6 +1039,39 @@ const [aiReply] = await accessModule.replyMomentCommentAsAgent(
 );
 assert.equal(aiReply.parentCommentId, userReply.id);
 assert.equal(aiReply.momentId, selectedMoment.id, '回复必须落在 parent comment 所属 Moment');
+
+// 读到父评论后、写入回复前被删除：真实事务拒绝仍进入工具的精确业务反馈。
+const [raceParent] = await repository.insertComments([{
+  id: 'reply-race-parent', momentId: userMoment.id, authorType: 'user', authorId: 'self',
+  authorNameSnapshot: identity.profile.name, parentCommentId: null, content: '即将删除的父评论',
+}]);
+const raceContext = createToolContext('agent-b', 'AI乙');
+raceContext.repositories.moment = {
+  getComment: async id => {
+    const comment = await repository.getComment(id);
+    await repository.deleteComment(id);
+    return comment;
+  },
+  getVisibleMomentForAgent: repository.getVisibleMomentForAgent.bind(repository),
+  insertComments: repository.insertComments.bind(repository),
+};
+const momentErrors = [], oldMomentConsoleError = console.error;
+console.error = (...args) => momentErrors.push(args);
+try {
+  const rejected = await replyTool.execute({ commentId: raceParent.id, content: '不能回复已删除的评论' }, raceContext);
+  assert.equal(rejected.success, false);
+  assert.match(rejected.error, /不要重复使用失效或猜测的 commentId/);
+  assert.equal(momentErrors.length, 0, '父评论竞态不误报为内部异常');
+  const commentsBefore = db.prepare('SELECT COUNT(*) AS count FROM moment_comments').get().count;
+  db.exec("CREATE TRIGGER reject_moment_comment BEFORE INSERT ON moment_comments BEGIN SELECT RAISE(ABORT,'moment storage failure'); END;");
+  try {
+    const failed = await commentTool.execute({ momentId: userMoment.id, content: '不能部分保存' }, createToolContext('agent-b', 'AI乙'));
+    assert.equal(failed.success, false);
+    assert.equal(momentErrors.length, 1);
+    assert.ok(momentErrors[0][1] instanceof databaseErrors.CoordinatedDatabaseError);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM moment_comments').get().count, commentsBefore);
+  } finally { db.exec('DROP TRIGGER reject_moment_comment'); }
+} finally { console.error = oldMomentConsoleError; }
 
 await assert.rejects(
   () => repository.insertComments([{

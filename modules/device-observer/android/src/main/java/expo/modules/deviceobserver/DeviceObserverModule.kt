@@ -98,6 +98,10 @@ class DeviceObserverModule : Module() {
       DeviceBatteryQuery(context).read()
     }.runOnQueue(Queues.DEFAULT)
 
+    AsyncFunction("readClipboardText") {
+      DeviceClipboardQuery.read(appContext.currentActivity)
+    }.runOnQueue(Queues.MAIN)
+
     AsyncFunction("getLocationAccessState") {
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       DeviceLocationQuery(context).accessState()

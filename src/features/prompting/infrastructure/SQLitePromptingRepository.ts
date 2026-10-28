@@ -1,4 +1,4 @@
-/** 使用 SQLite 持久化用户提示词片段、预设条目与目标绑定。 */
+/** 使用 SQLite 读写 AI 提示词配置与星标；2.x 片段、预设和绑定只读。 */
 
 import { databaseCoordinator, type CoordinatedDatabaseExecutor } from '@platform/persistence';
 import type {
@@ -107,17 +107,6 @@ export class SQLitePromptingRepository implements
     return rows.map(mapCustomBlock);
   }
 
-  async listPresets(scenarioId?: PromptScenarioId): Promise<PromptPreset[]> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.listPresets', feature: 'prompting', priority: 'runtime' });
-    const rows = scenarioId
-      ? await db.getAllAsync<PresetRow>(
-          'SELECT * FROM prompt_presets WHERE scenario_id = ? ORDER BY updated_at DESC',
-          [scenarioId]
-        )
-      : await db.getAllAsync<PresetRow>('SELECT * FROM prompt_presets ORDER BY updated_at DESC');
-    return rows.map(mapPreset);
-  }
-
   async getCustomBlockById(id: string): Promise<PromptCustomBlock | null> {
     const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.getCustomBlockById', feature: 'prompting', priority: 'runtime' });
     const row = await db.getFirstAsync<CustomBlockRow>(
@@ -134,40 +123,6 @@ export class SQLitePromptingRepository implements
     return row ? mapPreset(row) : null;
   }
 
-  async saveCustomBlock(block: PromptCustomBlock): Promise<PromptCustomBlock> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.saveCustomBlock', feature: 'prompting', priority: 'runtime' });
-    await db.runAsync(
-      `INSERT INTO prompt_custom_blocks (
-         id, name, description, content, category, default_slot, placement, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name, description = excluded.description, content = excluded.content,
-         category = excluded.category, default_slot = excluded.default_slot,
-         placement = excluded.placement, updated_at = excluded.updated_at`,
-      [block.id, block.name, block.description, block.content, block.category,
-        block.defaultSlot, block.placement, block.createdAt, block.updatedAt]
-    );
-    return block;
-  }
-
-  async savePreset(preset: PromptPreset): Promise<PromptPreset> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.savePreset', feature: 'prompting', priority: 'runtime' });
-    await db.runAsync(
-      `INSERT INTO prompt_presets (
-         id, name, description, scenario_id, base_preset_id, token_budget,
-         is_system, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name, description = excluded.description,
-         scenario_id = excluded.scenario_id, base_preset_id = excluded.base_preset_id,
-         token_budget = excluded.token_budget, is_system = excluded.is_system,
-         updated_at = excluded.updated_at`,
-      [preset.id, preset.name, preset.description, preset.scenarioId, preset.basePresetId,
-        preset.tokenBudget, preset.isSystem ? 1 : 0, preset.createdAt, preset.updatedAt]
-    );
-    return preset;
-  }
-
   async listItems(presetId: string): Promise<PromptPresetItem[]> {
     const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.listItems', feature: 'prompting', priority: 'runtime' });
     const rows = await db.getAllAsync<PresetItemRow>(
@@ -175,55 +130,6 @@ export class SQLitePromptingRepository implements
       [presetId]
     );
     return rows.map(mapPresetItem);
-  }
-
-  async listItemsByDefinitionId(definitionId: string): Promise<PromptPresetItem[]> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.listItemsByDefinitionId', feature: 'prompting', priority: 'runtime' });
-    const rows = await db.getAllAsync<PresetItemRow>(
-      'SELECT * FROM prompt_preset_items WHERE definition_id = ? ORDER BY preset_id, sort_order',
-      [definitionId]
-    );
-    return rows.map(mapPresetItem);
-  }
-
-  async replaceItems(presetId: string, items: PromptPresetItem[]): Promise<PromptPresetItem[]> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.replaceItems', feature: 'prompting', priority: 'runtime' });
-    await db.withExclusiveTransactionAsync(async (transaction) => {
-      await transaction.runAsync('DELETE FROM prompt_preset_items WHERE preset_id = ?', [presetId]);
-      for (const presetItem of items) {
-        await transaction.runAsync(
-          `INSERT INTO prompt_preset_items (
-             id, preset_id, definition_id, slot, sort_order, enabled,
-             condition_json, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [presetItem.id, presetId, presetItem.definitionId, presetItem.slot,
-            presetItem.sortOrder, presetItem.enabled ? 1 : 0, presetItem.conditionJson,
-            presetItem.createdAt, presetItem.updatedAt]
-        );
-      }
-    });
-    return items;
-  }
-
-  async deleteCustomBlock(id: string): Promise<boolean> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.deleteCustomBlock', feature: 'prompting', priority: 'runtime' });
-    const result = await db.runAsync('DELETE FROM prompt_custom_blocks WHERE id = ?', [id]);
-    return result.changes > 0;
-  }
-
-  async deletePreset(id: string): Promise<boolean> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.deletePreset', feature: 'prompting', priority: 'runtime' });
-    const result = await db.runAsync('DELETE FROM prompt_presets WHERE id = ?', [id]);
-    return result.changes > 0;
-  }
-
-  async listByPresetId(presetId: string): Promise<PromptBinding[]> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.listByPresetId', feature: 'prompting', priority: 'runtime' });
-    const rows = await db.getAllAsync<BindingRow>(
-      'SELECT * FROM prompt_bindings WHERE preset_id = ? ORDER BY updated_at DESC',
-      [presetId]
-    );
-    return rows.map(mapBinding);
   }
 
   async find(
@@ -239,31 +145,6 @@ export class SQLitePromptingRepository implements
       [scenarioId, targetType, targetId]
     );
     return row ? mapBinding(row) : null;
-  }
-
-  async saveBinding(binding: PromptBinding): Promise<PromptBinding> {
-    const db: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'prompting.saveBinding', feature: 'prompting', priority: 'runtime' });
-    await db.withExclusiveTransactionAsync(async (transaction) => {
-      await transaction.runAsync(
-        `DELETE FROM prompt_bindings
-         WHERE scenario_id = ? AND target_type = ? AND COALESCE(target_id, '') = COALESCE(?, '')`,
-        [binding.scenarioId, binding.targetType, binding.targetId]
-      );
-      await transaction.runAsync(
-        `INSERT INTO prompt_bindings (
-           id, scenario_id, target_type, target_id, preset_id, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [binding.id, binding.scenarioId, binding.targetType, binding.targetId,
-          binding.presetId, binding.createdAt, binding.updatedAt]
-      );
-    });
-    return binding;
-  }
-
-  async deleteBinding(id: string): Promise<boolean> {
-    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.deleteBinding', feature: 'prompting', priority: 'runtime' });
-    const result = await db.runAsync('DELETE FROM prompt_bindings WHERE id = ?', [id]);
-    return result.changes > 0;
   }
 
   async getAssistantSettings(assistantId: string): Promise<AssistantPromptSettings | null> {
@@ -333,15 +214,20 @@ export class SQLitePromptingRepository implements
     override: AssistantPromptDefinitionOverride
   ): Promise<AssistantPromptDefinitionOverride> {
     const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.saveDefinitionOverride', feature: 'prompting', priority: 'runtime' });
-    await db.runAsync(
-      `INSERT INTO assistant_prompt_definition_overrides (
-         assistant_id, definition_id, locale, content, updated_at
-       ) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(assistant_id, definition_id, locale) DO UPDATE SET
-         content = excluded.content, updated_at = excluded.updated_at`,
-      [override.assistantId, override.definitionId, override.locale, override.content, override.updatedAt]
-    );
+    await saveDefinitionOverrideRow(db, override);
     return override;
+  }
+
+  async applyDefinitionOverrideSnapshot(
+    assistantIds: readonly string[],
+    override: Omit<AssistantPromptDefinitionOverride, 'assistantId'>
+  ): Promise<void> {
+    const db = databaseCoordinator.openTaskExecutor({ name: 'prompting.applyDefinitionOverrideSnapshot', feature: 'prompting', priority: 'runtime' });
+    await db.withExclusiveTransactionAsync(async (transaction) => {
+      for (const assistantId of assistantIds) {
+        await saveDefinitionOverrideRow(transaction, { ...override, assistantId });
+      }
+    });
   }
 
   async resetDefinitionOverride(
@@ -400,6 +286,20 @@ export class SQLitePromptingRepository implements
     );
     return rows.map(mapMigrationOrphan);
   }
+}
+
+function saveDefinitionOverrideRow(
+  db: Pick<CoordinatedDatabaseExecutor, 'runAsync'>,
+  override: AssistantPromptDefinitionOverride
+): Promise<unknown> {
+  return db.runAsync(
+    `INSERT INTO assistant_prompt_definition_overrides (
+       assistant_id, definition_id, locale, content, updated_at
+     ) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(assistant_id, definition_id, locale) DO UPDATE SET
+       content = excluded.content, updated_at = excluded.updated_at`,
+    [override.assistantId, override.definitionId, override.locale, override.content, override.updatedAt]
+  );
 }
 
 function saveAssistantUserPromptRow(

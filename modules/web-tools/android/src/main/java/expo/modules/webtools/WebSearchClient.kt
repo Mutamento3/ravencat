@@ -6,7 +6,7 @@ import org.json.JSONObject
 
 /** 每次只访问调用方选择的来源；网络失败不在这里切换引擎或重试。 */
 class WebSearchClient(private val client: WebHttpClient) {
-  fun search(engine: String, query: String, limit: Int, apiKey: String?, depth: String, timeRange: String?, request: WebRequest): Map<String, Any> {
+  fun search(engine: String, query: String, limit: Int, apiKey: String?, depth: String, timeRange: String?, includeImages: Boolean, request: WebRequest): Map<String, Any> {
     return when (engine) {
       "bing" -> {
         val url = "https://www.bing.com/search".toHttpUrl().newBuilder()
@@ -21,9 +21,10 @@ class WebSearchClient(private val client: WebHttpClient) {
       "tavily" -> {
         val json = JSONObject().put("query", query).put("max_results", limit).put("search_depth", depth)
           .put("include_answer", false).put("include_raw_content", false).put("auto_parameters", false)
+          .put("include_images", includeImages).put("include_image_descriptions", includeImages)
         if (timeRange != null) json.put("time_range", timeRange)
         client.searchApi("https://api.tavily.com/search", request, mapOf("Authorization" to "Bearer ${apiKey!!}"), json.toString()) { response ->
-          WebSearchResults.tavily(body(response, request), query, limit)
+          WebSearchResults.tavily(body(response, request), query, limit, includeImages)
         }
       }
       "brave" -> {

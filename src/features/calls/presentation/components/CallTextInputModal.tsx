@@ -17,6 +17,8 @@ import { createCallStyles } from '../styles';
 
 interface CallTextInputModalProps {
   visible: boolean;
+  text: string;
+  onChangeText: (text: string) => void;
   onClose: () => void;
   onSend: (text: string) => Promise<void> | void;
   disabled?: boolean;
@@ -25,6 +27,8 @@ interface CallTextInputModalProps {
 
 export default function CallTextInputModal({
   visible,
+  text,
+  onChangeText,
   onClose,
   onSend,
   disabled = false,
@@ -37,7 +41,6 @@ export default function CallTextInputModal({
   const visibleRef = useRef(visible);
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keyboardVisibleRef = useRef(false);
-  const [text, setText] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const focusInput = useCallback(() => {
@@ -55,12 +58,10 @@ export default function CallTextInputModal({
     visibleRef.current = visible;
 
     if (visible) {
-      setText('');
       setKeyboardHeight(0);
       return undefined;
     }
 
-    setText('');
     setKeyboardHeight(0);
     keyboardVisibleRef.current = false;
     if (focusTimerRef.current) {
@@ -115,8 +116,6 @@ export default function CallTextInputModal({
     }
 
     const nextText = text.trim();
-    setText('');
-
     handleClose();
 
     await onSend(nextText);
@@ -140,7 +139,7 @@ export default function CallTextInputModal({
               ref={inputRef}
               style={styles.textInputModalInput}
               value={text}
-              onChangeText={setText}
+              onChangeText={onChangeText}
               placeholder="输入消息..."
               placeholderTextColor={theme.colors.text.tertiary}
               accessibilityLabel={title}

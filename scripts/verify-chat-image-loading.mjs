@@ -154,10 +154,10 @@ const Card = load('src/features/chat/presentation/messages/MessageBubble/ImageAt
 const props = (id) => ({
   attachment: { id, mediaAssetId: id, type: 'image', width: 220, height: 260 }, isMe: true,
 });
-function render(value) {
+function render(value, Component = Card) {
   cursor = 0;
   effects = [];
-  const tree = Card(value);
+  const tree = Component(value);
   effects.forEach((effect) => effect());
   return tree;
 }
@@ -201,4 +201,69 @@ await finish('missing', null);
 tree = render(props('missing'));
 assert.equal(unavailable(tree), true, '只有确认无可用媒体后显示不可用');
 assert.equal(find(tree, 'Image').props.style.height, 260, '失败状态也不能改变布局高度');
-console.log('聊天图片加载与媒体读取回归通过');
+
+// 表情包消息与引用使用同一卡片，加载期间不能提前宣告媒体失效。
+slots.forEach((slot) => slot.cleanup?.());
+slots.length = 0;
+const stickerRequests = new Map();
+const StickerCard = load('src/features/chat/presentation/messages/MessageBubble/StickerMessageCard.tsx', {
+  react,
+  'react-native': {
+    ActivityIndicator: 'ActivityIndicator', Image: 'Image', Text: 'Text', View: 'View',
+    StyleSheet: { create: (value) => value },
+  },
+  '@expo/vector-icons': { Ionicons: 'Icon' },
+  '@shopify/flash-list': { useRecyclingState },
+  '@shared/theme': { useTheme: () => theme, useThemedStyles: (factory) => factory(theme) },
+  '@features/media': {
+    resolveMediaAsset(id) {
+      return new Promise((resolve, reject) => stickerRequests.set(id, { resolve, reject }));
+    },
+  },
+}).default;
+const stickerProps = (id) => ({ sticker: { mediaAssetId: id, width: 100, height: 100 } });
+const renderSticker = (id) => render(stickerProps(id), StickerCard);
+const stickerUnavailable = (tree) => nodes(tree).some((node) => node.type === 'Text'
+  && node.props.children.includes('表情包不可用'));
+const placeholderHeight = (tree) => nodes(tree).find((node) => Array.isArray(node.props?.style))
+  .props.style[0].height;
+async function finishSticker(id, failed = false) {
+  const request = stickerRequests.get(id);
+  if (failed) request.reject(new Error('媒体缺失'));
+  else request.resolve({ localUri: `file:///${id}` });
+  await Promise.resolve();
+  await Promise.resolve();
+}
+tree = renderSticker('sticker-a');
+assert.ok(find(tree, 'ActivityIndicator'), '表情包解析期间显示加载提示');
+assert.equal(stickerUnavailable(tree), false, '解析期间不能假报表情包不可用');
+assert.equal(placeholderHeight(tree), 130, '占位沿用表情包尺寸');
+await finishSticker('sticker-a');
+tree = renderSticker('sticker-a');
+assert.equal(find(tree, 'Image').props.source.uri, 'file:///sticker-a');
+assert.equal(find(tree, 'Image').props.style.height, 130);
+assert.equal(find(tree, 'ActivityIndicator'), undefined);
+tree = renderSticker('sticker-b');
+assert.equal(find(tree, 'Image'), undefined, '回收卡片不能显示上一张表情包');
+assert.ok(find(tree, 'ActivityIndicator'));
+await finishSticker('sticker-b', true);
+tree = renderSticker('sticker-b');
+assert.equal(stickerUnavailable(tree), true, '解析失败后才显示表情包不可用');
+assert.equal(placeholderHeight(tree), 130, '失败状态不改变卡片高度');
+renderSticker('sticker-c');
+tree = renderSticker('sticker-d');
+assert.equal(stickerUnavailable(tree), false, '更换媒体后清除之前的失败状态');
+await finishSticker('sticker-c', true);
+tree = renderSticker('sticker-d');
+assert.ok(find(tree, 'ActivityIndicator'), '旧媒体的迟到失败不能覆盖当前加载状态');
+assert.equal(stickerUnavailable(tree), false);
+await finishSticker('sticker-d');
+assert.equal(find(renderSticker('sticker-d'), 'Image').props.source.uri, 'file:///sticker-d');
+renderSticker('sticker-e');
+renderSticker('sticker-f');
+await finishSticker('sticker-e');
+assert.ok(find(renderSticker('sticker-f'), 'ActivityIndicator'), '旧媒体的迟到成功不能覆盖当前加载状态');
+await finishSticker('sticker-f');
+assert.equal(find(renderSticker('sticker-f'), 'Image').props.source.uri, 'file:///sticker-f');
+slots.forEach((slot) => slot.cleanup?.());
+console.log('聊天图片、表情包加载与媒体读取回归通过');

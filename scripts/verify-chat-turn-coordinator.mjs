@@ -81,6 +81,11 @@ const coordinatorStub = `const databaseCoordinator = {
 
 const messageRepoSource = read('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts').replaceAll("from './ChatTimelineSql'", `from '${chatTimelineModuleUrl}'`).replaceAll("from './ChatMessageMutationSql'", `from '${chatMutationModuleUrl}'`).replaceAll("from '../../reply/infrastructure/ChatReplyVersionSql'", `from '${chatReplyVersionModuleUrl}'`);
 const stubbedMessageRepoSource = messageRepoSource
+  .replaceAll("from '../domain/chatMessageMetadata'", `from '${transpileToModuleUrl(
+    read('src/features/chat/messages/domain/chatMessageMetadata.ts')
+      .replaceAll("from './ChatSticker'", `from '${transpileToModuleUrl(read('src/features/chat/messages/domain/ChatSticker.ts'))}'`)
+      .replaceAll("from './SharedChatRecord'", `from '${transpileToModuleUrl(read('src/features/chat/messages/domain/SharedChatRecord.ts'))}'`),
+  )}'`)
   .replace(
     /import\s*\{[\s\S]*?\}\s*from\s*['"]@platform\/persistence['"];/,
     coordinatorStub,
@@ -830,6 +835,57 @@ for (const status of ['failed', 'cancelled']) {
   db.prepare("DELETE FROM ai_assistants WHERE id = 'ai1'").run();
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM chat_tool_package_exposure').get().n, 0);
   console.log('工具包持久开关：持续保留、主动关闭、操作顺序、分段、隔离、重载、回滚、终态及级联清理通过。');
+}
+
+// 日程与普通回复使用同一个持久执行槽；交付尾段和未领取的用户输入也必须阻挡日程。
+{
+  const db = createBaseDatabase();
+  addSession(db, 'schedule-chat');
+  await prepareConsumedTurnFixture(createExecutor(db));
+  const coordinator = createCoordinator(db);
+  globalThis.__TEST_TURN_COORDINATOR_HOLDER__ = coordinator;
+  const repo = new ConversationTurnRepository();
+  const first = await repo.claimAutonomousIfIdle('schedule-chat', 'schedule-first');
+  assert.equal(first.kind, 'autonomous');
+  assert.equal(await new ConversationTurnRepository().claimAutonomousIfIdle('schedule-chat', 'schedule-duplicate'), null);
+  await repo.finishAutonomous(first);
+  assert.equal(getTurnState(db, 'schedule-chat').reply_cursor, 0, '日程完成不推进用户回复游标');
+
+  const interrupted = await repo.claimAutonomousIfIdle('schedule-chat', 'schedule-interrupted');
+  await coordinator.transaction({}, async tx => {
+    addMessage(db, { sessionId: 'schedule-chat', text: '用户优先', isMe: true, createdAt: new Date().toISOString() });
+    assert.equal(await repo.supersedeActiveRunInTransaction(tx, 'schedule-chat'), interrupted.runId);
+  });
+  assert.equal(await repo.claimAutonomousIfIdle('schedule-chat', 'schedule-before-user-host'), null);
+  const user = await repo.claimIfIdle('schedule-chat', 'user_reply');
+  await repo.finishAutonomous(interrupted);
+  assert.equal(getTurnState(db, 'schedule-chat').active_run_id, user.runId, '旧日程收口不得释放新用户 owner');
+  assert.equal(await coordinator.read({}, tx => repo.isRunCurrentInTransaction(tx, interrupted.runId)), false);
+  const reply = makeAssistantItem('先回复用户', new Date().toISOString());
+  reply.message.sessionId = 'schedule-chat';
+  assert.equal((await repo.commitTurn(user, [reply],
+    { assistantId: 'ai1', changes: [] })).outcome, 'committed');
+  db.prepare("INSERT INTO chat_turn_presentations(run_id, session_id, state, updated_at) VALUES (?, ?, 'open', ?)")
+    .run(user.runId, 'schedule-chat', new Date().toISOString());
+  assert.equal(await repo.claimAutonomousIfIdle('schedule-chat', 'schedule-during-delivery'), null,
+    'T3 已提交但分段未交付完时，日程仍须等待');
+  db.prepare("UPDATE chat_turn_presentations SET state = 'completed' WHERE run_id = ?").run(user.runId);
+  const afterDelivery = await repo.claimAutonomousIfIdle('schedule-chat', 'schedule-after-delivery');
+  assert.ok(afterDelivery);
+  const cursor = getTurnState(db, 'schedule-chat').reply_cursor;
+  assert.deepEqual(await repo.interruptAbandonedAutonomousRuns([afterDelivery.runId]), []);
+  assert.deepEqual(await repo.interruptAbandonedAutonomousRuns([]), ['schedule-chat']);
+  assert.equal(getRun(db, afterDelivery.runId).status, 'failed');
+  assert.equal(getTurnState(db, 'schedule-chat').reply_cursor, cursor);
+  const next = await repo.claimAutonomousIfIdle('schedule-chat', 'schedule-next');
+  addMessage(db, { sessionId: 'schedule-chat', text: '进程恢复后的用户消息', isMe: true, createdAt: new Date().toISOString() });
+  const recoveredUser = await repo.takeOverOrphan('schedule-chat', 'user_reply');
+  assert.equal(recoveredUser.kind, 'user_reply');
+  assert.equal(getRun(db, next.runId).status, 'failed', '普通恢复不得重跑日程孤儿');
+  await repo.revoke(recoveredUser, 'failed', '测试失败输入');
+  assert.ok(await repo.claimAutonomousIfIdle('schedule-chat', 'schedule-after-user-failure'),
+    '已明确失败的旧输入不能永久阻挡日程');
+  db.close();
 }
 
 delete globalThis.__TEST_TURN_COORDINATOR_HOLDER__;

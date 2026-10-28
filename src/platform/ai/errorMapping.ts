@@ -9,6 +9,13 @@
 
 import type { ParamErrorInfo, QuotaErrorInfo, ServiceBusyErrorInfo, ErrorDisplayInfo } from './types';
 
+/** 外部接口可能回显凭据；仅由持有密钥的传输边界在错误离开前调用。 */
+export function redactAIErrorMessage(message: string, apiKey: string): string {
+  if (!apiKey) return message;
+  return [apiKey, JSON.stringify(apiKey).slice(1, -1), encodeURIComponent(apiKey)]
+    .reduce((text, secret) => text.split(secret).join('[REDACTED]'), message);
+}
+
 /** 请求 ID 和 messages[403] 之类的参数路径不是状态码，不能按数字子串判错。 */
 function hasErrorCode(message: string, code: number): boolean {
   return new RegExp(`(?:^\\s*|\\bhttp\\s+|\\b(?:status|code)\\s*[:=]\\s*)${code}(?=\\s|$|[:,;)])`, 'i').test(message);
@@ -160,7 +167,7 @@ export function detectServiceBusyError(message: string): ServiceBusyErrorInfo {
 }
 
 /**
- * 获取错误显示信息；需要排障的入口可保留具体原因，普通聊天使用简明提示。
+ * 获取错误显示信息；调用方通过 includeDetails 在分类提示之外保留具体原因。
  * @param error - 错误对象或消息
  * @returns 错误显示信息
  */
@@ -225,19 +232,20 @@ function mapErrorDisplayInfo(error: Error | string): ErrorDisplayInfo {
     };
   }
 
+  // RN 的超时文案也包含 Network，必须先识别超时，避免误提示用户修改 API 地址。
+  if (/timeout|timed\s+out/i.test(message)) {
+    return {
+      title: '请求超时',
+      message: '服务器响应超时，请稍后重试',
+      type: 'timeout',
+    };
+  }
+
   if (message.includes('Network') || message.includes('fetch')) {
     return {
       title: '网络错误',
       message: '无法连接到服务器，请检查网络或 API 地址',
       type: 'network',
-    };
-  }
-
-  if (message.includes('timeout') || message.includes('Timeout')) {
-    return {
-      title: '请求超时',
-      message: '服务器响应超时，请稍后重试',
-      type: 'timeout',
     };
   }
 

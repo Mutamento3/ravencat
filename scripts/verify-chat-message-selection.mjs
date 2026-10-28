@@ -1,85 +1,11 @@
-import { chatReplyVersionSql, chatMessageMutations, installChatTimelineSchema } from './chat-timeline-fixture.mjs';
 /** 验证整轮选择、20 条上限、跨分页删除、原子预览与页面多选行为，不读取用户数据库。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { DatabaseSync } from 'node:sqlite';
-import ts from 'typescript';
+import { createChatMessageMutationFixture, load } from './helpers/chat-message-mutation-fixture.mjs';
 
 const require = createRequire(import.meta.url);
-function load(relative, mocks = {}) {
-  const output = ts.transpileModule(fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
-    fileName: relative,
-  }).outputText;
-  const module = { exports: {} };
-  new Function('require', 'module', 'exports', output)((id) => {
-    if (Object.hasOwn(mocks, id)) return mocks[id];
-    if (id === 'react' || id === 'react/jsx-runtime') return require(id);
-    throw new Error(`${relative} 未提供依赖 ${id}`);
-  }, module, module.exports);
-  return module.exports;
-}
-
-const db = new DatabaseSync(':memory:');
-db.exec(`
-  CREATE TABLE chat_conversations (id TEXT PRIMARY KEY, kind TEXT NOT NULL);
-  CREATE TABLE sessions (id TEXT PRIMARY KEY, last_message TEXT, last_time TEXT,
-    visible_after_message_id INTEGER, updated_at TEXT);
-  CREATE TABLE group_chats (id TEXT PRIMARY KEY, last_message TEXT, last_time TEXT,
-    last_message_id INTEGER, updated_at TEXT);
-  CREATE TABLE messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, text TEXT, sender_type TEXT,
-    is_me INTEGER, is_read INTEGER DEFAULT 1, status TEXT DEFAULT 'sent', time TEXT,
-    created_at TEXT, updated_at TEXT, metadata_json TEXT, agent_id TEXT,
-    api_message_id TEXT, client_message_id TEXT, voice_played_at TEXT,
-    show_time_separator_before INTEGER, reply_to_id INTEGER, reply_to_text TEXT,
-    logical_message_id TEXT, segment_index INTEGER, segment_total INTEGER,
-    delivery_status TEXT DEFAULT 'delivered', tokens_used INTEGER, prompt_tokens INTEGER,
-    completion_tokens INTEGER, turn_run_id TEXT, turn_item_index INTEGER
-  );
-`);
-installChatTimelineSchema(db);
-let chain = Promise.resolve();
-const executor = {
-  getAllAsync: async (sql, params = []) => db.prepare(sql).all(...params),
-  getFirstAsync: async (sql, params = []) => db.prepare(sql).get(...params) ?? null,
-  runAsync: async (sql, params = []) => {
-    const result = db.prepare(sql).run(...params);
-    return { changes: Number(result.changes), lastInsertRowId: Number(result.lastInsertRowid) };
-  },
-  withExclusiveTransactionAsync(task) {
-    const next = chain.then(async () => {
-      db.exec('BEGIN IMMEDIATE');
-      try {
-        const result = await task(executor);
-        db.exec('COMMIT');
-        return result;
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
-      }
-    });
-    chain = next.catch(() => {});
-    return next;
-  },
-};
-const persistence = { databaseCoordinator: { openTaskExecutor: () => executor } };
-const domain = 'src/features/chat/messages/domain/';
-const metadata = load(`${domain}chatMessageMetadata.ts`, { './ChatSticker': load(`${domain}ChatSticker.ts`), './SharedChatRecord': load(`${domain}SharedChatRecord.ts`) });
-const selectionPolicy = load(`${domain}ChatMessageSelection.ts`, { './chatMessageMetadata': metadata });
-const { MessageRepository } = load('src/features/chat/messages/infrastructure/SQLiteMessageRepository.ts', {
-  '@platform/persistence': persistence,
-  './ChatMessageMutationSql': chatMessageMutations,
-      '../../reply/infrastructure/ChatReplyVersionSql': chatReplyVersionSql,
-  './ChatTimelineSql': load('src/features/chat/messages/infrastructure/ChatTimelineSql.ts'),
-  '../domain/MessageTimeSeparator': load(`${domain}MessageTimeSeparator.ts`),
-});
-const { GroupChatRepository } = load('src/features/chat/group/infrastructure/SQLiteGroupChatRepository.ts', {
-  '@platform/persistence': persistence, '@features/profile': {}, '@features/media': {},
-});
-const messages = new MessageRepository();
-const groups = new GroupChatRepository();
+const { db, metadata, persistence, messages, groups } = createChatMessageMutationFixture();
+const selectionPolicy = load('src/features/chat/messages/domain/ChatMessageSelection.ts', { './chatMessageMetadata': metadata });
 const deletions = [];
 const released = [];
 const invalidated = [];

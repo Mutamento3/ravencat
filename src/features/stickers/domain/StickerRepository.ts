@@ -58,7 +58,6 @@ export interface StickerSemanticSearchInput {
 export interface StickerRepository {
   getStickerById(id: string, assistantId?: string): Promise<Sticker | null>;
   getStickerByMediaAssetId(mediaAssetId: string): Promise<Sticker | null>;
-  getGroupById(id: string): Promise<StickerGroup | null>;
   listGroups(): Promise<StickerGroup[]>;
   listStickers(input?: ListStickersInput): Promise<Sticker[]>;
   searchStickers(input: SearchStickersInput): Promise<Sticker[]>;
@@ -67,7 +66,6 @@ export interface StickerRepository {
    * 不受 STICKER_LIST_LIMIT 这类 UI / 普通列表分页上限约束。
    */
   listReadyStickersForSemanticSearch(input: StickerSemanticSearchInput): Promise<Sticker[]>;
-  listStickersByIds(ids: readonly string[]): Promise<Sticker[]>;
 
   /** MediaAsset 创建事务内只执行 SQL，确保 asset 与 Sticker 引用原子提交。 */
   getStickerByIdInTransaction(
@@ -159,10 +157,5 @@ export interface StickerRepository {
     claimId: string,
     updatedAt: string,
   ): Promise<Sticker>;
-  recoverAnnotationClaims(
-    cutoff: string,
-    updatedAt: string,
-  ): Promise<number>;
   recoverInterruptedAnnotationClaims(updatedAt: string): Promise<number>;
-  retryAnnotation(id: string, updatedAt: string): Promise<Sticker>;
 }

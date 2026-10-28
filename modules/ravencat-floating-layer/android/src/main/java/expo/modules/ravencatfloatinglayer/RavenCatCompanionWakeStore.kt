@@ -1,6 +1,8 @@
 package expo.modules.ravencatfloatinglayer
 
 import android.content.Context
+import android.os.PowerManager
+import android.util.Log
 import expo.modules.ravencatfloatinglayer.companion.RavenCatCompanionWakeDispatcher
 import org.json.JSONArray
 import org.json.JSONObject
@@ -39,6 +41,13 @@ internal data class RavenCatCompanionWakeStatus(
   val lastPendingWakeAtEpochMs: Long,
 )
 
+internal enum class AIScheduleDiagnosticStage {
+  PROJECTION_ARMED, ALARM_RECEIVED, ALARM_WORK_ENQUEUED, ALARM_ENQUEUE_FAILED,
+  WORKER_STARTED, GATE_REJECTED, HOST_STARTED, FOREGROUND_REQUESTED,
+  FOREGROUND_STARTED, FOREGROUND_REJECTED, HEADLESS_REQUESTED, HEADLESS_ACCEPTED,
+  HEADLESS_REJECTED, RUNNER_COMPLETED, CANCELLATION_REQUESTED, HOST_FINISHED,
+}
+
 internal object RavenCatCompanionWakeStore {
   private const val PREFS_NAME = "ravencat_companion_wake_store"
   private const val KEY_LAST_NATIVE_WAKE_AT_EPOCH_MS = "lastNativeWakeAtEpochMs"
@@ -62,6 +71,64 @@ internal object RavenCatCompanionWakeStore {
   private const val KEY_PENDING_NATIVE_WAKE_COUNT = "pendingNativeWakeCount"
   private const val KEY_LAST_PENDING_WAKE_AT_EPOCH_MS = "lastPendingWakeAtEpochMs"
   private const val KEY_PENDING_QUEUE = "pendingWakeQueue"
+  private const val KEY_SCHEDULE_DIAGNOSTICS = "aiScheduleDiagnostics"
+  internal const val MAX_SCHEDULE_DIAGNOSTICS = 80
+
+  /** 阶段记录只观察交付，不参与 gate、claim 或恢复；故障不能改变一次日程的执行结果。 */
+  @Synchronized
+  fun recordScheduleDiagnostic(
+    context: Context,
+    deliveryEventId: String,
+    stage: AIScheduleDiagnosticStage,
+    expectedRemindAtEpochMs: Long? = null,
+    outcome: String? = null,
+  ) {
+    try {
+      val prefs = prefs(context)
+      val previous = JSONArray(prefs.getString(KEY_SCHEDULE_DIAGNOSTICS, "[]"))
+      val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+      val entry = JSONObject()
+        .put("deliveryEventId", deliveryEventId)
+        .put("stage", stage.name)
+        .put("recordedAtEpochMs", System.currentTimeMillis())
+        .put("expectedRemindAtEpochMs", expectedRemindAtEpochMs ?: JSONObject.NULL)
+        .put("outcome", outcome ?: JSONObject.NULL)
+        .put("deviceIdleMode", power.isDeviceIdleMode)
+        .put("powerSaveMode", power.isPowerSaveMode)
+        .put("batteryOptimizationExempt", power.isIgnoringBatteryOptimizations(context.packageName))
+      val bounded = JSONArray()
+      for (index in maxOf(0, previous.length() - MAX_SCHEDULE_DIAGNOSTICS + 1) until previous.length()) {
+        bounded.put(previous.getJSONObject(index))
+      }
+      bounded.put(entry)
+      prefs.edit().putString(KEY_SCHEDULE_DIAGNOSTICS, bounded.toString()).apply()
+    } catch (error: Exception) {
+      Log.w("RavenCatCompanionWake", "无法保存日程阶段诊断", error)
+    }
+  }
+
+  @Synchronized
+  fun scheduleDiagnostics(context: Context): List<Map<String, Any?>> {
+    val entries = JSONArray(prefs(context).getString(KEY_SCHEDULE_DIAGNOSTICS, "[]"))
+    return (0 until entries.length()).map { index ->
+      val entry = entries.getJSONObject(index)
+      mapOf(
+        "deliveryEventId" to entry.getString("deliveryEventId"),
+        "stage" to entry.getString("stage"),
+        "recordedAtEpochMs" to entry.getLong("recordedAtEpochMs"),
+        "expectedRemindAtEpochMs" to if (entry.isNull("expectedRemindAtEpochMs")) null else entry.getLong("expectedRemindAtEpochMs"),
+        "outcome" to if (entry.isNull("outcome")) null else entry.getString("outcome"),
+        "deviceIdleMode" to entry.getBoolean("deviceIdleMode"),
+        "powerSaveMode" to entry.getBoolean("powerSaveMode"),
+        "batteryOptimizationExempt" to entry.getBoolean("batteryOptimizationExempt"),
+      )
+    }
+  }
+
+  private fun recordHeadlessDiagnostic(context: Context, event: RavenCatCompanionWakeEvent, stage: AIScheduleDiagnosticStage) {
+    if (event.triggerKind != "ai_schedule") return
+    recordScheduleDiagnostic(context, event.deliveryId(), stage, event.expectedRemindAtEpochMs)
+  }
 
   fun status(context: Context): RavenCatCompanionWakeStatus {
     val prefs = prefs(context)
@@ -108,6 +175,7 @@ internal object RavenCatCompanionWakeStore {
     context: Context,
     event: RavenCatCompanionWakeEvent,
   ) {
+    recordHeadlessDiagnostic(context, event, AIScheduleDiagnosticStage.HEADLESS_REQUESTED)
     prefs(context)
       .edit()
       .putLong(KEY_LAST_NATIVE_WAKE_AT_EPOCH_MS, event.createdAtEpochMs)
@@ -124,6 +192,7 @@ internal object RavenCatCompanionWakeStore {
     context: Context,
     event: RavenCatCompanionWakeEvent,
   ) {
+    recordHeadlessDiagnostic(context, event, AIScheduleDiagnosticStage.HEADLESS_ACCEPTED)
     prefs(context)
       .edit()
       .putLong(KEY_LAST_NATIVE_WAKE_AT_EPOCH_MS, event.createdAtEpochMs)
@@ -141,6 +210,7 @@ internal object RavenCatCompanionWakeStore {
     event: RavenCatCompanionWakeEvent,
     error: String,
   ) {
+    recordHeadlessDiagnostic(context, event, AIScheduleDiagnosticStage.HEADLESS_REJECTED)
     prefs(context)
       .edit()
       .putLong(KEY_LAST_NATIVE_WAKE_AT_EPOCH_MS, event.createdAtEpochMs)
@@ -190,6 +260,10 @@ internal object RavenCatCompanionWakeStore {
     succeeded: Boolean,
     error: String?,
   ) {
+    // 仅保存受控终态码；异常正文可能包含请求信息，不进入可复制的运行诊断。
+    val terminal = error?.takeIf { it.matches(Regex("agent_terminal:[A-Z_]+")) }
+    recordScheduleDiagnostic(context, deliveryEventId, AIScheduleDiagnosticStage.RUNNER_COMPLETED,
+      outcome = terminal ?: if (succeeded) "ACKNOWLEDGED" else "FAILED")
     val prefs = prefs(context)
     // 只有成功结案才允许去重；失败保留系统重投递作为恢复路径（租约过期后由 JS 重试）。
     val recentIds = if (succeeded) {
@@ -225,6 +299,8 @@ internal object RavenCatCompanionWakeStore {
     outcome: String,
     foregroundRunning: Boolean,
   ) {
+    recordScheduleDiagnostic(context, deliveryEventId, AIScheduleDiagnosticStage.HOST_FINISHED,
+      outcome = "$outcome;foregroundRunning=$foregroundRunning")
     prefs(context)
       .edit()
       .putLong(KEY_LAST_EXECUTION_AT_EPOCH_MS, System.currentTimeMillis())
@@ -248,6 +324,7 @@ internal object RavenCatCompanionWakeStore {
    */
   @Synchronized
   fun markExecutionCancellationRequested(context: Context, deliveryEventId: String) {
+    recordScheduleDiagnostic(context, deliveryEventId, AIScheduleDiagnosticStage.CANCELLATION_REQUESTED)
     val prefs = prefs(context)
     val now = System.currentTimeMillis()
     val editor = prefs.edit().putLong(cancellationKey(deliveryEventId), now)

@@ -1,42 +1,25 @@
 /** 应用设置工具的真实 SQLite 权限、引用、CAS、默认读取及视觉交付行为。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import ts from 'typescript';
 import { bootstrapSqlite, createSqliteExecutor, DATABASE_SCHEMA_VERSION } from './helpers/sqlite-bootstrap-fixture.mjs';
 import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-dependencies.mjs';
+import { createCoordinatedSqliteFixture } from './helpers/coordinated-sqlite-fixture.mjs';
+import { loadTypeScriptModule as load } from './helpers/load-typescript-module.mjs';
 
-function load(file, mocks = {}) {
-  const module = { exports: {} };
-  const code = ts.transpileModule(fs.readFileSync(path.resolve(file), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  new Function('require', 'module', 'exports', code)(id => {
-    assert.ok(Object.hasOwn(mocks, id), `${file}: 缺少依赖 ${id}`);
-    return mocks[id];
-  }, module, module.exports);
-  return module.exports;
-}
 const db = new DatabaseSync(':memory:');
 const raw = createSqliteExecutor(db);
 await bootstrapSqlite(raw);
 db.exec('PRAGMA foreign_keys=ON');
-let lane = Promise.resolve(), inTransaction = false;
-function transaction(work) {
-  const next = lane.then(async () => {
-    db.exec('BEGIN IMMEDIATE'); inTransaction = true;
-    try { const value = await work(raw); db.exec('COMMIT'); return value; }
-    catch (error) { db.exec('ROLLBACK'); throw error; }
-    finally { inTransaction = false; }
-  });
-  lane = next.catch(() => {});
-  return next;
-}
-const executor = { ...raw, withExclusiveTransactionAsync: transaction };
-const persistence = { databaseCoordinator: { openTaskExecutor: () => executor,
-  read: (_meta, work) => work(raw), transaction: (_meta, work) => transaction(work) } };
+let inTransaction = false;
+const persistence = createCoordinatedSqliteFixture({ ...raw, async execAsync(sql) {
+  await raw.execAsync(sql);
+  if (sql.startsWith('BEGIN')) inTransaction = true;
+  if (sql.startsWith('COMMIT') || sql.startsWith('ROLLBACK')) inTransaction = false;
+} });
+const executor = persistence.executor;
+const transaction = work => executor.withExclusiveTransactionAsync(work);
+const runState = load('src/platform/agentRuntime/AgentRunState.ts');
 const slot = load('src/shared/runtime/RuntimeSlot.ts');
 const abort = load('src/shared/runtime/abortSignal.ts');
 const conflict = load('src/shared/errors/SettingChangeConflictError.ts');
@@ -154,6 +137,7 @@ const { SQLiteCallBackgroundRepository } = load('src/features/calls/infrastructu
 const calls = load('src/features/calls/application/CallBackgroundSettings.ts', common);
 calls.configureCallBackgroundRuntime(new SQLiteCallBackgroundRepository());
 const fence = load('src/host/composition/agent/assertImageToolRunCurrent.ts', {
+  '@platform/agentRuntime': runState,
   '@shared/runtime/abortSignal': abort,
   '@features/chat': { isChatReplyRunCurrentInTransaction: async () => runCurrent,
     isGroupSpeechTaskRunCurrentInTransaction: async () => runCurrent },
@@ -178,6 +162,7 @@ imageRuntime.configureAIImageRuntime({ view: async input => {
       : [{ type: 'text', text: '原图已提供' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }] };
 }, resolveAvatar: async (target, _actor, selector) => ({ status: 'found', imageUri: 'file:///default-avatar.png', label: `${selector ?? target}的头像` }) });
 const { applicationSettingsTools } = load('src/host/composition/agent/ApplicationSettingsTools.ts', {
+  '@platform/persistence': persistence,
   'react-native': { Dimensions: { get: () => ({ width: 1080, height: 2400 }) } },
   'expo-asset': { Asset: { fromModule: assetId => ({ downloadAsync: async () => ({ localUri: assetId === 2 ? 'file:///default-group.png' : 'file:///default-cover.png' }) }) } },
   '@shared/avatar/avatarRegistry': { getDefaultGroupAvatarAsset: () => 2 },
@@ -192,13 +177,24 @@ const { applicationSettingsTools } = load('src/host/composition/agent/Applicatio
 });
 const tools = new Map(applicationSettingsTools.map(entry => [entry.tool.name, entry.tool]));
 const schemas = load('src/shared/aiTools/AgentToolInputSchema.ts', agentToolSchemaDependencies);
+const { AgentToolExecutor } = load('src/platform/agentRuntime/AgentToolExecutor.ts', {
+  '@shared/aiTools': schemas, './AgentRunState': runState,
+});
+const toolExecutor = new AgentToolExecutor({ get: name => {
+  const tool = tools.get(name);
+  return { descriptor: { name, inputSchema: tool.definition.parameters }, execute: tool.execute };
+} });
 const context = (assistantId = 'a') => ({ task: { assistantId, source: 'chat', type: 'chat_reply' }, runId: 'run', abortSignal: new AbortController().signal });
 const execute = (name, input = {}, actor = 'a') => {
   const tool = tools.get(name);
   assert.ok(schemas.matchesAgentToolInputSchema(input, tool.definition.parameters), `${name} 参数应有效`);
-  return tool.execute(input, typeof actor === 'string' ? context(actor) : actor);
+  const actorContext = typeof actor === 'string' ? context(actor) : actor;
+  const task = { ...actorContext.task, allowedToolNames: [...tools.keys()] };
+  return toolExecutor.execute(toolExecutor.prepare({ id: 'settings-call', name, arguments: JSON.stringify(input) }, task), { ...actorContext, task });
 };
 const now = new Date().toISOString();
+const settingsErrorLogs = [], originalConsoleError = console.error;
+console.error = (...args) => settingsErrorLogs.push(args);
 for (const id of ['a', 'b', 'host']) {
   db.prepare('INSERT INTO ai_assistants (id,agent_id,name,nickname,model,is_host_ai,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
     .run(id, `agent-${id}`, '同名', id === 'b' ? '用户私密备注' : null, 'model', id === 'host' ? 1 : 0, now, now);
@@ -342,7 +338,8 @@ async function duringCrop(name, actor, mutate, expectedCode, input = set) {
   await mutate();
   const committedUpdates = updates.length;
   release();
-  if (expectedCode === 'AbortError') await assert.rejects(pending, { name: 'AbortError' });
+  if (expectedCode === 'SUPERSEDED') await assert.rejects(pending, error => error.code === 'SUPERSEDED');
+  else if (expectedCode === 'AbortError') await assert.rejects(pending);
   else assert.equal((await pending).code, expectedCode);
   pauseCrop = null;
   assert.ok(db.prepare('SELECT COUNT(*) AS count FROM media_assets').get().count <= beforeAssets, '失败不留下无主资产');
@@ -361,12 +358,12 @@ await duringCrop('set_global_background', 'host', async () => db.exec("UPDATE ai
 db.exec("UPDATE ai_assistants SET is_host_ai=1 WHERE id='host'");
 await duringCrop('set_ai_avatar', 'host', async () => db.exec("UPDATE ai_assistants SET is_host_ai=0 WHERE id='host'"), 'SETTING_ACCESS_DENIED', { ...set, agent_id: 'agent-b' });
 db.exec("UPDATE ai_assistants SET is_host_ai=1 WHERE id='host'");
-await duringCrop('set_ai_avatar', 'a', async () => { runCurrent = false; }, 'AbortError');
+await duringCrop('set_ai_avatar', 'a', async () => { runCurrent = false; }, 'SUPERSEDED');
 runCurrent = true;
 const controller = new AbortController();
 await duringCrop('set_chat_background', { ...context(), abortSignal: controller.signal }, async () => controller.abort(), 'AbortError');
 const groupActor = { ...context(), task: { ...context().task, type: 'group_chat_reply' } };
-await duringCrop('set_ai_avatar', groupActor, async () => { runCurrent = false; }, 'AbortError');
+await duringCrop('set_ai_avatar', groupActor, async () => { runCurrent = false; }, 'SUPERSEDED');
 runCurrent = true;
 
 let nameReadStarted, resumeNameRead;
@@ -387,6 +384,19 @@ assert.ok(await mediaRepository.getById(originalId), '原图的下载引用仍�
 assert.equal(files.get('file:///original.png'), 'original-image');
 assert.ok(deleted.length > 0 && ![...files.keys()].some(uri => uri.startsWith('file:///crop-')), '成功和失败均清理裁剪暂存');
 assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+assert.equal(settingsErrorLogs.length, 0, '设置权限、CAS 与失效运行均不触发红色错误日志');
+const nameBeforeStorageFailure = db.prepare("SELECT name FROM ai_assistants WHERE id='a'").get().name;
+db.exec("CREATE TRIGGER reject_setting_name BEFORE UPDATE OF name ON ai_assistants BEGIN SELECT RAISE(ABORT,'setting storage failure'); END;");
+try {
+  const failure = await execute('set_ai_name', { name: '不能保存' });
+  assert.equal(failure.code, 'TOOL_EXECUTION_FAILED');
+  assert.equal(settingsErrorLogs.length, 1);
+  assert.ok(settingsErrorLogs[0][1].error instanceof persistence.CoordinatedDatabaseError);
+  assert.equal(db.prepare("SELECT name FROM ai_assistants WHERE id='a'").get().name, nameBeforeStorageFailure);
+} finally {
+  db.exec('DROP TRIGGER reject_setting_name');
+  console.error = originalConsoleError;
+}
 db.close();
 
 // 还原 127 的昵称审计表与旧工具身份，验证升级保留权限、特批及已展开的包。

@@ -1,6 +1,7 @@
 /** 原生资源桥；页面地址由 Host 提供，Calls 不持有 App 路由。 */
 import { nativeCallRuntime } from '../../../../modules/call-runtime';
 import type { CallRuntimeDependencies } from '../application/runtime/CallRuntimeDependencies';
+import { loadCallRingtoneUri } from '../application/CallRingtoneSettings';
 
 export function createCallExecutionAdapter(
   returnUri: (callId: string) => string,
@@ -12,6 +13,8 @@ export function createCallExecutionAdapter(
       await nativeCallRuntime.start({
         callId: call.id, name: caller.name, avatarUri: caller.avatar, direction: call.direction,
         returnUri: returnUri(call.id),
+        ringtoneUri: call.state === 'dialing' ? await loadCallRingtoneUri(call.aiAssistantId, 'outgoing') : null,
+        ringing: call.state === 'dialing',
       });
     },
     isAlive: (id) => nativeCallRuntime.isAlive(id),

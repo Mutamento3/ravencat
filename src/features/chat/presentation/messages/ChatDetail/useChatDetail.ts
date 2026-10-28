@@ -72,6 +72,7 @@ export function useChatDetail(
     setError,
     loadMore,
     refresh,
+    resetHistory,
     lastMessageIdRef,
   } = useMessageHistoryState(sessionId);
 
@@ -83,6 +84,7 @@ export function useChatDetail(
     setIsTyping,
     setMessages,
     lastMessageIdRef,
+    resetHistory,
   });
 
   // 消息发送流程：发送新消息、重试失败消息

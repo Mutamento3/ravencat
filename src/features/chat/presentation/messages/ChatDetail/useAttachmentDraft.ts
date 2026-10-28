@@ -19,7 +19,7 @@ import {
   captureChatPhotoFromDevice,
   persistDeviceMedia,
   pickChatDocumentFromDevice,
-  pickChatImageFromDevice,
+  pickChatImagesFromDevice,
 } from '@platform/device/DeviceMediaService';
 
 function buildReadyAttachment(draft: AttachmentDraftItem): ChatAttachment | null {
@@ -80,6 +80,7 @@ function buildInitialDraft(params: {
 }
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'bmp'];
+const MAX_CHAT_IMAGE_SELECTION = 9;
 
 function isImageFile(fileName: string, mimeType?: string | null): boolean {
   if (mimeType?.startsWith('image/')) {
@@ -90,9 +91,9 @@ function isImageFile(fileName: string, mimeType?: string | null): boolean {
 }
 
 export function useAttachmentDraft() {
-  const [draftAttachment, setDraftAttachment] = useState<AttachmentDraftItem | null>(null);
+  const [draftAttachments, setDraftAttachments] = useState<AttachmentDraftItem[]>([]);
   const operationIdRef = useRef(0);
-  const draftRef = useRef<AttachmentDraftItem | null>(null);
+  const draftRef = useRef<AttachmentDraftItem[]>([]);
   const draftLeases = useRef(new Map<string, () => void>());
 
   const releaseDraft = useCallback((draft: AttachmentDraftItem | null) => {
@@ -103,27 +104,34 @@ export function useAttachmentDraft() {
 
   const clearAttachment = useCallback(() => {
     operationIdRef.current += 1;
-    releaseDraft(draftRef.current);
-    draftRef.current = null;
-    setDraftAttachment(null);
+    draftRef.current.forEach(releaseDraft);
+    draftRef.current = [];
+    setDraftAttachments(draftRef.current);
   }, [releaseDraft]);
 
   useEffect(() => () => {
     operationIdRef.current += 1;
-    releaseDraft(draftRef.current);
-    draftRef.current = null;
+    draftRef.current.forEach(releaseDraft);
+    draftRef.current = [];
   }, [releaseDraft]);
 
-  const setDraftIfLatest = useCallback((operationId: number, updater: AttachmentDraftItem | null) => {
-    if (operationIdRef.current !== operationId) {
+  const removeAttachment = useCallback((id: string) => {
+    releaseDraft(draftRef.current.find((draft) => draft.id === id) ?? null);
+    draftRef.current = draftRef.current.filter((draft) => draft.id !== id);
+    setDraftAttachments(draftRef.current);
+  }, [releaseDraft]);
+
+  const setDraftIfLatest = useCallback((operationId: number, updater: AttachmentDraftItem) => {
+    // 单张移除不取消同批其他图片；晚到的文件仍由原草稿负责释放。
+    if (operationIdRef.current !== operationId || !draftRef.current.some((draft) => draft.id === updater.id)) {
       releaseDraft(updater);
       return;
     }
-    draftRef.current = updater;
-    setDraftAttachment(updater);
+    draftRef.current = draftRef.current.map((draft) => draft.id === updater.id ? updater : draft);
+    setDraftAttachments(draftRef.current);
   }, [releaseDraft]);
 
-  const prepareAttachment = useCallback(async (params: {
+  const prepareAttachments = useCallback(async (items: {
     type: ChatAttachmentType;
     source: ChatAttachmentSource;
     originalUri: string;
@@ -132,130 +140,126 @@ export function useAttachmentDraft() {
     fileSize?: number | null;
     width?: number | null;
     height?: number | null;
-  }) => {
-    if (params.type === 'file') {
-      assertChatAttachmentFileSupported({
-        fileName: params.fileName,
-      });
+  }[]) => {
+    for (const params of items) {
+      if (params.type === 'file') {
+        assertChatAttachmentFileSupported({
+          fileName: params.fileName,
+        });
+      }
     }
-
-    const draftId = createAttachmentDraftId(params.type === 'image' ? 'img' : 'file');
     const operationId = operationIdRef.current + 1;
     operationIdRef.current = operationId;
-    releaseDraft(draftRef.current);
+    draftRef.current.forEach(releaseDraft);
+    const initialDrafts = items.map((params) => buildInitialDraft({
+      ...params,
+      id: createAttachmentDraftId(params.type === 'image' ? 'img' : 'file'),
+    }));
+    draftRef.current = initialDrafts;
+    setDraftAttachments(initialDrafts);
 
-    const initialDraft = buildInitialDraft({
-      id: draftId,
-      type: params.type,
-      source: params.source,
-      originalUri: params.originalUri,
-      fileName: params.fileName,
-      mimeType: params.mimeType,
-      fileSize: params.fileSize,
-      width: params.width,
-      height: params.height,
-    });
-    setDraftAttachment(initialDraft);
-    draftRef.current = initialDraft;
+    const results = await Promise.allSettled(initialDrafts.map(async (initialDraft) => {
+      const params = initialDraft;
+      let persistedUri: string | null = null;
 
-    let persistedUri: string | null = null;
+      try {
+        setDraftIfLatest(operationId, {
+          ...initialDraft,
+          status: 'persisting',
+        });
 
-    try {
-      setDraftIfLatest(operationId, {
-        ...initialDraft,
-        status: 'persisting',
-      });
+        const localUri = await persistDeviceMedia({
+          sourceUri: params.originalUri,
+          category:
+            params.type === 'image'
+              ? PERSISTENT_MEDIA_CATEGORY.chatImage
+              : PERSISTENT_MEDIA_CATEGORY.chatFile,
+          entityId: initialDraft.id,
+          originalFileName: params.fileName,
+          mimeType: params.mimeType,
+        });
+        persistedUri = localUri;
+        draftLeases.current.set(localUri, ownChatAttachmentDraftFile(localUri));
+        if (operationIdRef.current !== operationId || !draftRef.current.some((draft) => draft.id === initialDraft.id)) {
+          releaseDraft({ ...initialDraft, localUri });
+          return;
+        }
 
-      const localUri = await persistDeviceMedia({
-        sourceUri: params.originalUri,
-        category:
-          params.type === 'image'
-            ? PERSISTENT_MEDIA_CATEGORY.chatImage
-            : PERSISTENT_MEDIA_CATEGORY.chatFile,
-        entityId: draftId,
-        originalFileName: params.fileName,
-        mimeType: params.mimeType,
-      });
-      persistedUri = localUri;
-      draftLeases.current.set(localUri, ownChatAttachmentDraftFile(localUri));
-      if (operationIdRef.current !== operationId) {
-        releaseDraft({ ...initialDraft, localUri });
-        return;
-      }
+        if (params.type === 'image') {
+          setDraftIfLatest(operationId, {
+            ...initialDraft,
+            localUri,
+            thumbnailUri: localUri,
+            status: 'ready',
+            parseStatus: 'skipped',
+          });
+          return;
+        }
 
-      if (params.type === 'image') {
         setDraftIfLatest(operationId, {
           ...initialDraft,
           localUri,
-          thumbnailUri: localUri,
-          status: 'ready',
-          parseStatus: 'skipped',
+          status: 'parsing',
+          parseStatus: 'parsing',
         });
-        return;
-      }
 
-      setDraftIfLatest(operationId, {
-        ...initialDraft,
-        localUri,
-        status: 'parsing',
-        parseStatus: 'parsing',
-      });
+        const parseResult = await attachmentParser.parseFile({
+          localUri,
+          fileName: params.fileName,
+          mimeType: params.mimeType,
+        });
 
-      const parseResult = await attachmentParser.parseFile({
-        localUri,
-        fileName: params.fileName,
-        mimeType: params.mimeType,
-      });
+        if (parseResult.parseStatus !== 'success') {
+          throw new Error(
+            parseResult.parseError
+              ? `文件解析失败，无法发送：${parseResult.parseError}`
+              : '文件无法解析，无法发送'
+          );
+        }
 
-      if (parseResult.parseStatus !== 'success') {
-        throw new Error(
-          parseResult.parseError
-            ? `文件解析失败，无法发送：${parseResult.parseError}`
-            : '文件无法解析，无法发送'
-        );
-      }
-
-      setDraftIfLatest(operationId, {
-        ...initialDraft,
-        localUri,
-        status: 'ready',
-        parseStatus: parseResult.parseStatus,
-        parsedText: parseResult.parsedText,
-        parseError: parseResult.parseError,
-        parserName: parseResult.parserName,
-        previewText: parseResult.previewText,
-      });
-    } catch (error) {
-      if (operationIdRef.current !== operationId) {
+        setDraftIfLatest(operationId, {
+          ...initialDraft,
+          localUri,
+          status: 'ready',
+          parseStatus: parseResult.parseStatus,
+          parsedText: parseResult.parsedText,
+          parseError: parseResult.parseError,
+          parserName: parseResult.parserName,
+          previewText: parseResult.previewText,
+        });
+      } catch (error) {
         releaseDraft({ ...initialDraft, localUri: persistedUri });
-        return;
-      }
-      const message = error instanceof Error ? error.message : '附件处理失败';
+        if (operationIdRef.current !== operationId || !draftRef.current.some((draft) => draft.id === initialDraft.id)) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : '附件处理失败';
 
-      if (params.type === 'file') {
-        setDraftIfLatest(operationId, null);
-        releaseDraft({ ...initialDraft, localUri: persistedUri });
+        if (params.type === 'file') {
+          removeAttachment(initialDraft.id);
+          throw error;
+        }
+
+        setDraftIfLatest(operationId, {
+          ...initialDraft,
+          status: 'failed',
+          parseStatus: 'skipped',
+          errorMessage: message,
+          parseError: null,
+        });
         throw error;
       }
-
-      setDraftIfLatest(operationId, {
-        ...initialDraft,
-        status: 'failed',
-        parseStatus: 'skipped',
-        errorMessage: message,
-        parseError: null,
-      });
-      throw error;
-    }
-  }, [releaseDraft, setDraftIfLatest]);
+    }));
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure) throw failure.reason;
+  }, [releaseDraft, removeAttachment, setDraftIfLatest]);
 
   const selectImageAttachment = useCallback(async () => {
-    const image = await pickChatImageFromDevice();
-    if (!image) {
+    const images = await pickChatImagesFromDevice(MAX_CHAT_IMAGE_SELECTION);
+    if (!images) {
       return false;
     }
 
-    await prepareAttachment({
+    await prepareAttachments(images.map((image) => ({
       type: 'image',
       source: image.source,
       originalUri: image.uri,
@@ -264,9 +268,9 @@ export function useAttachmentDraft() {
       fileSize: image.fileSize,
       width: image.width,
       height: image.height,
-    });
+    })));
     return true;
-  }, [prepareAttachment]);
+  }, [prepareAttachments]);
 
   const capturePhotoAttachment = useCallback(async () => {
     const photo = await captureChatPhotoFromDevice();
@@ -274,7 +278,7 @@ export function useAttachmentDraft() {
       return false;
     }
 
-    await prepareAttachment({
+    await prepareAttachments([{
       type: 'image',
       source: photo.source,
       originalUri: photo.uri,
@@ -283,9 +287,9 @@ export function useAttachmentDraft() {
       fileSize: photo.fileSize,
       width: photo.width,
       height: photo.height,
-    });
+    }]);
     return true;
-  }, [prepareAttachment]);
+  }, [prepareAttachments]);
 
   // 常见图片文件后缀（用于文件选择器选择的图片识别）
   const selectDocumentAttachment = useCallback(async () => {
@@ -298,31 +302,30 @@ export function useAttachmentDraft() {
     const shouldTreatAsImage = isImageFile(document.fileName, document.mimeType);
 
     if (shouldTreatAsImage) {
-      await prepareAttachment({
+      await prepareAttachments([{
         type: 'image',
         source: document.source,
         originalUri: document.uri,
         fileName: document.fileName,
         mimeType: document.mimeType,
         fileSize: document.fileSize,
-      });
+      }]);
     } else {
-      await prepareAttachment({
+      await prepareAttachments([{
         type: 'file',
         source: document.source,
         originalUri: document.uri,
         fileName: document.fileName,
         mimeType: document.mimeType,
         fileSize: document.fileSize,
-      });
+      }]);
     }
     return true;
-  }, [prepareAttachment]);
+  }, [prepareAttachments]);
 
   const readyAttachments = useMemo(() => {
-    const readyAttachment = draftAttachment ? buildReadyAttachment(draftAttachment) : null;
-    return readyAttachment ? [readyAttachment] : [];
-  }, [draftAttachment]);
+    return draftAttachments.map(buildReadyAttachment).filter((attachment): attachment is ChatAttachment => attachment !== null);
+  }, [draftAttachments]);
 
   /** 发送持有源文件至结束；失败乐观气泡的重试持有由 send flow 独立负责。 */
   const withAttachmentSubmission = useCallback(async <T,>(
@@ -330,11 +333,13 @@ export function useAttachmentDraft() {
     shouldClearDraft: (result: T) => boolean,
   ): Promise<T> => {
     const draft = draftRef.current;
-    const attachment = draft ? buildReadyAttachment(draft) : null;
-    const releaseSubmission = retainChatAttachmentDraftFiles(attachment ? [attachment] : []);
+    const operationId = operationIdRef.current;
+    const attachments = draft.map(buildReadyAttachment).filter((attachment): attachment is ChatAttachment => attachment !== null);
+    const releaseSubmission = retainChatAttachmentDraftFiles(attachments);
     try {
-      const result = await submit(attachment ? [attachment] : []);
-      if (shouldClearDraft(result) && draftRef.current === draft) clearAttachment();
+      const result = await submit(attachments);
+      // 发送途中移除单张仍属于同批；重新选择的下一批不能被旧提交清空。
+      if (shouldClearDraft(result) && operationIdRef.current === operationId) clearAttachment();
       return result;
     } finally {
       releaseSubmission();
@@ -342,20 +347,18 @@ export function useAttachmentDraft() {
   }, [clearAttachment]);
 
   return {
-    draftAttachment,
+    draftAttachments,
     readyAttachments,
     withAttachmentSubmission,
-    hasAttachment: Boolean(draftAttachment),
-    hasFailedAttachment: draftAttachment?.status === 'failed',
-    isPreparingAttachment:
-      draftAttachment?.status === 'preparing' ||
-      draftAttachment?.status === 'persisting' ||
-      draftAttachment?.status === 'parsing',
+    hasAttachment: draftAttachments.length > 0,
+    hasFailedAttachment: draftAttachments.some((draft) => draft.status === 'failed'),
+    isPreparingAttachment: draftAttachments.some((draft) =>
+      draft.status === 'preparing' || draft.status === 'persisting' || draft.status === 'parsing'),
     selectImageAttachment,
     capturePhotoAttachment,
     selectDocumentAttachment,
     clearAttachment,
-    removeAttachment: clearAttachment,
+    removeAttachment,
   };
 }
 

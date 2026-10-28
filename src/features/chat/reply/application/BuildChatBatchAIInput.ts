@@ -22,6 +22,7 @@ import {
 } from '@features/chat/messages/domain';
 import { buildStickerModelText } from '../../messages/domain/ChatSticker';
 import { resolveChatImageModelInput } from './ResolveChatImageModelInput';
+import { getChatReplyRuntimeDependencies } from './ChatReplyRuntimeDependencies';
 import { buildSharedChatRecordText, sharedRecordAuthorLabel } from '../../messages/domain/SharedChatRecord';
 import { mediaImageFailure } from '@features/media';
 
@@ -73,6 +74,7 @@ async function appendAttachmentParts(
     const imageName = attachment.fileName || '未命名图片';
     // 素材身份不依赖读取成功；失败提示仍允许模型引用同一张图片。
     const contextText = `${authorLabel}发送了一张图片：${imageName}${attachment.mediaAssetId ? `；mediaAssetId=${attachment.mediaAssetId}` : ''}`;
+    let directVision = false;
 
     try {
       const commonInput = {
@@ -85,6 +87,7 @@ async function appendAttachmentParts(
           : { ...commonInput, imageUri: attachment.localUri },
       );
       parts.push(...imageInput.parts);
+      directVision = imageInput.route === 'direct_vision';
     } catch (error) {
       const failure = mediaImageFailure(error);
       if (!failure) throw error;
@@ -93,6 +96,11 @@ async function appendAttachmentParts(
         error
       );
       parts.push({ type: 'text', text: buildImageFallbackPrompt(contextText, failure.modelContent) });
+    }
+
+    if (directVision) {
+      const reminder = await getChatReplyRuntimeDependencies().prompt.readImageGroundingReminder(assistantId);
+      if (reminder !== null) parts.push({ type: 'text', text: reminder });
     }
 
     if (messageText) {

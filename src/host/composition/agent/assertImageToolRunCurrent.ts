@@ -1,4 +1,5 @@
 import type { DatabaseTransactionExecutor } from '@platform/persistence';
+import { AgentRuntimeTerminalError } from '@platform/agentRuntime';
 import type { AgentToolExecutionContext } from '@shared/aiTools';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { isChatReplyRunCurrentInTransaction, isGroupSpeechTaskRunCurrentInTransaction } from '@features/chat';
@@ -7,10 +8,10 @@ import { isChatReplyRunCurrentInTransaction, isGroupSpeechTaskRunCurrentInTransa
 export async function assertImageToolRunCurrent(transaction: DatabaseTransactionExecutor, context: AgentToolExecutionContext): Promise<void> {
   throwIfAbortSignalAborted(context.abortSignal);
   if (context.task.type === 'group_chat_reply') {
-    if (!await isGroupSpeechTaskRunCurrentInTransaction(transaction, context.runId)) throw new DOMException('群发言任务已结束', 'AbortError');
+    if (!await isGroupSpeechTaskRunCurrentInTransaction(transaction, context.runId)) throw new AgentRuntimeTerminalError('SUPERSEDED');
     return;
   }
   if (context.task.source === 'chat' && !await isChatReplyRunCurrentInTransaction(transaction, context.runId)) {
-    throw new DOMException('本轮已被新消息打断', 'AbortError');
+    throw new AgentRuntimeTerminalError('SUPERSEDED');
   }
 }

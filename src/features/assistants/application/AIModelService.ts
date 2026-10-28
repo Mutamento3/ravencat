@@ -78,7 +78,7 @@ export async function fetchModelsWithConfig({
       skipped: false,
       models: [],
       error,
-      errorInfo: getErrorDisplayInfo(error as Error | string) as ErrorDisplayInfo,
+      errorInfo: getErrorDisplayInfo(error as Error | string, { includeDetails: true }) as ErrorDisplayInfo,
     };
   }
 }
@@ -128,7 +128,7 @@ export async function runConnectionTestByConfig({
       success: false,
       result: result as ConnectionTestResult,
       rawError: result.error,
-      errorInfo: getErrorDisplayInfo(result.error || '') as ErrorDisplayInfo,
+      errorInfo: getErrorDisplayInfo(result.error || '', { includeDetails: true }) as ErrorDisplayInfo,
     };
   } catch (error) {
     const rawError = error instanceof Error ? error.message : String(error || '');
@@ -138,7 +138,7 @@ export async function runConnectionTestByConfig({
       success: false,
       error,
       rawError,
-      errorInfo: getErrorDisplayInfo(error as Error | string) as ErrorDisplayInfo,
+      errorInfo: getErrorDisplayInfo(error as Error | string, { includeDetails: true }) as ErrorDisplayInfo,
     };
   }
 }
@@ -148,5 +148,5 @@ export function detectConnectionParamError(message: string): ParamErrorInfo {
 }
 
 export function getAIConnectionErrorInfo(error: Error | string): ErrorDisplayInfo {
-  return getErrorDisplayInfo(error) as ErrorDisplayInfo;
+  return getErrorDisplayInfo(error, { includeDetails: true }) as ErrorDisplayInfo;
 }

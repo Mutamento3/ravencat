@@ -9,8 +9,13 @@ export const listCallHistory = (assistantId: string) => repository().listHistory
 export async function getCallHistory(callId: string, assistantId: string) {
   const record = await repository().getHistory(callId, assistantId);
   if (!record) throw new Error('通话记录不存在或已删除');
-  const [entries, images] = await Promise.all([repository().listHistoryEntries(callId), repository().listHistoryImages(callId)]);
-  return { record, entries, images };
+  const [entries, images, events] = await Promise.all([
+    repository().listHistoryEntries(callId), repository().listHistoryImages(callId),
+    repository().listEvents({ callId, limit: 200 }),
+  ]);
+  const errors = events.flatMap(event => event.kind === 'error' && event.text
+    ? [{ id: event.id, createdAt: event.createdAt, text: event.text }] : []);
+  return { record, entries, images, errors };
 }
 
 export async function renameCallHistory(callId: string, assistantId: string, value: string): Promise<void> {

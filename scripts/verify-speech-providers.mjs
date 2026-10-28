@@ -149,7 +149,7 @@ try {
     }
   } finally { globalThis.fetch = beforeFishErrors; }
 
-  // 控制标记留在提供方输入，canonical 转写只包含正文；不把错误语法降级成朗读文本。
+  // 支持的控制标记留在提供方输入，canonical 转写只包含正文。
   const textCases = [
     ['minimaxT2aV2', 'speech-2.8-hd', '嗯，(laughs)<#0.5#>我在听。', '嗯， 我在听。'],
     ['minimaxT2aV2', 'speech-2.6-turbo', 'Hello<#0.25#>world.', 'Hello world.'],
@@ -204,8 +204,8 @@ try {
       assert.match(guidance, /\[whispering\]/);
       assert.match(guidance, /\[break\]/);
       assert.match(guidance, /\[long-break\]/);
-      assert.throws(() => speechText.prepareSpeechText('(happy)你好', provider, model));
-      assert.throws(() => speechText.prepareSpeechText('<whisper>你好</whisper>', provider, model));
+      assert.deepEqual(speechText.prepareSpeechText('(happy)你好', provider, model), { synthesisText: '你好', transcript: '你好' });
+      assert.deepEqual(speechText.prepareSpeechText('<whisper>你好</whisper>', provider, model), { synthesisText: '你好', transcript: '你好' });
     }
   }
   for (const [provider, model] of [
@@ -214,25 +214,46 @@ try {
     ['fishAudio', 's1'], ['fishAudio', 'future-model'], ['openaiCompatible', 'fish-audio/s2.1-pro-free'],
   ]) {
     for (const tag of ['[whispers]', '［whispers］', '【轻声】'])
-      assert.throws(() => speechText.prepareSpeechText(`${tag}你好`, provider, model));
+      assert.deepEqual(speechText.prepareSpeechText(`${tag}你好`, provider, model), { synthesisText: '你好', transcript: '你好' });
     const text = '嗯……啊，唔！别急——我在。  Really? 好的；继续：听着、慢慢说。';
     assert.deepEqual(speechText.prepareSpeechText(text, provider, model), { synthesisText: text, transcript: text });
   }
+  // 跨厂商或未知模型的完整标记只移除控制本身，正文仍进入真实合成请求。
+  for (const [provider, model, text, plainText] of [
+    ['minimaxT2aV2', 'speech-2.6-hd', '(laughs) 你好', '你好'],
+    ['elevenlabs', 'eleven_v4', '你好<break time="0.5s" />呀', '你好 呀'],
+    ['openrouter', 'mistralai/voxtral-mini-tts-2603', '你好<#0.5#>呀', '你好 呀'],
+    ['openai', 'tts-1', '【轻声】你好，(laughs)我在。<break time="0.5s" />继续吧。', '你好， 我在。 继续吧。'],
+    ['openaiCompatible', 'custom-model', '<speak><prosody rate="slow">Hello</prosody> [warmly]world!</speak>', 'Hello world!'],
+    ['fishAudio', 's1', '［whispering］嗯，我在。(happy)你说吧。', '嗯，我在。 你说吧。'],
+  ]) {
+    const prepared = speechText.prepareSpeechText(text, provider, model);
+    assert.deepEqual(prepared, { synthesisText: plainText, transcript: plainText });
+    await gateway.synthesizeSpeechAudio({ baseURL: catalog.getSpeechProvider(provider).baseURL || 'https://custom.example/v1', apiKey: 'key', model }, { provider, voiceId: 'voice' }, prepared.synthesisText, {});
+    assert.equal(requests.at(-1).body.text ?? requests.at(-1).body.input, plainText);
+  }
+  assert.deepEqual(speechText.prepareSpeechText('[whispers]你好(laughs)，我在。', 'elevenlabs', 'eleven_v4'), {
+    synthesisText: '[whispers]你好，我在。', transcript: '你好，我在。',
+  });
+  assert.deepEqual(speechText.prepareSpeechText('[happy]你好(laughs)<#0.5#>呀', 'minimaxT2aV2', 'speech-2.8-hd'), {
+    synthesisText: '你好(laughs)<#0.5#>呀', transcript: '你好 呀',
+  });
   for (const [provider, model, text] of [
-    ['minimaxT2aV2', 'speech-2.6-hd', '(laughs) 你好'],
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0#>呀'],
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#100#>呀'],
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0.001#>呀'],
     ['minimaxT2aV2', 'speech-2.8-hd', '<#0.5#>你好'],
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0.5#>'],
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0.5#>(sighs)<#0.5#>呀'],
-    ['elevenlabs', 'eleven_v4', '你好<break time="0.5s" />呀'],
-    ['elevenlabs', 'eleven_multilingual_v2', '[laughs] 你好'],
     ['elevenlabs', 'eleven_flash_v2_5', '你好<break time="3.1s" />呀'],
-    ['openai', 'tts-1', '[whispers] 你好'],
-    ['openrouter', 'mistralai/voxtral-mini-tts-2603', '你好<#0.5#>呀'],
-    ['openaiCompatible', 'gpt-4o-mini-tts', '[laughs] 你好'],
-    ['elevenlabs', 'future-model', '[laughs] 你好'],
+    ['minimaxT2aV2', 'speech-2.8-hd', '[happy]<#0.5#>你好'],
+    ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0.5#>[happy]'],
+    ['openaiCompatible', 'custom-model', '[laughs]'],
+    ['openai', 'tts-1', '<whisper></whisper>'],
+    ['fishAudio', 's1', '(happy)'],
+    ['openai', 'tts-1', '你好[whispers'],
+    ['openai', 'tts-1', '(happy）你好'],
+    ['openai', 'tts-1', '(soft[laughs])你好'],
     ['elevenlabs', 'eleven_v4', '[laughs]'],
     ['elevenlabs', 'eleven_v4', '你好[short pause'],
     ['minimaxT2aV2', 'speech-2.8-hd', '你好<#0.5'],
@@ -345,13 +366,29 @@ try {
   const normalizedVoice = await configuredTool.execute({ text: '【speaking softly】嗯，我在。［short pause］你说吧。' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'normalized-expression' });
   assert.equal(normalizedVoice.data.transcript, '嗯，我在。 你说吧。');
   assert.equal(synthesized.at(-1).text, '[speaking softly]嗯，我在。[short pause]你说吧。');
+  const unsupportedTagVoice = await configuredTool.execute({ text: '你好<break time="0.5s" />呀' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'unsupported-tag' });
+  assert.equal(unsupportedTagVoice.status, 'success');
+  assert.equal(unsupportedTagVoice.data.transcript, '你好 呀');
+  assert.equal(synthesized.at(-1).text, '你好 呀');
   const synthesisCount = synthesized.length;
-  const invalidText = await configuredTool.execute({ text: '你好<break time="0.5s" />呀' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'invalid' });
+  const invalidText = await configuredTool.execute({ text: '你好[whispers' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'invalid' });
   assert.equal(invalidText.code, 'VOICE_TEXT_INVALID');
   assert.equal(synthesized.length, synthesisCount);
   const tagOnlyVoice = await configuredTool.execute({ text: '【laughs】' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'tag-only' });
   assert.equal(tagOnlyVoice.code, 'VOICE_TEXT_INVALID');
   assert.equal(synthesized.length, synthesisCount);
+
+  selectedVoice = { ...directoryConfig, model: 'tts-1', modelConfigId: 'plain-tool', metadataJson: '{"provider":"openai"}' };
+  const plainTool = await voiceTool.createConfiguredVoiceMessageTool('assistant');
+  const plainVoice = await plainTool.execute({ text: '【轻声】我在。(laughs)你说吧。' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'plain-voice' });
+  assert.equal(plainVoice.status, 'success');
+  assert.equal(plainVoice.data.transcript, '我在。 你说吧。');
+  assert.equal(synthesized.at(-1).text, '我在。 你说吧。');
+  assert.equal(synthesized.at(-1).modelSnapshot.modelConfigId, 'plain-tool');
+  const beforeEmptyVoice = synthesized.length;
+  const emptyPlainVoice = await plainTool.execute({ text: '[whispers](laughs)' }, { task: { assistantId: 'assistant' }, abortSignal: new AbortController().signal, toolCallId: 'empty-plain-voice' });
+  assert.equal(emptyPlainVoice.code, 'VOICE_TEXT_INVALID');
+  assert.equal(synthesized.length, beforeEmptyVoice);
 
   // 默认 Fish 配置向聊天 AI 声明自己的示例，合成保留标签，消息事实只保存可朗读正文。
   selectedVoice = { ...directoryConfig, model: 's2.1-pro-free', modelConfigId: 'fish-tool', metadataJson: '{"provider":"fishAudio","voiceId":"fish-voice"}' };
@@ -377,12 +414,29 @@ try {
     const stream = callStreams.createCallSpeechSentenceStream(assert.fail, { ...directoryConfig, model: 'eleven_v4' });
     assert.throws(() => { for (const chunk of text) stream.push(chunk); stream.flush(); }, undefined, text);
   }
-  // 相似或不完整的标记仍交给既有 Speech 边界报错，不能被修补成挂断。
+  // 相似或不完整的标记仍交给既有 Speech 语法边界报错，不能被修补成挂断。
   for (const text of ['晚安。[[END_CALL]', '晚安。[[END_CALLS]]', '晚安。[END_CALL]']) {
     const stream = callStreams.createCallSpeechSentenceStream(() => {}, null);
     assert.throws(() => { for (const chunk of text) stream.push(chunk); stream.flush(); });
     assert.equal(stream.shouldEndCall(), false);
   }
+  // 不支持标签的通话模型在任意分片下都朗读正文，字幕与合成输入不泄漏控制标签。
+  const plainSnapshot = { ...directoryConfig, model: 'tts-1', metadataJson: '{"provider":"openai"}' };
+  const unsupportedCallText = '【轻声】我在。<#0.5#><whisper>你说吧。</whisper>晚安。[[END_CALL]]';
+  const readPlainCall = (chunks) => {
+    const spoken = [];
+    const stream = callStreams.createCallSpeechSentenceStream((transcript, speech) => spoken.push({ transcript, text: speech.synthesisText }), plainSnapshot);
+    for (const chunk of chunks) stream.push(chunk);
+    stream.flush();
+    assert.equal(stream.shouldEndCall(), true);
+    assert.deepEqual(stream.getSentences(), spoken.map(({ transcript }) => transcript));
+    return spoken;
+  };
+  const plainCallExpected = [{ transcript: '我在。 你说吧。', text: '我在。 你说吧。' }, { transcript: '晚安。', text: '晚安。' }];
+  assert.deepEqual(readPlainCall([unsupportedCallText]), plainCallExpected);
+  assert.deepEqual(readPlainCall([...unsupportedCallText]), plainCallExpected);
+  for (let split = 1; split < unsupportedCallText.length; split++)
+    assert.deepEqual(readPlainCall([unsupportedCallText.slice(0, split), unsupportedCallText.slice(split)]), plainCallExpected);
   const formattedCallSentences = [];
   const formattedCallStream = callStreams.createCallSpeechSentenceStream((transcript, speech) => formattedCallSentences.push({ transcript, text: speech.synthesisText }), { ...directoryConfig, model: 'eleven_v4' });
   formattedCallStream.push('【轻声】嗯，🙂我\n在。你说吧。');

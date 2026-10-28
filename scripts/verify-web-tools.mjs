@@ -25,18 +25,21 @@ const calls = [];
 let nativeResult = { ok: true, data: { items: [{ title: '资料', url: 'https://example.com', snippet: '摘要' }] } };
 let pending;
 let searchStarted;
+let imageStarted;
 const native = {
-  createRequest: () => 'request-1',
+  createRequest: mode => { connectionModes.push(mode); return 'request-1'; },
   cancelRequest: (id) => calls.push(['cancel', id]),
   search: async (...args) => { calls.push(['search', ...args]); searchStarted?.(); return pending ?? nativeResult; },
   readPage: async (...args) => { calls.push(['read', ...args]); return nativeResult; },
   download: async (...args) => { calls.push(['download', ...args]); return nativeResult; },
-  downloadImage: async (...args) => { calls.push(['image', ...args]); return pending ?? nativeResult; },
+  downloadImage: async (...args) => { calls.push(['image', ...args]); imageStarted?.(); return pending ?? nativeResult; },
 };
+const connectionModes = [];
 const web = load('src/platform/web/WebTools.ts', {
   expo: { requireNativeModule: () => native },
   'expo-file-system': { File: class { constructor(uri) { this.uri = uri; } delete() { calls.push(['delete-temp', this.uri]); } } },
   '@shared/runtime/abortSignal': load('src/shared/runtime/abortSignal.ts'),
+  '@shared/runtime/RuntimeSlot': load('src/shared/runtime/RuntimeSlot.ts'),
 });
 const searchDomain = load('src/features/webTools/domain/SearchSettings.ts');
 const database = new DatabaseSync(':memory:');
@@ -76,6 +79,10 @@ let credentialSequence = 0;
 const searchRuntime = { settings: sqliteSearchSettingsRepository,
   credentials: { save: async key => { const ref = `key-${credentialSequence++}`; credentials.set(ref, key); return ref; },
   read: async ref => credentials.get(ref) ?? null, delete: async ref => { credentials.delete(ref); } } };
+const runtime = load('src/features/webTools/application/WebToolsRuntime.ts', {
+  '@shared/runtime/RuntimeSlot': load('src/shared/runtime/RuntimeSlot.ts'), '@platform/web': web,
+});
+runtime.configureWebToolsRuntime(searchRuntime);
 const searchConfiguration = load('src/features/webTools/application/SearchConfiguration.ts', {
   '@platform/web': web, '@shared/runtime/abortSignal': load('src/shared/runtime/abortSignal.ts'),
   '../domain/SearchSettings': searchDomain, './WebToolsRuntime': { getWebToolsRuntime: () => searchRuntime },
@@ -93,7 +100,9 @@ const { MoonshotToolsClient } = load('src/platform/ai/MoonshotToolsClient.ts', {
 const kimiTools = load('src/features/webTools/application/KimiOfficialTools.ts', { '@platform/ai': { MoonshotToolsClient } });
 const tools = { ...load('src/features/webTools/application/WebAgentTools.ts', { '@platform/web': web, './SearchConfiguration': searchConfiguration }), ...kimiTools };
 const { AgentToolRegistry } = load('src/platform/agentRuntime/AgentToolRegistry.ts');
-const { AgentToolExecutor } = load('src/platform/agentRuntime/AgentToolExecutor.ts', { '@shared/aiTools': schema });
+const { AgentToolExecutor } = load('src/platform/agentRuntime/AgentToolExecutor.ts', {
+  '@shared/aiTools': schema, './AgentRunState': load('src/platform/agentRuntime/AgentRunState.ts'),
+});
 const placeholder = (name) => ({ name, definition: { name, description: name, parameters: { type: 'object' } }, execute: async () => ({ success: true }) });
 const proxy = new Proxy({}, { get: (_, name) => placeholder(String(name)) });
 let defaults = {};
@@ -107,8 +116,13 @@ const registration = load('src/host/composition/agent/createAgentToolRegistry.ts
   './ApplicationSettingsTools': { applicationSettingsTools: [] },
   './GroupManagementTools': { groupManagementTools: [] },
   ...Object.fromEntries(featureNames.map((name) => [`@features/${name}`, proxy])),
+  '@features/phoneTools': new Proxy(load('src/features/phoneTools/toolPackages/ToolPackageCatalog.ts'), {
+    get: (target, key) => target[key] ?? placeholder(String(key).startsWith('Xiaohongshu')
+      ? String(key).replace(/Tool$/, '').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
+      : String(key)),
+  }),
   '@features/webTools': tools,
-  '@features/prompting': { readPromptDefaults: async () => ({ toolPermissions: defaults }) },
+  '@features/prompting': { readPromptDefaults: async () => ({ toolPermissions: defaults, appToolPackages: {} }) },
   '@features/assistants': new Proxy({ assistantToolPermissionRepository: { list: async () => overrides } }, {
     get: (target, name) => target[name] ?? placeholder(String(name)),
   }),
@@ -157,9 +171,10 @@ const result = await execute('web_search', { query: '资料' });
 assert.equal(result.status, 'success');
 assert.deepEqual(result.data, { ...nativeResult.data, defaultEngine: 'bing', availableEngines: ['bing', 'duckduckgo'] });
 assert.ok(result.modelContent.includes('https://example.com'));
-assert.deepEqual(calls.at(-1), ['search', 'request-1', '资料', 5, 'bing', null, 'basic', null]);
+assert.deepEqual(calls.at(-1), ['search', 'request-1', '资料', 5, 'bing', null, 'basic', null, false]);
 assert.equal(executor.prepare({ name: 'web_search', arguments: '{"query":" "}' }, task).status, 'rejected');
 assert.equal(executor.prepare({ name: 'web_search', arguments: '{"query":"资料","limit":11}' }, task).status, 'rejected');
+assert.equal(executor.prepare({ name: 'web_search', arguments: '{"query":"资料","include_images":"true"}' }, task).status, 'rejected');
 assert.equal(executor.prepare({ name: 'download_file', arguments: '{"url":"https://example.com","directory":"/other"}' }, task).status, 'rejected');
 
 nativeResult = { ok: true, data: { text: '正文', truncated: true } };
@@ -178,13 +193,21 @@ assert.deepEqual(await execute('web_search', { query: '资料' }), {
 const cancelled = new AbortController();
 cancelled.abort(new Error('已取消'));
 const count = calls.length;
-const searchOptions = { engine: 'bing', apiKey: null, depth: 'basic', timeRange: null };
+const searchOptions = { engine: 'bing', apiKey: null, depth: 'basic', timeRange: null, includeImages: false };
 await assert.rejects(web.searchWeb('资料', 5, cancelled.signal, searchOptions), /已取消/u);
 assert.equal(calls.length, count);
+const cancellingBeforeStart = new AbortController();
+const notStarted = web.searchWeb('资料', 5, cancellingBeforeStart.signal, searchOptions);
+cancellingBeforeStart.abort(new Error('读取配置期间取消'));
+await assert.rejects(notStarted, /读取配置期间取消/);
+assert.equal(calls.length, count, '读取连接配置时取消，不创建原生联网请求');
 let resolvePending;
 pending = new Promise((resolve) => { resolvePending = resolve; });
 const running = new AbortController();
+const searchEntered = new Promise(resolve => { searchStarted = resolve; });
 const operation = web.searchWeb('资料', 5, running.signal, searchOptions);
+await searchEntered;
+searchStarted = undefined;
 running.abort(new Error('运行取消'));
 assert.deepEqual(calls.at(-1), ['cancel', 'request-1']);
 resolvePending({ ok: true, data: {} });
@@ -198,7 +221,10 @@ assert.equal(calls.length, completedCount, '完成后取消监听必须释放');
 let resolveImage;
 pending = new Promise(resolve => { resolveImage = resolve; });
 const imageController = new AbortController();
+const imageEntered = new Promise(resolve => { imageStarted = resolve; });
 const imageOperation = web.downloadWebImage('https://example.com/cat.png', null, imageController.signal);
+await imageEntered;
+imageStarted = undefined;
 imageController.abort(new Error('取消图片下载'));
 resolveImage({ ok: true, data: { uri: 'file:///temp-image' } });
 await assert.rejects(imageOperation, /取消图片下载/);
@@ -208,8 +234,9 @@ assert.deepEqual(calls.at(-1), ['delete-temp', 'file:///temp-image'], '原生返
 pending = undefined;
 nativeResult = { ok: true, data: { engine: 'duckduckgo', source: 'DuckDuckGo', query: '资料', items: [] } };
 assert.equal((await execute('web_search', { query: '资料', engine: 'duckduckgo', time_range: 'week' })).status, 'success');
-assert.deepEqual(calls.at(-1), ['search', 'request-1', '资料', 5, 'duckduckgo', null, 'basic', 'week']);
-for (const input of [{ engine: 'tavily' }, { engine: 'brave' }, { depth: 'advanced' }, { time_range: 'day' }]) {
+assert.deepEqual(calls.at(-1), ['search', 'request-1', '资料', 5, 'duckduckgo', null, 'basic', 'week', false]);
+for (const input of [{ engine: 'tavily' }, { engine: 'brave' }, { depth: 'advanced' }, { time_range: 'day' },
+  { include_images: true }, { engine: 'duckduckgo', include_images: true }]) {
   const before = calls.length;
   assert.equal((await execute('web_search', { query: '资料', ...input })).status, 'error');
   assert.equal(calls.length, before);
@@ -221,9 +248,21 @@ await execute('web_fetch', { url: 'https://example.com', start_char: 12000, find
 assert.deepEqual(calls.at(-1), ['read', 'request-1', 'https://example.com', 12000, 12000, '目标', 'a'.repeat(64)]);
 
 const testSignal = new AbortController().signal;
-const initial = await searchRuntime.settings.read();
+let initial = await searchRuntime.settings.read();
 assert.equal(initial.defaultEngine, 'bing');
-await assert.rejects(searchConfiguration.updateSearchConfiguration({ kind: 'enabled', engine: 'tavily', enabled: true }), /密钥/);
+assert.equal(initial.connectionMode, 'direct');
+assert.equal(connectionModes.at(-1), 'direct');
+await searchConfiguration.updateSearchConfiguration({ kind: 'connection', mode: 'system' });
+assert.equal((await searchConfiguration.readSearchConfiguration()).connectionMode, 'system');
+await web.searchWeb('代理搜索', 1, testSignal, { engine: 'bing', apiKey: null, depth: 'basic', timeRange: null, includeImages: false });
+await web.readWebPage('https://example.com', 1000, testSignal);
+await web.downloadWebFile('https://example.com/document.pdf', null, testSignal);
+await web.downloadWebImage('https://example.com/image.png', null, testSignal);
+assert.deepEqual(connectionModes.slice(-4), ['system', 'system', 'system', 'system'], '搜索、读取和两种下载统一读取已持久化连接方式');
+await searchConfiguration.updateSearchConfiguration({ kind: 'connection', mode: 'direct' });
+initial = await searchRuntime.settings.read();
+await assert.rejects(searchConfiguration.selectSearchSource('tavily'), /密钥/);
+assert.deepEqual((await searchConfiguration.readSearchSelection()).models.map(model => model.id), ['bing', 'duckduckgo']);
 await assert.rejects(searchConfiguration.testAndSaveSearchKey('tavily', 'bad key', testSignal), /有效/);
 assert.deepEqual(await searchRuntime.settings.read(), initial);
 nativeResult = { ok: false, error: { code: 'WEB_API_AUTH_FAILED', message: '密钥无效' } };
@@ -234,6 +273,7 @@ assert.equal(credentials.size, 0);
 nativeResult = { ok: true, data: { engine: 'tavily', source: 'Tavily', items: [] } };
 await searchConfiguration.testAndSaveSearchKey('tavily', 'test-tavily-key', testSignal);
 assert.equal((await searchRuntime.settings.read()).defaultEngine, 'tavily', '首次成功配置自有服务自动设为默认');
+assert.equal(calls.at(-1)[8], false, '连接测试不请求图片候选');
 const configuredResult = await execute('web_search', { query: '资料' });
 assert.equal(calls.at(-1)[4], 'tavily');
 assert.equal(calls.at(-1)[5], 'test-tavily-key');
@@ -247,15 +287,36 @@ await assert.rejects(searchConfiguration.testAndSaveSearchKey('tavily', '', test
 await searchConfiguration.testAndSaveSearchKey('brave', 'test-brave-key', testSignal);
 assert.equal((await searchRuntime.settings.read()).defaultEngine, 'tavily', '后加服务不覆盖已有默认');
 await searchConfiguration.updateSearchConfiguration({ kind: 'default', engine: 'brave' });
+database.prepare("UPDATE web_search_sources SET enabled=0 WHERE engine='tavily'").run();
+await searchConfiguration.selectSearchSource('tavily');
+assert.equal((await searchRuntime.settings.read()).sources.find(source => source.engine === 'tavily').enabled, true,
+  '选择已有配置时在同一事务中启用，不需要独立来源开关');
+assert.equal((await searchConfiguration.readSearchSelection()).selectedModelId, 'tavily');
+await searchConfiguration.selectSearchSource('brave');
 await searchConfiguration.testAndSaveSearchKey('tavily', 'replacement-key', testSignal);
 assert.equal((await searchRuntime.settings.read()).defaultEngine, 'brave');
+const imageCandidates = [{ url: 'https://images.example.com/whale.jpg?size=1200&signature=abc',
+  description: '搜索服务描述的鲸鱼照片', sourceUrl: 'https://example.com/whale' }];
+nativeResult = { ok: true, data: { engine: 'tavily', source: 'Tavily', items: [], images: imageCandidates } };
+const beforeImageSearch = calls.length;
+const unsupportedImages = await execute('web_search', { query: '鲸鱼', include_images: true });
+assert.equal(unsupportedImages.code, 'WEB_SEARCH_OPTION_UNAVAILABLE');
+assert.equal(calls.length, beforeImageSearch, '图片选项不隐式切换默认来源');
+assert.ok(unsupportedImages.modelContent.includes('tavily'));
+const searchedImages = await execute('web_search', { query: '鲸鱼', engine: 'tavily', include_images: true, limit: 3 });
+assert.equal(searchedImages.status, 'success');
+assert.deepEqual(calls.at(-1), ['search', 'request-1', '鲸鱼', 3, 'tavily', 'replacement-key', 'basic', null, true]);
+assert.deepEqual(searchedImages.data.images, imageCandidates);
+assert.deepEqual(JSON.parse(searchedImages.modelContent.split('\n').slice(1).join('\n')).images, imageCandidates,
+  '候选图片地址完整进入模型 observation，保留尺寸和签名参数');
+assert.equal(calls.length, beforeImageSearch + 1, '请求图片候选只执行搜索，不自动下载');
 assert.ok(![...credentials.values()].includes('test-tavily-key'), '替换成功后回收旧凭据');
 assert.equal((await execute('web_search', { query: '资料', engine: 'tavily', depth: 'advanced' })).status, 'error');
 await searchConfiguration.updateSearchConfiguration({ kind: 'advanced', allowed: true });
 assert.equal((await execute('web_search', { query: '资料', engine: 'tavily', depth: 'advanced' })).status, 'success');
 assert.equal(calls.at(-1)[6], 'advanced');
 
-// 测试期间修改配置：迟到成功不能重新启用来源或覆盖默认，未发布的新凭据必须回收。
+// 测试期间修改配置：迟到成功不能覆盖新配置，未发布的新凭据必须回收。
 let releaseTest;
 pending = new Promise(resolve => { releaseTest = resolve; });
 let enterTest;
@@ -264,7 +325,7 @@ searchStarted = enterTest;
 const lateSave = searchConfiguration.testAndSaveSearchKey('tavily', 'late-key', testSignal);
 await testEntered;
 searchStarted = undefined;
-await searchConfiguration.updateSearchConfiguration({ kind: 'enabled', engine: 'tavily', enabled: false });
+await searchConfiguration.updateSearchConfiguration({ kind: 'connection', mode: 'system' });
 const beforeLateResult = await searchRuntime.settings.read();
 releaseTest(nativeResult);
 await assert.rejects(lateSave, /配置已改变/);
@@ -279,13 +340,24 @@ assert.equal(missing.code, 'WEB_SEARCH_CREDENTIAL_MISSING');
 const missingConfiguration = await searchConfiguration.readSearchConfiguration();
 assert.equal(missingConfiguration.sources.find(source => source.engine === 'tavily').configured, false);
 assert.equal(missingConfiguration.sources.find(source => source.engine === 'tavily').apiKey, '');
-await searchConfiguration.updateSearchConfiguration({ kind: 'enabled', engine: 'brave', enabled: false });
+const missingSelection = await searchConfiguration.readSearchSelection();
+assert.equal(missingSelection.status, 'unavailable');
+assert.ok(!missingSelection.models.some(model => model.id === 'brave'));
+await searchConfiguration.selectSearchSource(null);
 assert.equal((await searchRuntime.settings.read()).defaultEngine, null);
 assert.equal((await execute('web_search', { query: '资料' })).code, 'WEB_SEARCH_NOT_CONFIGURED');
+assert.equal((await searchConfiguration.readSearchSelection()).status, 'unconfigured');
 await searchConfiguration.updateSearchConfiguration({ kind: 'default', engine: 'duckduckgo' });
+await searchConfiguration.updateSearchConfiguration({ kind: 'connection', mode: 'direct' });
 const saved = await searchRuntime.settings.read();
+// 从上一版保留搜索来源与密钥引用，只为新连接设置补入直连默认值。
+database.exec('ALTER TABLE web_search_settings DROP COLUMN connection_mode; PRAGMA user_version=149;');
 await bootstrapSqlite(createSqliteExecutor(database));
-assert.deepEqual(await searchRuntime.settings.read(), saved, '再次启动不覆盖配置');
+assert.deepEqual(await searchRuntime.settings.read(), saved);
+await searchConfiguration.updateSearchConfiguration({ kind: 'connection', mode: 'system' });
+const savedProxySettings = await searchRuntime.settings.read();
+await bootstrapSqlite(createSqliteExecutor(database));
+assert.deepEqual(await searchRuntime.settings.read(), savedProxySettings, '再次启动不覆盖代理或来源配置');
 assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
 // 官方工具走相同权限、拆包与 Executor；协议响应在 Provider 边界验证。
 const kimiNames = ['kimi_web_search', 'kimi_web_fetch', 'kimi_mew'];
@@ -407,5 +479,119 @@ const requestsBeforeCancel = officialRequests.length;
 await assert.rejects(runOfficialTool('kimi_web_search', { query: '新闻' }));
 assert.equal(officialRequests.length, requestsBeforeCancel, '取消后不得继续触网');
 
+// 搜索凭据随真实数据库快照往返，Host 装配负责选择 snapshot / 活动库。
+{
+  const tavilyRef = 'web.search.11111111-1111-4111-8111-111111111111';
+  const braveRef = 'web.search.22222222-2222-4222-8222-222222222222';
+  const activeRef = 'web.search.33333333-3333-4333-8333-333333333333';
+  const secureValues = new Map([[tavilyRef, 'tavily-fixture'], [braveRef, 'brave-fixture'], [activeRef, 'active-fixture']]);
+  let failedReference = null;
+  const backupCredentials = load('src/features/webTools/infrastructure/SecureSearchCredentialStore.ts', {
+    'expo-crypto': { randomUUID: () => { throw new Error('恢复不得创建新引用'); } },
+    'expo-secure-store': {
+      getItemAsync: async reference => secureValues.get(reference) ?? null,
+      setItemAsync: async (reference, key) => {
+        if (reference === failedReference) throw new Error('安全存储写入失败');
+        secureValues.set(reference, key);
+      },
+      deleteItemAsync: async reference => { secureValues.delete(reference); },
+    },
+  });
+  database.exec(`UPDATE web_search_sources SET credential_ref=NULL, enabled=CASE WHEN engine IN ('bing', 'duckduckgo') THEN 1 ELSE 0 END;
+    UPDATE web_search_sources SET credential_ref='${tavilyRef}' WHERE engine='tavily';
+    UPDATE web_search_sources SET credential_ref='${braveRef}', enabled=0 WHERE engine='brave';`);
+  const stableSettings = load('src/features/backup/infrastructure/stableSettingsBackupState.ts');
+  const persistence = { databaseCoordinator: {
+    openTaskExecutor: () => ({ getAllAsync: async () => [{ credential_ref: activeRef }] }),
+    readSnapshotAsync: async (_task, uri, callback) => {
+      assert.equal(uri, 'file:///snapshot.db');
+      return callback(sql);
+    },
+  } };
+  const credentialRepository = load('src/features/webTools/infrastructure/SQLiteSearchSettingsRepository.ts', {
+    '@platform/persistence': persistence, '../domain/SearchSettings': searchDomain,
+  });
+  const { ApplicationBackupSourceGateway } = load('src/features/backup/infrastructure/ApplicationBackupSourceGateway.ts', {
+    '@platform/persistence': {},
+    '@platform/device': { getPersistentMediaRootUri: () => 'file:///source/persistent-media/' },
+    '@platform/device/DeviceMediaService': {},
+    '@features/media': {},
+    '@shared/theme': {
+      loadStoredThemeBackupState: async () => ({}),
+      parseStoredThemeBackupState: value => value,
+      restoreStoredThemeBackupState: async () => {},
+    },
+    '../../../../modules/ravencat-floating-layer': {
+      getBubbleSkinBackupSource: async () => ({ settingsJson: '{}', rootUri: 'file:///skins/' }),
+      validateBubbleSkinBackupSettings: async () => {},
+      restoreBubbleSkinBackupSettings: async () => {},
+    },
+    './stableSettingsBackupState': stableSettings,
+  });
+  const { createBackupSourceGateway } = load('src/host/composition/createBackupSourceGateway.ts', {
+    '@platform/persistence': persistence,
+    '@features/backup/composition': { ApplicationBackupSourceGateway },
+    '@features/media/composition': { SQLiteMediaAssetRepository: class { async listBackupAssets() { return []; } } },
+    '@features/calls/composition': { CALL_SNAPSHOT_BACKUP_EXCLUSIONS: [], callRepository: { assertBackupSnapshotHasNoFiles: async () => {} } },
+    '@features/webTools/composition': { ...credentialRepository, ...backupCredentials },
+  });
+  const gateway = createBackupSourceGateway();
+  const incoming = await gateway.readNonDatabaseSources('file:///snapshot.db');
+  const payload = JSON.parse(incoming.stableSettingsJson);
+  assert.deepEqual(new Map(payload.searchCredentials.map(entry => [entry.reference, entry.key])), new Map([
+    [tavilyRef, 'tavily-fixture'], [braveRef, 'brave-fixture'],
+  ]), '包含已停用来源，排除活动库新引用及其他 SecureStore 数据');
+  await gateway.validateStableSettingsJson(incoming.stableSettingsJson, 'file:///skins/', 'file:///media/', 'file:///snapshot.db');
+  const rollbackJson = await gateway.exportStableSettingsJson();
+  assert.deepEqual(JSON.parse(rollbackJson).searchCredentials, [{ reference: activeRef, key: 'active-fixture' }]);
+
+  secureValues.clear();
+  await gateway.restoreStableSettingsJson(incoming.stableSettingsJson);
+  assert.equal(secureValues.get(tavilyRef), 'tavily-fixture', '换机空安全存储恢复 Tavily Key');
+  assert.equal(secureValues.get(braveRef), 'brave-fixture', '换机空安全存储恢复 Brave Key');
+  const restoredConfiguration = load('src/features/webTools/application/SearchConfiguration.ts', {
+    '@platform/web': web, '@shared/runtime/abortSignal': load('src/shared/runtime/abortSignal.ts'),
+    '../domain/SearchSettings': searchDomain,
+    './WebToolsRuntime': { getWebToolsRuntime: () => ({
+      settings: sqliteSearchSettingsRepository, credentials: backupCredentials.secureSearchCredentialStore,
+    }) },
+  });
+  const restoredSettings = await restoredConfiguration.readSearchConfiguration();
+  assert.equal(restoredSettings.sources.find(source => source.engine === 'tavily').apiKey, 'tavily-fixture');
+  assert.equal(restoredSettings.sources.find(source => source.engine === 'brave').configured, true);
+  assert.equal(restoredSettings.sources.find(source => source.engine === 'brave').enabled, false, '恢复凭据不改变启用状态');
+  await gateway.restoreStableSettingsJson(incoming.stableSettingsJson);
+  assert.equal(secureValues.size, 2, '重复恢复不创建新引用');
+
+  for (const entries of [
+    null, [{ reference: 'mcp.token', key: 'other' }],
+    [payload.searchCredentials[0], payload.searchCredentials[0]],
+    [{ reference: tavilyRef, key: 'invalid key' }, payload.searchCredentials[1]],
+    [payload.searchCredentials[0]],
+    [...payload.searchCredentials, { reference: activeRef, key: 'extra' }],
+  ]) {
+    await assert.rejects(gateway.validateStableSettingsJson(JSON.stringify({ ...payload, searchCredentials: entries }),
+      'file:///skins/', 'file:///media/', 'file:///snapshot.db'), /备份搜索凭据/);
+  }
+  const oldPayload = { ...payload }; delete oldPayload.searchCredentials;
+  await gateway.validateStableSettingsJson(JSON.stringify(oldPayload), 'file:///skins/', 'file:///media/', 'file:///snapshot.db');
+  await gateway.restoreStableSettingsJson(JSON.stringify(oldPayload));
+  assert.equal(secureValues.get(tavilyRef), 'tavily-fixture', '旧包不改变本机搜索凭据');
+
+  // 同名引用部分写入后失败，旧快照恢复已有值及原本缺失的状态。
+  secureValues.set(tavilyRef, 'original-key');
+  secureValues.delete(braveRef);
+  const original = await backupCredentials.readSearchCredentialsBackup([tavilyRef, braveRef]);
+  assert.equal(original[1].key, null);
+  failedReference = braveRef;
+  await assert.rejects(gateway.restoreStableSettingsJson(incoming.stableSettingsJson), /安全存储写入失败/);
+  failedReference = null;
+  await gateway.restoreStableSettingsJson(JSON.stringify({ ...payload, searchCredentials: original }));
+  assert.equal(secureValues.get(tavilyRef), 'original-key');
+  assert.equal(secureValues.has(braveRef), false);
+  await gateway.restoreStableSettingsJson(rollbackJson);
+  assert.equal(secureValues.get(activeRef), 'active-fixture');
+}
+
 database.close();
-console.log('联网工具权限、取消、多来源切换、网页读取、密钥隔离、配置竞态、数据库升级，以及 Kimi 官方地址识别、拆包特批、REST 与 mew Formula 协议边界验证通过。');
+console.log('联网工具权限、取消、多来源切换、网页读取、密钥隔离、配置竞态、数据库升级、搜索凭据备份恢复与回滚，以及 Kimi 官方地址识别、拆包特批、REST 与 mew Formula 协议边界验证通过。');

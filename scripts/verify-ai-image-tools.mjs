@@ -1,22 +1,11 @@
 /** AI 图片与收藏的行为测试：真实 SQLite 所有权、迁移、claim/fence 和工具视觉输入。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
 import { DatabaseSync } from 'node:sqlite';
+import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-dependencies.mjs';
 import { SCHEMAS, bootstrapSqlite, createSqliteExecutor, loadSqliteModule } from './helpers/sqlite-bootstrap-fixture.mjs';
+import { createCoordinatedSqliteFixture, databaseErrors } from './helpers/coordinated-sqlite-fixture.mjs';
+import { loadTypeScriptModule as load } from './helpers/load-typescript-module.mjs';
 
-function load(file, mocks = {}) {
-  const module = { exports: {} };
-  const code = ts.transpileModule(fs.readFileSync(path.resolve(file), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  new Function('require', 'module', 'exports', code)(id => {
-    assert.ok(Object.hasOwn(mocks, id), `${file}: 缺少依赖 ${id}`);
-    return mocks[id];
-  }, module, module.exports);
-  return module.exports;
-}
 const domain = load('src/features/stickers/domain/Sticker.ts');
 const chatSticker = load('src/features/chat/messages/domain/ChatSticker.ts');
 const chatMetadata = load('src/features/chat/messages/domain/chatMessageMetadata.ts', { './ChatSticker': chatSticker,
@@ -24,6 +13,7 @@ const chatMetadata = load('src/features/chat/messages/domain/chatMessageMetadata
 const sharedRecord = load('src/features/chat/messages/domain/SharedChatRecord.ts');
 const embeddingDomain = load('src/features/stickers/domain/StickerEmbedding.ts');
 const abort = load('src/shared/runtime/abortSignal.ts');
+const runState = load('src/platform/agentRuntime/AgentRunState.ts');
 const slot = load('src/shared/runtime/RuntimeSlot.ts');
 const runtime = load('src/features/stickers/application/StickerRuntime.ts', { '@shared/runtime/RuntimeSlot': slot });
 const models = load('src/features/stickers/application/StickerSystemModels.ts', {
@@ -32,13 +22,13 @@ const models = load('src/features/stickers/application/StickerSystemModels.ts', 
   '../domain/StickerSystemConfig': load('src/features/stickers/domain/StickerSystemConfig.ts'),
 });
 const { SQLiteStickerRepository } = load('src/features/stickers/infrastructure/SQLiteStickerRepository.ts', {
-  '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => ({}) } },
+  '@platform/persistence': { ...databaseErrors, databaseCoordinator: { openTaskExecutor: () => ({}) } },
   '../domain/Sticker': domain,
 });
 const processingModule = load('src/features/stickers/infrastructure/SQLiteAIStickerProcessingRepository.ts', {
   '../domain/Sticker': domain,
   './SQLiteStickerRepository': load('src/features/stickers/infrastructure/SQLiteStickerRepository.ts', {
-    '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => ({}) } }, '../domain/Sticker': domain,
+    '@platform/persistence': { ...databaseErrors, databaseCoordinator: { openTaskExecutor: () => ({}) } }, '../domain/Sticker': domain,
   }),
 });
 const { ConversationTurnRepository } = load('src/features/chat/reply/infrastructure/SQLiteConversationTurnRepository.ts', {
@@ -52,29 +42,14 @@ const { GroupChatRepository } = load('src/features/chat/group/infrastructure/SQL
 });
 const groups = new GroupChatRepository();
 const { assertImageToolRunCurrent } = load('src/host/composition/agent/assertImageToolRunCurrent.ts', {
+  '@platform/agentRuntime': runState,
   '@shared/runtime/abortSignal': abort,
   '@features/chat': { isChatReplyRunCurrentInTransaction: (tx, id) => turns.isRunCurrentInTransaction(tx, id),
     isGroupSpeechTaskRunCurrentInTransaction: (tx, id) => groups.isSpeechTaskRunCurrentInTransaction(tx, id) },
 });
 
 function coordinated(db) {
-  const raw = createSqliteExecutor(db);
-  let chain = Promise.resolve();
-  const schedule = fn => {
-    const result = chain.then(fn);
-    chain = result.catch(() => {});
-    return result;
-  };
-  return { ...raw,
-    getFirstAsync: (...args) => schedule(() => raw.getFirstAsync(...args)),
-    getAllAsync: (...args) => schedule(() => raw.getAllAsync(...args)),
-    runAsync: (...args) => schedule(() => raw.runAsync(...args)),
-    withExclusiveTransactionAsync: fn => schedule(async () => {
-      db.exec('BEGIN IMMEDIATE');
-      try { const result = await fn(raw); db.exec('COMMIT'); return result; }
-      catch (error) { db.exec('ROLLBACK'); throw error; }
-    }),
-  };
+  return createCoordinatedSqliteFixture(createSqliteExecutor(db)).executor;
 }
 const now = '2026-10-11T00:00:00.000Z';
 const db = new DatabaseSync(':memory:');
@@ -116,7 +91,7 @@ let embed = async () => { embeddingCalls++; if (embeddingFailure) throw new Erro
 const model = { id: 'embedding', capabilityKind: 'embedding', enabled: true, baseUrl: 'https://example.invalid',
   apiKey: '', name: '向量模型', model: 'embed', updatedAt: now };
 let generated = 0;
-runtime.configureStickersRuntime({ repository: repo, media: { resolveMediaAsset: async () => ({ asset, localUri: 'file:///cat.png' }),
+runtime.configureStickersRuntime({ repository: repo, media: { resolveMediaAsset: async id => ({ asset: { ...asset, id }, localUri: 'file:///cat.png' }),
   releaseMediaAssetCandidates: async () => {} }, auxiliaryModels: { getModelConfigById: async () => model,
     listModelConfigsByRequirement: async () => [model] }, embeddings: { embedTexts: (...args) => embed(...args) },
   generateId: () => `new-${++generated}`, now: () => now,
@@ -136,7 +111,7 @@ await repo.deleteSticker('two-sticker', 'ai-two');
 const receivedImage = { id: 'chat-attachment', type: 'image', source: 'gallery', fileName: 'chat-cat.png', mediaAssetId: asset.id };
 const receivedMessage = { id: 101, sessionId: 'chat', senderType: 'user', isMe: true, status: 'sent', deliveryStatus: null,
   text: '收藏这张猫猫', createdAt: now, metadataJson: JSON.stringify({ kind: 'image', attachments: [receivedImage] }) };
-const { AddOwnStickerTool } = load('src/features/stickers/aiTools/AIStickerLibraryTools.ts', {
+const { AddOwnStickerTool, MaintainOwnStickerTool } = load('src/features/stickers/aiTools/AIStickerLibraryTools.ts', {
   '@features/media': { mediaImageFailure: () => null }, '../domain/Sticker': domain, '../application/AIStickerCommands': commands,
 });
 const collected = await AddOwnStickerTool.execute({ media_asset_id: chatMetadata.getMessageAttachments(receivedMessage)[0].mediaAssetId }, context('ai-two'));
@@ -197,7 +172,7 @@ db.exec(`INSERT INTO chat_conversations (id,kind) VALUES ('chat','direct');
 const chatActor = context('ai-one', 'chat');
 assert.equal(await turns.isRunCurrentInTransaction(createSqliteExecutor(db), 'run-1'), true);
 await turns.supersedeActiveRunInTransaction(createSqliteExecutor(db), 'chat', now);
-await assert.rejects(commands.maintainAISticker({ sticker_id: 'one-sticker', action: 'delete' }, chatActor), /新消息打断/);
+await assert.rejects(commands.maintainAISticker({ sticker_id: 'one-sticker', action: 'delete' }, chatActor), error => error.cause.code === 'SUPERSEDED');
 db.exec(`INSERT INTO chat_conversations VALUES ('image-group','group');
   INSERT INTO group_chats(id,name,created_at,updated_at) VALUES ('image-group','群','${now}','${now}');
   INSERT INTO group_speech_plans(id,group_id,status,created_at,updated_at) VALUES ('image-plan','image-group','running','${now}','${now}');
@@ -206,7 +181,7 @@ db.exec(`INSERT INTO chat_conversations VALUES ('image-group','group');
 const groupActor = { ...context('ai-one', 'chat'), runId: 'image-task', task: { assistantId: 'ai-one', source: 'chat', type: 'group_chat_reply' } };
 await assertImageToolRunCurrent(createSqliteExecutor(db), groupActor);
 db.prepare("UPDATE group_speech_plans SET status='terminated' WHERE id='image-plan'").run();
-await assert.rejects(commands.maintainAISticker({ sticker_id: 'one-sticker', action: 'delete' }, groupActor), /群发言任务已结束/);
+await assert.rejects(commands.maintainAISticker({ sticker_id: 'one-sticker', action: 'delete' }, groupActor), error => error.cause.code === 'SUPERSEDED');
 assert.notEqual(await repo.getStickerById('one-sticker', 'ai-one'), null);
 const claim = await aiRepo.claim('ai-one', 'one-sticker', 'embed', 'before-edit', 'process-1', now, noFence);
 await repo.updateStickerMetadata('one-sticker', { description: '等待网络期间修改了语义' }, now, 'ai-one');
@@ -233,6 +208,50 @@ for (let i = 1; i <= 499; i++) {
 }
 insertAsset.run('spare', 'catalog/media/spare.png', 'f'.repeat(64), now, now);
 await assert.rejects(aiRepo.create('ai-one', { ...asset, id: 'spare' }, '满库', null, 'overflow', now, noFence), domain.StickerLibraryFullError);
+const inputSchema = load('src/shared/aiTools/AgentToolInputSchema.ts', agentToolSchemaDependencies);
+const { AgentToolExecutor } = load('src/platform/agentRuntime/AgentToolExecutor.ts', {
+  '@shared/aiTools': inputSchema, './AgentRunState': runState,
+});
+const collectionTools = [AddOwnStickerTool, MaintainOwnStickerTool];
+const toolExecutor = new AgentToolExecutor({ get: name => {
+  const tool = collectionTools.find(item => item.name === name);
+  return { descriptor: { name, inputSchema: tool.definition.parameters }, execute: tool.execute };
+} });
+const invokeCollection = (tool, input, ctx = actor) => {
+  const task = { ...ctx.task, allowedToolNames: collectionTools.map(item => item.name) };
+  return toolExecutor.execute(toolExecutor.prepare({ id: 'collection-call', name: tool.name, arguments: JSON.stringify(input) }, task), { ...ctx, task });
+};
+const collectionLogs = [], oldConsoleError = console.error;
+console.error = (...args) => collectionLogs.push(args);
+try {
+  const full = await invokeCollection(AddOwnStickerTool, { media_asset_id: 'spare' });
+  assert.equal(full.status, 'error');
+  assert.equal(full.modelContent, new domain.StickerLibraryFullError(500).message);
+  assert.equal(collectionLogs.length, 0, '满库业务拒绝不触发开发版红色日志');
+  assert.equal(await repo.getStickerByMediaAssetId('spare'), null);
+  const getSticker = repo.getStickerById.bind(repo);
+  repo.getStickerById = async (id, owner) => {
+    const snapshot = await getSticker(id, owner);
+    if (id === added.stickerId) await repo.deleteSticker(id, 'ai-two');
+    return snapshot;
+  };
+  try {
+    const stale = await invokeCollection(MaintainOwnStickerTool,
+      { sticker_id: added.stickerId, action: 'edit', description: '不能修改已删除的收藏' }, context('ai-two'));
+    assert.equal(stale.status, 'error');
+    assert.equal(stale.modelContent, new domain.StickerNotFoundError(added.stickerId).message);
+    assert.equal(collectionLogs.length, 0, '读取后删除的竞态也返回明确业务原因');
+  } finally { repo.getStickerById = getSticker; }
+  await assert.rejects(invokeCollection(MaintainOwnStickerTool, { sticker_id: 'one-sticker', action: 'delete' }, chatActor), error => error.code === 'SUPERSEDED');
+  assert.equal(collectionLogs.length, 0, 'signal 尚未取消时持久 fence 仍终止旧 run');
+  db.exec("CREATE TRIGGER reject_tool_sticker_update BEFORE UPDATE ON stickers BEGIN SELECT RAISE(ABORT,'sticker storage failure'); END;");
+  try {
+    const failed = await invokeCollection(MaintainOwnStickerTool, { sticker_id: 'one-sticker', action: 'edit', description: '不能保存' });
+    assert.equal(failed.code, 'TOOL_EXECUTION_FAILED');
+    assert.equal(collectionLogs.length, 1);
+    assert.ok(collectionLogs[0][1].error instanceof databaseErrors.CoordinatedDatabaseError);
+  } finally { db.exec('DROP TRIGGER reject_tool_sticker_update'); }
+} finally { console.error = oldConsoleError; }
 assert.equal((await aiRepo.create('ai-one', asset, '重复', null, 'reused-full', now, noFence)).reused, true);
 await executor.withExclusiveTransactionAsync(tx => repo.createStickerInTransaction(tx, { ...userSticker, id: 'user-spare', mediaAssetId: 'spare' }));
 assert.equal((await repo.listStickers()).length, 2, 'AI 满库不能占用用户配额');
@@ -277,8 +296,9 @@ for (const [key, sql] of Object.entries(SCHEMAS)) {
   legacy.exec(sql);
 }
 // 119 的真实结构没有后来新增的设置列，不能把当前 schema 冒充旧库。
-legacy.exec('ALTER TABLE ai_assistants DROP COLUMN show_token_usage; ALTER TABLE ai_assistants DROP COLUMN nickname;');
-legacy.exec('ALTER TABLE chat_summary_request_settings DROP COLUMN model_config_id; ALTER TABLE chat_summary_request_settings DROP COLUMN group_trigger_count;');
+legacy.exec('ALTER TABLE ai_assistants DROP COLUMN show_token_usage; ALTER TABLE ai_assistants DROP COLUMN nickname; ALTER TABLE ai_assistants DROP COLUMN show_action_steps; ALTER TABLE ai_assistants DROP COLUMN streaming_reply;');
+legacy.exec('ALTER TABLE chat_summary_request_settings DROP COLUMN model_config_id; ALTER TABLE chat_summary_request_settings DROP COLUMN group_trigger_count; ALTER TABLE chat_summary_request_settings DROP COLUMN primary_limit;');
+legacy.exec('ALTER TABLE group_chat_members DROP COLUMN muted; ALTER TABLE group_chat_members DROP COLUMN joined_during_plan_id;');
 const schema = loadSqliteModule('stickerSchema');
 const oldStickers = schema.STICKERS_SCHEMA.replace('media_asset_id TEXT NOT NULL CHECK', 'media_asset_id TEXT NOT NULL UNIQUE CHECK')
   .replace('    owner_assistant_id TEXT,\n', '').replace(',\n    FOREIGN KEY (owner_assistant_id) REFERENCES ai_assistants(id) ON DELETE CASCADE', '');
@@ -301,6 +321,45 @@ assert.throws(() => legacy.prepare(`INSERT INTO stickers (id,media_asset_id,name
   VALUES ('duplicate','old','重复','image/png','${now}','${now}')`).run(), /UNIQUE/);
 legacy.close();
 
+// 私有下载查询复用真实表与 Repository：只查自己的记录，按媒体身份去重并分页。
+const downloadsDb = new DatabaseSync(':memory:');
+downloadsDb.exec('PRAGMA foreign_keys=ON');
+await bootstrapSqlite(createSqliteExecutor(downloadsDb));
+const downloadsExecutor = coordinated(downloadsDb);
+const { SQLiteAIDownloadedImageRepository } = load('src/features/media/infrastructure/SQLiteAIDownloadedImageRepository.ts', {
+  '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => downloadsExecutor } },
+  '@platform/device': { createRandomUUID: () => `download-${++generated}` },
+});
+const downloads = new SQLiteAIDownloadedImageRepository();
+for (const id of ['ai-one', 'ai-two']) downloadsDb.prepare(`INSERT INTO ai_assistants (id,agent_id,name,model,created_at,updated_at)
+  VALUES (?,?,?,'model',?,?)`).run(id, id, id, now, now);
+for (const [index, id] of [asset.id, 'snow-1', 'snow-2', 'snow-3', 'other-image'].entries()) downloadsDb.prepare(`INSERT INTO media_assets
+  (id,storage_backend,storage_key,hash_algorithm,content_hash,mime_type,byte_size,status,created_at,updated_at)
+  VALUES (?,'persistent-media',?,'sha256',?,'image/png',1,'ready',?,?)`).run(id, `catalog/${id}.png`, index.toString(16).padStart(64, '0'), now, now);
+for (const [id, owner, mediaId, fileName, createdAt] of [
+  ['snow-a', 'ai-one', 'snow-1', '雪山日出.png', now],
+  ['snow-b', 'ai-one', 'snow-2', '雪山日落.png', now],
+  ['snow-c', 'ai-one', 'snow-3', '雪山星空.PNG', now],
+  ['snow-d', 'ai-one', 'snow-1', '雪山新名字.png', '2026-10-12T00:00:00.000Z'],
+  ['other', 'ai-two', 'other-image', '雪山私藏.png', now],
+  ['literal', 'ai-one', asset.id, '100%_Cat.png', now],
+]) downloadsDb.prepare('INSERT INTO ai_downloaded_images VALUES (?,?,?,?,?,?)')
+  .run(id, owner, mediaId, `https://example.com/${id}.png`, fileName, createdAt);
+assert.equal((await downloads.query('ai-one', { mediaAssetId: 'snow-1' })).images[0].fileName, '雪山新名字.png');
+assert.equal((await downloads.query('ai-one', { mediaAssetId: 'snow-1' })).images.length, 1);
+assert.deepEqual(await downloads.query('ai-one', { mediaAssetId: 'other-image' }), { images: [], nextOffset: null });
+const firstDownloads = await downloads.query('ai-one', { keyword: '雪山', limit: 2, offset: 0 });
+assert.deepEqual(firstDownloads.images.map(image => image.mediaAssetId), ['snow-1', 'snow-3']);
+assert.equal(firstDownloads.nextOffset, 2);
+const lastDownloads = await downloads.query('ai-one', { keyword: '雪山', limit: 2, offset: firstDownloads.nextOffset });
+assert.deepEqual(lastDownloads.images.map(image => image.mediaAssetId), ['snow-2']);
+assert.equal(lastDownloads.nextOffset, null);
+assert.equal((await downloads.query('ai-one', { keyword: '日出', limit: 20, offset: 0 })).images[0].mediaAssetId, 'snow-1', '旧下载时取的名字仍可找回同一媒体');
+for (const keyword of ['cat', '%_', '100%']) {
+  assert.deepEqual((await downloads.query('ai-one', { keyword, limit: 20, offset: 0 })).images.map(image => image.mediaAssetId), [asset.id]);
+}
+assert.deepEqual((await downloads.query('ai-one', { keyword: "' OR 1=1 --", limit: 20, offset: 0 })).images, []);
+
 // 工具结果中的原生图片在完整工具批次之后送进模型，而辅助视觉只返回文字。
 const imageRuntime = load('src/features/media/application/AIImageRuntime.ts', { '@shared/runtime/RuntimeSlot': slot });
 let visionMode = 'direct_vision', missing = false, downloadedCommits = 0, tempDeletes = 0;
@@ -313,10 +372,14 @@ const imageTools = load('src/features/media/application/AIImageTools.ts', {
   './AIImageRuntime': imageRuntime,
   './MediaImageToolResult': { mediaImageFailure: error => error instanceof MissingImage ? { status: 'error', code: 'IMAGE_MISSING', modelContent: '找不到图片，请重新发送', retryable: false } : null },
   './MediaAssetRuntime': { resolveMediaAsset: async () => { if (missing) throw new MissingImage(); return { localUri: 'file:///cat.png' }; },
-    createMediaAssetWithReference: async (_, commit) => { await commit({ transaction: {}, asset }); return { asset }; } },
+    createMediaAssetWithReference: async (_, commit) => {
+      await downloadsExecutor.withExclusiveTransactionAsync(transaction => commit({ transaction, asset }));
+      downloadedCommits++;
+      return { asset };
+    } },
   './MediaAssetBacking': { MEDIA_ASSET_STORAGE_BACKEND: { persistentMedia: 'persistent-media' } },
 });
-imageRuntime.configureAIImageRuntime({ downloads: { addInTransaction: async () => { downloadedCommits++; } }, assertCurrent: noFence,
+imageRuntime.configureAIImageRuntime({ downloads, assertCurrent: noFence,
   resolveAvatar: async () => ({ status: 'found', mediaAssetId: asset.id, label: '用户头像' }),
   view: async () => ({ route: visionMode, ocrSucceeded: visionMode === 'ocr' ? true : null,
     parts: visionMode === 'direct_vision' ? [{ type: 'text', text: '原图已提供' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }]
@@ -330,9 +393,73 @@ assert.deepEqual(ocr.modelImages, []);
 missing = true;
 assert.equal((await imageTools.ViewImageTool.execute({ target: 'media', media_asset_id: 'missing' }, actor)).code, 'IMAGE_MISSING');
 missing = false;
-await imageTools.DownloadImageTool.execute({ url: 'https://example.com/cat.png' }, actor);
+const downloadedImage = await imageTools.DownloadImageTool.execute({ url: 'https://example.com/cat.png' }, actor);
 assert.equal(downloadedCommits, 1);
 assert.equal(tempDeletes, 1, '持久资产提交后回收暂存文件');
+const foundDownload = await imageTools.QueryDownloadedImagesTool.execute({ media_asset_id: downloadedImage.data.mediaAssetId }, actor);
+assert.equal(foundDownload.data.images.length, 1);
+assert.equal(foundDownload.data.images[0].mediaAssetId, JSON.parse(downloadedImage.modelContent).mediaAssetId);
+const foundByName = await imageTools.QueryDownloadedImagesTool.execute({ keyword: 'cat' }, actor);
+assert.equal(foundByName.data.images[0].mediaAssetId, downloadedImage.data.mediaAssetId);
+assert.equal(foundByName.data.nextOffset, null);
+assert.equal(foundByName.modelContent, JSON.stringify(foundByName.data));
+assert.deepEqual((await imageTools.QueryDownloadedImagesTool.execute({ media_asset_id: 'snow-1' }, context('ai-two'))).data.images, []);
+const { matchesAgentToolInputSchema } = load('src/shared/aiTools/AgentToolInputSchema.ts', agentToolSchemaDependencies);
+const querySchema = imageTools.QueryDownloadedImagesTool.definition.parameters;
+for (const input of [{ media_asset_id: asset.id }, { keyword: '雪山' }, { keyword: '雪山', offset: 2, limit: 1 }]) {
+  assert.equal(matchesAgentToolInputSchema(input, querySchema), true);
+}
+for (const input of [{}, { keyword: '' }, { media_asset_id: asset.id, keyword: '雪山' }, { keyword: '雪山', limit: 51 },
+  { keyword: '雪山', offset: -1 }, { keyword: '雪山', date: '2026-10-11' }]) {
+  assert.equal(matchesAgentToolInputSchema(input, querySchema), false, '参数互斥和分页限制由统一 schema 边界裁决');
+}
+const abortedQuery = new AbortController();
+abortedQuery.abort(new Error('查询已取消'));
+await assert.rejects(imageTools.QueryDownloadedImagesTool.execute({ keyword: '雪山' }, { ...actor, abortSignal: abortedQuery.signal }), /查询已取消/);
+
+// 发送复用现有素材，工具不写消息、不复制文件；文件错误与取消交给既有边界。
+const resolverErrors = load('src/features/media/application/MediaAssetResolver.ts', {
+  './MediaAssetBacking': { MediaAssetBackingNotFoundError: class extends Error {} },
+});
+const imageFailure = load('src/features/media/application/MediaImageToolResult.ts', {
+  './MediaAssetResolver': resolverErrors, '@platform/device': { ImageFileReadError: class extends Error {} },
+});
+let resolveForSend = async () => ({ asset, localUri: 'file:///cat.png' });
+const { SendImageTool } = load('src/features/chat/reply/agent/SendImageTool.ts', {
+  '@features/media': { ...imageFailure, resolveMediaAsset: id => resolveForSend(id) },
+  '@shared/aiTools': load('src/shared/aiTools/ToolCompletionIntent.ts'), '@shared/runtime/abortSignal': abort,
+});
+const sendContext = { ...actor, toolCallId: 'send-image' };
+const sendInput = { media_asset_id: downloadedImage.data.mediaAssetId, file_name: 'cat.png', on_success: 'finish' };
+const sentImage = await SendImageTool.execute(sendInput, sendContext);
+assert.equal(sentImage.status, 'success');
+assert.equal(sentImage.data.attachment.mediaAssetId, downloadedImage.data.mediaAssetId);
+assert.equal(sentImage.data.attachment.fileName, 'cat.png');
+assert.equal(sentImage.data.attachment.type, 'image');
+assert.equal(sentImage.data.attachment.localUri, undefined);
+assert.deepEqual(sentImage.metadata, { fulfillsUserVisibleOutput: true, completionIntent: 'finish' });
+assert.equal(downloadedCommits, 1, '发送已有素材不会重复下载或创建素材');
+const sendSchema = SendImageTool.definition.parameters;
+assert.equal(matchesAgentToolInputSchema(sendInput, sendSchema), true);
+for (const input of [{ media_asset_id: asset.id }, { media_asset_id: '', on_success: 'finish' },
+  { url: 'https://example.com/cat.png', on_success: 'finish' }, { ...sendInput, on_success: 'other' }]) {
+  assert.equal(matchesAgentToolInputSchema(input, sendSchema), false);
+}
+resolveForSend = async () => ({ asset: { ...asset, mimeType: 'audio/mpeg' } });
+assert.equal((await SendImageTool.execute(sendInput, sendContext)).code, 'IMAGE_REQUIRED');
+for (const [ErrorType, code] of [[resolverErrors.MediaAssetNotFoundError, 'IMAGE_NOT_FOUND'],
+  [resolverErrors.MediaAssetMissingError, 'IMAGE_MISSING']]) {
+  resolveForSend = async () => { throw new ErrorType(asset.id); };
+  assert.equal((await SendImageTool.execute(sendInput, sendContext)).code, code);
+}
+resolveForSend = async () => { throw new Error('数据库异常'); };
+await assert.rejects(SendImageTool.execute(sendInput, sendContext), /数据库异常/, '内部契约失败不能静默转为图片错误');
+const sendAbort = new AbortController();
+resolveForSend = async () => { sendAbort.abort(new Error('发送已取消')); return { asset }; };
+await assert.rejects(SendImageTool.execute(sendInput, { ...sendContext, abortSignal: sendAbort.signal }), /发送已取消/);
+resolveForSend = async () => { throw new Error('取消后不应读取素材'); };
+await assert.rejects(SendImageTool.execute(sendInput, { ...sendContext, abortSignal: sendAbort.signal }), /发送已取消/);
+downloadsDb.close();
 const modelGateway = load('src/platform/agentRuntime/BaseAIClientAgentModelGateway.ts', {
   '@platform/ai': {}, '@shared/diagnostics/TurnTimelineLog': {},
 });
@@ -414,13 +541,21 @@ assert.equal(projectChatContextMessage(legacyOnly, [now, 101, 0, 101]).content.i
 
 // 读取失败与成功共用同一图片说明，模型仍能引用失败图片的 ID；显示文本不变。
 let imageReadFails = true;
+let attachmentRoute = 'direct_vision';
+let imageReminder = '自定义图片防幻觉提醒';
+let reminderReads = 0;
 const { buildChatUserMessageModelInput } = load('src/features/chat/reply/application/BuildChatBatchAIInput.ts', {
   '@features/media': { mediaImageFailure: error => ({ status: 'error', code: 'IMAGE_UNREADABLE', modelContent: error.message }) },
   '@features/chat/messages/domain': chatMetadata, '../../messages/domain/ChatSticker': chatSticker,
   '../../messages/domain/SharedChatRecord': sharedRecord,
+  './ChatReplyRuntimeDependencies': { getChatReplyRuntimeDependencies: () => ({ prompt: {
+    readImageGroundingReminder: async assistantId => { assert.equal(assistantId, 'ai-two'); reminderReads++; return imageReminder; },
+  } }) },
   './ResolveChatImageModelInput': { resolveChatImageModelInput: async input => {
     if (imageReadFails) throw new Error('图片已被删除');
-    return { parts: [{ type: 'text', text: input.contextText }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }] };
+    return { route: attachmentRoute, parts: attachmentRoute === 'direct_vision'
+      ? [{ type: 'text', text: input.contextText }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }]
+      : [{ type: 'text', text: attachmentRoute === 'ocr' ? 'OCR 结果或失败说明' : '视觉识别不可用' }] };
   } },
 });
 const unreadable = await buildChatUserMessageModelInput(historical, 'ai-two');
@@ -434,6 +569,21 @@ imageReadFails = false;
 const readable = await buildChatUserMessageModelInput(receivedMessage, 'ai-two');
 assert.ok(readable.modelInput.some(part => part.type === 'text' && part.text.includes('mediaAssetId=image-1')));
 assert.ok(readable.modelInput.some(part => part.type === 'image_url'));
+assert.ok(readable.modelInput.some(part => part.type === 'text' && part.text === imageReminder));
+assert.equal(readable.displayText.includes(imageReminder), false, '提醒不进入用户消息展示正文');
+assert.equal(reminderReads, 1, '图片读取失败时不再叠加提醒');
+imageReminder = null;
+const reminderDisabled = await buildChatUserMessageModelInput(receivedMessage, 'ai-two');
+assert.ok(reminderDisabled.modelInput.some(part => part.type === 'image_url'), '关闭提醒不影响图片');
+assert.equal(reminderDisabled.modelInput.length, readable.modelInput.length - 1, '关闭后完全省略提醒片段');
+imageReminder = '不应进入 OCR 路线的提醒';
+const readsBeforeOCR = reminderReads;
+for (const route of ['ocr', 'vision_unavailable']) {
+  attachmentRoute = route;
+  const result = await buildChatUserMessageModelInput(receivedMessage, 'ai-two');
+  assert.equal(result.modelInput.includes(imageReminder), false);
+}
+assert.equal(reminderReads, readsBeforeOCR, '已配置 OCR 的成功、失败或不可用路线均不读取提醒');
 
 // 上传前验证真实文件格式及长截图尺寸，拒绝超限图时不进行模型编码。
 let dimensions = { width: 1080, height: 20000 }, imageEncodings = 0;
@@ -456,7 +606,7 @@ assert.deepEqual(await imagePreparation.readVisionImageAsBase64('file:///wrong-e
 const { BaseAIClient } = load('src/platform/ai/BaseAIClient.ts', {
   './HttpExchangeCapture': { beginAIHttpCapture: async () => null },
   './baseUrl': { normalizeAIBaseURL: value => value },
-  './errorMapping': { getErrorDisplayInfo: error => ({ message: String(error) }) },
+  './errorMapping': load('src/platform/ai/errorMapping.ts'),
 });
 const savedFetch = globalThis.fetch, savedXHR = globalThis.XMLHttpRequest;
 const requests = [];

@@ -107,6 +107,8 @@ function hookHost() {
     '@platform/device/DeviceMediaService': { deletePersistentMediaIfExists: async (uri) => { drafts.delete(uri); } },
   });
   const picked = { uri: 'content://picked', fileName: 'picked.png', mimeType: 'image/png', source: 'gallery' };
+  let pickedImages = [picked];
+  let failCopy = null;
   const { useAttachmentDraft } = load('src/features/chat/presentation/messages/ChatDetail/useAttachmentDraft.ts', {
     react: host.react,
     './ChatAttachmentDraftFiles': draftFiles,
@@ -114,9 +116,10 @@ function hookHost() {
     '@features/chat/messages/domain': load('src/features/chat/messages/domain/ChatAttachment.ts'),
     '@platform/device/DeviceMediaService': {
       PERSISTENT_MEDIA_CATEGORY: mediaStore.PERSISTENT_MEDIA_CATEGORY,
-      pickChatImageFromDevice: async () => picked,
+      pickChatImagesFromDevice: async (limit) => { assert.equal(limit, 9); return pickedImages; },
       deletePersistentMediaIfExists: async (uri) => { drafts.delete(uri); },
-      persistDeviceMedia: async () => {
+      persistDeviceMedia: async ({ sourceUri }) => {
+        if (sourceUri === failCopy) throw new Error('图片复制失败');
         const uri = `file:///draft-${++sequence}.png`; drafts.add(uri);
         if (pendingCopy) await pendingCopy.promise;
         return uri;
@@ -149,6 +152,60 @@ function hookHost() {
   assert.equal(drafts.has(oldUri), false);
   assert.ok(drafts.has(newUri), '旧发送完成不能清空用户后来选择的新附件');
   assert.equal(render().readyAttachments[0].localUri, newUri);
+
+  // 多图共享一次提交，移除和取消只影响对应草稿。
+  pickedImages = Array.from({ length: 9 }, (_, index) => ({ ...picked, uri: `content://picked-${index}`, fileName: `${index}.png` }));
+  await draft.selectImageAttachment(); draft = render();
+  assert.equal(draft.readyAttachments.length, 9);
+  assert.deepEqual(draft.readyAttachments.map(item => item.fileName), pickedImages.map(item => item.fileName));
+  const removed = draft.readyAttachments[4];
+  draft.removeAttachment(removed.id); draft = render(); await tick();
+  assert.equal(draft.readyAttachments.length, 8);
+  assert.equal(drafts.has(removed.localUri), false, '逐张移除只释放对应文件');
+  assert.equal(drafts.size, 8);
+  pickedImages = null;
+  assert.equal(await draft.selectImageAttachment(), false);
+  assert.equal(render().readyAttachments.length, 8, '取消重选保留整批已有草稿');
+  let submissions = 0;
+  await draft.withAttachmentSubmission(async (attachments) => {
+    submissions++;
+    assert.equal(attachments.length, 8, '剩余图片通过一次提交交接');
+    return true;
+  }, result => result);
+  assert.equal(submissions, 1);
+  assert.equal(render().draftAttachments.length, 0);
+  assert.equal(drafts.size, 0);
+
+  pickedImages = [picked, { ...picked, uri: 'content://bad', fileName: 'bad.png' }];
+  failCopy = 'content://bad';
+  await assert.rejects(draft.selectImageAttachment(), /图片复制失败/); draft = render();
+  assert.equal(draft.readyAttachments.length, 1, '单张处理失败不丢弃其他图片');
+  assert.equal(draft.hasFailedAttachment, true);
+  draft.removeAttachment(draft.draftAttachments.find(item => item.status === 'failed').id);
+  assert.equal(render().hasFailedAttachment, false);
+  failCopy = null;
+
+  pickedImages = [picked, { ...picked, uri: 'content://second', fileName: 'second.png' }];
+  await draft.selectImageAttachment(); draft = render();
+  const batchSendGate = deferred();
+  const sendingBatch = draft.withAttachmentSubmission(async attachments => {
+    assert.equal(attachments.length, 2);
+    await batchSendGate.promise;
+    assert.ok(attachments.every(item => drafts.has(item.localUri)), '整批发送完成前每张源文件都仍可读取');
+    return true;
+  }, result => result);
+  draft.removeAttachment(draft.draftAttachments[0].id);
+  batchSendGate.resolve(); await sendingBatch; await tick(); draft = render();
+  assert.equal(draft.draftAttachments.length, 0, '提交期间单张移除不能让其余已发送草稿留在输入区');
+  assert.equal(drafts.size, 0);
+
+  pendingCopy = deferred();
+  const pendingBatch = draft.selectImageAttachment(); await tick(); draft = render();
+  const pendingRemoved = draft.draftAttachments[0];
+  draft.removeAttachment(pendingRemoved.id);
+  pendingCopy.resolve(); await pendingBatch; await tick(); draft = render();
+  assert.equal(draft.readyAttachments.length, 1, '准备途中移除一张不取消其余图片');
+  assert.equal(drafts.size, 1, '迟到的已移除图片副本被释放');
   pendingCopy = deferred(); const selecting = draft.selectImageAttachment(); await tick();
   host.unmount(); pendingCopy.resolve(); await selecting; await tick();
   assert.equal(drafts.size, 0, '退出页面后迟到的复制结果也必须释放');
@@ -165,6 +222,7 @@ function hookHost() {
   let messages = []; let retryGate = null;
   const { useChatSendFlow } = load('src/features/chat/presentation/messages/ChatDetail/useChatSendFlow.ts', {
     react: host.react, './ChatAttachmentDraftFiles': draftFiles,
+    '@shared/ui': { showAppDialog() {} },
     '../../../messages/application/MessageTimeline': { messageTimeline: {
       createOptimisticUserMessages: ({ attachments }) => [{ id: -1, isMe: true, status: 'pending', text: '', metadataJson: JSON.stringify({ attachments }) }],
       mergeMessages: (_previous, next) => ({ messages: next, changed: true, lastMessageId: next.at(-1).id }),

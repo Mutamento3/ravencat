@@ -15,32 +15,25 @@ import type {
 } from './Prompting';
 import type { PromptScenarioId } from '@shared/prompt';
 
+/** 2.x 历史片段端口：只按 ID 或列表读取，写入链路已不存在。 */
 export interface PromptCustomBlockRepository {
   listCustomBlocks(): Promise<PromptCustomBlock[]>;
   getCustomBlockById(id: string): Promise<PromptCustomBlock | null>;
-  saveCustomBlock(block: PromptCustomBlock): Promise<PromptCustomBlock>;
-  deleteCustomBlock(id: string): Promise<boolean>;
 }
 
+/** 2.x 历史预设端口：只读取绑定指到的预设及其条目。 */
 export interface PromptPresetRepository {
-  listPresets(scenarioId?: PromptScenarioId): Promise<PromptPreset[]>;
   getPresetById(id: string): Promise<PromptPreset | null>;
-  savePreset(preset: PromptPreset): Promise<PromptPreset>;
   listItems(presetId: string): Promise<PromptPresetItem[]>;
-  listItemsByDefinitionId(definitionId: string): Promise<PromptPresetItem[]>;
-  replaceItems(presetId: string, items: PromptPresetItem[]): Promise<PromptPresetItem[]>;
-  deletePreset(id: string): Promise<boolean>;
 }
 
+/** 2.x 历史绑定端口：只按目标查找，绑定内容来自历史数据。 */
 export interface PromptBindingRepository {
-  listByPresetId(presetId: string): Promise<PromptBinding[]>;
   find(
     scenarioId: PromptScenarioId,
     targetType: PromptBindingTargetType,
     targetId: string | null
   ): Promise<PromptBinding | null>;
-  saveBinding(binding: PromptBinding): Promise<PromptBinding>;
-  deleteBinding(id: string): Promise<boolean>;
 }
 
 export interface AssistantPromptConfigurationRepository {
@@ -54,6 +47,8 @@ export interface AssistantPromptConfigurationRepository {
   saveDefinitionState(state: AssistantPromptDefinitionState): Promise<AssistantPromptDefinitionState>;
   listDefinitionOverrides(assistantId: string): Promise<AssistantPromptDefinitionOverride[]>;
   saveDefinitionOverride(override: AssistantPromptDefinitionOverride): Promise<AssistantPromptDefinitionOverride>;
+  /** 原子覆盖指定 AI 的同一项正文，保留开关、其他正文与全局默认。 */
+  applyDefinitionOverrideSnapshot(assistantIds: readonly string[], override: Omit<AssistantPromptDefinitionOverride, 'assistantId'>): Promise<void>;
   resetDefinitionOverride(assistantId: string, definitionId: string, locale: 'zh-CN' | 'en-US'): Promise<boolean>;
   listAssistantUserPrompts(assistantId: string): Promise<AssistantUserPrompt[]>;
   saveAssistantUserPrompt(prompt: AssistantUserPrompt): Promise<AssistantUserPrompt>;

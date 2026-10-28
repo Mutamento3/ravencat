@@ -75,10 +75,6 @@ export async function resolveStickerMedia(stickerId: string): Promise<ResolvedSt
   return { sticker, localUri: resolved.localUri };
 }
 
-export async function resolveStickerUri(stickerId: string): Promise<string> {
-  return (await resolveStickerMedia(stickerId)).localUri;
-}
-
 function requireId(value: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error('Sticker ID 不能为空');

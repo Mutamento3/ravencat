@@ -15,7 +15,11 @@ import { createGroupChat } from '../../group/application';
 import { getAssistantDisplayName,
   fetchModelsWithConfig,
   runConnectionTestByConfig,
+  FetchModelsButton,
   GeneralModelPrefill,
+  ModelSelectHint,
+  SelectedModel,
+  TestConnectionButton,
   type ModelCallConfig,
   type AIProfile,
 } from '@features/assistants';
@@ -291,30 +295,38 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
                 style={styles.avatarImage}
               />
               <View style={styles.avatarEditBadge}>
-                <Ionicons name="camera" size={14} color={theme.colors.surface.default} />
+                <Ionicons name="camera" size={14} color={theme.colors.brand.onPrimary} />
               </View>
             </TouchableOpacity>
           </View>
 
           {/* 群聊名称 */}
-          <InputField
-            label="群聊名称"
-            placeholder="请输入群聊名称"
-            value={groupName}
-            onChangeText={setGroupName}
-          />
+          <View style={styles.section}>
+            <InputField
+              label="群聊名称"
+              placeholder="请输入群聊名称"
+              value={groupName}
+              onChangeText={setGroupName}
+              style={{ marginBottom: 0 }}
+            />
+          </View>
 
           {/* 群管理员 */}
           <View style={styles.section}>
             <Text style={commonStyles.sectionTitle}>群管理员</Text>
             <GeneralModelPrefill onFill={fillAdminConfig} disabled={isTesting || isLoadingModels || isSaving} />
+          </View>
+          <View style={styles.section}>
             <InputField
               label="API 地址"
               placeholder="https://api.example.com/v1"
               value={adminUrl}
               onChangeText={handleAdminUrlChange}
               autoGrow
+              style={{ marginBottom: 0 }}
             />
+          </View>
+          <View style={styles.section}>
             <InputField
               label="API Key"
               placeholder="sk-..."
@@ -322,45 +334,29 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
               onChangeText={handleAdminApiKeyChange}
               autoGrow
               autoCapitalize="none"
+              style={{ marginBottom: 0 }}
             />
-            <Button
-              title={availableModels.length > 0 ? '重新获取模型列表' : '获取模型列表'}
-              onPress={handleFetchModels}
-              disabled={isLoadingModels}
-              style={styles.fullWidthButton}
-            />
-            {adminModel ? (
-              <View style={styles.selectedModelContainer}>
-                <Text style={styles.selectedModelText} numberOfLines={1}>
-                  {adminModel}
-                </Text>
-                <TouchableOpacity
-                  style={styles.changeModelBtn}
-                  onPress={() => setShowModelPicker(true)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.changeModelText}>更换</Text>
-                </TouchableOpacity>
-              </View>
-            ) : availableModels.length > 0 ? (
-              <Text style={styles.modelHint}>请选择一个管理员模型</Text>
-            ) : null}
-            {adminModel ? (
-              <Button
-                title={
-                  testResult === 'success'
-                    ? '连接正常'
-                    : testResult === 'error'
-                      ? '连接失败'
-                      : '测试连接'
-                }
-                onPress={handleTestConnection}
-                disabled={isTesting}
-                variant={testResult === 'error' ? 'danger' : 'primary'}
-                style={styles.fullWidthButton}
-              />
-            ) : null}
           </View>
+          <FetchModelsButton
+            onPress={handleFetchModels}
+            isLoading={isLoadingModels}
+            hasModels={availableModels.length > 0}
+          />
+          {adminModel ? (
+            <SelectedModel
+              modelId={adminModel}
+              onChangePress={() => setShowModelPicker(true)}
+            />
+          ) : availableModels.length > 0 ? (
+            <ModelSelectHint />
+          ) : null}
+          {adminModel ? (
+            <TestConnectionButton
+              onPress={handleTestConnection}
+              isTesting={isTesting}
+              testResult={testResult}
+            />
+          ) : null}
 
           {/* 邀请 AI 助手 */}
           <View style={styles.section}>
@@ -390,7 +386,7 @@ export default function CreateGroup({ aiList, onBack, onCreated }: CreateGroupPr
                     ]}
                   >
                     {selectedIds.has(ai.id) && (
-                      <Ionicons name="checkmark" size={14} color={theme.colors.surface.default} />
+                      <Ionicons name="checkmark" size={14} color={theme.colors.brand.onPrimary} />
                     )}
                   </View>
                 </TouchableOpacity>

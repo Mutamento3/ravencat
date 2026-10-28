@@ -1,22 +1,8 @@
 import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 /** 验证群聊工具目录与发布工具的可见范围资料随实际 schema 暴露。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
-import { fileURLToPath } from 'node:url';
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-function load(relative, mocks = {}) {
-  const output = ts.transpileModule(fs.readFileSync(path.join(root, relative), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }, fileName: relative,
-  });
-  const module = { exports: {} };
-  new Function('require', 'module', 'exports', output.outputText)((name) => {
-    assert.ok(Object.hasOwn(mocks, name), relative + ' 未声明依赖 ' + name);
-    return mocks[name];
-  }, module, module.exports);
-  return module.exports;
-}
+import { loadTypeScriptModule as load } from './helpers/load-typescript-module.mjs';
+
 let assistants = [
   { name: '普通 AI', agentId: 'agent-ordinary', isHostAI: false },
   { name: '候选 AI', agentId: 'agent-candidate', isBlocked: false },
@@ -93,11 +79,12 @@ const providerKeys = {
   'context.host_cooldown': 'host_cooldown',
 };
 const { promptPackAssembler: assembler } = load('src/host/prompt/PromptPackAssembler.ts', {
+  '@features/companion': { loadAIScheduleContext: async () => '' },
   './PromptPackBlockFactory': { promptPackBlockFactory: {
     resolveUserIdentity: async () => ({ displayName: '用户', source: 'test' }),
     createFoundationBlock: () => block('foundation_default_core'), createPersonaBlock: () => block('persona'),
     createUserIdentityBlock: () => block('user_identity_summary'), createTimeAwarenessBlock: () => block('time_awareness'),
-    createVisualGroundingRulesBlock: () => block('visual_grounding_rules'), createScenarioContextBlock: () => null,
+    createScenarioContextBlock: () => null,
     createInteractionEnvironmentBlock: () => block('interaction_environment'),
     createRecentChatWindowBlock: () => ({ ...block('recent_chat_window'), placement: 'history' }),
     createGroupMemberReplyConfidentialityBlock: () => ({ ...block('group_chat_context', '群输出要求'),

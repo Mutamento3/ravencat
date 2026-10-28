@@ -1,6 +1,6 @@
 /** 拥有列表的贴底意图、触摸暂停和新消息提示；历史锚定仍由 FlashList 负责。 */
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import { PixelRatio, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import type { FlashListRef } from '@shopify/flash-list';
 import type { ChatMessage } from '../../../messages/domain/ChatMessage';
 import type { RenderedMessageItem } from './chatMessageRenderUtils';
@@ -66,8 +66,10 @@ export function useChatBottomFollow({
       + contentPaddingBottom;
     // FlashList 提交的是 cell 布局，原生 ScrollView 的内容范围可能尚未扩高。
     // 此时滚动会被截在旧底部；请求保留到原生尺寸事件到达，不另加 timer 或重试。
+    // 两次测量独立取整，按物理像素允许一像素误差，不能按整数 dp 判断是否就绪。
     if (nativeContentHeightRef.current === null
-      || Math.round(nativeContentHeightRef.current) < Math.round(contentHeight)) return false;
+      || PixelRatio.getPixelSizeForLayoutSize(contentHeight)
+        - PixelRatio.getPixelSizeForLayoutSize(nativeContentHeightRef.current) > 1) return false;
     const offset = Math.max(0, contentHeight - list.getWindowSize().height);
     // 使用已提交的布局同步滚动；scrollToEnd 内部会再排 timer，导致尾栏先下移、下一帧才拉回。
     if (offset !== list.getAbsoluteLastScrollOffset()) {

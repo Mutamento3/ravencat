@@ -9,7 +9,7 @@ import {
   CALL_POST_USER_HANGUP_PROMPT,
   CALL_POST_USER_HANGUP_JSON_CONTRACT,
   OUTGOING_CALL_DECISION_PROMPT,
-  OUTGOING_CALL_JSON_CONTRACT,
+  OUTGOING_CALL_CONTROL_PROMPT,
 } from './CallPromptBlocks';
 
 const LIVE_REPLY_SCENARIO = ['call.live_reply'] as const;
@@ -98,19 +98,20 @@ export const CALL_PROMPT_DEFINITIONS = [
     sourcePath: 'src/features/calls/application/CallPromptBlocks.ts',
   },
   {
+    // 此 ID 已持久化在 2.x 预设中；保留引用身份，名称与正文更新为当前标记协议。
     id: 'output.call_outgoing_decision_json',
-    version: 2,
-    name: '去电决策 JSON 契约',
-    description: '只允许 accept/spokenText 或 reject/rejectionReason 两种 JSON 形状。',
+    version: 3,
+    name: '去电接听控制标记',
+    description: '从任意位置的 [[接听]] 或 [[拒绝接听]] 识别动作，抽离标记后交付正文。',
     owner: 'calls',
-    category: 'output',
+    category: 'control',
     supportedScenarios: [...OUTGOING_DECISION_SCENARIO],
     defaultSlot: 'output_contract',
     placement: 'system',
     protection: 'locked',
-    protectionReason: '通话状态机依赖结构化决策。',
+    protectionReason: '通话状态机依赖明确的接听或拒接控制标记。',
     contentKind: 'static',
-    content: OUTGOING_CALL_JSON_CONTRACT,
+    content: OUTGOING_CALL_CONTROL_PROMPT,
     sourcePath: 'src/features/calls/application/CallPromptBlocks.ts',
   },
   {

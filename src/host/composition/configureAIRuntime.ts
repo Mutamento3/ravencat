@@ -25,6 +25,8 @@ import {
   callAudioPlayback,
   callBackgroundRepository,
   configureCallBackgroundRuntime,
+  callRingtoneRepository,
+  configureCallRingtoneRuntime,
   callRepository,
   configureCallRuntimeDependencies,
   requestCallCameraPermission,
@@ -93,6 +95,7 @@ export function configureAIRuntime(): void {
     notifyTranslationModelsChanged();
   });
   configureCallBackgroundRuntime(callBackgroundRepository);
+  configureCallRingtoneRuntime(callRingtoneRepository);
   configureCallRuntimeDependencies({
     agent: {
       run: runHostAgent,

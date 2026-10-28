@@ -3,6 +3,8 @@
 export { configureCallRuntimeDependencies } from './application/runtime/CallRuntimeDependencies';
 export { configureCallBackgroundRuntime, ensureCallBackgroundMigration } from './application/CallBackgroundSettings';
 export { callBackgroundRepository } from './infrastructure/SQLiteCallBackgroundRepository';
+export { configureCallRingtoneRuntime } from './application/CallRingtoneSettings';
+export { callRingtoneRepository } from './infrastructure/SQLiteCallRingtoneRepository';
 export { callRepository } from './infrastructure/SQLiteCallRepository';
 export { callAudioPlayback } from './infrastructure/NativeCallAudioAdapter';
 export { createCallExecutionAdapter } from './infrastructure/NativeCallExecutionAdapter';

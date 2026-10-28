@@ -7,19 +7,10 @@ export type { ModelCallConfig } from './domain/ModelCallConfig';
 export { default as CopyToGeneralModel } from './presentation/auxiliaryModels/CopyToGeneralModel';
 export { default as GeneralModelPrefill } from './presentation/auxiliaryModels/GeneralModelPrefill';
 export { ApplicationSettingsAccessError } from './domain/ApplicationSettingsAccess';
-export type {
-  AIAssistantSettingsUpdate,
-  AIModelSettingsUpdate,
-  AIAssistantSummary,
-  IAIAssistantRepository,
-} from './domain/AssistantRepository';
-export type { IAIHostRepository, HostCooldownStatus, BlockAIParams, BlockedAIRecord } from './domain/HostRepository';
+export type { AIAssistantSettingsUpdate, AIAssistantSummary, IAIAssistantRepository } from './domain/AssistantRepository';
+export type { IAIHostRepository } from './domain/HostRepository';
 export { ReleaseHostCooldownTool } from './aiTools/ReleaseHostCooldownTool';
-export {
-  HostRelationshipError,
-  type HostRelationshipErrorCode,
-} from './domain/HostRepository';
-export type { IAuxiliaryModelRepository } from './domain/AuxiliaryModelRepository';
+export { HostRelationshipError } from './domain/HostRepository';
 export { AIAssistantRepository, aiAssistantRepository } from './infrastructure/SQLiteAssistantRepository';
 export {
   assistantToolPermissionRepository,
@@ -31,55 +22,45 @@ export * from './ManageAuxiliaryModelConfigs';
 export * from './ResolveAuxiliaryModel';
 export * from './TestAuxiliaryModelConnection';
 export {
-  appointHostAIAssistant, createAIAssistant, deleteAIAssistant,
+  appointHostAIAssistant,
+  createAIAssistant,
+  deleteAIAssistant,
   getAIAssistantById,
-  getHostAIAssistant, getHostAICooldownStatus,
+  getHostAIAssistant,
+  getHostAICooldownStatus,
   configureAssistantRuntime,
-  getLedgerAIAssistant, listAIAssistants, listAIAssistantSummaries, setLedgerAIAssistant,
+  listAIAssistants,
+  listAIAssistantSummaries,
+  setLedgerAIAssistant,
   revokeHostAIAssistant,
   runAsCurrentHostAuthority,
   runHostAuthorityMutation,
   releaseHostAICooldown,
   updateAIModelSettings,
   updateAIAssistantSettings,
-  applyAssistantContextLimits,
   updateAIAssistantAvatarFromDraft,
   changeAssistantAvatarFromMediaAsset,
   changeAssistantPublicName,
   assertApplicationSettingsAccessInTransaction,
   subscribeAIAssistantUpdated,
 } from './AIAssistantManagement';
-export type {
-  AIAssistantUpdatedListener,
-  AssistantChatSessionGateway,
-} from './AIAssistantManagement';
-export type { CurrentHostAuthorityResult } from './application/HostAuthorityCoordinator';
 export { AgentRegistryService, agentRegistryService } from './AgentRegistryService';
-export type {
-  AgentRegistryCollaborationState,
-  AgentRegistryEntry,
-  AgentRegistrySummary,
-  GetAgentRegistrySummaryOptions,
-} from './AgentRegistryService';
-export {
-  detectConnectionParamError,
-  fetchModelsWithConfig, getAIConnectionErrorInfo,
-  normalizeModelConfigInput, runConnectionTestByConfig,
-} from './application/AIModelService';
+export { fetchModelsWithConfig, runConnectionTestByConfig } from './application/AIModelService';
 export type * from './application/modelTypes';
 export { default as AddAIScreen } from './presentation/management';
+export {
+  FetchModelsButton,
+  ModelSelectHint,
+  SelectedModel,
+  TestConnectionButton,
+} from './presentation/management/FormFields';
 export { default as ContextLimitsApply } from './presentation/management/ContextLimitsApply';
-export type { AssistantContextLimits } from './domain/AssistantRepository';
 export { default as AIModelSettings } from './presentation/management/AIModelSettings';
 export { createHostAIAppointmentDialog } from './presentation/HostAIAppointmentDialog';
 export { default as ConversationList } from './presentation/management/ConversationList';
 export type { ConversationListPinTarget } from './presentation/management/ConversationList';
 export {
   buildConversationListItems,
-} from './presentation/management/conversationListItems';
-export type {
-  ConversationListItem,
-  BuildConversationListItemsParams,
 } from './presentation/management/conversationListItems';
 export { default as ModelSection } from './presentation/management/AIModelSettings/ModelSection';
 export { createModelSettingsStyles } from './presentation/management/AIModelSettings/styles';
@@ -89,4 +70,4 @@ export { BlockAIAssistantTool } from './aiTools/BlockAIAssistantTool';
 export { UnblockAIAssistantTool } from './aiTools/UnblockAIAssistantTool';
 export { subscribeAuxiliaryModelsChanged } from './AuxiliaryModelsChanged';
 
-export { getAssistantVoiceModelSettings, selectAssistantVoiceModel, subscribeAssistantVoiceModelsChanged } from './application/AssistantVoiceModels';
+export { selectAssistantVoiceModel } from './application/AssistantVoiceModels';

@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
 import { Check, ChevronRight, Plus, Search, X } from 'lucide-react-native';
-import { AppTextInput, ModalSheet, Toggle } from '@shared/ui';
+import { AppTextInput, ModalSheet, ToggleField } from '@shared/ui';
 import { useTheme, useThemedStyles } from '@shared/theme';
 import { normalizeMemoryText, memorySearchText } from '../domain/Memory';
 import { addMemoryTrigger } from '../application/MemoryCommands';
@@ -65,7 +65,9 @@ export default function MemorySpacePanel({ visible, snapshot, error, busy, refre
                 <Text style={styles.body}>新建关联组</Text>
                 <Text style={styles.meta}>多个词用逗号、顿号、分号或换行分隔。命中任一词，带入本组开启的记忆；相同词可以出现在其他组。</Text>
                 <AppTextInput multiline accessibilityLabel="关联组的触发词" style={styles.groupInput} value={triggerInput} onChangeText={setTriggerInput} editable={!busy} placeholder="chatgpt、openai的ai、codex" placeholderTextColor={secondaryColor} />
-                <View style={styles.row}><Text style={[styles.meta, { flex: 1 }]}>自动关联正文或摘要含任一词的记忆</Text><Toggle accessibilityLabel="自动关联包含触发词的记忆" disabled={busy} value={autoAssociate} onValueChange={setAutoAssociate} /></View>
+                <ToggleField layout="inline" rowStyle={styles.row} label="自动关联包含触发词的记忆" disabled={busy} value={autoAssociate} onValueChange={setAutoAssociate}>
+                  <Text style={[styles.meta, { flex: 1 }]}>自动关联正文或摘要含任一词的记忆</Text>
+                </ToggleField>
                 <Text style={styles.meta}>选择关联记忆（已选 {selectedMemoryIds.length} 条）</Text>
                 <AppTextInput accessibilityLabel="查找要关联的记忆" style={styles.groupInput} value={query} onChangeText={setQuery} placeholder="查找记忆" placeholderTextColor={secondaryColor} />
                 <View style={styles.row}>

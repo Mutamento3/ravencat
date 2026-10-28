@@ -32,6 +32,8 @@ let backgroundChanged, aiUpdated, userUpdated;
 let backgroundUri = 'file:///role-background.jpg';
 let speechCallbacks;
 let audioCallbacks;
+let sentencePlaybackListener;
+let speechInterruptions = 0;
 const deletedFrames = [];
 let cameraMounts = 0;
 let cameraUnmounts = 0;
@@ -48,6 +50,9 @@ let routeRequest;
 let cameraReady;
 let deferCamera = true;
 let finishReply;
+let delayTypedCommit = false;
+let releaseTypedCommit;
+let failTypedCommit = false;
 let finishEventRead;
 let deferEventRead = false;
 const committedEvents = [];
@@ -106,6 +111,9 @@ const nativeDependencies = {
 const dependenciesModule = { getCallRuntimeDependencies: () => nativeDependencies };
 const nativeStarts = [];
 const { createCallExecutionAdapter } = load('src/features/calls/infrastructure/NativeCallExecutionAdapter.ts', {
+  '../application/CallRingtoneSettings': { async loadCallRingtoneUri(assistantId, direction) {
+    assert.equal(assistantId, 'ai-1'); assert.equal(direction, 'outgoing'); return 'file:///outgoing.mp3';
+  } },
   '../../../../modules/call-runtime': { nativeCallRuntime: { async start(options) { nativeStarts.push(options); } } },
 });
 const executionAdapter = createCallExecutionAdapter(id => `kimiphone://calls/${id}`, async assistantId => {
@@ -115,7 +123,11 @@ const executionAdapter = createCallExecutionAdapter(id => `kimiphone://calls/${i
 await executionAdapter.start(call);
 assert.deepEqual(nativeStarts, [{
   callId: 'call-1', name: 'AI', avatarUri: 'file:///ai-avatar.jpg', direction: 'outgoing', returnUri: 'kimiphone://calls/call-1',
+  ringtoneUri: null, ringing: false,
 }], '通话宿主的展示契约携带当前 AI 头像，不使用全屏通话背景代替');
+await executionAdapter.start({ ...call, state: 'dialing' });
+assert.equal(nativeStarts[1].ringtoneUri, 'file:///outgoing.mp3');
+assert.equal(nativeStarts[1].ringing, true, '只有未接通的拨出启动等待音');
 const transcriptWriter = load('src/features/calls/application/events/AppendCallTranscriptEvent.ts', {
   '../CallHistory': { async saveCallHistoryAudio() {} },
   '../runtime/CallRuntimeDependencies': dependenciesModule,
@@ -152,11 +164,14 @@ const application = {
   async attachCallSnapshot() { return { callId: call.id }; },
   getCallReplyRunPhase: () => 'idle',
   subscribeCallReplyRunPhase: () => () => {},
-  subscribeCallSentencePlayback: () => () => {},
-  callTTSPlaybackQueue: { async interruptForUserSpeech() {} },
-  async submitCallUserInput({ userText }) {
+  subscribeCallSentencePlayback: listener => { sentencePlaybackListener = listener; return () => {}; },
+  callTTSPlaybackQueue: { async interruptForUserSpeech() { speechInterruptions++; return false; } },
+  async submitCallUserInput({ userText, onUserTextCommitted }) {
+    if (onUserTextCommitted && failTypedCommit) throw new Error('测试：文字提交失败');
+    if (onUserTextCommitted && delayTypedCommit) await new Promise(resolve => { releaseTypedCommit = resolve; });
     transcripts.push(userText);
     await transcriptWriter.appendUserSpeechText({ callId: call.id, text: userText });
+    onUserTextCommitted?.();
     await new Promise(resolve => { finishReply = resolve; });
     return { status: 'completed' };
   },
@@ -268,6 +283,26 @@ try {
     await currentRuntime.startRealtimeSpeech();
     opening = currentRuntime.toggleCamera();
   });
+  await act(async () => {
+    sentencePlaybackListener({ callId: call.id, type: 'started' });
+    speechCallbacks.onInterimTranscript({ index: 89, text: '尚无人声候选的识别结果', startTime: 0, endTime: 0 });
+  });
+  assert.equal(speechInterruptions, 0, 'AI 播放期间没有声学候选的识别结果仍被隔离');
+  await act(async () => {
+    audioCallbacks.onSpeechDetected();
+    audioCallbacks.onSpeechDetected();
+    speechCallbacks.onSpeechStart({ index: 90, text: '', startTime: 0, endTime: 0 });
+    speechCallbacks.onInterimTranscript({ index: 90, text: '  ', startTime: 0, endTime: 0 });
+  });
+  assert.equal(speechInterruptions, 0, '本地人声检测和空识别结果不能独自打断 AI');
+  await act(async () => {
+    speechCallbacks.onInterimTranscript({ index: 90, text: '等一下', startTime: 0, endTime: 0 });
+  });
+  assert.equal(speechInterruptions, 1, '确认识别内容后及时打断，不等待整句结束');
+  await act(async () => {
+    sentencePlaybackListener({ callId: call.id, type: 'ended' });
+    speechCallbacks.onInterimTranscript({ index: 90, text: '', startTime: 0, endTime: 0 });
+  });
   assert.equal(currentRuntime.cameraEnabled, true, '第一次点击立即提交摄像头开启状态');
   assert.equal(currentRuntime.isCameraReady, false, '原生绑定期间显示启动状态');
   assert.equal((await snapshots.requestCallSnapshotFromProvider(call.id, 'look_at_user')).status, 'camera_not_ready', '启动中的画面不能误报可截帧');
@@ -314,7 +349,9 @@ try {
   const originalAudioCallbacks = audioCallbacks;
 
   for (let cycle = 0; cycle < 3; cycle += 1) {
-    await act(async () => { renderer.update(tree(call.id, true)); });
+  await act(async () => { currentRuntime.changeTextDraft('收起后继续写的草稿'); });
+  await act(async () => { renderer.update(tree(call.id, true)); });
+  assert.equal(currentRuntime.textDraft, '收起后继续写的草稿');
     assert.equal(currentRuntime.isListening, true);
     assert.equal(currentRuntime.audioRoute, 'earpiece');
     let frame;
@@ -335,6 +372,7 @@ try {
 
   await act(async () => { speechCallbacks.onFinalTranscript({ index: 0, text: '收起后继续说话', startTime: 0, endTime: 2300 }); });
   assert.deepEqual(transcripts, ['收起后继续说话']);
+  assert.equal(currentRuntime.textDraft, '收起后继续写的草稿', '语音输入不清空文字草稿');
   assert.equal(currentRuntime.pendingUserSpeechText, null, '用户文本提交后立即替换临时行，无需等待模型回复');
   await act(async () => { lyrics = create(renderLyrics()); });
   assert.deepEqual(lyricTexts(), ['收起后继续说话']);
@@ -373,6 +411,21 @@ try {
   await act(async () => { transcriptFacts.publishCallTranscriptFact(committedEvents.at(-1)); });
   assert.equal(currentRuntime.events.filter(event => event.text === '新提交的文本').length, 1, '历史读取与提交推送共用事件身份去重');
   await act(async () => { finishReply(); });
+  let typedSubmission;
+  await act(async () => { typedSubmission = currentRuntime.sendCallText(currentRuntime.textDraft); });
+  assert.equal(currentRuntime.textDraft, '', '文字事实提交即清除草稿，不等待 AI 回合结束');
+  await act(async () => { currentRuntime.changeTextDraft('等待回复时新写的文字'); finishReply(); await typedSubmission; });
+  assert.equal(currentRuntime.textDraft, '等待回复时新写的文字');
+  delayTypedCommit = true;
+  await act(async () => { typedSubmission = currentRuntime.sendCallText(currentRuntime.textDraft); });
+  await act(async () => { currentRuntime.changeTextDraft('提交期间又编辑的新草稿'); releaseTypedCommit(); });
+  assert.equal(currentRuntime.textDraft, '提交期间又编辑的新草稿', '旧文字提交不能清除新草稿');
+  await act(async () => { finishReply(); await typedSubmission; });
+  failTypedCommit = true;
+  await act(async () => { await currentRuntime.sendCallText(currentRuntime.textDraft); });
+  assert.equal(currentRuntime.textDraft, '提交期间又编辑的新草稿', '用户文字提交失败保留原稿');
+  failTypedCommit = false;
+  delayTypedCommit = false;
   assert.deepEqual(currentRuntime.events.filter(event => event.kind === 'ttsStarted').map(event => event.text), ['第一句。', '第二句。', '第三句。']);
   await act(async () => { await currentRuntime.stopRealtimeSpeech(); });
   assert.deepEqual(releasedCalls, [], '暂停录音不结束通话音频会话');
@@ -380,6 +433,7 @@ try {
   cleanupOrder.length = 0;
   await act(async () => { assert.equal(await currentRuntime.hangUp(), true); });
   assert.equal(currentRuntime.isListening, false);
+  assert.equal(currentRuntime.textDraft, '', '通话终态清除本次草稿');
   assert.equal(currentRuntime.cameraEnabled, false);
   assert.equal(cameraUnmounts, 1);
   assert.deepEqual(cleanupOrder, ['microphone', 'asr', 'camera', 'audio-session']);

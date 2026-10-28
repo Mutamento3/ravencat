@@ -84,6 +84,7 @@ export interface SubscribeConversationTimelineParams {
   onReplace?: (messages: ChatMessage[]) => void | Promise<void>;
   onAppend?: (messages: ChatMessage[]) => void | Promise<void>;
   onRemove?: (messageIds: readonly number[]) => void | Promise<void>;
+  onReset?: () => void;
   onError?: (error: string) => void;
   pollIntervalMs?: number | null;
   shouldPoll?: () => boolean;
@@ -346,6 +347,7 @@ export function subscribeConversationTimeline(
     onReplace,
     onAppend,
     onRemove,
+    onReset,
     onError,
     pollIntervalMs = null,
     shouldPoll,
@@ -357,6 +359,7 @@ export function subscribeConversationTimeline(
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   const pendingPatchedMessageIds = new Set<number>();
   let hasPendingReload = false;
+  let historyGeneration = 0;
   // 删除可能发生在增量查询等待期间；旧查询结果不能重新插入已提交删除的身份。
   const deletedMessageIds = new Set<number>();
 
@@ -389,19 +392,22 @@ export function subscribeConversationTimeline(
       do {
         hasPendingSync = false;
 
+        const generation = historyGeneration;
+        const forceReload = hasPendingReload;
+        hasPendingReload = false;
         const result = await syncConversationTimelineOnce({
           sessionId,
           getAfterId,
           getLoadedMessageIds,
           onError,
-          forceReload: hasPendingReload,
+          forceReload,
           ...consumePendingPatchState(),
         }, deps);
-        hasPendingReload = false;
 
         if (isDisposed) {
           return;
         }
+        if (generation !== historyGeneration) continue;
 
         const messages = result.messages.filter((message) => !deletedMessageIds.has(message.id));
         if (result.mode === 'replace') {
@@ -438,6 +444,11 @@ export function subscribeConversationTimeline(
           }
         }
       } else if (eventName === 'messagesReloadRequested') {
+        if (payload.resetHistory) {
+          historyGeneration++;
+          pendingPatchedMessageIds.clear();
+          onReset?.();
+        }
         hasPendingReload = true;
       } else if (eventName !== 'messagesUpdated') {
         return;

@@ -259,7 +259,7 @@ try {
   const shared = Object.fromEntries(['Button', 'InputField', 'DropdownField', 'ToggleField', 'ModelPickerModal', 'NavigationHeader', 'EmptyState', 'ListItem', 'KeyboardAvoidingContainer'].map((name) => [name, name]));
   shared.NavigationHeader = function NavigationHeader({ rightButton, ...props }) { return React.createElement('Header', props, rightButton); };
   shared.showAppDialog = () => {};
-  const uiTheme = { useTheme: () => theme, useThemedStyles: () => ({}) };
+  const uiTheme = { ThemedSurface: 'Surface', useTheme: () => theme, useThemedStyles: () => ({}) };
   shared.ConfiguredModelPicker = load('src/shared/ui/ConfiguredModelPicker.tsx', {
     'react-native': native, '@shared/theme': uiTheme, 'lucide-react-native': { Check: 'Check', ChevronRight: 'ChevronRight' },
     './ModalSheet': { __esModule: true, default: function ModalSheet({ visible, children }) { return visible ? React.createElement('ModalSheet', null, children) : null; } },

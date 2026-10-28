@@ -1,53 +1,9 @@
 import { agentToolSchemaDependencies } from './helpers/agent-tool-schema-dependencies.mjs';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function read(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: absolutePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 存在未声明的运行时依赖：${specifier}`);
-    return mocks[specifier];
-  };
-  const executeModule = new Function(
-    'exports',
-    'require',
-    'module',
-    '__filename',
-    '__dirname',
-    compiled.outputText,
-  );
-  executeModule(
-    module.exports,
-    requireMock,
-    module,
-    absolutePath,
-    path.dirname(absolutePath),
-  );
-  return module.exports;
-}
+import { DatabaseSync } from 'node:sqlite';
+import { createSqliteExecutor } from './helpers/sqlite-bootstrap-fixture.mjs';
+import { createCoordinatedSqliteFixture } from './helpers/coordinated-sqlite-fixture.mjs';
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 
 const runStateModule = loadTypeScriptModule('src/platform/agentRuntime/AgentRunState.ts');
 const guardsModule = loadTypeScriptModule(
@@ -58,6 +14,7 @@ const agentToolSchemaModule = loadTypeScriptModule('src/shared/aiTools/AgentTool
 const abortSignalModule = loadTypeScriptModule('src/shared/runtime/abortSignal.ts');
 const toolExecutorModule = loadTypeScriptModule('src/platform/agentRuntime/AgentToolExecutor.ts', {
   '@shared/aiTools': agentToolSchemaModule,
+  './AgentRunState': runStateModule,
 });
 const runLoopModule = loadTypeScriptModule('src/platform/agentRuntime/AgentRunLoop.ts', {
   './AgentRuntimeGuards': guardsModule,
@@ -83,6 +40,7 @@ const { LegacyAgentToolAdapter } = loadTypeScriptModule(
 const { AgentRuntime } = runtimeModule;
 const { AgentToolRegistry } = registryModule;
 const { AGENT_TOOL_BATCH_TIMEOUT_MS } = guardsModule;
+const { CHAT_AGENT_TASK_BUDGET_PRESET } = loadTypeScriptModule('src/features/chat/reply/agent/ChatAgentTask.ts');
 
 function createClock() {
   let timestamp = 0;
@@ -459,6 +417,25 @@ const unexpectedToolLogs = [];
 console.error = (...args) => unexpectedToolLogs.push(args);
 let thrownToolError;
 try {
+  const fenceDb = new DatabaseSync(':memory:');
+  const fixture = createCoordinatedSqliteFixture(createSqliteExecutor(fenceDb));
+  try {
+    const superseded = await runCase({
+      turns: [createTurn({ toolCalls: [createToolCall('fence-call', 'fenced'), createToolCall('later-call', 'later')] })],
+      tools: [
+        createTool('fenced', async () => fixture.databaseCoordinator.transaction(
+          { name: 'test.fence', feature: 'test', priority: 'interactive' },
+          async tx => { await tx.runAsync('CREATE TABLE rejected_write (id INTEGER)'); throw new runStateModule.AgentRuntimeTerminalError('SUPERSEDED'); },
+        )),
+        createTool('later', async () => { assert.fail('失效 run 不得执行同批后续工具'); }),
+      ],
+    });
+    assert.equal(superseded.result.terminalCode, 'SUPERSEDED', '持久 fence 先失效、signal 尚未取消时仍结束 run');
+    assert.equal(superseded.gateway.requests.length, 1, '失效运行不得请求下一轮模型');
+    assert.equal(superseded.executions.length, 1);
+    assert.equal(unexpectedToolLogs.length, 0, '显式运行终态不记工具异常');
+    assert.equal(fenceDb.prepare("SELECT name FROM sqlite_master WHERE name='rejected_write'").get(), undefined, '运行失效时事务回滚');
+  } finally { fenceDb.close(); }
   thrownToolError = await runCase({
     turns: [
       createTurn({ toolCalls: [createToolCall('call-1', 'throws')] }),
@@ -690,6 +667,24 @@ assert.equal(maxSteps.gateway.requests.length, 2, '工具回合预算用尽后�
 assert.equal(maxSteps.gateway.requests[1].tools.length, 0, '最终回答轮次不得继续暴露工具');
 assert.equal(maxSteps.gateway.requests[1].toolBudget.forceFinalResponse, true);
 
+// 普通 Chat 可以让模型观察每一步结果后继续，达到三十次上限后仍保留无工具最终回答。
+for (const modelTransport of ['complete', 'stream']) {
+  const sequential = await runCase({
+    task: { ...CHAT_AGENT_TASK_BUDGET_PRESET, modelTransport },
+    turns: [
+      ...Array.from({ length: 30 }, (_, index) => createTurn({ toolCalls: [createToolCall(`step-${index}`, 'step_tool', { index })] })),
+      createTurn({ text: '三十个步骤已逐一完成' }),
+    ],
+    tools: [createTool('step_tool', async input => ({ status: 'success', data: input, modelContent: JSON.stringify(input) }))],
+  });
+  assert.equal(sequential.result.terminalCode, 'COMPLETED');
+  assert.equal(sequential.executions.length, 30, '分步观察不能在第十轮提前关闭工具');
+  assert.equal(sequential.gateway.requests[10].history.filter(item => item.role === 'tool').length, 10, '后续模型请求必须包含之前步骤的结果');
+  assert.equal(sequential.gateway.requests[30].tools.length, 0, '三十次调用后仍须收口，不扩大工具总额度');
+  assert.equal(sequential.gateway.requests[30].toolBudget.forceFinalResponse, true);
+  assert.equal(sequential.result.finalText, '三十个步骤已逐一完成');
+}
+
 const maxToolCalls = await runCase({
   turns: [
     createTurn({ toolCalls: [createToolCall('call-1', 'lookup')] }),
@@ -732,7 +727,7 @@ assert.equal(remainingLimit.gateway.requests[1].tools.length, 0);
 assert.equal(remainingLimit.gateway.requests[1].toolBudget.forceFinalResponse, true);
 
 await assert.rejects(
-  () => runCase({ turns: [createTurn({ text: '不应启动' })], task: { maxSteps: 11 } }),
+  () => runCase({ turns: [createTurn({ text: '不应启动' })], task: { maxSteps: 31 } }),
   /maxSteps/,
   'AR-10c 超过 Runtime hard limits 的 task 必须创建失败',
 );
@@ -1196,6 +1191,27 @@ const pendingSticker = await runCase({
 });
 assert.equal(pendingSticker.result.steps[0].toolCalls[0].outcome.code, 'STICKER_NOT_READY');
 assert.equal(pendingSticker.gateway.requests.length, 2, '真实表情包业务失败仍交回模型');
+
+const { SendImageTool } = loadTypeScriptModule('src/features/chat/reply/agent/SendImageTool.ts', {
+  '@features/media': {
+    resolveMediaAsset: async id => ({ asset: { id, mimeType: 'image/png', byteSize: 100, width: 100, height: 100 } }),
+    mediaImageFailure: () => null,
+  },
+  '@shared/aiTools': loadTypeScriptModule('src/shared/aiTools/ToolCompletionIntent.ts'),
+  '@shared/runtime/abortSignal': abortSignalModule,
+});
+const imageSendTool = createTool(SendImageTool.name, SendImageTool.execute, SendImageTool.definition.parameters);
+for (const on_success of ['finish', 'continue']) {
+  const imageReply = await runCase({
+    tools: [imageSendTool], turns: [
+      createTurn({ toolCalls: [createToolCall('image', 'send_image', { media_asset_id: 'downloaded-image', on_success })] }),
+      ...(on_success === 'continue' ? [createTurn({ text: '补充图片说明' })] : []),
+    ],
+  });
+  assert.equal(imageReply.result.terminalCode, 'COMPLETED');
+  assert.equal(imageReply.gateway.requests.length, on_success === 'finish' ? 1 : 2, '图片可独立结束回复，也可继续补充内容');
+  assert.equal(imageReply.result.steps[0].toolCalls[0].outcome.data.attachment.mediaAssetId, 'downloaded-image');
+}
 
 const completeAndStream = await Promise.all([
   runCase({ turns: [createTurn({ text: '同一状态机' })], task: { modelTransport: 'complete' } }),

@@ -1,13 +1,14 @@
 /** 用户管理退出历史的注入选择；记忆转换由 AI 的记忆工具负责。 */
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ChevronRight } from 'lucide-react-native';
 import { ModalSheet, ToggleField } from '@shared/ui';
-import { useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
+import { ThemedSurface, useTheme, useThemedStyles, type PresentationTheme } from '@shared/theme';
+import { createStyles as createSettingsStyles } from './chatSettingsStyles';
 import { listHistoricalGroups, setHistoricalGroupInjection, subscribeGroupChanged } from '../../group/application/GroupMembership';
 import type { GroupHistory } from '../../group/domain/GroupMembership';
 
 const createStyles = (theme: PresentationTheme) => StyleSheet.create({
-  entry: { padding: theme.spacing.lg },
   title: { color: theme.colors.text.primary, fontSize: 16, fontWeight: '600' },
   description: { color: theme.colors.text.secondary, fontSize: 13, lineHeight: 20, marginTop: theme.spacing.sm },
   body: { padding: theme.spacing.lg, gap: theme.spacing.md },
@@ -23,6 +24,7 @@ function historyText(history: GroupHistory): string {
 export default function HistoricalGroupsSection({ assistantId }: { assistantId: string }) {
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
+  const settingsStyles = useThemedStyles(createSettingsStyles);
   const [visible, setVisible] = useState(false);
   const [histories, setHistories] = useState<GroupHistory[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -52,19 +54,25 @@ export default function HistoricalGroupsSection({ assistantId }: { assistantId: 
     finally { setBusy(false); }
   };
   return <>
-    <Pressable style={styles.entry} accessibilityRole="button" onPress={() => { setSelectedId(null); setVisible(true); }}>
-      <Text style={styles.title}>历史群聊 ›</Text>
-      <Text style={styles.description}>查看退出前保留的信息、管理历史注入。可以让 AI 使用记忆工具转换为长期记忆。不会接收退出后的群消息。</Text>
-    </Pressable>
+    <ThemedSurface variant="card" style={settingsStyles.entryCard}>
+      <Pressable style={settingsStyles.entryRow} accessibilityRole="button" onPress={() => { setSelectedId(null); setVisible(true); }}>
+        <View style={settingsStyles.rowCopy}>
+          <Text style={settingsStyles.rowTitle}>历史群聊</Text>
+          <Text style={settingsStyles.rowDescription}>查看已退出的群聊，选择是否带入历史</Text>
+        </View>
+        <ChevronRight size={18} color={theme.colors.text.tertiary} />
+      </Pressable>
+    </ThemedSurface>
     <ModalSheet visible={visible} onClose={() => { if (!busy) setVisible(false); }} title={selected ? selected.groupName : '历史群聊'}>
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+        <Text style={styles.description}>只保留退出时的信息，不接收后续群消息。可让 AI 使用记忆工具转存为长期记忆。</Text>
         {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
         {loading && <ActivityIndicator color={theme.colors.brand.primary} />}
         {selected ? <>
           <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setSelectedId(null); }}><Text style={styles.action}>‹ 历史群聊列表</Text></Pressable>
           <Text style={styles.description}>{selected.reason === 'removed' ? '已被移出该群聊' : '已退出该群聊'} · {new Date(selected.exitedAt).toLocaleString()}</Text>
-          <ToggleField label="历史信息注入" value={selected.injectEnabled} onValueChange={enabled => { if (!busy) void toggle(selected, enabled); }}
-            hint="关闭后不再自动带入这份历史，已转存的记忆单独管理；群聊·客为 0 时也不注入。" />
+          <ToggleField layout="inline" label="带入历史信息" value={selected.injectEnabled} onValueChange={enabled => { if (!busy) void toggle(selected, enabled); }}
+            hint="关闭不影响已转存的记忆；其他群聊背景为 0 时也不带入。" />
           <Text selectable style={styles.text}>{historyText(selected) || '退出时没有可保留的摘要或聊天内容。'}</Text>
         </> : !loading && (histories.length === 0 ? <Text style={styles.description}>还没有已退出的群聊记录。重新加入的群使用正常群上下文，不在这里重复注入。</Text>
           : histories.map(record => <Pressable key={record.id} style={styles.row} accessibilityRole="button" onPress={() => { setSelectedId(record.id); setError(null); }}>

@@ -63,12 +63,14 @@ function load(relative) {
     if (id === 'react' || id === 'react/jsx-runtime') return require(id);
     if (id.endsWith('/ChatMessageRuntime') || id === './ChatMessageRuntime') return { getChatMessageRuntimeDependencies: () => runtime };
     if (id.endsWith('/ChatGroupRuntime') || id === './ChatGroupRuntime') return { getChatGroupRuntimeDependencies: () => groupRuntime };
+    if (id === './ChatReplyRuntimeDependencies') return { getChatReplyRuntimeDependencies: () => ({ prompt: { readImageGroundingReminder: async () => null } }) };
     if (id.endsWith('/ChatPresentation')) return { getChatDetailAvailableAssistants: async () => assistants, getChatDetailCurrentUser: async () => ({ name: '枫渡' }) };
     if (id.endsWith('/ResolveCanonicalConversation')) return { resolveCanonicalConversation: async ({ aiId }) => ({ id: `direct:${aiId}` }) };
     if (id.endsWith('/ChatCallGateway')) return { getActiveChatCall: () => null, isChatSendBlockedByCall: () => false };
     if (id.endsWith('/GroupChatManagement')) return { getGroupChat: async (groupId) => groupId === 'missing' ? null : {}, listGroupChats: async () => [{ id: 'target-group', name: '目标群' }] };
     if (id.endsWith('/AgentTransientTimeline')) return { clearAgentTransientTimelineRun() {} };
     if (id === '@shared/runtime/abortSignal') return load('src/shared/runtime/abortSignal.ts');
+    if (id === '@shared/runtime/RuntimeSlot') return load('src/shared/runtime/RuntimeSlot.ts');
     if (id.endsWith('/ChatEvents')) return { emitChatMessagesUpdated() {}, emitChatTurnExecutionChanged() {}, emitChatTypingStatusChanged() {}, emitChatGroupSpeechPlanChanged() { if (failNotice) throw new Error('subscriber failed'); } };
     if (id === './GroupAutoInvocationScheduler') return { scheduleGroupAutoInvocation: (params) => scheduled.push(params), acknowledgeGroupInvocationInput() {}, notifyGroupInvocationSettled() {}, cancelGroupAutoInvocation() {} };
     if (id === './GroupChatMessaging') return { invokeGroupChat() {} };

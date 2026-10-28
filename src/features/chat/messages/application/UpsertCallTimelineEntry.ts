@@ -44,7 +44,7 @@ function buildMessage(
   metadata: CallStatusMessageMetadata,
   createdDate: Date,
 ): CreateMessageInput {
-  const sender = getCallStatusMessageSender({ direction: params.direction });
+  const sender = getCallStatusMessageSender({ direction: params.direction, callStatus: params.callStatus });
   return {
     sessionId: params.sessionId,
     text: metadata.displayText,

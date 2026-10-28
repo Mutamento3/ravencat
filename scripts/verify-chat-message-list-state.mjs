@@ -122,6 +122,15 @@ const renderUtils = loadModule(
   },
 );
 
+for (const direction of ['incoming', 'outgoing']) {
+  const sender = metadata.getCallStatusMessageSender({ direction, callStatus: 'callSystemError' });
+  const rendered = renderUtils.buildMessageBubbleRenderState({
+    ...sender, text: '【系统错误：系统通知发送失败】', attachments: [], isToolStatusMessage: false,
+  });
+  assert.equal(rendered.variant, 'system', '通话系统故障应走灰色系统提示，不能进入用户或 AI 气泡');
+  assert.equal(rendered.isSystem, true);
+}
+
 function message(overrides = {}) {
   return {
     id: overrides.id ?? 1,
@@ -646,6 +655,7 @@ function userMessage(id = 20) {
       'src/features/chat/presentation/messages/components/useChatBottomFollow.ts',
       (name) => {
         if (name === 'react') return React;
+        if (name === 'react-native') return { PixelRatio: { getPixelSizeForLayoutSize: value => Math.round(value * 3) } };
         if (name === './chatMessageListState') return state;
         throw new Error(`未预期的贴底运行时依赖：${name}`);
       },
@@ -903,6 +913,40 @@ function userMessage(id = 20) {
   act(() => list().props.onContentSizeChange(400, 2100));
   flushFrames();
   assert.equal(offset, 100, '等待原生扩高时用户已上翻，迟到的尺寸事件不能再拉回底部');
+  act(() => renderer.unmount());
+
+  // Android 内容尺寸与 cell 布局独立取整，跨过半个 dp 的像素误差不能永久阻塞跟随。
+  props = { ...props, sessionId: 'fractional-bottom-follow', messages: [message({ id: 7850 })] };
+  nativeViewportHeight = 600;
+  offset = 600;
+  act(() => { renderer = create(React.createElement(List, props)); });
+  commit(1200);
+  layout(600);
+  act(() => {
+    measuredContentHeight = 1200.5;
+    list().props.onContentSizeChange(400, 1200 + 1 / 3);
+    list().props.onCommitLayoutEffect();
+  });
+  layout(300);
+  assert.ok(Math.abs(offset - (1200 + 1 / 3 - 300)) < 0.001,
+    '已在底部时，键盘抬起仍将末条消息移到输入框上方');
+  layout(600);
+  offset = 600;
+  update({ messages: [...props.messages, userMessage(7851)] });
+  act(() => {
+    measuredContentHeight = 1550.5;
+    list().props.onCommitLayoutEffect();
+    list().props.onContentSizeChange(400, 1549);
+  });
+  flushFrames();
+  assert.equal(offset, 600, '原生内容仍差多个物理像素时，继续等待真实扩高');
+  act(() => list().props.onContentSizeChange(400, 1550 + 1 / 3));
+  flushFrames();
+  assert.ok(Math.abs(offset - (1550 + 1 / 3 - 600)) < 0.001,
+    '原生尺寸与已提交布局只差一个物理像素时，仍应完成贴底');
+  const scrollsAfterFractionalReply = scrolls;
+  commit(1800);
+  assert.equal(scrolls, scrollsAfterFractionalReply, '像素误差不遗留跟随请求，之后局部展开保持位置');
   act(() => renderer.unmount());
 
   // 所有主题都按当前 AI 的选择隐藏完整行动步骤；相同文字的正文始终保留。

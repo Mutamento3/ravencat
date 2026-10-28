@@ -6,6 +6,8 @@ export interface NativeCallStart {
   avatarUri: string | null;
   direction: 'incoming' | 'outgoing';
   returnUri: string;
+  ringtoneUri: string | null;
+  ringing: boolean;
 }
 export interface NativeCallCommand {
   callId: string;

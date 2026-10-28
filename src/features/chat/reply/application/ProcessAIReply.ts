@@ -164,6 +164,7 @@ export async function processAIReply(
       runtimeContext.turnInputMessages,
       promptPack.messageTimestampsEnabled,
     );
+    persistence.configureSegmentDelivery?.({ aiConfig, runtimeContext, callbacks });
     const agentReplyResult = await runChatAgentReplyFlow({
       sessionId,
       originalUserText: userText,
@@ -234,7 +235,8 @@ function resolveHostRunScenario(runtimeContext: AIReplyRuntimeContext): PromptPa
 
 function resolveAIReplyErrorMessage(error: unknown): string {
   if (error instanceof ChatAgentModelRequestError) {
-    return getErrorDisplayInfo(error).message;
+    // 客户端已保留并脱敏 Provider 错误；聊天需展示具体原因，便于用户调整模型或配置。
+    return getErrorDisplayInfo(error, { includeDetails: true }).message;
   }
   if (error instanceof ChatAgentRunFailedError) {
     return `处理 AI 回复时发生错误\n\n${error.diagnosticText}`;

@@ -43,7 +43,7 @@ try {
   database.exec(`PRAGMA foreign_keys = ON;
     CREATE TABLE chat_conversations(id TEXT PRIMARY KEY);
     CREATE TABLE sessions(id TEXT PRIMARY KEY, visible_after_message_id INTEGER);
-    CREATE TABLE messages(id INTEGER PRIMARY KEY);
+    CREATE TABLE messages(id INTEGER PRIMARY KEY, client_message_id TEXT);
     CREATE TABLE conversation_turn_runs(run_id TEXT PRIMARY KEY, session_id TEXT, status TEXT,
       revision_at_claim INTEGER, input_high_watermark INTEGER, created_at TEXT, kind TEXT DEFAULT 'user_reply');
     CREATE TABLE conversation_turn_state(session_id TEXT PRIMARY KEY, active_run_id TEXT, revision INTEGER, reply_cursor INTEGER);
@@ -77,7 +77,7 @@ try {
   // canonical 发布版本与完成状态必须同一事务；终态写失败不能泄漏可见内容。
   database.exec(`UPDATE chat_turn_presentations SET state = 'open' WHERE run_id = 'r';
     UPDATE conversation_turn_runs SET status = 'committed' WHERE run_id = 'r';
-    INSERT INTO messages VALUES (11);
+    INSERT INTO messages(id) VALUES (11);
     UPDATE chat_turn_display_items SET message_id = 11 WHERE identity = 'agent-timeline:r:2:0';
     CREATE TRIGGER reject_completion BEFORE UPDATE OF state ON chat_turn_presentations
       WHEN NEW.state = 'completed' BEGIN SELECT RAISE(ABORT, 'completion-rejected'); END;`);

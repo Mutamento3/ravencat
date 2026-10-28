@@ -5,7 +5,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
-import { bootstrapSqlite, createSqliteExecutor } from './helpers/sqlite-bootstrap-fixture.mjs';
+import { bootstrapSqlite, createSqliteExecutor, DATABASE_SCHEMA_VERSION } from './helpers/sqlite-bootstrap-fixture.mjs';
 
 const boundaries = {}, cache = new Map();
 function load(relative) {
@@ -141,6 +141,14 @@ assert.equal((await lifecycle.releaseCandidates(audioIds)).releasedAssets.length
 assert.ok((await mediaRepo.listAssistantMediaAssetIds('a', executor)).includes(audioIds[0]));
 assert.ok((await mediaRepo.listChatSessionMediaAssetIds(['chat-a'], executor)).includes(audioIds[0]));
 
+// 没有对话或音频的失败电话也必须能取回已保存的异常。
+const nativeFailure = await calls.appendEvent({ callId: 'same-second', chatSessionId: 'chat-a',
+  kind: 'error', actorType: 'system', text: '原生通话建立失败（等待当前音频端点）：系统通话音频建立超时' });
+const failedDetail = await history.getCallHistory('same-second', 'a');
+assert.equal(failedDetail.entries.length, 0);
+assert.deepEqual(failedDetail.errors, [{ id: nativeFailure.id, createdAt: nativeFailure.createdAt, text: nativeFailure.text }]);
+assert.deepEqual(detail.errors, []);
+
 // 真机回归：143 已初始化通话录音，但后补的截图表尚未创建；重新启动必须正式升级。
 db.exec('DROP TABLE call_history_images; DROP TABLE call_history_preferences; PRAGMA user_version=143');
 assert.deepEqual((await mediaRepo.listBackupAssets(executor)).map(asset => asset.id).sort(), [...audioIds].sort(), '仅录音的 143 旧备份可预检');
@@ -248,7 +256,7 @@ assert.equal(removed, 3);
 db.exec('DROP TABLE call_history_images; DROP TABLE call_history_preferences; DROP TABLE call_history_entries; DROP TABLE call_history; PRAGMA user_version=142');
 assert.equal((await mediaRepo.listBackupAssets(executor)).length, 0, '旧备份预检不查询尚不存在的录音表');
 await bootstrapSqlite(executor);
-assert.equal(db.prepare('PRAGMA user_version').get().user_version, 144);
+assert.equal(db.prepare('PRAGMA user_version').get().user_version, DATABASE_SCHEMA_VERSION);
 assert.equal(db.prepare('SELECT COUNT(*) AS count FROM call_history').get().count, 0);
 assert.ok(db.prepare('SELECT 1 FROM call_events WHERE id=?').get(speech.id));
 db.close();

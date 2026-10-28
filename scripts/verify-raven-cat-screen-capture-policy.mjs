@@ -1,35 +1,10 @@
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadTypeScriptModule, readRepoFile as read } from './helpers/load-typescript-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
-const require = createRequire(import.meta.url);
-const ts = require('typescript');
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const sourcePath = path.join(root, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: sourcePath,
-  });
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `缺少 verifier mock：${specifier}`);
-    return mocks[specifier];
-  };
-  new Function('exports', 'require', 'module', compiled.outputText)(
-    module.exports,
-    requireMock,
-    module,
-  );
-  return module.exports;
-}
 
 const manifest = read('modules/device-observer/android/src/main/AndroidManifest.xml');
 const appQuery = read(

@@ -1,4 +1,5 @@
 /** 聊天功能的普通公共出口；Host 组装能力统一从 ./composition 获取。 */
+export { listChatTurnStates } from './reply/application/QueryChatTurnStates';
 
 // 普通会话与消息命令。
 export {
@@ -145,6 +146,7 @@ export {
   type UserVoiceMessageRecording,
   type UserVoiceMessageResult,
 } from './messages/application/UserVoiceMessageRecording';
+export { SendImageTool } from './reply/agent/SendImageTool';
 export {
   SendVoiceMessageTool,
   createConfiguredVoiceMessageTool,
@@ -288,6 +290,8 @@ export {
   ChatSettingsRouteScreen,
   ChatSummaryRouteScreen,
   ChatStatisticsRouteScreen,
+  ChatSearchRouteScreen,
+  GroupSearchRouteScreen,
   ChatSummaryEditorRouteScreen,
   ChatSummarySettingsRouteScreen,
   GroupSummaryRouteScreen,
@@ -298,12 +302,14 @@ export {
   GroupMenuRouteScreen,
 } from './presentation/shell/ChatRouteScreens';
 export { getChatSummaryContext, getChatBackgroundContexts, createChatSummary, editChatSummary, deleteChatSummary, clearChatSummary,
-  updateChatSummarySettings, searchChatSummaries, getChatSummarySettings, setFixedChatContextStart, retryChatSummaryTask,
+  updateChatSummarySettings, searchChatSummaries, getChatSummarySettings, getAssistantChatSummaryGenerationState, setFixedChatContextStart, retryChatSummaryTask,
 } from './summary/application/ChatSummary';
 export { subscribeChatSummaryChanged } from './summary/application/ChatSummaryRuntime';
 export type { ChatSummarySegment, ChatSummarySnapshot, ChatSummarySettings, ChatSummarySettingsPatch, ChatSummarySearchInput, ChatSummarySearchPage } from './summary/domain/ChatSummaryRepository';
 export type { ChatSummaryTask, ChatSummaryCallDiagnostics } from './summary/domain/ChatSummaryRepository';
 export { SearchChatSummariesTool } from './summary/aiTools/SearchChatSummariesTool';
+export { SearchChatMessagesTool } from './messages/aiTools/SearchChatMessagesTool';
+export { ReadChatMessageContextTool } from './messages/aiTools/ReadChatMessageContextTool';
 export { GetSecondarySummaryTool, EditSecondarySummaryTool, EditPrimarySummaryTool, DeletePrimarySummaryTool } from './summary/aiTools/ChatSummaryTools';
 export { isChatReplyRunCurrentInTransaction } from './reply/application/ChatRunMutationFence';
 export { isGroupSpeechTaskRunCurrentInTransaction } from './group/application/GroupSpeechTermination';

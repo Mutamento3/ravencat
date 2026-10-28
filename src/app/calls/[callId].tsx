@@ -10,9 +10,9 @@ export default function CallRoute() {
   const rawCallId = Array.isArray(params.callId) ? params.callId[0] : params.callId;
   const callId = rawCallId?.trim();
 
-  // 外部深链也由 Host 建立媒体会话；路由卸载不释放正在进行的电话。
+  // 外部深链由 Host 按持久通话状态准入；路由卸载只取消本次准入，不释放正在进行的电话。
   useEffect(() => {
-    if (callId) activateCallScreen(callId);
+    if (callId) return activateCallScreen(callId);
   }, [activateCallScreen, callId]);
 
   if (!callId) {

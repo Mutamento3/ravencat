@@ -8,23 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
 import { bootstrapSqlite, createSqliteExecutor } from './helpers/sqlite-bootstrap-fixture.mjs';
+import { createCoordinatedSqliteFixture, databaseErrors } from './helpers/coordinated-sqlite-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const db = new DatabaseSync(':memory:');
 db.exec('PRAGMA foreign_keys=ON');
 const raw = createSqliteExecutor(db);
 await bootstrapSqlite(raw);
-let tail = Promise.resolve();
-const schedule = operation => { const run = tail.then(operation); tail = run.catch(() => {}); return run; };
-const coordinator = {
-  transaction: (_meta, operation) => schedule(async () => {
-    db.exec('BEGIN');
-    try { const value = await operation(raw); db.exec('COMMIT'); return value; }
-    catch (error) { db.exec('ROLLBACK'); throw error; }
-  }),
-  openTaskExecutor: () => ({ ...Object.fromEntries(['runAsync', 'getFirstAsync', 'getAllAsync', 'execAsync'].map(key => [key,
-    (...args) => schedule(() => raw[key](...args))])), withExclusiveTransactionAsync: operation => coordinator.transaction({}, operation) }),
-};
+const { databaseCoordinator: coordinator } = createCoordinatedSqliteFixture(raw);
 const modules = new Map();
 let modelCalls = [], modelResponse = { success: true, text: 'Model memory', finishReason: 'stop' }, beforeModelReturns;
 let currentRun = true;
@@ -40,6 +31,14 @@ function load(relative) {
     if (filename.endsWith('createAgentToolRegistry.ts')) {
       if (specifier === '@features/memory') return load('src/features/memory/aiTools/MemoryAgentTools.ts');
       if (specifier === '@features/phoneTools/neteaseComposition') return { productionNetEaseChildTools: [] };
+      if (specifier === '@features/phoneTools') return new Proxy(load('src/features/phoneTools/toolPackages/ToolPackageCatalog.ts'), {
+        get: (target, key) => {
+          if (Object.hasOwn(target, key)) return target[key];
+          const name = ({ XiaohongshuPrepareTextNoteTool: 'xiaohongshu_prepare_text_note',
+            XiaohongshuPublishPreparedNoteTool: 'xiaohongshu_publish_prepared_note' })[key] ?? String(key);
+          return { name, definition: { name, parameters: { type: 'object' } } };
+        },
+      });
       if (specifier === './ApplicationSettingsTools') return { applicationSettingsTools: [] };
       if (specifier === '@platform/agentRuntime') return load('src/platform/agentRuntime/AgentToolRegistry.ts');
       if (specifier.startsWith('@features/')) return new Proxy({}, { get: (_target, key) => ({
@@ -48,6 +47,7 @@ function load(relative) {
       }) });
     }
     if (specifier === '@platform/persistence') return { databaseCoordinator: coordinator, CoordinatedDatabaseError };
+    if (specifier === '@platform/agentRuntime') return load('src/platform/agentRuntime/AgentRunState.ts');
     if (specifier === 'expo-crypto') return { randomUUID };
     if (specifier === '@features/media') return { resolveMediaAssetReferenceUri: async value => value.legacyUri,
       collectChatSessionMediaAssetCandidatesInTransaction: async () => [] };
@@ -77,7 +77,7 @@ function load(relative) {
   new Function('require', 'module', 'exports', compiled)(requireLocal, module, module.exports);
   return module.exports;
 }
-const { CoordinatedDatabaseError, classifyDatabaseError } = load('src/platform/persistence/runtime/DatabaseErrors.ts');
+const { CoordinatedDatabaseError } = databaseErrors;
 const { groupMembershipRepository: membership } = load('src/features/chat/group/infrastructure/SQLiteGroupMembershipRepository.ts');
 const { groupChatRepository: groups } = load('src/features/chat/group/infrastructure/SQLiteGroupChatRepository.ts');
 const { SQLiteChatSummaryRepository } = load('src/features/chat/summary/infrastructure/SQLiteChatSummaryRepository.ts');
@@ -200,8 +200,8 @@ assert.equal((await invite('discover-en', 'agent-outside')).status, 'error', '�
 db.prepare("DELETE FROM ai_blacklist WHERE id='group-tool-block'").run();
 
 currentRun = false;
-await assert.rejects(join('discover-en'), { name: 'AbortError' });
-await assert.rejects(invite('discover-en', 'agent-new'), { name: 'AbortError' });
+await assert.rejects(join('discover-en'), error => error.cause.code === 'SUPERSEDED');
+await assert.rejects(invite('discover-en', 'agent-new'), error => error.cause.code === 'SUPERSEDED');
 currentRun = true;
 assert.equal(db.prepare("SELECT COUNT(*) AS n FROM group_chat_members WHERE group_id='discover-en'").get().n, 0, '失效回合不写入成员事实');
 assert.equal((await tools.rename_group.execute({ group_id: 'g', name: '普通成员可改名' }, toolContext('member'))).status, 'success');
@@ -241,7 +241,7 @@ const expectedOrder = ['Reasoning', 'Action', notice.text, 'Follow-up', 'Reply']
 assert.deepEqual(sortChatTimelineMessages([...canonical].reverse().concat(notice)).map(item => item.text), expectedOrder);
 const persisted = [];
 for (const item of canonical) {
-  persisted.push(await coordinator.transaction({}, tx => messages.commitMessageInTransaction(tx, { message: {
+  persisted.push(await coordinator.transaction({ name: 'test.persist-timeline', feature: 'chat', priority: 'interactive' }, tx => messages.commitMessageInTransaction(tx, { message: {
     ...item, sessionId: 'g', senderType: 'assistant', status: 'sent', updatedAt: item.createdAt,
   } })));
 }
@@ -250,7 +250,7 @@ const { timelineOrderedMessagesCte, timelineProjectionOrderBy } = load('src/feat
 const sqlOrder = db.prepare(`${timelineOrderedMessagesCte('m.session_id = ? AND m.turn_run_id = ?')} SELECT text FROM ordered_messages ORDER BY ${timelineProjectionOrderBy('ASC')}`)
   .all('g', hostTask.id).map(item => item.text);
 assert.deepEqual(sqlOrder, expectedOrder);
-await coordinator.transaction({}, tx => groups.materializeAIMentionSpeechTasksInTransaction(tx, plan.plan.id, hostTask, [makeTask('member'), makeTask('new')]));
+await coordinator.transaction({ name: 'test.materialize-mentions', feature: 'chat', priority: 'interactive' }, tx => groups.materializeAIMentionSpeechTasksInTransaction(tx, plan.plan.id, hostTask, [makeTask('member'), makeTask('new')]));
 assert.deepEqual((await groups.listSpeechPlanTasks(plan.plan.id)).map(task => task.aiAssistantId), ['host', 'member']);
 await groups.updateSpeechTaskStatus(hostTask.id, 'completed');
 const running = await groups.claimNextQueuedSpeechTask(plan.plan.id);
@@ -261,11 +261,11 @@ const unregisterHost = registerGroupSpeechAbort(plan.plan.id, hostController, ho
 const unregisterMember = registerGroupSpeechAbort(plan.plan.id, memberController, running.id);
 
 await summaries.create('g', 'summary-old', '退出前的既有摘要', stamp, 'Asia/Shanghai');
-await coordinator.transaction({}, tx => messages.commitMessageInTransaction(tx, { message: {
+await coordinator.transaction({ name: 'test.group-message', feature: 'chat', priority: 'interactive' }, tx => messages.commitMessageInTransaction(tx, { message: {
   sessionId: 'g', text: '退出前原文', isMe: true, senderType: 'user', status: 'sent', createdAt: stamp, updatedAt: stamp,
 } }));
 for (const [senderType, text] of [['user', 'Long history '.repeat(2000)], ['tool', 'TOOL_INTERNAL_TRACE']]) {
-  await coordinator.transaction({}, tx => messages.commitMessageInTransaction(tx, { message: {
+  await coordinator.transaction({ name: 'test.group-message', feature: 'chat', priority: 'interactive' }, tx => messages.commitMessageInTransaction(tx, { message: {
     sessionId: 'g', text, isMe: senderType === 'user', senderType, status: 'sent', createdAt: stamp, updatedAt: stamp,
   } }));
 }
@@ -333,8 +333,12 @@ const initialCount = countMemories();
 modelResponse = { success: true, text: 'x'.repeat(501), finishReason: 'stop' };
 assert.match((await convert()).modelContent, /500/);
 assert.equal(countMemories(), initialCount);
-modelResponse = { success: false, text: '' };
-assert.equal((await convert()).status, 'error');
+modelResponse = { success: false, text: '', error: 'HTTP 429: quota exceeded for model test' };
+const failedConversion = await convert();
+assert.equal(failedConversion.status, 'error');
+assert.ok(failedConversion.modelContent.includes(modelResponse.error), '转换失败保留客户端已脱敏的接口原因');
+assert.equal(countMemories(), initialCount);
+assert.equal((await listHistoricalGroups('member')).length, 1, '失败保留退出历史');
 modelResponse = { success: true, text: 'Incomplete', finishReason: 'length' };
 assert.equal((await convert()).status, 'error');
 modelResponse = { success: true, text: 'New memory', finishReason: 'stop' };
@@ -350,7 +354,7 @@ assert.match((await convert()).modelContent, /退出历史已经更新/);
 assert.equal(countMemories(), initialCount);
 beforeModelReturns = undefined;
 currentRun = false;
-await assert.rejects(convert(), { name: 'AbortError' });
+await assert.rejects(convert(), error => error.cause.code === 'SUPERSEDED');
 currentRun = true;
 const controller = new AbortController();
 beforeModelReturns = () => controller.abort();
@@ -383,11 +387,11 @@ assert.equal((await convert()).status, 'success', '关闭注入、删除原群�
 assert.equal((await listHistoricalGroups('member'))[0].injectEnabled, false);
 assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
 // 生产协调器会包装事务异常；已达到目标禁言状态应成功返回，且不写入任何变更。
-const originalTransaction = coordinator.transaction;
+const originalTransaction = coordinator.transaction.bind(coordinator);
 let rolledBack = 0;
 coordinator.transaction = async (meta, operation) => {
   try { return await originalTransaction(meta, operation); }
-  catch (error) { rolledBack++; throw new CoordinatedDatabaseError(classifyDatabaseError(error), meta, error); }
+  catch (error) { rolledBack++; throw error; }
 };
 const muteGroup = 'mute-result';
 db.prepare('INSERT INTO chat_conversations VALUES (?,?)').run(muteGroup, 'group');

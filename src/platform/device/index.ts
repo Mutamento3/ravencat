@@ -1,3 +1,4 @@
+export { executeXiaohongshuNote, type XiaohongshuNoteCommand, type XiaohongshuNoteResult } from './XiaohongshuAutomation';
 export {
   awaitTurnDisplayArrival,
   setTurnDisplayOpen,
@@ -77,8 +78,9 @@ export {
   type ConversationTurnExecutionStartOptions,
 } from './ConversationTurnExecutionHost';
 export { createRandomUUID } from './randomUUID';
-export { copyTextToClipboard } from './Clipboard';
+export { copyTextToClipboard, readDeviceClipboardText, type DeviceClipboardSnapshot } from './Clipboard';
 export { TextSelectionScrollView, releaseTextSelectionFocus } from './TextSelection';
+export { CallPresentationSurface } from './CallPresentationSurface';
 export {
   voiceRecordingPort,
   clearVoiceRecordingDataForFactoryReset,
@@ -100,7 +102,7 @@ export {
 export { readLocalAudioMetadata, type LocalAudioMetadata } from './LocalAudioMetadata';
 export { localAudioPlaybackCoordinator } from './LocalAudioPlaybackCoordinator';
 export {
-  selectChatImage,
+  selectChatImages,
   captureChatPhoto,
   selectChatDocument,
 } from './chat';

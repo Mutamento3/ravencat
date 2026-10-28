@@ -1,6 +1,7 @@
 /** Sticker 收藏库的 SQLite adapter；所有 SQL 都经过 databaseCoordinator 调度。 */
 
 import {
+  CoordinatedDatabaseError,
   databaseCoordinator,
   type CoordinatedDatabaseExecutor,
   type DatabaseTransactionExecutor,
@@ -240,10 +241,21 @@ export function semanticFieldsChanged(
   );
 }
 
-/**
- * Sticker adapter 不持有 raw SQLite connection。默认使用 Feature 专属 coordinator
- * executor；测试或 Host 组合可注入已经绑定 task metadata 的 executor。
- */
+/** 收藏仓储内部共用的业务错误恢复边界，不对 Feature 外公开。 */
+export async function stickerTransaction<T>(database: CoordinatedDatabaseExecutor, operation: (tx: DatabaseTransactionExecutor) => Promise<T>): Promise<T> {
+  try {
+    return await database.withExclusiveTransactionAsync(operation);
+  } catch (error) {
+    // 两个收藏仓储共用事务出口，用户维护与 AI 收藏均保留同一业务错误契约。
+    if (error instanceof CoordinatedDatabaseError && (
+      error.cause instanceof StickerLibraryFullError || error.cause instanceof StickerNotFoundError
+      || error.cause instanceof StickerGroupNotFoundError || error.cause instanceof StickerAnnotationClaimLostError
+    )) throw error.cause;
+    throw error;
+  }
+}
+
+/** Sticker adapter 只持有已绑定 task metadata 的协调器 executor，不持有原始连接。 */
 export class SQLiteStickerRepository implements StickerRepository {
   constructor(
     private readonly database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({
@@ -267,14 +279,6 @@ export class SQLiteStickerRepository implements StickerRepository {
       [mediaAssetId],
     );
     return row ? mapStickerRow(row) : null;
-  }
-
-  async getGroupById(id: string): Promise<StickerGroup | null> {
-    const row = await this.database.getFirstAsync<StickerGroupRow>(
-      `SELECT ${GROUP_COLUMNS} FROM sticker_groups WHERE id = ? LIMIT 1`,
-      [id],
-    );
-    return row ? mapGroupRow(row) : null;
   }
 
   async listGroups(): Promise<StickerGroup[]> {
@@ -427,7 +431,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   }
 
   async createGroup(input: CreateStickerGroupInput): Promise<StickerGroup> {
-    await this.database.withExclusiveTransactionAsync(async (transaction) => {
+    await stickerTransaction(this.database, async (transaction) => {
       await transaction.runAsync(
         `INSERT INTO sticker_groups (id, name, sort_order, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?)`,
@@ -444,7 +448,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   }
 
   async renameGroup(id: string, name: string, updatedAt: string): Promise<StickerGroup> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const result = await transaction.runAsync(
         `UPDATE sticker_groups SET name = ?, updated_at = ? WHERE id = ?`,
         [name, updatedAt, id],
@@ -459,7 +463,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   }
 
   async deleteGroup(id: string, updatedAt: string): Promise<boolean> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       // 显式清空引用，避免旧库 foreign_keys 配置差异改变业务语义。
       await transaction.runAsync(
         `UPDATE stickers SET group_id = NULL, updated_at = ? WHERE group_id = ?`,
@@ -480,7 +484,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     ownerAssistantId: string | null = null,
     guard?: (transaction: DatabaseTransactionExecutor) => Promise<void>,
   ): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       if (guard) await guard(transaction);
       const current = await this.getStickerByIdInTransaction(transaction, id, ownerAssistantId);
       if (!current) throw new StickerNotFoundError(id);
@@ -530,7 +534,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     isFavorite: boolean | null,
     updatedAt: string,
   ): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const current = await this.getStickerByIdInTransaction(transaction, id);
       if (!current) throw new StickerNotFoundError(id);
       const next = isFavorite ?? !current.isFavorite;
@@ -545,7 +549,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   }
 
   async moveSticker(id: string, groupId: string | null, updatedAt: string): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const current = await this.getStickerByIdInTransaction(transaction, id);
       if (!current) throw new StickerNotFoundError(id);
       if (groupId && !(await this.getGroupByIdInTransaction(transaction, groupId))) {
@@ -562,7 +566,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   }
 
   async deleteSticker(id: string, ownerAssistantId: string | null = null, guard?: (transaction: DatabaseTransactionExecutor) => Promise<void>): Promise<boolean> {
-    return this.database.withExclusiveTransactionAsync(async transaction => {
+    return stickerTransaction(this.database, async transaction => {
       if (guard) await guard(transaction);
       const result = await transaction.runAsync(
         'DELETE FROM stickers WHERE id = ? AND owner_assistant_id IS ?', [id, ownerAssistantId]);
@@ -571,7 +575,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   }
 
   async recordStickerUse(id: string, usedAt: string): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const result = await transaction.runAsync(
         `UPDATE stickers
          SET use_count = use_count + 1, last_used_at = ?, updated_at = ?
@@ -589,7 +593,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     claimId: string,
     claimedAt: string,
   ): Promise<StickerAnnotationClaim | null> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const candidate = await transaction.getFirstAsync<StickerRow>(
         `SELECT ${STICKER_COLUMNS}
          FROM stickers
@@ -619,7 +623,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     metadata: StickerAnnotationMetadata,
     updatedAt: string,
   ): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const current = await this.getStickerByIdInTransaction(transaction, stickerId);
       if (!current) throw new StickerNotFoundError(stickerId);
       const nextName = metadata.name ?? current.name;
@@ -667,7 +671,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     metadata: StickerAnnotationMetadata,
     updatedAt: string,
   ): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const current = await this.getStickerByIdInTransaction(transaction, stickerId);
       if (!current) throw new StickerNotFoundError(stickerId);
       if (current.annotationStatus !== 'manual_required' && current.annotationStatus !== 'failed') {
@@ -717,7 +721,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     error: string,
     updatedAt: string,
   ): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const result = await transaction.runAsync(
         `UPDATE stickers
          SET annotation_status = 'failed', annotation_error = ?,
@@ -742,7 +746,7 @@ export class SQLiteStickerRepository implements StickerRepository {
     claimId: string,
     updatedAt: string,
   ): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const result = await transaction.runAsync(
         `UPDATE stickers
          SET annotation_status = 'pending', annotation_error = NULL,
@@ -762,24 +766,8 @@ export class SQLiteStickerRepository implements StickerRepository {
     });
   }
 
-  async recoverAnnotationClaims(cutoff: string, updatedAt: string): Promise<number> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
-      const result = await transaction.runAsync(
-        `UPDATE stickers
-         SET annotation_status = 'pending', annotation_error = NULL,
-             annotation_claim_id = NULL, annotation_claimed_at = NULL,
-             updated_at = ?
-         WHERE owner_assistant_id IS NULL AND annotation_status = 'processing'
-           AND annotation_claimed_at IS NOT NULL
-           AND annotation_claimed_at <= ?`,
-        [updatedAt, cutoff],
-      );
-      return result.changes;
-    });
-  }
-
   async recoverInterruptedAnnotationClaims(updatedAt: string): Promise<number> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const result = await transaction.runAsync(
         `UPDATE stickers
          SET annotation_status = 'pending', annotation_error = NULL,
@@ -790,40 +778,6 @@ export class SQLiteStickerRepository implements StickerRepository {
       );
       return result.changes;
     });
-  }
-
-  async retryAnnotation(id: string, updatedAt: string): Promise<Sticker> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
-      const current = await this.getStickerByIdInTransaction(transaction, id);
-      if (!current) throw new StickerNotFoundError(id);
-      if (current.annotationStatus !== 'failed' || current.isAnimated) {
-        throw new Error(`当前 Sticker 不可自动重试标注：${id}`);
-      }
-      await transaction.runAsync(
-        `UPDATE stickers
-         SET annotation_status = 'pending', annotation_error = NULL,
-             annotation_claim_id = NULL, annotation_claimed_at = NULL,
-             updated_at = ?
-         WHERE id = ?`,
-        [updatedAt, id],
-      );
-      const updated = await this.getStickerByIdInTransaction(transaction, id);
-      if (!updated) throw new StickerNotFoundError(id);
-      return updated;
-    });
-  }
-
-  async listStickersByIds(ids: readonly string[]): Promise<Sticker[]> {
-    const uniqueIds = [...new Set(ids)].filter((id) => id.trim());
-    if (uniqueIds.length === 0) return [];
-    const placeholders = uniqueIds.map(() => '?').join(', ');
-    const rows = await this.database.getAllAsync<StickerRow>(
-      `SELECT ${STICKER_COLUMNS}
-       FROM stickers
-       WHERE owner_assistant_id IS NULL AND id IN (${placeholders})`,
-      uniqueIds,
-    );
-    return rows.map(mapStickerRow);
   }
 
   // -- Sticker System 业务级模型配置 --
@@ -855,7 +809,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   }
 
   async saveStickerSystemConfig(config: StickerSystemConfig, updatedAt: string): Promise<void> {
-    await this.database.withExclusiveTransactionAsync(async (transaction) => {
+    await stickerTransaction(this.database, async (transaction) => {
       await transaction.runAsync(
         `INSERT INTO sticker_system_config (
            id, recognition_model_config_id, embedding_model_config_id, created_at, updated_at
@@ -877,7 +831,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   // -- 语义向量索引 --
 
   async upsertStickerEmbedding(embedding: StickerEmbedding): Promise<void> {
-    await this.database.withExclusiveTransactionAsync(async (transaction) => {
+    await stickerTransaction(this.database, async (transaction) => {
       await transaction.runAsync(
         `INSERT INTO sticker_embeddings (
            sticker_id, model_config_id, model_config_updated_at, semantic_revision,
@@ -921,7 +875,7 @@ export class SQLiteStickerRepository implements StickerRepository {
   }
 
   async deleteStickerEmbeddingsByModel(modelConfigId: string): Promise<number> {
-    return this.database.withExclusiveTransactionAsync(async (transaction) => {
+    return stickerTransaction(this.database, async (transaction) => {
       const result = await transaction.runAsync(
         `DELETE FROM sticker_embeddings WHERE model_config_id = ? AND sticker_id IN (SELECT id FROM stickers WHERE owner_assistant_id IS NULL)`,
         [modelConfigId],

@@ -68,7 +68,7 @@ export function parseChatSettingsDraft(
       result.patch.showActionSteps = draft.showActionSteps;
     } else {
       const guest = field === 'privateSecondary' || field === 'groupSecondary';
-      const parsed = readDraftInteger(draft[field], guest ? '客条数（0关闭整类背景）' : '主条数', false, guest ? 0 : 1);
+      const parsed = readDraftInteger(draft[field], guest ? '背景条数（0 为不带入）' : '当前对话条数', false, guest ? 0 : 1);
       if (parsed.error) { result.errors[field] = parsed.error; continue; }
       result.patch[contexts[field]] = parsed.value;
     }

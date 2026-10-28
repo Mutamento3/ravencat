@@ -53,6 +53,7 @@ db.exec("CREATE TABLE ai_assistants (id TEXT PRIMARY KEY); INSERT INTO ai_assist
 db.exec(schema.RAVEN_CAT_COMPANION_STATE_SCHEMA);
 db.exec("INSERT INTO raven_cat_companion_state (id, desired_enabled, activation_status, host_ai_id, created_at, updated_at) VALUES ('default', 1, 'enabled', 'host-ai', '2026-09-01', '2026-09-01')");
 db.exec(schema.RAVEN_CAT_AI_SCHEDULES_SCHEMA);
+db.exec(schema.RAVEN_CAT_AI_SCHEDULE_CONTEXT_SCHEMA);
 db.exec(schema.RAVEN_CAT_AI_SCHEDULES_OWNER_STATUS_TIME_INDEX);
 db.exec(schema.RAVEN_CAT_AI_SCHEDULES_OWNER_TIME_INDEX);
 // fresh schema 与 upgrade migration 复用的语句可重复执行，不能损坏已有 truth。
@@ -270,6 +271,7 @@ assert.equal((await application.cancel({
 now = new Date('2026-09-09T10:00:00.000Z');
 await create({ remindAt: '2026-09-14T09:00:00.000Z', summary: '后一个' });
 await create({ remindAt: '2026-09-14T08:00:00.000Z', summary: '前一个' });
+await create({ remindAt: '2026-09-14T09:00:00.000Z' });
 const listed = await application.list({
   ownerAIId: 'host-ai',
   from: '2026-09-08T00:00:00.000Z',

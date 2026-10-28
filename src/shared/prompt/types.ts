@@ -32,7 +32,7 @@ export type PromptBlockKey =
   | 'device_battery'
   | 'foundation_default_core'
   | 'persona'
-  | 'visual_grounding_rules'
+  | 'paragraph_breaks'
   | 'protocol_space'
   | 'tool_context_explanation'
   | 'agent_registry_summary'
@@ -104,6 +104,8 @@ export interface PromptPackMessage {
   content: PromptPackMessageContent;
   /** 原消息时间仅作为元数据传递；是否注入由本轮冻结的 AI 配置决定。 */
   createdAt?: string;
+  /** 可信组装器提供的来源说明或规则，独立成为 system 消息，不混入历史正文。 */
+  systemNotice?: string;
   sourceMessageId?: number;
   sourceCallEventId?: string;
   logicalMessageId?: string | null;
@@ -177,6 +179,7 @@ export interface PromptPackRuntimeContext {
   forceAppendUserText?: boolean;
   recentWindowLimit?: number;
   replyRunId?: string;
+  isRegeneration?: boolean;
   memoryParticipation?: MemoryParticipationMode;
   supportsMultipleBubbles?: boolean;
   groupChat?: PromptPackGroupChatContext;

@@ -18,7 +18,6 @@ import type {
   YearlyLedgerStats,
   LedgerKeywordSearchStats,
   CreateQuickActionInput,
-  UpdateQuickActionInput
 } from '../domain/LedgerRepository';
 
 /**
@@ -456,55 +455,6 @@ export class SQLiteLedgerRepository implements ILedgerRepository {
     );
 
     return actionToSave;
-  }
-
-  /**
-   * 更新快捷记账
-   * @param id - 快捷记账ID
-   * @param updates - 更新字段
-   */
-  async updateQuickAction(id: string, updates: UpdateQuickActionInput): Promise<boolean> {
-    const db: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'wallet.updateQuickAction', feature: 'wallet', priority: 'runtime' });
-    const now = new Date().toISOString();
-    
-    const fields: string[] = [];
-    const values: (string | number)[] = [];
-    
-    if (updates.name !== undefined) {
-      fields.push('name = ?');
-      values.push(updates.name);
-    }
-    if (updates.type !== undefined) {
-      fields.push('type = ?');
-      values.push(updates.type);
-    }
-    if (updates.category !== undefined) {
-      fields.push('category = ?');
-      values.push(updates.category);
-    }
-    if (updates.detail !== undefined) {
-      fields.push('detail = ?');
-      values.push(updates.detail);
-    }
-    if (updates.amount !== undefined) {
-      fields.push('amount = ?');
-      values.push(parseFloat(String(updates.amount)));
-    }
-    if (updates.sortOrder !== undefined) {
-      fields.push('sort_order = ?');
-      values.push(updates.sortOrder);
-    }
-    
-    fields.push('updated_at = ?');
-    values.push(now);
-    values.push(id);
-
-    await db.runAsync(
-      `UPDATE ledger_quick_actions SET ${fields.join(', ')} WHERE id = ?`,
-      values
-    );
-
-    return true;
   }
 
   /**

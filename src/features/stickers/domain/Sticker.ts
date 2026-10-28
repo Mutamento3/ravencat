@@ -118,7 +118,6 @@ export const STICKER_RECENT_LIMIT = 30;
 export const STICKER_GROUP_LIMIT = 100;
 export const STICKER_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 export const STICKER_MAX_DIMENSION_PX = 2048;
-export const STICKER_ANNOTATION_LEASE_MS = 15 * 60 * 1000;
 
 export class StickerNotFoundError extends Error {
   constructor(stickerId: string) {

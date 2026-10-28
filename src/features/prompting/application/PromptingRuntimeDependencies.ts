@@ -10,37 +10,12 @@ import type {
   AssistantPromptConfigurationRepository,
 } from '../domain/PromptingRepositories';
 import type {
-  PromptBindingTargetType,
-  PromptCustomBlock,
-} from '../domain/Prompting';
-import type {
-  PromptPack,
   PromptPresetDefinition,
   PromptScenarioId,
 } from '@shared/prompt';
 
 export interface SystemPromptPresetReader {
   get(scenarioId: PromptScenarioId): PromptPresetDefinition;
-}
-
-export interface PromptBindingTargetReader {
-  exists(targetType: PromptBindingTargetType, targetId: string): Promise<boolean>;
-  list(targetType: Exclude<PromptBindingTargetType, 'global'>): Promise<{
-    id: string;
-    name: string;
-  }[]>;
-}
-
-export interface PromptPreviewGateway {
-  preview(input: {
-    scenarioId: PromptScenarioId;
-    assistantId: string | null;
-    groupId: string | null;
-    exampleInput: string;
-    useRealContext: boolean;
-    preset: PromptPresetDefinition;
-    customBlocks: PromptCustomBlock[];
-  }): Promise<PromptPack>;
 }
 
 export interface PromptAssistantSummary {
@@ -92,6 +67,9 @@ export interface PromptingRuntimeDependencies {
     listOptions(): Promise<PromptAssistantOption[]>;
     list(): Promise<PromptAssistantSummary[]>;
   };
+  summary: {
+    getGenerationState(assistantId: string): Promise<{ primaryEnabled: boolean; secondaryEnabled: boolean }>;
+  };
   tools: {
     list(assistantId?: string): Promise<{
       name: string;
@@ -113,8 +91,6 @@ export interface PromptingRuntimeDependencies {
     list(): Promise<PromptMcpServiceSummary[]>;
     setEnabled(id: string, enabled: boolean): Promise<PromptMcpServiceSummary>;
   };
-  targets: PromptBindingTargetReader;
-  preview: PromptPreviewGateway;
 }
 
 const promptingRuntimeSlot = createRuntimeSlot<PromptingRuntimeDependencies>('Prompting');

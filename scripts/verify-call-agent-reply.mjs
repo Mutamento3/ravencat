@@ -105,7 +105,13 @@ reset([
   { chunks: ['还需要'], result: response('还需要再查一项。', [toolCall('second', 'lookup')]) },
   { chunks: ['查到', '了。'], result: response('查到了。') },
 ]);
-const multiRound = await run();
+let committedInputs = 0;
+const multiRound = await run({ onUserTextCommitted() {
+  committedInputs++;
+  assert.equal(events.at(-1).kind, 'userSpeechText');
+  assert.equal(requests.length, 0, '用户事实先提交，草稿交接不依赖模型请求');
+} });
+assert.equal(committedInputs, 1);
 assert.equal(multiRound.status, 'completed', JSON.stringify(multiRound));
 assert.deepEqual(executed, ['first', 'second']);
 assert.deepEqual(spoken, ['我查一下', '还需要再查一项。', '查到了。'], '所有模型回合都朗读，完整响应补尾且不重复 delta');
@@ -163,14 +169,13 @@ reset([{ result: response('晚安。[[END_CALL]]') }]);
 assert.equal((await run({ aiConfig: { ...aiConfig, enableTools: false } })).callEnded, true);
 assert.deepEqual(requests[0].tools, [], '挂断信号不依赖工具开关');
 assert.deepEqual(spoken, ['晚安。']);
-// 网络/Provider 失败、模型输出不适合通话、语音标签解析失败分别保留原因。
+// 网络/Provider 失败与模型输出不适合通话分别保留原因。
 for (const [turn, expected] of [
   [{ result: { ...response(''), success: false, error: 'HTTP 429: code=1302，请求并发数超限' }, chunks: [] }, /HTTP 429.*1302/],
   [{ error: new Error('Network request failed: connection reset') }, /connection reset/],
   [{ result: { ...response(''), finishReason: 'length' } }, /耗尽输出额度/],
   [{ result: { ...response(''), finishReason: 'content_filter' } }, /内容审核.*content_filter/],
   [{ result: response('') }, /没有返回可朗读正文/],
-  [{ result: response('晚安。[invalid_voice_tag]') }, /回复语音文本解析失败.*不支持该标记/],
 ]) {
   reset([turn]);
   const failure = await run();
@@ -181,6 +186,21 @@ for (const [turn, expected] of [
   assert.equal(events.at(-1).text, failure.errorMessage, '通话事实保留与页面相同的具体错误');
   assert.equal(requests.length, 1, '报错不得暗中重试模型');
 }
+
+// 语音诊断允许调整措辞；这里保护解析阶段、具体失败输入及事实交付，不锁定解释文案。
+reset([{ result: response('晚安。[invalid_voice_tag]') }]);
+const invalidSpeech = await run();
+assert.equal(invalidSpeech.status, 'failed');
+assert.ok(events.includes(invalidSpeech.userEvent), '解析失败仍保留已提交的用户输入');
+assert.ok(invalidSpeech.errorMessage.includes('[invalid_voice_tag]'), '诊断应保留具体无效标记');
+const speechErrors = events.filter(event => event.kind === 'error');
+assert.equal(speechErrors.length, 1);
+assert.equal(speechErrors[0].text, invalidSpeech.errorMessage, '页面与持久错误事实使用相同原因');
+assert.deepEqual(JSON.parse(speechErrors[0].payloadJson), {
+  type: 'replyFailure', stage: '回复语音文本解析', model: aiConfig.model, runId: 'run',
+});
+assert.equal(events.some(event => event.kind === 'aiSpeechText'), false, '解析失败不能提交成功的 AI 正文');
+assert.equal(requests.length, 1, '解析失败不得暗中重试模型');
 
 // lookAtUser 本身负责把本次快照转成观察，不再从历史中猜测“最新”图片。
 let imageRoute = 'direct_vision';

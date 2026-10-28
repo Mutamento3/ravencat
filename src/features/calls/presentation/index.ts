@@ -3,3 +3,4 @@ export { default as CallHistoryScreen } from './CallHistoryScreen';
 export { default as CallHistoryDetailScreen } from './CallHistoryDetailScreen';
 export { default as CallActiveScreen } from './CallActiveScreen';
 export { CallRuntimeProvider, useCallRuntime } from './CallRuntimeProvider';
+export { default as CallRingtoneSettings } from './CallRingtoneSettings';

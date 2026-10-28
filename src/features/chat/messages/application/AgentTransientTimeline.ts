@@ -44,7 +44,6 @@ export interface AgentTransientTimelineSnapshot {
   toolDisplayNames?: readonly string[];
   toolExecutionStarted?: boolean;
   apiMessageId?: string | null;
-  assistantAsActivity?: boolean;
   interrupted?: boolean;
   pendingDelivery?: boolean;
   tokensUsed?: number;
@@ -81,14 +80,12 @@ export interface AgentTransientTimelineSink {
 export function createAgentTransientTimelineSink(params: {
   sessionId: string;
   agentId?: string | null;
-  assistantAsActivity?: boolean;
 }): AgentTransientTimelineSink {
   return {
     onChanged: ({ items }) => {
       applyAgentTransientTimelineSnapshots({
         sessionId: params.sessionId,
-        snapshots: params.assistantAsActivity
-          ? items.map((item) => ({ ...item, assistantAsActivity: true })) : items,
+        snapshots: items,
         agentId: params.agentId,
       });
     },
@@ -295,18 +292,15 @@ function buildTransientMessageFromSnapshot(
         source: 'chatToolFlow',
         interrupted: snapshot.interrupted === true,
       })
-    : snapshot.assistantAsActivity
-      ? JSON.stringify({ type: 'agentActivity', source: 'chatAgentRun', phase: snapshot.kind })
-      : JSON.stringify({ interrupted: snapshot.interrupted === true, pendingDelivery: snapshot.pendingDelivery === true,
-          cachedTokens: snapshot.cachedTokens });
+    : JSON.stringify({ interrupted: snapshot.interrupted === true, pendingDelivery: snapshot.pendingDelivery === true,
+        cachedTokens: snapshot.cachedTokens });
   return {
     id: 0,
     sessionId,
     text: snapshot.text,
     isMe: false,
     isRead: true,
-    senderType: isTool || (snapshot.assistantAsActivity && snapshot.kind === 'assistant')
-      ? 'system' : snapshot.kind,
+    senderType: isTool ? 'system' : snapshot.kind,
     agentId: agentId ?? null,
     apiMessageId: snapshot.apiMessageId ?? null,
     clientMessageId: snapshot.clientMessageId,

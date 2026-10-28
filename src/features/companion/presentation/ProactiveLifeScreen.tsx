@@ -351,7 +351,7 @@ export default function ProactiveLifeScreen({ onBack }: ProactiveLifeScreenProps
         data={timelineRows}
         keyExtractor={(row) => row.key}
         renderItem={({ item }) => (
-          <TimelineRowView row={item} styles={styles} />
+          <TimelineRowView row={item} styles={styles} onOpenSchedule={openScheduleDetail} />
         )}
         ListHeaderComponent={listHeader}
         ListEmptyComponent={
@@ -401,19 +401,23 @@ export default function ProactiveLifeScreen({ onBack }: ProactiveLifeScreenProps
 function TimelineRowView({
   row,
   styles,
+  onOpenSchedule,
 }: {
   row: ProactiveLifeTimelineRow;
   styles: Styles;
+  onOpenSchedule: (scheduleId: string) => void;
 }) {
   if (row.kind === 'day-header') {
     return <Text style={styles.dayHeader}>{row.label}</Text>;
   }
   if (row.kind === 'running') {
-    return <RunningTimelineEntry item={row.item} styles={styles} />;
+    return <TouchableOpacity onPress={() => onOpenSchedule(row.item.sourceId)} accessibilityRole="button">
+      <RunningTimelineEntry item={row.item} styles={styles} />
+    </TouchableOpacity>;
   }
   const item = row.item;
   return (
-    <View style={styles.timelineRow}>
+    <TouchableOpacity onPress={() => onOpenSchedule(item.sourceId)} accessibilityRole="button" style={styles.timelineRow}>
       <Text style={styles.timelineTime}>{formatProactiveLifeClock(item.occurredAt)}</Text>
       <TimelineRail nodeStyle={styles.timelineNode} styles={styles} />
       <View style={styles.timelineContent}>
@@ -423,7 +427,7 @@ function TimelineRowView({
           <Text>{` · ${proactiveLifeCompletionDispositionLabel(item.completionDisposition, item.modelResponded)}`}</Text>
         </Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -575,7 +579,10 @@ function AIScheduleDetailContent({
 
   return (
     <ScrollView style={styles.detailScroll} contentContainerStyle={styles.detailBody}>
-      <Text style={styles.detailTime}>{formatProactiveLifeFullDateTime(schedule.remindAt)}</Text>
+      <Text style={styles.detailTime}>计划时间：{formatProactiveLifeFullDateTime(schedule.remindAt)}</Text>
+      <Text style={styles.detailDetails}>创建时间：{formatProactiveLifeFullDateTime(schedule.createdAt)}</Text>
+      <Text style={styles.detailDetails}>实际开始时间：{schedule.claimedAt
+        ? formatProactiveLifeFullDateTime(schedule.claimedAt) : '尚未开始'}</Text>
       <Text style={styles.detailSummary}>{schedule.summary}</Text>
       {schedule.details && schedule.details !== schedule.summary ? (
         <Text style={styles.detailDetails}>{schedule.details}</Text>
@@ -587,7 +594,10 @@ function AIScheduleDetailContent({
         </>
       ) : null}
       {schedule.status !== 'scheduled' ? (
-        <Text style={styles.detailDetails}>这条日程已在执行或已结束。</Text>
+        <Text style={styles.detailDetails}>{schedule.cancelledReason === 'expired' ? '已跳过：超过原定时间 15 分钟仍未开始，不再补跑。'
+          : schedule.cancelledReason === 'merged_chat' ? '自主执行机会已结束，相关信息已交给正常聊天。'
+          : schedule.cancelledReason === 'merged_schedule' ? '已归并到更新的日程，不单独执行。'
+          : '这条日程已在执行或已结束。'}</Text>
       ) : null}
       {actionError ? <Text style={styles.detailError}>{actionError}</Text> : null}
       {canCancelAISchedule(schedule, new Date()) ? (

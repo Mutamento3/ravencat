@@ -70,7 +70,7 @@ export const executeMomentImageAnalysis: MomentImageAnalysisExecutor = async (re
       signal: request.signal,
     });
     if (!response.success) {
-      throw new MomentImageAnalysisError('model_request_failed', '图片理解模型请求失败');
+      throw new MomentImageAnalysisError('model_request_failed', `图片理解模型请求失败：${response.error}`);
     }
     return response.text;
   } catch (error) {

@@ -8,7 +8,7 @@ import {
 } from './AgentRunState';
 
 export const AGENT_RUNTIME_HARD_LIMITS = {
-  maxSteps: 10,
+  maxSteps: 30,
   maxToolCalls: 30,
   maxToolCallsPerStep: 3,
 } as const;

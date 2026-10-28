@@ -126,5 +126,13 @@
   {
     "file": "react-native-fluid-bottom-bar-main-LICENSE.txt",
     "source": "https://raw.githubusercontent.com/vipin14444/react-native-fluid-bottom-bar/main/LICENSE"
+  },
+  {
+    "file": "android-vad-webrtc-2.0.10-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/gkonovalov/android-vad/2.0.10/LICENSE.md"
+  },
+  {
+    "file": "webrtc-vad-2.0.10-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/gkonovalov/android-vad/2.0.10/webrtc/src/main/jni/webrtc_vad/LICENSE"
   }
 ]

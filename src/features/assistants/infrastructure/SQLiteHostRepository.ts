@@ -211,39 +211,6 @@ export class AIHostRepository implements IAIHostRepository {
   }
 
   /**
-   * 获取被拉黑的AI列表
-   */
-  async getBlockedAIs(blockedByAIId: string | null = null): Promise<BlockedAIRecord[]> {
-    try {
-      const database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'assistants.getBlockedAIs', feature: 'assistants', priority: 'runtime' });
-      let rows: { id: string; ai_id: string; blocked_by: string; blocked_until: string; reason: string | null; created_at: string }[];
-
-      if (blockedByAIId) {
-        rows = await database.getAllAsync(
-          'SELECT * FROM ai_blacklist WHERE blocked_by = ? ORDER BY created_at DESC',
-          [blockedByAIId]
-        );
-      } else {
-        rows = await database.getAllAsync(
-          'SELECT * FROM ai_blacklist ORDER BY created_at DESC'
-        );
-      }
-
-      return rows.map(row => ({
-        id: row.id,
-        aiId: row.ai_id,
-        blockedByAIId: row.blocked_by,
-        blockedUntil: row.blocked_until,
-        reason: row.reason,
-        createdAt: row.created_at
-      }));
-    } catch (error) {
-      console.error('[AIHostRepository] Failed to get blocked AIs:', error);
-      return [];
-    }
-  }
-
-  /**
    * 检查AI是否被拉黑
    */
   async isAIBlocked(aiId: string): Promise<{ isBlocked: boolean; blockInfo: BlockedAIRecord | null }> {
@@ -294,24 +261,6 @@ export class AIHostRepository implements IAIHostRepository {
       return true;
     } catch (error) {
       console.error('[AIHostRepository] Failed to cleanup expired blocks:', error);
-      return false;
-    }
-  }
-
-  /**
-   * 删除AI时清理相关拉黑记录
-   */
-  async cleanupBlocksByHostAI(hostAIId: string): Promise<boolean> {
-    try {
-      const database: CoordinatedDatabaseExecutor = databaseCoordinator.openTaskExecutor({ name: 'assistants.cleanupBlocksByHostAI', feature: 'assistants', priority: 'runtime' });
-      await database.runAsync(
-        'DELETE FROM ai_blacklist WHERE blocked_by = ?',
-        [hostAIId]
-      );
-
-      return true;
-    } catch (error) {
-      console.error('[AIHostRepository] Failed to cleanup blocks by host AI:', error);
       return false;
     }
   }

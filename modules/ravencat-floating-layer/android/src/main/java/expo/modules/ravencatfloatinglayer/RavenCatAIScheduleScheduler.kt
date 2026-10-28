@@ -197,6 +197,9 @@ internal object RavenCatAIScheduleScheduler {
     try {
       RavenCatAIScheduleWorkScheduler.scheduleTrigger(context, projection)
       RavenCatAIScheduleAlarmScheduler.schedule(context, projection)
+      RavenCatCompanionWakeStore.recordScheduleDiagnostic(context,
+        "${projection.scheduleId}@${projection.projectionToken}", AIScheduleDiagnosticStage.PROJECTION_ARMED,
+        projection.expectedRemindAtEpochMs)
     } catch (error: Exception) {
       RavenCatAIScheduleStore.remove(context, projection.scheduleId)
       throw error
@@ -252,6 +255,8 @@ internal object RavenCatAIScheduleScheduler {
     val current = RavenCatAIScheduleStore.get(context, scheduleId) ?: return
     if (current.expectedRemindAtEpochMs != expectedAt || current.projectionToken != token) return
     RavenCatAIScheduleWorkScheduler.scheduleTrigger(context, current, immediate = true)
+    RavenCatCompanionWakeStore.recordScheduleDiagnostic(context, "$scheduleId@$token",
+      AIScheduleDiagnosticStage.ALARM_WORK_ENQUEUED, expectedAt)
   }
 
   @Synchronized
@@ -290,6 +295,9 @@ class RavenCatAIScheduleWorker(
       ?: return Result.failure()
     if (expectedRemindAt < 0L) return Result.failure()
 
+    RavenCatCompanionWakeStore.recordScheduleDiagnostic(applicationContext, "$scheduleId@$projectionToken",
+      AIScheduleDiagnosticStage.WORKER_STARTED, expectedRemindAt)
+
     // native gate：只有当前投影的 winner 才能进入执行宿主。
     // STALE / ABSENT（已 update / 已 cancel / 已被更早的投递消费）都直接收口，
     // 同一个 delivery 不会因为 WorkManager 重复投递或进程重建再执行一次。
@@ -302,10 +310,14 @@ class RavenCatAIScheduleWorker(
       )
     ) {
       RavenCatAIScheduleConsumeOutcome.STALE -> {
+        RavenCatCompanionWakeStore.recordScheduleDiagnostic(applicationContext, "$scheduleId@$projectionToken",
+          AIScheduleDiagnosticStage.GATE_REJECTED, expectedRemindAt, "STALE")
         Log.i(TAG, "AI Schedule stale worker ignored scheduleId=$scheduleId")
         return Result.success()
       }
       RavenCatAIScheduleConsumeOutcome.ABSENT -> {
+        RavenCatCompanionWakeStore.recordScheduleDiagnostic(applicationContext, "$scheduleId@$projectionToken",
+          AIScheduleDiagnosticStage.GATE_REJECTED, expectedRemindAt, "ABSENT")
         Log.i(TAG, "AI Schedule delivery already consumed scheduleId=$scheduleId")
         return Result.success()
       }

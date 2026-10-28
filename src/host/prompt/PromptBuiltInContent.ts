@@ -22,12 +22,15 @@ export const DEFAULT_CORE_SYSTEM_PROMPTS = [
   '语言优先遵循${userDisplayName}或 AI 人设的明确要求，否则沿用${userDisplayName}当前使用的语言。',
 ].join('\n');
 
-/** 视觉真实性规则；只在当前轮涉及图片时注入。 */
-export const VISUAL_GROUNDING_REQUIREMENTS = [
-  '【视觉真实性规则】',
-  '只有本轮确实收到图片或成功的 OCR 转述，才能声称看到图片内容；读取或 OCR 失败即无视觉证据，禁止编造。',
-  'OCR 转述不等于原图，不得补充其中没有的细节。',
-].join('\n');
+/** 图片附件直传时的可选提醒；OCR 与工具观察已有自己的结果说明。 */
+export const DEFAULT_IMAGE_GROUNDING_PROMPT = '仅描述图片中能够确认的内容；无法读取或看清时请直接说明，不要猜测。';
+
+export const DEFAULT_PARAGRAPH_BREAKS_PROMPT = '按语义自然分段，段落之间空一行；同一段内不要逐句换行，简短回复无需强行分段。';
+
+/** 只约束普通聊天正文，不进入口语、摘要或内部决策任务。 */
+export const PARAGRAPH_BREAK_SCENARIOS = [
+  'chat.private_reply', 'chat.group_member_reply', 'ledger.reply', 'raven_cat.ai_schedule_trigger',
+] as const;
 
 /** 群聊成员回复的保密输出边界；只约束输出形态，不改变身份信息本身。 */
 export const GROUP_MEMBER_REPLY_CONFIDENTIALITY_RULES = [

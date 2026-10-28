@@ -74,7 +74,7 @@ export default function useConnectionTest({
 
       if (paramError.isParamError) {
         setTestResult('param_error');
-        setTestErrorInfo(paramError);
+        setTestErrorInfo({ ...paramError, message: result.errorInfo!.message });
 
         if (onShowAlert) {
           const paramDisplayName = paramError.paramName === 'temperature'
@@ -88,7 +88,7 @@ export default function useConnectionTest({
 
           onShowAlert(
             '参数设置错误',
-            `${paramError.message}\n\n${suggestion}`,
+            `${result.errorInfo!.message}\n\n${suggestion}`,
             [{ text: '知道了', style: 'default' }], 'error'
           );
         }

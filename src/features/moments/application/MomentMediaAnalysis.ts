@@ -14,7 +14,7 @@ export const MAX_MOMENT_MEDIA_ANALYSIS_LENGTH = 4000;
 
 export type MomentMediaAnalysisAttemptResult =
   | { success: true; mediaId: string }
-  | { success: false; mediaId: string; errorCode: MomentImageAnalysisErrorCode };
+  | { success: false; mediaId: string; errorCode: MomentImageAnalysisErrorCode; errorMessage: string };
 
 type MomentMediaAnalysisListener = (mediaId: string) => void;
 const listeners = new Set<MomentMediaAnalysisListener>();
@@ -39,10 +39,6 @@ function normalizeAnalysisText(text: string): string {
   return normalized;
 }
 
-function stableErrorCode(error: unknown): MomentImageAnalysisErrorCode {
-  return error instanceof MomentImageAnalysisError ? error.code : 'model_request_failed';
-}
-
 /**
  * 失败结果与广播的统一收口：只有 CAS 真的写入了失败事实才广播 state update。
  *
@@ -54,14 +50,15 @@ function stableErrorCode(error: unknown): MomentImageAnalysisErrorCode {
 function settleAnalysisFailure(
   mediaId: string,
   errorCode: MomentImageAnalysisErrorCode,
+  errorMessage: string,
   saved: boolean,
   initial: boolean
 ): MomentMediaAnalysisAttemptResult {
   if (!saved && initial) {
-    return { success: false, mediaId, errorCode: 'stale_analysis_attempt' };
+    return { success: false, mediaId, errorCode: 'stale_analysis_attempt', errorMessage: '图片描述已更新，本次识别未覆盖当前描述。' };
   }
   if (saved) emitUpdated(mediaId);
-  return { success: false, mediaId, errorCode };
+  return { success: false, mediaId, errorCode, errorMessage };
 }
 
 async function analyze(
@@ -72,26 +69,30 @@ async function analyze(
   const settings = await getMomentSettings();
   if (!settings.imageAnalysisModelConfigId) {
     const at = runtime.now();
+    const errorMessage = '尚未配置图片理解模型，请在时刻设置中选择模型。';
     const saved = await runtime.repository.saveAnalysisFailure({
       mediaId: media.id,
       expectedRevision: media.analysisRevision,
       expectedPending: options.initial,
       errorCode: 'model_not_configured',
+      errorMessage,
       analyzedAt: at,
     });
-    return settleAnalysisFailure(media.id, 'model_not_configured', saved, options.initial);
+    return settleAnalysisFailure(media.id, 'model_not_configured', errorMessage, saved, options.initial);
   }
   const model = await resolveMomentImageAnalysisModel();
   if (!model) {
     const at = runtime.now();
+    const errorMessage = '所选图片理解模型不可用，请在时刻设置中检查模型配置。';
     const saved = await runtime.repository.saveAnalysisFailure({
       mediaId: media.id,
       expectedRevision: media.analysisRevision,
       expectedPending: options.initial,
       errorCode: 'model_unavailable',
+      errorMessage,
       analyzedAt: at,
     });
-    return settleAnalysisFailure(media.id, 'model_unavailable', saved, options.initial);
+    return settleAnalysisFailure(media.id, 'model_unavailable', errorMessage, saved, options.initial);
   }
 
   try {
@@ -112,18 +113,22 @@ async function analyze(
     if (saved) emitUpdated(media.id);
     return saved
       ? { success: true, mediaId: media.id }
-      : { success: false, mediaId: media.id, errorCode: 'stale_analysis_attempt' };
+      : { success: false, mediaId: media.id, errorCode: 'stale_analysis_attempt', errorMessage: '图片描述已更新，本次识别未覆盖当前描述。' };
   } catch (error) {
     throwIfAbortSignalAborted(options.signal);
-    const errorCode = stableErrorCode(error);
+    // 模型接口原因由 Host/Client 边界脱敏；未知内部异常不作为接口原文展示。
+    const failure = error instanceof MomentImageAnalysisError
+      ? error
+      : new MomentImageAnalysisError('model_request_failed', '图片理解处理失败，请稍后重试。');
     const saved = await runtime.repository.saveAnalysisFailure({
       mediaId: media.id,
       expectedRevision: media.analysisRevision,
       expectedPending: options.initial,
-      errorCode,
+      errorCode: failure.code,
+      errorMessage: failure.message,
       analyzedAt: runtime.now(),
     });
-    return settleAnalysisFailure(media.id, errorCode, saved, options.initial);
+    return settleAnalysisFailure(media.id, failure.code, failure.message, saved, options.initial);
   }
 }
 

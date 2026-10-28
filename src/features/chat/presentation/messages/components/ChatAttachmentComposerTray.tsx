@@ -3,6 +3,7 @@
 import React from 'react';
 import {
   Image,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -16,8 +17,8 @@ import { useTheme, useThemedStyles } from '@shared/theme';
 import type { PresentationTheme } from '@shared/theme';
 
 interface ChatAttachmentComposerTrayProps {
-  attachment: AttachmentDraftItem | null;
-  onRemove?: () => void;
+  attachments: AttachmentDraftItem[];
+  onRemove?: (id: string) => void;
 }
 
 function getStatusText(attachment: AttachmentDraftItem): string {
@@ -49,59 +50,72 @@ function getStatusText(attachment: AttachmentDraftItem): string {
 }
 
 export default function ChatAttachmentComposerTray({
-  attachment,
+  attachments,
   onRemove,
 }: ChatAttachmentComposerTrayProps) {
   const theme = useTheme();
   const styles = useThemedStyles(createStyles);
 
-  if (!attachment) {
+  if (attachments.length === 0) {
     return null;
   }
 
-  const isImage = attachment.type === 'image';
-  const previewUri = attachment.thumbnailUri || attachment.localUri || attachment.originalUri;
-
   return (
     <View style={styles.container}>
-      <View style={styles.card}>
-        {isImage ? (
-          <View style={styles.previewWrap}>
-            {previewUri ? (
-              <Image source={{ uri: previewUri }} style={styles.imagePreview} />
-            ) : (
-              <View style={[styles.imagePreview, styles.imagePlaceholder]}>
-                <Ionicons name="image-outline" size={20} color={theme.colors.icon.secondary} />
+      {attachments.length > 1 ? (
+        <Text style={styles.selectionCount}>已选 {attachments.length} 张图片</Text>
+      ) : null}
+      <ScrollView horizontal={attachments.length > 1} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cards}>
+        {attachments.map((attachment) => {
+          const isImage = attachment.type === 'image';
+          const previewUri = attachment.thumbnailUri || attachment.localUri || attachment.originalUri;
+          return (
+            <View key={attachment.id} style={[styles.card, attachments.length > 1 ? styles.multiCard : null]}>
+              {isImage ? (
+                <View style={styles.previewWrap}>
+                  {previewUri ? (
+                    <Image source={{ uri: previewUri }} style={styles.imagePreview} />
+                  ) : (
+                    <View style={[styles.imagePreview, styles.imagePlaceholder]}>
+                      <Ionicons name="image-outline" size={20} color={theme.colors.icon.secondary} />
+                    </View>
+                  )}
+                </View>
+              ) : (
+                <View style={styles.fileIconWrap}>
+                  <Ionicons name="document-text-outline" size={24} color={theme.colors.icon.primary} />
+                </View>
+              )}
+
+              <View style={styles.content}>
+                <Text numberOfLines={1} style={styles.fileName}>
+                  {attachment.fileName || (isImage ? '未命名图片' : '未命名文件')}
+                </Text>
+                <Text numberOfLines={2} style={[
+                  styles.statusText,
+                  attachment.status === 'failed' ? styles.statusTextError : null,
+                ]}>
+                  {getStatusText(attachment)}
+                </Text>
+                <Text numberOfLines={1} style={styles.metaText}>
+                  {isImage
+                    ? `${attachment.width && attachment.height ? `${attachment.width}×${attachment.height} · ` : ''}${formatFileSize(attachment.fileSize)}`
+                    : `${formatFileSize(attachment.fileSize)}${attachment.previewText ? ` · ${attachment.previewText}` : ''}`}
+                </Text>
               </View>
-            )}
-          </View>
-        ) : (
-          <View style={styles.fileIconWrap}>
-            <Ionicons name="document-text-outline" size={24} color={theme.colors.icon.primary} />
-          </View>
-        )}
 
-        <View style={styles.content}>
-          <Text numberOfLines={1} style={styles.fileName}>
-            {attachment.fileName || (isImage ? '未命名图片' : '未命名文件')}
-          </Text>
-          <Text numberOfLines={2} style={[
-            styles.statusText,
-            attachment.status === 'failed' ? styles.statusTextError : null,
-          ]}>
-            {getStatusText(attachment)}
-          </Text>
-          <Text numberOfLines={1} style={styles.metaText}>
-            {isImage
-              ? `${attachment.width && attachment.height ? `${attachment.width}×${attachment.height} · ` : ''}${formatFileSize(attachment.fileSize)}`
-              : `${formatFileSize(attachment.fileSize)}${attachment.previewText ? ` · ${attachment.previewText}` : ''}`}
-          </Text>
-        </View>
-
-        <TouchableOpacity style={styles.removeButton} onPress={onRemove}>
-          <Ionicons name="close-circle" size={22} color={theme.colors.icon.secondary} />
-        </TouchableOpacity>
-      </View>
+              <TouchableOpacity
+                style={styles.removeButton}
+                onPress={() => onRemove?.(attachment.id)}
+                accessibilityRole="button"
+                accessibilityLabel={`移除${attachment.fileName}`}
+              >
+                <Ionicons name="close-circle" size={22} color={theme.colors.icon.secondary} />
+              </TouchableOpacity>
+            </View>
+          );
+        })}
+      </ScrollView>
     </View>
   );
 }
@@ -120,6 +134,17 @@ const createStyles = (theme: PresentationTheme) => StyleSheet.create({
     borderWidth: 0.5,
     borderColor: theme.colors.border.default,
     padding: 10,
+  },
+  cards: {
+    gap: 8,
+  },
+  multiCard: {
+    width: 280,
+  },
+  selectionCount: {
+    fontSize: 12,
+    color: theme.colors.text.secondary,
+    marginBottom: 6,
   },
   previewWrap: {
     marginRight: 10,

@@ -31,6 +31,8 @@ export interface RunCallTurnParams {
   callId: string;
   userText: string;
   userAudio?: Promise<CallInputAudio | null>;
+  /** 用户输入落库后即可交接草稿，不等待 AI 回复或播放完成。 */
+  onUserTextCommitted?: () => void;
   aiConfig: CallAIConfig;
   onPlaybackStarted?: () => void;
   onPlaybackEnded?: () => void;
@@ -84,6 +86,7 @@ export class CallTurnRuntimeService {
         runId,
         userText: params.userText,
         userAudio: params.userAudio,
+        onUserTextCommitted: params.onUserTextCommitted,
         aiConfig: params.aiConfig,
         signal,
         onToolExecutionChanged: (active) => {

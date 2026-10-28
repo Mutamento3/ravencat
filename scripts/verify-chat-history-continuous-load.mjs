@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
+import React from 'react';
+import { act, create } from 'react-test-renderer';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 
@@ -27,6 +29,8 @@ function loadModule(relativePath, requireModule = () => ({})) {
     Math,
     JSON,
     Error,
+    setInterval,
+    clearInterval,
   });
   return module.exports;
 }
@@ -963,6 +967,86 @@ function createMessages(count) {
   assert.deepEqual(harness.snapshot(), bSnapshot, '旧 session 的 refresh 结果不得覆盖新 session');
   assert.equal(harness.state.messageCount, 12, 'B 的消息数不得被 A 的 refresh 改写');
   assert.equal(harness.state.hasMore, false, 'B 的 hasMore 不得被 A 的 refresh 改写');
+}
+
+// 清除必须经过真实 hook 和时间线订阅，不能只在测试中预先把 hasMore 设为 false。
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+const events = loadModule('src/features/chat/messages/events/ChatEvents.ts');
+const ordering = loadModule('src/features/chat/messages/domain/ChatTimelineOrdering.ts');
+let repository;
+const timeline = loadModule('src/features/chat/messages/application/MessageTimeline.ts', specifier => {
+  if (specifier === '../events/ChatEvents') return events;
+  if (specifier === '../domain/ChatTimelineOrdering') return ordering;
+  if (specifier === './ChatMessageRuntime') return { getChatMessageRuntimeDependencies: () => ({ messages: repository }) };
+  return {};
+});
+const historyHook = loadModule('src/features/chat/presentation/messages/components/useMessageHistoryState.ts', specifier => {
+  if (specifier === 'react') return React;
+  if (specifier === '../../../messages/application/MessageTimeline') return timeline;
+  if (specifier === './sessionTimelineCache') return timelineCache;
+  if (specifier === './chatBottomAnchorExperiment') return initialWindow;
+  if (specifier === './chatHistoryPagination') return pagination;
+  throw new Error(`未预期的历史依赖：${specifier}`);
+});
+const syncHook = loadModule('src/features/chat/presentation/messages/components/useChatTimelineSync.ts', specifier => {
+  if (specifier === 'react') return React;
+  if (specifier === '../../../messages/application/MessageTimeline') return timeline;
+  if (specifier === '../../../messages/events/ChatEvents') return events;
+  throw new Error(`未预期的订阅依赖：${specifier}`);
+});
+for (const pendingKind of ['older', 'refresh', 'initial']) {
+  const sessionId = `clear-history-${pendingKind}`;
+  const delayed = createDeferred();
+  const delayedDelta = createDeferred();
+  const oldMessages = [9144, 9150].map(id => ({ id, sessionId, text: '旧消息', createdAt: '2026-10-28T00:00:00Z' }));
+  const oldPage = { success: true, messages: oldMessages, hasMore: true, nextCursor: 9144 };
+  let initialReads = 0;
+  let olderReads = 0;
+  let current;
+  repository = {
+    getMessages: async (_sessionId, { cursor }) => {
+      if (cursor !== null) { olderReads++; return delayed.promise; }
+      initialReads++;
+      return pendingKind === 'initial' || initialReads > 1 ? delayed.promise : oldPage;
+    },
+    getReloadWindowMessages: async (_sessionId, ids) => {
+      assert.equal(ids.length, 0, '清除后的重读不能携带旧窗口身份');
+      return [];
+    },
+    getNewerMessages: async () => delayedDelta.promise,
+  };
+  function Harness() {
+    current = historyHook.useMessageHistoryState(sessionId);
+    const [isTyping, setIsTyping] = React.useState(false);
+    syncHook.useChatTimelineSync({ sessionId, ...current, isTyping, setIsTyping });
+    return null;
+  }
+  let renderer;
+  await act(async () => { renderer = create(React.createElement(Harness)); });
+  let pendingRead;
+  await act(async () => {
+    if (pendingKind === 'older') {
+      pendingRead = current.loadMore();
+      events.emitChatMessagesUpdated(sessionId);
+    } else if (pendingKind === 'refresh') pendingRead = current.refresh();
+  });
+  await act(async () => { events.emitChatMessagesReloadRequested(sessionId, true); });
+  assert.equal(current.messages.length, 0, '清除立即移除旧消息');
+  assert.equal(current.hasMore, false, '清除立即撤销分页资格');
+  assert.equal(current.isLoadingMore, false);
+  assert.equal(current.lastMessageIdRef.current, null);
+  assert.equal(await current.loadMore(), false, '清除后上滑不能再使用游标 9144');
+  assert.equal(olderReads, pendingKind === 'older' ? 1 : 0, '清除后不发出额外分页请求');
+  await act(async () => {
+    delayed.resolve(oldPage);
+    delayedDelta.resolve(oldMessages);
+    await pendingRead;
+  });
+  assert.equal(current.messages.length, 0, '迟到的首屏、刷新、分页与增量结果都不能恢复旧消息');
+  assert.equal(current.hasMore, false);
+  assert.equal(current.error, null);
+  assert.equal(timelineCache.getSessionTimelineCache(sessionId).messages.length, 0, '旧查询不能污染重进页面的缓存');
+  await act(async () => { renderer.unmount(); });
 }
 
 console.log('Chat history continuous load verification passed.');

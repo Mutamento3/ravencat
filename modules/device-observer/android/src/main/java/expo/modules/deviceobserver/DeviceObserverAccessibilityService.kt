@@ -40,6 +40,7 @@ class DeviceObserverAccessibilityService : AccessibilityService() {
   }
 
   override fun onAccessibilityEvent(event: AccessibilityEvent) {
+    // 内容/文本事件让 Android 更新节点缓存；前台事实仍只由窗口事件推进，不广播输入内容。
     if (
       event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
       event.eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED
@@ -104,6 +105,19 @@ class DeviceObserverAccessibilityService : AccessibilityService() {
         error,
       )
     }
+  }
+
+  /** 动作诊断只借用同一前台事实，不在 App 适配器中另猜当前窗口。 */
+  fun observeActionWindow(): DeviceWindowState = snapshotCurrentWindow() ?: DeviceWindowState.unknown()
+
+  /** 动作消费方每次派发前现场绑定目标窗口，不把只读快照当成可长期使用的节点句柄。 */
+  fun requireActionRoot(packageName: String): AccessibilityNodeInfo {
+    val state = snapshotCurrentWindow()
+    val windowId = state?.windowId
+    check(state != null && state.detectionReliable && state.packageName == packageName && windowId != null) {
+      "目标应用已离开前台或窗口不可可靠识别"
+    }
+    return findExpectedWindowRoot(DeviceWindowIdentity(packageName, windowId))
   }
 
   internal suspend fun captureScreenshot(
@@ -352,6 +366,10 @@ class DeviceObserverAccessibilityService : AccessibilityService() {
     internal fun connectedInstance(): DeviceObserverAccessibilityService? {
       return connectedService
     }
+
+    /** 只供原生 Device Control 借用服务能力；不创建第二个无障碍服务或执行宿主。 */
+    fun requireActionService(): DeviceObserverAccessibilityService =
+      checkNotNull(connectedService) { "无障碍服务未连接" }
 
     internal fun currentWindowState(context: android.content.Context): DeviceWindowState {
       val liveState = connectedService?.snapshotCurrentWindow()

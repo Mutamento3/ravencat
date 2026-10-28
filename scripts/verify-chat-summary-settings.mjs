@@ -75,6 +75,8 @@ function load(relative) {
   return module.exports;
 }
 mocks['@shared/ui/useAutoSaveDraft'] = load('src/shared/ui/useAutoSaveDraft.ts');
+mocks['./Toggle'] = { default: 'Toggle', __esModule: true };
+mocks['@shared/ui'].ToggleField = load('src/shared/ui/ToggleField.tsx').default;
 const Panel = load('src/features/chat/summary/presentation/ChatSummarySettingsPanel.tsx').default;
 let renderer;
 const saves = [];
@@ -234,7 +236,7 @@ let chosen = 0;
 const fixedChanges = [];
 const fixedProps = {conversationId:'only-this-ai',onChoose:()=>chosen++,onFixedChange:value=>fixedChanges.push(value)};
 await act(async () => { renderer=TestRenderer.create(React.createElement(FixedSection,fixedProps)); });
-assert.ok(renderer.root.findAllByType('Text').some(node=>node.children.join('')==='去设置'));
+assert.ok(renderer.root.findAllByType('Text').some(node=>node.children.join('')==='选择起点'));
 await act(async () => {renderer.root.findByType('Pressable').props.onPress();});
 assert.equal(chosen,1);
 fixedSnapshot={settings:{...settings,generationEnabled:false,fixedMessageId:42},fixedStart:{messageId:42,content:'固定的原消息',messageCount:7}};
@@ -256,9 +258,9 @@ await act(async () => {renderer.unmount();});
 
 const ContextSection = load('src/features/chat/presentation/conversation/ContextWindowSection.tsx').default;
 await act(async () => {renderer=TestRenderer.create(React.createElement(ContextSection,{values:{privatePrimary:'30',privateSecondary:'10',groupPrimary:'40',groupSecondary:'5'},fixed:true,onChange(){}}));});
-assert.equal(renderer.root.findByProps({accessibilityLabel:'单聊·主'}).props.editable,false);
-assert.equal(renderer.root.findByProps({accessibilityLabel:'单聊·主'}).props.value,'30');
-assert.equal(renderer.root.findByProps({accessibilityLabel:'单聊·客'}).props.editable,true);
+assert.equal(renderer.root.findByProps({accessibilityLabel:'当前单聊'}).props.editable,false);
+assert.equal(renderer.root.findByProps({accessibilityLabel:'当前单聊'}).props.value,'30');
+assert.equal(renderer.root.findByProps({accessibilityLabel:'单聊背景'}).props.editable,true);
 await act(async () => {renderer.unmount();});
 
 const Menu = load('src/features/chat/presentation/messages/components/ChatMessageActionMenu.tsx').default;

@@ -77,15 +77,6 @@ export interface LedgerKeywordSearchStats {
 
 export type CreateQuickActionInput = Partial<QuickAction>;
 
-export interface UpdateQuickActionInput {
-  name?: string;
-  type?: WalletRecordType;
-  category?: string;
-  detail?: string;
-  amount?: number;
-  sortOrder?: number;
-}
-
 export interface ILedgerRepository {
   insertRecord(record: CreateWalletRecordInput): Promise<WalletRecord>;
   getRecords(filters?: LedgerRecordFilters): Promise<WalletRecord[]>;
@@ -96,7 +87,6 @@ export interface ILedgerRepository {
   updateRecord(id: string, updates: UpdateWalletRecordInput): Promise<boolean>;
   getQuickActions(): Promise<QuickAction[]>;
   insertQuickAction(action: CreateQuickActionInput): Promise<QuickAction>;
-  updateQuickAction(id: string, updates: UpdateQuickActionInput): Promise<boolean>;
   deleteQuickAction(id: string): Promise<boolean>;
   useQuickAction(quickActionId: string, recordDate?: string): Promise<WalletRecord>;
   /** 返回预设与账单、快捷记账中已使用的分类；不受日期或记录条数限制。 */

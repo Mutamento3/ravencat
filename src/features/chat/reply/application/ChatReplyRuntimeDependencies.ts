@@ -84,6 +84,7 @@ export interface ChatReplyRuntimeDependencies {
     resolveRuntimeContext: (assistantId: string) => Promise<{ companionScheduleRevision?: number }>;
   };
   prompt: {
+    readImageGroundingReminder: (assistantId: string) => Promise<string | null>;
     assembleChat: (params: AssemblePromptPackParams) => Promise<PromptPack>;
     assembleLedger: (params: AssemblePromptPackParams) => Promise<PromptPack>;
     assembleStandalone: (params: AssembleStandalonePromptPackParams) => Promise<PromptPack>;

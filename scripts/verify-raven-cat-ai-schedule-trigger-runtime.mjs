@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { loadTypeScriptModule as loadModule } from './helpers/load-typescript-module.mjs';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -22,30 +23,6 @@ async function importTypeScriptModule(relativePath, transform = (source) => sour
   return import(`${pathToFileURL(target).href}?v=${Date.now()}-${Math.random()}`);
 }
 
-function loadModule(relativePath, mocks) {
-  const code = fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-  const transpiled = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: relativePath,
-    reportDiagnostics: true,
-  });
-  assert.deepEqual(
-    (transpiled.diagnostics ?? []).filter((item) => item.category === ts.DiagnosticCategory.Error),
-    [],
-    `${relativePath} 无法编译`,
-  );
-  const module = { exports: {} };
-  new Function('exports', 'require', 'module', transpiled.outputText)(
-    module.exports,
-    (specifier) => {
-      assert.ok(Object.hasOwn(mocks, specifier), `未声明运行时 mock：${specifier}`);
-      return mocks[specifier];
-    },
-    module,
-  );
-  return module.exports;
-}
-
 // ---------------------------------------------------------------------------
 // Part A：SQLite Repository claim CAS（due-time + stale projection）与 authority invalidation。
 // ---------------------------------------------------------------------------
@@ -58,6 +35,7 @@ db.exec("CREATE TABLE ai_assistants (id TEXT PRIMARY KEY); INSERT INTO ai_assist
 db.exec(schema.RAVEN_CAT_COMPANION_STATE_SCHEMA);
 db.exec("INSERT INTO raven_cat_companion_state (id, desired_enabled, activation_status, host_ai_id, created_at, updated_at) VALUES ('default', 1, 'enabled', 'host-ai', '2026-09-01', '2026-09-01')");
 db.exec(schema.RAVEN_CAT_AI_SCHEDULES_SCHEMA);
+db.exec(schema.RAVEN_CAT_AI_SCHEDULE_CONTEXT_SCHEMA);
 db.exec(schema.RAVEN_CAT_AI_SCHEDULES_OWNER_STATUS_TIME_INDEX);
 db.exec(schema.RAVEN_CAT_AI_SCHEDULES_OWNER_TIME_INDEX);
 
@@ -286,6 +264,7 @@ const switchOwner = new ownerModule.AIScheduleProjectionOwner({
     update: async (changes) => (switchState = { ...switchState, ...changes }),
   },
   schedules: {
+    expireScheduled: async () => {},
     listAllScheduled: async () => [...switchTruth.values()],
     getByScheduleId: async (id) => switchTruth.get(id),
   },
@@ -328,6 +307,7 @@ const projectionTruth = new Map();
 globalThis.__aiScheduleProjectionTruth = projectionTruth;
 const projectionRepository = {
   ...repository,
+  expireScheduled: async () => {},
   getByScheduleId: async (scheduleId) => projectionTruth.get(scheduleId) ?? null,
 };
 
@@ -667,9 +647,11 @@ assert.equal(timerQueue.length, 0, 'cancel 必须清空 pending repair timer');
 let claimOutcomes = [];
 let runResult = terminal('COMPLETED');
 let runError = null;
+let dispatchAvailable = true;
 let consumeOutcome = { status: 'consumed' };
 let currentHostAIId = 'host-ai';
 const runnerCalls = [];
+let admissionGate = null;
 
 const runnerMocks = {
   '@features/assistants': {
@@ -687,6 +669,18 @@ const runnerMocks = {
     getCompanionRuntimeDependencies: () => ({
       initializeDatabase: async () => runnerCalls.push(['database']),
       generateAutonomousRunId: () => 'generated-run',
+      repositories: { aiSchedules: {
+        prepareDispatch: async input => dispatchAvailable ? ({ ...baseSchedule, scheduleId: input.scheduleId, ownerAIId: input.ownerAIId,
+          remindAt: input.expectedRemindAt, updatedAt: input.projectionToken }) : null,
+        mergeClaimedRun: async () => {}, mergeScheduled: async () => {},
+      } },
+      chat: {
+        resolveCanonicalConversation: async () => ({ id: 'canonical-session' }),
+        runInConversation: async (_sessionId, _runId, _priority, execute, signal) => {
+          if (admissionGate) await admissionGate;
+          return { status: 'ran', value: await execute({ signal: signal ?? new AbortController().signal }) };
+        },
+      },
     }),
   },
   './AIScheduleProjectionOwner': {
@@ -769,6 +763,41 @@ assert.equal(consumeCall.completionDisposition, 'agent_terminal');
 assert.deepEqual(runnerCalls.find(([kind]) => kind === 'complete'), [
   'complete', 'generated-run', 'agent_terminal',
 ]);
+
+runnerCalls.length = 0;
+dispatchAvailable = false;
+assert.deepEqual(await runHeadlessAISchedule(callback), { status: 'ignored', reason: 'expired_or_merged' });
+assert.equal(runnerCalls.some(([kind]) => kind === 'claim' || kind === 'run'), false,
+  '已经失效或被归并的系统投递必须在会话领取和模型准备之前结束');
+dispatchAvailable = true;
+
+// 短小的 owner 交接尚未完成时不抢先领取；claimedAt 只记录真实开始时间。
+runnerCalls.length = 0;
+let releaseAdmission;
+admissionGate = new Promise(resolve => { releaseAdmission = resolve; });
+claimOutcomes.push(claimedOutcome);
+const delayed = runHeadlessAISchedule(callback);
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(runnerCalls.some(([kind]) => kind === 'claim'), false);
+assert.equal(runnerCalls.some(([kind]) => kind === 'run'), false);
+const admittedAt = Date.now();
+releaseAdmission();
+assert.equal((await delayed).status, 'ran');
+assert.ok(Date.parse(runnerCalls.find(([kind]) => kind === 'claim')[1].claimedAt) >= admittedAt);
+assert.equal(runnerCalls.find(([kind]) => kind === 'run')[1].sessionId, 'canonical-session');
+admissionGate = null;
+
+// 等待期间被撤销主理身份，不能沿用等待前的授权去领取执行机会。
+runnerCalls.length = 0;
+admissionGate = new Promise(resolve => { releaseAdmission = resolve; });
+const revokedWhileWaiting = runHeadlessAISchedule(callback);
+await new Promise(resolve => setImmediate(resolve));
+currentHostAIId = 'replacement-host';
+releaseAdmission();
+assert.deepEqual(await revokedWhileWaiting, { status: 'ignored', reason: 'not_current_host' });
+assert.equal(runnerCalls.some(([kind]) => kind === 'claim'), false);
+admissionGate = null;
+currentHostAIId = 'host-ai';
 
 // 5/4/6：claim 拒绝（not_due / stale_projection）→ ignored，不启动 run。
 runnerCalls.length = 0;

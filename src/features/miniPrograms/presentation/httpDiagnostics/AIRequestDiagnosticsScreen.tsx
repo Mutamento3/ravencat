@@ -24,24 +24,14 @@ function describeStatus(record: AIHttpExchange): string {
   return record.status === null ? '未收到 HTTP 状态' : `HTTP ${record.status}`;
 }
 
-function formatExchange(record: AIHttpExchange): string {
-  // 正文直接拼接，不解析 JSON / SSE，保留发送和接收的原始文本。
-  return [
-    `ID: ${record.id}`,
-    `开始: ${record.startedAt}`,
-    `结束: ${record.completedAt}`,
-    `${record.method} ${record.url}`,
-    `模型: ${record.model}`,
-    `传输: ${record.transport}`,
-    describeStatus(record),
-    `错误: ${record.error ?? '无'}`,
-    '',
-    '=== HTTP 请求正文（原文）===',
-    record.requestBody,
-    '',
-    '=== HTTP 响应正文（原文）===',
-    record.responseBody,
-  ].join('\n');
+const BODY_PAGE_SIZE = 4000;
+
+function bodyPageOffset(body: string, offset: number): number {
+  // 页边界不能拆开 emoji 等字符的 UTF-16 代理对；只检查边界，不遍历整份正文。
+  const previous = body.charCodeAt(offset - 1);
+  const current = body.charCodeAt(offset);
+  return previous >= 0xD800 && previous <= 0xDBFF && current >= 0xDC00 && current <= 0xDFFF
+    ? offset - 1 : offset;
 }
 
 function HttpBodySection({ title, body, styles }: {
@@ -51,6 +41,8 @@ function HttpBodySection({ title, body, styles }: {
 }) {
   const theme = useTheme();
   const [expanded, setExpanded] = useState(false);
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(body.length / BODY_PAGE_SIZE));
   const Chevron = expanded ? ChevronDown : ChevronRight;
   return <View>
     <TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded }}
@@ -60,27 +52,41 @@ function HttpBodySection({ title, body, styles }: {
       <Text style={styles.hint}>{expanded ? '收起' : '展开'}</Text>
       <Chevron size={20} color={theme.colors.text.secondary} />
     </TouchableOpacity>
-    {expanded ? body.length === 0 ? <Text style={styles.hint}>（空正文）</Text>
-      : <Text selectable style={styles.raw}>{body}</Text> : null}
+    {expanded ? body.length === 0 ? <Text style={styles.hint}>（空正文）</Text> : <>
+      {pageCount > 1 ? <View style={styles.bodyPagination}>
+        <Text style={styles.hint}>第 {page + 1} / {pageCount} 页 · 仅分页显示，复制仍为完整正文</Text>
+        <View style={styles.actions}>
+          <Button title="上一页" variant="text" disabled={page === 0} onPress={() => setPage(page - 1)} />
+          <Button title="下一页" variant="text" disabled={page === pageCount - 1} onPress={() => setPage(page + 1)} />
+        </View>
+      </View> : null}
+      {/* 每次只向原生排版提交一页；换页重建滚动区，使阅读和选择回到页首。 */}
+      <ScrollView key={page} nestedScrollEnabled style={styles.bodyScroll}>
+        <Text selectable style={styles.raw}>{body.slice(
+          bodyPageOffset(body, page * BODY_PAGE_SIZE),
+          bodyPageOffset(body, Math.min(body.length, (page + 1) * BODY_PAGE_SIZE)),
+        )}</Text>
+      </ScrollView>
+    </> : null}
   </View>;
 }
 
 /** 记录详情独立成弹窗，避免详情内容与页面上的开关、列表叠在同一文档流里。 */
 function ExchangeDetail({ record, styles }: { record: AIHttpExchange; styles: DiagnosticsStyles }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
 
-  const copy = () => showAppDialog({
-    title: '复制完整 HTTP 记录',
-    message: '将复制本条请求、响应原文与元信息，可能包含私密聊天及工具内容。请先检查正文，再决定是否向他人分享。',
+  const copy = (label: string, body: string) => showAppDialog({
+    title: `复制${label}`,
+    message: `将复制完整${label}，可能包含私密聊天及工具内容。请先检查正文，再决定是否向他人分享。`,
     buttons: [
       { text: '取消', style: 'cancel' },
-      { text: '复制完整记录', onPress: () => {
-        setCopied(false);
+      { text: `复制${label}`, onPress: () => {
+        setCopied(null);
         setCopyError(null);
         try {
-          copyTextToClipboard(formatExchange(record));
-          setCopied(true);
+          copyTextToClipboard(body);
+          setCopied(label);
         } catch (cause) {
           setCopyError(`复制失败：${describeError(cause)}`);
         }
@@ -98,9 +104,10 @@ function ExchangeDetail({ record, styles }: { record: AIHttpExchange; styles: Di
     </ScrollView>
     <View style={styles.detailActions}>
       {/* 弹窗遮住页面顶部的错误区，复制结果必须在这一层反馈。 */}
-      {copied ? <Text style={styles.hint}>已复制完整记录</Text> : null}
+      {copied ? <Text style={styles.hint}>已复制完整{copied}</Text> : null}
       {copyError ? <Text selectable accessibilityRole="alert" style={styles.error}>{copyError}</Text> : null}
-      <Button title="复制本条完整请求与响应" variant="secondary" onPress={copy} />
+      <Button title="复制请求正文" variant="secondary" onPress={() => copy('请求正文', record.requestBody)} />
+      <Button title="复制响应正文" variant="secondary" onPress={() => copy('响应正文', record.responseBody)} />
     </View>
   </>;
 }

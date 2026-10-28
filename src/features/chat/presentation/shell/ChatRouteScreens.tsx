@@ -20,6 +20,8 @@ import { renameGroupChat, subscribeGroupChanged } from '../../group/application/
 import AIOptions from '../conversation/AIOptions';
 import ChatSettings from '../conversation/ChatSettings';
 import ChatStatisticsScreen from '../conversation/ChatStatisticsScreen';
+import ChatMessageSearchScreen from '../messages/ChatMessageSearchScreen';
+import ChatMessageContextScreen from '../messages/ChatMessageContextScreen';
 import ChatSummaryScreen from '../../summary/presentation/ChatSummaryScreen';
 import ChatSummaryEditorScreen from '../../summary/presentation/ChatSummaryEditorScreen';
 import ChatSummarySettingsScreen from '../../summary/presentation/ChatSummarySettingsScreen';
@@ -396,14 +398,15 @@ export function ChatMenuRouteScreen({ aiId }: { aiId: string }) {
         if (!sessionId) {
           throw new Error('当前 canonical conversation 尚未就绪');
         }
-        clearSessionTimelineCache(sessionId);
         await clearChatConversationHistory(sessionId);
+        clearSessionTimelineCache(sessionId);
         state.handleCloseMenu();
         router.returnToConversation(aiId);
       }}
       onModelSettings={() => router.openSubScreen('modelSettings')}
       onChatSettings={() => router.openSubScreen('chatSettings')}
       onChatSummary={() => router.openSubScreen('summary')}
+      onSearchMessages={() => router.openSubScreen('search')}
       onCallHistory={() => router.openSubScreen('callHistory')}
       onChatStatistics={() => router.openSubScreen('statistics')}
       onDeleteAI={async () => {
@@ -448,6 +451,30 @@ export function ChatSummaryRouteScreen({ aiId, onCreateSummary, onEditSummary, o
     onBack={router.routeBack} onCreateSummary={onCreateSummary} onEditSummary={onEditSummary}
     onEditSecondary={onEditSecondary} onTask={onTask} onSettings={onSettings}
   />;
+}
+
+type MessageSearchRouteProps = { messageId: number; onOpenMessage?: never }
+  | { messageId?: undefined; onOpenMessage(messageId: number): void };
+
+export function ChatSearchRouteScreen({ aiId, messageId, onOpenMessage }: { aiId: string } & MessageSearchRouteProps) {
+  const router = usePreparedConversation(aiId);
+  useSubScreenLifecycle(router.state.setCurrentSubScreen, 'search', messageId !== undefined ? 'search' : 'menu');
+  if (router.unavailableReason) {
+    return <ConversationUnavailable reason={router.unavailableReason} onBack={router.returnToConversations} />;
+  }
+  if (router.preparing || !router.state.currentSession) return <RouteLoading />;
+  const conversationId = router.state.currentSession.id;
+  return messageId !== undefined
+    ? <ChatMessageContextScreen key={`${conversationId}:${messageId}`} conversationId={conversationId} messageId={messageId} onBack={router.routeBack} />
+    : <ChatMessageSearchScreen key={conversationId} conversationId={conversationId} onBack={router.routeBack} onOpenMessage={onOpenMessage} />;
+}
+
+export function GroupSearchRouteScreen({ groupId, messageId, onOpenMessage }: { groupId: string } & MessageSearchRouteProps) {
+  const router = usePreparedGroup(groupId);
+  if (router.preparing || router.currentGroup?.id !== groupId) return <RouteLoading />;
+  return messageId !== undefined
+    ? <ChatMessageContextScreen key={`${groupId}:${messageId}`} conversationId={groupId} messageId={messageId} onBack={router.routeBack} />
+    : <ChatMessageSearchScreen key={groupId} conversationId={groupId} onBack={router.routeBack} onOpenMessage={onOpenMessage} />;
 }
 
 export function ChatStatisticsRouteScreen({ aiId }: { aiId: string }) {
@@ -694,6 +721,7 @@ export function GroupMenuRouteScreen({ groupId }: { groupId: string }) {
       onBack={router.routeBack}
       onAdminSettings={() => router.openGroupSubScreen(groupId, 'adminSettings')}
       onSummary={() => router.openGroupSubScreen(groupId, 'summary')}
+      onSearchMessages={() => router.openGroupSubScreen(groupId, 'search')}
       onDeleteGroup={handleDeleteGroup}
       onUpdateProfile={handleUpdateProfile}
     />

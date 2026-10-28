@@ -1,12 +1,7 @@
-/** 交付先持久化再投影；折叠与屏幕测量不能撤销已交付的版本。 */
-export interface ChatToolExecutionSnapshot {
-  toolCallId: string;
-  name: string;
-  arguments: string;
-  status: 'proposed' | 'running' | 'success' | 'error';
-  modelContent?: string;
-}
+import type { ChatToolExecutionSnapshot } from '../../messages/domain/chatMessageMetadata';
+export type { ChatToolExecutionSnapshot } from '../../messages/domain/chatMessageMetadata';
 
+/** 交付先持久化再投影；折叠与屏幕测量不能撤销已交付的版本。 */
 export interface ChatTurnDisplaySnapshot {
   runId: string;
   sequence: number;
@@ -23,7 +18,6 @@ export interface ChatTurnDisplaySnapshot {
   toolExecutionStarted?: boolean;
   toolExecutions?: readonly ChatToolExecutionSnapshot[];
   apiMessageId?: string | null;
-  assistantAsActivity?: boolean;
   pendingDelivery?: boolean;
   /** 生成中的正文随持久批次交付，不叠加非流式的分段间隔。 */
   streamingDelivery?: boolean;
@@ -69,6 +63,7 @@ export interface ChatTurnPresentationWindow {
 /** 独立执行历史，没有 canonical 回复资格，也不构成重放工具的指令。 */
 export interface ChatInterruptedTurnContext {
   runId: string;
+  /** 用户输入或自主触发来源的消息定位；不改变执行回合的用户游标。 */
   inputHighWatermark: number;
   createdAt: string;
   items: readonly ChatTurnDisplaySnapshot[];

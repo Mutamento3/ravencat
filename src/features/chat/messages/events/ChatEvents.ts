@@ -16,6 +16,8 @@ export interface ChatEventBusPayload {
   activeTypingCount?: number;
   updatedMessageIds?: number[];
   deletedMessageIds?: readonly number[];
+  /** 清除全部历史后重建窗口；普通事实重读不改变分页生命周期。 */
+  resetHistory?: boolean;
   regenerationError?: string;
 }
 
@@ -93,13 +95,13 @@ export function emitChatMessagesPatched(payload: ChatMessagesPatchedPayload): vo
   }
 }
 
-export function emitChatMessagesReloadRequested(sessionId: string): void {
+export function emitChatMessagesReloadRequested(sessionId: string, resetHistory = false): void {
   if (!sessionId) {
     return;
   }
 
   for (const eventBus of Array.from(chatEventBuses)) {
-    Promise.resolve(eventBus.emit('messagesReloadRequested', { sessionId })).catch(
+    Promise.resolve(eventBus.emit('messagesReloadRequested', { sessionId, ...(resetHistory ? { resetHistory: true } : {}) })).catch(
       (error) => {
         console.error('[ChatEvents] Failed to emit messagesReloadRequested:', error);
       }

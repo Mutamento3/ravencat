@@ -42,6 +42,7 @@ import {
   type DeviceObserverConnectionState,
 } from '@features/deviceControl';
 import { createStyles } from './CompanionSettingsShared.styles';
+import { CompanionDiagnosticsSheet } from './CompanionDiagnosticsSheet';
 import {
   getDeviceLocationAccessState,
   isSystemCalendarPermissionGranted,
@@ -79,6 +80,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
   const [refreshing, setRefreshing] = useState(false);
   const [snapshot, setSnapshot] = useState<SystemAccessSnapshot | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const refresh = useCallback(async (pullToRefresh = false) => {
     if (pullToRefresh) setRefreshing(true);
@@ -213,6 +215,14 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
               </View>
             </ThemedSurface>
 
+            <TouchableOpacity style={styles.entryCard} onPress={() => setShowDiagnostics(true)} accessibilityRole="button">
+              <View style={styles.permissionText}>
+                <Text style={styles.entryTitle}>日程运行诊断</Text>
+                <Text style={styles.entryHint}>查看闹钟、后台执行与结束记录，可复制用于排查延迟。</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.text.tertiary} />
+            </TouchableOpacity>
+
             <Text style={styles.sectionTitle}>通话系统访问</Text>
             <ThemedSurface variant="card" style={styles.card}>
               <View style={styles.cardContent}>
@@ -236,6 +246,7 @@ export default function CompanionSystemAccessScreen({ onBack }: CompanionSystemA
         ) : null}
         <View style={styles.bottomGap} />
       </ScrollView>
+      {showDiagnostics ? <CompanionDiagnosticsSheet onClose={() => setShowDiagnostics(false)} /> : null}
     </SafeAreaView>
   );
 }

@@ -28,6 +28,8 @@ export interface ConversationListPinTarget {
 interface ConversationListProps {
   aiList: AIProfile[];
   groupChats?: GroupChat[];
+  /** 只覆盖摘要的文字草稿，键为 canonical conversation ID。 */
+  textDrafts?: Readonly<Record<string, string>>;
   onSelectAI: (ai: AIProfile) => void | Promise<void>;
   onSelectGroup?: (group: GroupChat) => void | Promise<void>;
   onAddAI: (() => void) | null | undefined;
@@ -225,6 +227,7 @@ const createStyles = (theme: PresentationTheme) =>
 export default function ConversationList({
   aiList,
   groupChats = [],
+  textDrafts = {},
   onSelectAI,
   onSelectGroup,
   onAddAI,
@@ -359,6 +362,8 @@ export default function ConversationList({
     const avatar = isGroupChat ? item.group.avatar : item.ai.avatar;
     const lastMessage = isGroupChat ? item.group.lastMessage : item.ai.lastMessage;
     const lastTime = isGroupChat ? item.group.lastTime : item.ai.lastTime;
+    const conversationId = isGroupChat ? item.group.id : item.ai.canonicalConversationId;
+    const draft = conversationId ? textDrafts[conversationId]?.replace(/\s+/g, ' ').trim() : '';
     const isBlocked = !isGroupChat && item.ai.isBlocked === true;
     const blockedUntil = !isGroupChat ? item.ai.blockedUntil : null;
     const unreadCount = unreadMessages[item.id] || 0;
@@ -421,7 +426,8 @@ export default function ConversationList({
               <Text style={[styles.aiPreview, hasUnread && styles.aiPreviewUnread]} numberOfLines={1}>
                 {isBlocked
                   ? (blockedUntil ? `已拉黑至 ${formatChatTime(blockedUntil)}` : '当前已被拉黑')
-                  : (lastMessage || '暂无消息')}
+                  : draft ? <><Text style={{ color: theme.colors.feedback.error }}>[草稿]</Text> {draft}</>
+                    : (lastMessage || '暂无消息')}
               </Text>
               {hasUnread ? (
                 <View style={styles.unreadBadge}>
@@ -435,7 +441,7 @@ export default function ConversationList({
         </TouchableOpacity>
       </ThemedSurface>
     );
-  }, [handleItemLongPress, onSelectAI, onSelectGroup, styles, theme, unreadMessages]);
+  }, [handleItemLongPress, onSelectAI, onSelectGroup, styles, theme, unreadMessages, textDrafts]);
 
   const rightButton = (
     <TouchableOpacity

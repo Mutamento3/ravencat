@@ -27,6 +27,7 @@ import CallControls, { type CallControlAction } from './components/CallControls'
 import CallTextInputModal from './components/CallTextInputModal';
 import CallTranscriptOverlay from './components/CallTranscriptOverlay';
 import { getCallRuntimeDependencies } from '../application/runtime/CallRuntimeDependencies';
+import { CallPresentationSurface } from '@platform/device';
 
 interface CallActiveScreenProps {
   callId: string;
@@ -68,11 +69,12 @@ function getStateText(call: CallSession, turnPhase: CallTurnPhase, elapsedSecond
   return '通话中';
 }
 
-export default function CallActiveScreen({ onMinimize, runtime }: CallActiveScreenProps) {
+export default function CallActiveScreen({ callId, onMinimize, runtime }: CallActiveScreenProps) {
   const theme = useTheme();
   const styles = useThemedStyles(createCallStyles);
   const insets = useSafeAreaInsets();
   const [textInputVisible, setTextInputVisible] = useState(false);
+  const [loadedBackground, setLoadedBackground] = useState<string | null>(null);
   const resumeSpeechAfterTextRef = useRef(false);
 
   const {
@@ -211,9 +213,13 @@ export default function CallActiveScreen({ onMinimize, runtime }: CallActiveScre
   }
 
   return (
-    <View style={styles.screen}>
+    <CallPresentationSurface
+      style={styles.screen}
+      callId={callId}
+      ready={!runtime.backgroundUri || loadedBackground === runtime.backgroundUri}
+    >
       <StatusBar style="light" />
-      <CallBackgroundLayer backgroundUri={runtime.backgroundUri}>
+      <CallBackgroundLayer backgroundUri={runtime.backgroundUri} onImageReady={setLoadedBackground}>
         <SafeAreaView style={styles.content} edges={['bottom', 'left', 'right']}>
           <View style={[styles.topBar, { paddingTop: insets.top }]}>
             <TouchableOpacity
@@ -272,6 +278,8 @@ export default function CallActiveScreen({ onMinimize, runtime }: CallActiveScre
 
         <CallTextInputModal
           visible={textInputVisible}
+          text={runtime.textDraft}
+          onChangeText={runtime.changeTextDraft}
           onClose={closeTextInput}
           onSend={runtime.sendCallText}
           // 输入可用性由通话状态决定；任何回合相位都可提交，
@@ -280,6 +288,6 @@ export default function CallActiveScreen({ onMinimize, runtime }: CallActiveScre
         />
       </CallBackgroundLayer>
 
-    </View>
+    </CallPresentationSurface>
   );
 }

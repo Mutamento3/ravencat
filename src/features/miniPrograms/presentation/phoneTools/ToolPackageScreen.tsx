@@ -9,7 +9,7 @@ import type { PresentationTheme } from '@shared/theme';
 import NavigationHeader from '@shared/ui/NavigationHeader';
 import { buildToolPackageDisplayModel } from './ToolPackageDisplayModel';
 import { usePhoneToolSettings } from './usePhoneToolSettings';
-import { Toggle } from '@shared/ui';
+import { ToggleField } from '@shared/ui';
 
 interface ToolPackageScreenProps {
   packageId?: string;
@@ -114,6 +114,9 @@ export default function ToolPackageScreen({ packageId, onBack }: ToolPackageScre
       <NavigationHeader title={displayModel.title} onGoBack={onBack} />
       <ScrollView contentContainerStyle={styles.content}>
         {settings.notice && <Text style={styles.toolDescription}>{settings.notice}</Text>}
+        {!settings.packageDisabled && !settings.isPackageEnabled(toolPackage.id) && <Text style={styles.toolDescription}>
+          工具包已关闭。可先配置单项权限，再返回手机工具页开启总开关。
+        </Text>}
         <Text style={styles.sectionTitle}>工具</Text>
         <ThemedSurface nativeGlass variant="card" style={styles.card}>
           {displayModel.tools.length === 0 ? (
@@ -124,36 +127,38 @@ export default function ToolPackageScreen({ packageId, onBack }: ToolPackageScre
               </Text>
             </View>
           ) : (
-            displayModel.tools.map((tool, index) => (
-              <View
-                key={tool.id}
-                style={[
-                  styles.toolRow,
-                  index < displayModel.tools.length - 1 && styles.toolDivider,
-                ]}
-              >
-                <View style={styles.titleRow}>
-                  <Text style={styles.toolTitle}>{tool.title}</Text>
-                  <View style={styles.status}>
-                    <Text
-                      style={[
-                        styles.statusText,
-                        tool.implementationStatus === 'available' && settings.statusLabel(tool.toolName) === '权限就绪' && styles.statusAvailable,
-                      ]}
-                    >
-                      {tool.implementationStatus === 'available' ? settings.statusLabel(tool.toolName) : tool.statusLabel}
-                    </Text>
-                  </View>
-                  {tool.implementationStatus === 'available' && <Toggle
+            displayModel.tools.map((tool, index) => {
+              const title = <>
+                <Text style={styles.toolTitle}>{tool.title}</Text>
+                <View style={styles.status}>
+                  <Text style={[
+                    styles.statusText,
+                    tool.implementationStatus === 'available' && settings.statusLabel(tool.toolName) === '权限就绪' && styles.statusAvailable,
+                  ]}>
+                    {tool.implementationStatus === 'available' ? settings.statusLabel(tool.toolName) : tool.statusLabel}
+                  </Text>
+                </View>
+              </>;
+              return (
+                <View
+                  key={tool.id}
+                  style={[
+                    styles.toolRow,
+                    index < displayModel.tools.length - 1 && styles.toolDivider,
+                  ]}
+                >
+                  {tool.implementationStatus === 'available' ? <ToggleField layout="inline" rowStyle={styles.titleRow} label={tool.title}
                     accessibilityLabel={`允许调用${tool.title}`}
                     disabled={settings.disabled}
                     value={settings.isEnabled(tool.toolName)}
                     onValueChange={(enabled) => { void settings.toggleTool(tool.toolName, enabled); }}
-                  />}
+                  >
+                    {title}
+                  </ToggleField> : <View style={styles.titleRow}>{title}</View>}
+                  <Text style={styles.toolDescription}>{tool.description}</Text>
                 </View>
-                <Text style={styles.toolDescription}>{tool.description}</Text>
-              </View>
-            ))
+              );
+            })
           )}
         </ThemedSurface>
       </ScrollView>

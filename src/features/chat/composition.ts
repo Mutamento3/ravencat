@@ -33,6 +33,8 @@ import type {
   GroupAvatarMediaAssetMigrationCandidate,
 } from './group/domain/GroupChatRepository';
 
+export { configureChatTextDrafts } from './conversation/application/ChatTextDraftRuntime';
+export { SQLiteChatTextDraftRepository } from './conversation/infrastructure/SQLiteChatTextDraftRepository';
 export { interruptAbandonedGroupSpeechPlans } from './group/application/GroupSpeechTermination';
 export { configureChatTurnPresentation, configureTurnDisplayPacing, freezeTurnDisplays, interruptSessionTurnDisplays, recoverTurnPresentationDisplays, interruptChatRunPresentation } from './reply/application/ChatTurnPresentationRuntime';
 export { chatTurnPresentationRepository } from './reply/infrastructure/SQLiteChatTurnPresentationRepository';

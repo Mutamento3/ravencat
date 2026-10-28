@@ -66,7 +66,7 @@ const actionGrouping = loadModule(
   },
 );
 
-// 自主唤醒的开始、过程与结束进入同一行动组；关闭行动步骤仅隐藏展示。
+// 生命周期只提供状态，过程卡片不重复显示开始和结束说明。
 {
   const activity = (id, senderType, phase) => ({ id, senderType, isMe: false, status: 'sent',
     turnRunId: 'wake-run', text: phase, metadataJson: JSON.stringify({
@@ -81,19 +81,29 @@ const actionGrouping = loadModule(
   const grouped = actionGrouping.segmentContiguousAgentActions(visible);
   assert.equal(grouped.length, 1);
   assert.equal(grouped[0].kind, 'action-group');
-  assert.equal(grouped[0].children.length, 4);
+  assert.equal(grouped[0].children.length, 2);
   assert.equal(grouped[0].isRunning, false);
+  assert.equal(actionGrouping.renderedItemContainsMessageId({ msg: grouped[0].children[0], actionGroup: grouped[0] }, 1, records[0]), true,
+    '隐藏触发来源仍定位到同一 run 的真实过程');
   const voice = { id: 5, senderType: 'assistant', status: 'sent', isMe: false,
     turnRunId: 'wake-run', text: '真实语音消息' };
-  const beforeTerminal = actionGrouping.segmentContiguousAgentActions([...records.slice(0, 3), voice]);
+  const beforeTerminal = actionGrouping.segmentContiguousAgentActions([
+    ...records.slice(0, 3), activity(6, 'system', 'responded'), voice,
+  ]);
   const withVoice = actionGrouping.segmentContiguousAgentActions([...records.slice(0, 3), voice, records[3]]);
-  assert.equal(withVoice.length, 3, '真实发言保留为独立气泡，两侧过程仍分组');
+  assert.equal(withVoice.length, 2, '真实发言保留为独立气泡，结束说明不再制造第二张卡片');
   assert.equal(beforeTerminal[0].isRunning, true);
   assert.equal(withVoice[0].isRunning, false, '跨气泡的终态必须结束前一过程组的处理中状态');
   assert.equal(withVoice[0].activityLifecycle.terminalCode, 'COMPLETED');
-  assert.equal(withVoice[2].activityLifecycle.responded, true, '后组也共享已响应的证据');
+  assert.equal(withVoice[0].activityLifecycle.responded, true, '状态仍读取真实响应证据');
   assert.equal(actionGrouping.areActionGroupsEquivalent(beforeTerminal[0], withVoice[0], (a, b) => a === b), false,
     '组外终态变化也必须触发前组重新渲染');
+  const sharedSilent = actionGrouping.segmentContiguousAgentActions([records[0], activity(7, 'system', 'assistant')]);
+  assert.equal(sharedSilent[0].isRunning, false, '已完成的静默选择不能永远显示正在处理');
+  assert.equal(sharedSilent[0].activityLifecycle, null, '共享回合不制造独立的日程生命周期标题');
+  const sharedBody = actionGrouping.segmentContiguousAgentActions([records[0], voice]);
+  assert.equal(sharedBody.length, 1, '只有正文的日程不生成空过程卡片');
+  assert.equal(actionGrouping.renderedItemContainsMessageId({ msg: voice, actionGroup: null }, 1, records[0]), true);
 }
 
 const messageListState = loadModule(

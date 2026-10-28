@@ -18,6 +18,7 @@ export {
   getBubbleSkins,
   getBatteryOptimizationState,
   getNativeHealth,
+  getAIScheduleDiagnostics,
   isOverlayPermissionGranted,
   isFloatingLayerRunning,
   listAIScheduleTriggerProjections,

@@ -33,6 +33,7 @@ import { Buffer } from 'node:buffer';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -67,13 +68,15 @@ const chatReplyAbortModuleUrl = transpileToModuleUrl(
   read('src/features/chat/reply/application/ChatReplyAbort.ts'),
 );
 
+const chatEventsModuleUrl = transpileToModuleUrl(read('src/features/chat/messages/events/ChatEvents.ts'));
 const chatStub = `import { isChatReplyRunCancellationError } from '${chatReplyAbortModuleUrl}';
+import { emitChatTurnExecutionChanged, setChatEventBus } from '${chatEventsModuleUrl}';
 const conversationTurnRepository = null;
 const executeUserReplyTurn = null;
 const sessionRepository = null;
 const emitChatMessagesReloadRequested = () => {};
-const emitChatTurnExecutionChanged = () => {};
 const interruptChatRunPresentation = async () => {};
+const recoverTurnPresentationDisplays = async () => {};
 const emitChatTypingStatusChanged = () => {};
 const emitChatRegenerationChanged = () => {};`;
 
@@ -135,6 +138,7 @@ function createFakes(options = {}) {
     terminalAt: null,
   });
   const turns = {
+    interruptAbandonedAutonomousRuns: async () => [],
     claimIfIdle: async (sessionId, kind) => {
       calls.claimIfIdle.push({ sessionId, kind });
       if (options.claimResult === null) {
@@ -571,6 +575,22 @@ const awaitMessageArrival = async (...args) => { globalThis.__arrivalCalls.push(
   assert.deepEqual(arrivalCalls[0], ['ai:ai1', 100], '前台抑制也消费同一原生到达节奏');
   assert.ok(arrivalCalls.some(([key]) => key === 'group:group-current'), '群聊到达按群隔离');
 
+  // 持久运行正文已经到达，通知直接使用气泡身份，不能拿空数据库 ID 再等一次到达。
+  globalThis.__notificationsEnabled = true;
+  const beforeDisplayArrival = arrivalCalls.length;
+  const displayIdentity = 'agent-timeline:run:1:0';
+  const displayPayload = { ...basePayload, committedMessageId: undefined, clientMessageId: displayIdentity,
+    turnRunId: 'run', arrivalAlreadyScheduled: true };
+  assert.equal((await aiMessageDeliveryHandler(displayPayload)).status, 'shown');
+  assert.equal(notificationCalls.at(-1).eventId, displayIdentity);
+  assert.equal(notificationCalls.at(-1).turnRunId, 'run');
+  assert.equal(arrivalCalls.length, beforeDisplayArrival);
+  await aiMessageDeliveryHandler({ ...displayPayload, committedMessageId: 200 });
+  assert.equal(notificationCalls.at(-1).eventId, displayIdentity, 'T3 身份交接仍指向同一通知');
+  fakeAppState.currentState = 'active';
+  fakeForeground.direct = () => true;
+  assert.equal((await aiMessageDeliveryHandler(displayPayload)).status, 'suppressed_foreground');
+
   delete globalThis.__fakeAppState;
   delete globalThis.__fakeChatForeground;
   delete globalThis.__notificationCalls;
@@ -582,6 +602,50 @@ const awaitMessageArrival = async (...args) => { globalThis.__arrivalCalls.push(
 // ============================================================================
 // 后台入口组合行为
 // ============================================================================
+
+// 悬浮预览在正文持久交付时显示；T3 的正式消息回调只交接身份，不重复弹出。
+for (const previewAccepted of [true, false]) {
+  const previews = [];
+  const receipts = [];
+  const completions = [];
+  const floating = loadTypeScriptModule('src/features/companion/application/ExecuteFloatingMessage.ts', {
+    '@features/assistants': { getAssistantDisplayName: ai => ai.name },
+    '@features/screenCapture': { ScreenCaptureError: class extends Error {} },
+    '@features/floatingLayer': {
+      updateTargetPreview: async () => {},
+      updateReplyPreview: async payload => { previews.push(payload); return previewAccepted; },
+      recordFloatingMessageTaskCompletion: async payload => completions.push(payload),
+    },
+    './CompanionConversationTarget': {
+      buildCompanionAIRequestConfig: () => ({}),
+      resolveCompanionConversationTarget: async () => ({ ai: { id: 'ai', name: 'AI' }, session: { id: 's' } }),
+    },
+    './CompanionScreenCapture': {},
+    './CompanionRuntimeDependencies': { getCompanionRuntimeDependencies: () => ({
+      initializeDatabase: async () => {},
+      chat: { sendUserMessageFromExecutionHost: async ({ replyCallbacks }) => {
+        for (const [index, text] of ['第一泡', '第二泡'].entries()) {
+          const clientMessageId = `agent-timeline:preview:${index + 1}:0`;
+          receipts.push(await replyCallbacks.onReplyDisplaySegment({ sessionId: 's', clientMessageId, text, previewText: text }));
+          const displayCorrelation = previews.at(-1).correlationId;
+          receipts.push(await replyCallbacks.onReplySegment({ sessionId: 's', clientMessageId, messageId: index + 1,
+            segmentIndex: index, text, previewText: text }));
+          assert.equal(previews.at(-1).correlationId, displayCorrelation, '正式消息交接须沿用已有预览身份');
+          assert.equal(previews.at(-1).messageId, index + 1, '预览绑定正式 ID 后才可发出已读回执');
+        }
+        replyCallbacks.onReplyCommitted();
+        return { userMessage: { id: 1 }, success: true };
+      } },
+    }) },
+  });
+  await floating.executeFloatingMessage({ action: 'message', text: '测试', correlationId: 'preview' });
+  const replyPreviews = new Map(previews.filter(item => item.status === 'reply').map(item => [item.correlationId, item]));
+  assert.deepEqual([...replyPreviews.values()].map(item => item.text), ['第一泡', '第二泡']);
+  assert.equal(replyPreviews.size, 2);
+  assert.ok(receipts.every(receipt => receipt.userNotificationHandled === previewAccepted),
+    '原生拒绝预览时保持未处理回执，由统一协调器发送系统通知');
+  assert.equal(completions[0].succeeded, true);
+}
 
 // 真实后台入口与启动门组合；不以 helper 名称或源码循环写法代替业务行为。
 const runnerUrl = transpileToModuleUrl(read('src/host/composition/runPendingBackupRestoreCompletion.ts'));
@@ -667,5 +731,122 @@ await withConversationExecutionLifetime({ hostId: 'timeout-host', executionDeadl
 assert.deepEqual(bootstrapState.execution, [], '初始化失败不开放业务读取');
 delete globalThis.__HEADLESS_BOOTSTRAP_TEST__; delete globalThis.__HEADLESS_RESTORE_RUNNER__;
 
-console.log('ConversationTurn execution host 契约验证通过：页面委派 / 就地执行 / host 等待 terminal / 孤儿接管 / recovery 委派 / 交付策略 / 冷启动 bootstrap。');
+// 日程等待只由真实终态/所有权事件推进；不猜测用户是否在聊天，不轮询。
+function autonomousScenario() {
+  let active = null;
+  let pendingUser = false;
+  let sequence = 0;
+  const executions = [];
+  const claims = [];
+  const finished = [];
+  const gates = new Map();
+  const userHostStarts = [];
+  const make = (sessionId, runId, kind) => ({ sessionId, runId, kind, revisionAtClaim: ++sequence,
+    replyCursorAtClaim: 0, inputHighWatermark: 1, status: 'active' });
+  const turns = {
+    getActiveRun: async () => active,
+    interruptAbandonedAutonomousRuns: async () => [],
+    claimAutonomousIfIdle: async (sessionId, runId) => {
+      claims.push(runId);
+      if (active || pendingUser) return null;
+      return active = make(sessionId, runId, 'autonomous');
+    },
+    finishAutonomous: async run => {
+      finished.push(run.runId);
+      if (active?.runId === run.runId) active = null;
+    },
+    revoke: async run => { if (active?.runId === run.runId) active = null; },
+    claimIfIdle: async sessionId => {
+      if (active || !pendingUser) return null;
+      return active = make(sessionId, `user-${sequence}`, 'user_reply');
+    },
+    getSessionTurnSnapshot: async sessionId => pendingUser ? { sessionId, highWatermark: 1, replyCursor: 0 } : null,
+    findTerminalRunCovering: async () => null,
+    takeOverOrphan: async sessionId => active = make(sessionId, `recovered-${sequence}`, 'user_reply'),
+  };
+  const coordinator = createConversationTurnCoordinator({ turns, resolveAIConfig: async () => aiConfig,
+    executionHost: { start: async ids => { userHostStarts.push(ids); return true; } },
+    executeTurn: async ({ run }) => {
+      const gate = deferred(); gates.set(run.runId, gate);
+      executions.push(run.runId);
+      await gate.promise;
+      if (active?.runId === run.runId) { active = null; pendingUser = false; }
+      return 'committed';
+    },
+  });
+  return { coordinator, turns, claims, executions, finished, gates, userHostStarts, active: () => active,
+    userInput() { const old = active?.runId ?? null; active = null; pendingUser = true; return old; } };
+}
+
+const priority = (minute, scheduleId) => ({ plannedAt: `2026-10-28T09:${minute}:00.000Z`, updatedAt: '2026-10-28T08:00:00.000Z', scheduleId });
+{
+  const state = autonomousScenario();
+  state.userInput();
+  const user = state.coordinator.executeTurnFromHost('schedule-chat');
+  await flush();
+  const result = await state.coordinator.runAutonomousFromHost('schedule-chat', 'busy', priority('00', 'busy'), async () => {
+    assert.fail('用户聊天期间不能额外启动日程模型');
+  });
+  assert.deepEqual(result, { status: 'chat_busy' }, '日程交给聊天上下文，不等待用户聊天结束后补跑');
+  state.gates.get(state.executions[0]).resolve(); await user;
+  assert.deepEqual(state.claims, []);
+}
+{
+  const state = autonomousScenario();
+  const gate = deferred(); let oldContext; let newContext;
+  const old = state.coordinator.runAutonomousFromHost('schedule-chat', 'old', priority('00', 'old'), async context => {
+    oldContext = context; await gate.promise; return 'old';
+  });
+  await flush();
+  const latest = await state.coordinator.runAutonomousFromHost('schedule-chat', 'latest', priority('01', 'latest'), async context => {
+    newContext = context; return 'latest';
+  });
+  assert.equal(oldContext.signal.aborted, true, '最新日程先撤销旧 owner 并停止后续执行');
+  assert.equal(newContext.displacedRunId, 'old', '旧安排背景交给最新一轮');
+  assert.deepEqual(latest, { status: 'ran', value: 'latest' });
+  gate.resolve(); await old;
+  assert.equal(state.active(), null, '旧回合迟到 finally 不得污染新 owner');
+}
+{
+  const state = autonomousScenario();
+  const gate = deferred();
+  const latest = state.coordinator.runAutonomousFromHost('schedule-chat', 'latest', priority('02', 'latest'), async () => {
+    await gate.promise; return 'latest';
+  });
+  await flush();
+  const older = await state.coordinator.runAutonomousFromHost('schedule-chat', 'older', priority('01', 'older'), async () => assert.fail('旧日程不能抢走最新日程'));
+  assert.deepEqual(older, { status: 'superseded', scheduleId: 'latest' });
+  gate.resolve(); await latest;
+}
+{
+  const state = autonomousScenario();
+  const gate = deferred(); let scheduleContext;
+  const scheduled = state.coordinator.runAutonomousFromHost('schedule-chat', 'schedule', priority('00', 'schedule'), async context => {
+    scheduleContext = context; await gate.promise; return 'late';
+  });
+  await flush();
+  const supersededRunId = state.userInput();
+  await state.coordinator.onCanonicalUserMessageCommitted({ sessionId: 'schedule-chat', supersededRunId,
+    executionMode: 'delegate_to_android_host', aiConfig });
+  assert.equal(scheduleContext.signal.aborted, true, '用户输入优先撤销日程');
+  gate.resolve(); await scheduled;
+}
+{
+  const state = autonomousScenario(); state.userInput();
+  const result = await state.coordinator.runAutonomousFromHost('schedule-chat', 'pending', priority('00', 'pending'), async () => assert.fail('未回复用户输入优先'));
+  assert.deepEqual(result, { status: 'chat_busy' });
+  assert.deepEqual(state.userHostStarts, [], '不能为了日程重新启动普通聊天宿主');
+}
+{
+  const state = autonomousScenario(); const gate = deferred();
+  const claim = state.turns.claimAutonomousIfIdle;
+  state.turns.claimAutonomousIfIdle = async (...args) => { await gate.promise; return claim(...args); };
+  const first = state.coordinator.runAutonomousFromHost('schedule-chat', 'first', priority('00', 'first'), async context => context);
+  const second = state.coordinator.runAutonomousFromHost('schedule-chat', 'second', priority('01', 'second'), async context => context);
+  gate.resolve();
+  const result = await second; await first;
+  assert.equal(result.status, 'ran', '同时抵达时，短小 admission 交接不能把日程误判成用户聊天');
+}
+
+console.log('ConversationTurn execution host 契约验证通过：页面委派 / 就地执行 / host 等待 terminal / 孤儿接管 / recovery 委派 / 交付策略 / 冷启动 bootstrap / 日程共享所有权与用户优先。');
 console.log('真机后台链路（Headless service 启动与 XHR/SSE 消费）仍需 Android 验收。');

@@ -4,7 +4,9 @@ import type { PromptDefinitionDescriptor, PromptScenarioId } from '@shared/promp
 import {
   DEFAULT_CORE_SYSTEM_PROMPTS,
   GROUP_MEMBER_REPLY_CONFIDENTIALITY_RULES,
-  VISUAL_GROUNDING_REQUIREMENTS,
+  DEFAULT_IMAGE_GROUNDING_PROMPT,
+  DEFAULT_PARAGRAPH_BREAKS_PROMPT,
+  PARAGRAPH_BREAK_SCENARIOS,
 } from '../PromptBuiltInContent';
 
 const FACTORY_SOURCE = 'src/host/prompt/PromptPackBlockFactory.ts';
@@ -33,9 +35,9 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
     id: 'foundation.default_core', name: '默认基础指令', owner: 'host',
     description: '上下文不足时禁止虚构，并说明语言与工具使用的默认行为。',
     category: 'foundation', supportedScenarios: [...PACK_SCENARIOS, 'chat.summary'], defaultSlot: 'foundation', placement: 'system',
-    protection: 'locked', protectionReason: '基础真实性边界不能被普通预设删除。', contentKind: 'static',
+    protection: 'locked', protectionReason: '基础规则保留固定组装位置，正文由编辑页管理。', contentKind: 'static',
     defaultContent: DEFAULT_CORE_SYSTEM_PROMPTS,
-    contentDescription: '始终作为 foundation 注入；AI 角色设定在独立 persona Block 中追加。', sourcePath: FACTORY_SOURCE,
+    contentDescription: '正文非空时作为 foundation 注入；用户保存空正文时省略，AI 人设仍独立追加。', sourcePath: FACTORY_SOURCE,
   }),
   define({
     id: 'persona.assistant', name: 'AI 人设', owner: 'assistants',
@@ -52,12 +54,19 @@ export const HOST_PROMPT_DEFINITIONS: PromptDefinitionDescriptor[] = [
     sourcePath: FACTORY_SOURCE,
   }),
   define({
-    id: 'foundation.visual_grounding', name: '视觉真实性规则', owner: 'host',
-    description: '只有当前轮图片或成功 OCR 才能作为可见内容证据。',
-    category: 'foundation', supportedScenarios: PACK_SCENARIOS, defaultSlot: 'foundation', placement: 'system',
-    protection: 'locked', protectionReason: '防止根据文件名、记忆或失败 OCR 猜测图片。', contentKind: 'static',
-    defaultContent: VISUAL_GROUNDING_REQUIREMENTS,
-    contentDescription: '对应 visual_grounding_rules Block。', sourcePath: FACTORY_SOURCE,
+    id: 'input.image_grounding', name: '图片防幻觉提醒', owner: 'host',
+    description: '仅在未配置 OCR、聊天图片附件直接传图时附加，默认开启。',
+    category: 'input', supportedScenarios: [...PARAGRAPH_BREAK_SCENARIOS], defaultSlot: 'input', placement: 'input',
+    protection: 'overridable', contentKind: 'static', defaultContent: DEFAULT_IMAGE_GROUNDING_PROMPT,
+    contentDescription: '随图片附件提供；OCR 成功、失败和工具观察均不追加。',
+    sourcePath: 'src/features/chat/reply/application/BuildChatBatchAIInput.ts',
+  }),
+  define({
+    id: 'output.paragraph_breaks', name: '换行规则', owner: 'host',
+    description: '普通聊天正文的自然分段要求，按 AI 控制，默认关闭。',
+    category: 'style', supportedScenarios: [...PARAGRAPH_BREAK_SCENARIOS], defaultSlot: 'foundation', placement: 'system',
+    protection: 'overridable', contentKind: 'static', defaultContent: DEFAULT_PARAGRAPH_BREAKS_PROMPT,
+    contentDescription: '开启后紧随系统基础规则注入稳定前缀；关闭时完全省略。', sourcePath: FACTORY_SOURCE,
   }),
   define({
     id: 'context.protocol_space', name: '协议空间常驻提示词', owner: 'host',

@@ -33,9 +33,8 @@ function item(
 }
 
 const FOUNDATION_ITEMS: PromptPresetItemDefinition[] = [
-  item('foundation.default_core', 'foundation', 20, 'locked', true),
+  item('foundation.default_core', 'foundation', 20, 'locked'),
   item('persona.assistant', 'persona', 30, 'editable'),
-  item('foundation.visual_grounding', 'foundation', 40, 'locked'),
 ];
 
 const CORE_ITEMS: PromptPresetItemDefinition[] = [
@@ -97,7 +96,7 @@ const SPECIALIZED_PRESET_ITEMS: Partial<Record<PromptPackScenario, PromptPresetI
     item('input.current', 'input', 40, 'locked', true),
   ],
   'chat.summary': [
-    item('foundation.default_core', 'foundation', 20, 'locked', true),
+    item('foundation.default_core', 'foundation', 20, 'locked'),
     item('persona.assistant', 'persona', 30, 'editable'),
     item('context.user_identity', 'persona', 35),
     item('context.protocol_space', 'user_rules', 60, 'locked'),

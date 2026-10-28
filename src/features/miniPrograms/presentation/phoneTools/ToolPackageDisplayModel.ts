@@ -23,11 +23,12 @@ export function getPhoneToolReadinessLabel(toolName: string, enabled: boolean, a
   if (toolName === 'get_app_usage' && !access.usageAccessGranted) return '待授权使用情况';
   if ((toolName === 'netease_get_playback_state' || toolName === 'netease_control_playback')
     && !access.notificationListenerGranted) return '待授权通知使用权';
-  if (['get_foreground_app', 'read_screen_accessibility', 'read_screen_ocr', 'soft_lock_app'].includes(toolName)) {
+  const editsXiaohongshu = toolName.startsWith('xiaohongshu_');
+  if (editsXiaohongshu || ['get_foreground_app', 'read_screen_accessibility', 'read_screen_ocr', 'soft_lock_app'].includes(toolName)) {
     if (!access.observer.accessibilityEnabled) return '待授权无障碍';
     if (!access.observer.accessibilityConnected) return '无障碍未连接';
   }
-  if (toolName === 'read_screen_accessibility' && !access.observer.canRetrieveWindowContent) return '无法读取页面';
+  if ((editsXiaohongshu || toolName === 'read_screen_accessibility') && !access.observer.canRetrieveWindowContent) return '无法读取页面';
   if (toolName === 'read_screen_ocr' && !access.observer.canTakeScreenshot) return '无法截图';
   if (toolName === 'soft_lock_app' && !access.overlayGranted) return '待授权悬浮显示';
   return '权限就绪';

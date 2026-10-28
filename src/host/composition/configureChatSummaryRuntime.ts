@@ -8,6 +8,7 @@ import { configureChatSummaryRuntime, sessionRepository, groupChatRepository, cr
   type SecondaryChatSummaryClaim, ChatSummaryGenerationError, type ChatSummaryCallDiagnostics,
   type ChatSummaryRequestSettings } from '@features/chat/composition';
 import { getChatSummarySettings } from '@features/chat';
+import { resolveChatSummaryPromptOverride } from '@features/prompting';
 import { assembleResolvedSummaryPromptPack } from '@host/prompt';
 import { createAIClient } from '@platform/ai';
 import { ToolContext } from '@shared/aiTools';
@@ -70,6 +71,9 @@ async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSumma
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, settings.requestTimeoutSeconds * 1000);
   try {
     const secondary = 'segments' in input;
+    const kind = group ? 'group' : 'private';
+    const override = await resolveChatSummaryPromptOverride(assistant?.id ?? null, secondary ? 'secondary' : 'primary');
+    const task = secondary ? createSecondaryChatSummaryPromptBlock(kind, override) : createChatSummaryPromptBlock(kind, override);
     const currentInput = secondary ? JSON.stringify({
       summaries: input.segments.map((segment) => ({ content: segment.content,
         discussionStart: segment.sourceStartAt, discussionEnd: segment.sourceEndAt, timeZone: segment.timeZone })),
@@ -88,7 +92,7 @@ async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSumma
       const toolsDescription = buildToolsDescription(allowedToolNames);
       const pack = await assembleResolvedSummaryPromptPack({ sessionId: input.conversationId, aiConfig, toolContext,
         currentInput, allowedToolNames, toolsDescription, mcpServices: mcp.services },
-      secondary ? createSecondaryChatSummaryPromptBlock() : createChatSummaryPromptBlock());
+      task);
       // 工具目录沿用同一注册与分包规则，只复用稳定说明，不建立 Agent run 或执行工具。
       const registry = createAgentToolRegistry({ createLegacyContext: () => toolContext });
       const packages = registerToolPackagesForHostRun({ registry, allowedToolNames,
@@ -98,12 +102,11 @@ async function generateSummary(input: ChatSummaryModelInput | SecondaryChatSumma
       systemPrompt = slot ? [slot.before, packages.instructions().catalog, slot.after].filter(Boolean).join('\n\n') : pack.systemPrompt;
       modelMessages = pack.modelMessages;
     } else {
-      const kind = group ? 'group' : 'private';
-      const rules = secondary ? createSecondaryChatSummaryPromptBlock(kind).content : createChatSummaryPromptBlock(kind).content;
+      const rules = task.content;
       const identity = group ? { sourceKind: 'group', groupId: group.group.id, groupName: group.group.name }
         : { sourceKind: 'private', assistant: { id: assistant!.id, agentId: assistant!.agentId, name: assistant!.name } };
       systemPrompt = group ? rules
-        : ['你是专用总结模型，只整理提供的来源，不执行工具。', rules].join('\n\n');
+        : ['你是专用记忆提取模型，只从提供的来源提取重要记忆，不执行工具。', rules].join('\n\n');
       modelMessages = [{ role: 'user', content: JSON.stringify(identity) + '\n' + currentInput }];
     }
     const response = await createAIClient({ baseURL: model.apiBaseUrl!, apiKey: model.apiKey!, model: model.model,

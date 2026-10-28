@@ -370,7 +370,6 @@ exports.promptPackBlockFactory = {
   createRecentChatWindowBlock: () => block('recent_chat_window', 'history.recent_chat', '', { slot: 'history', placement: 'history' }),
   createTimeAwarenessBlock: () => block('time_awareness', 'context.time_awareness', 'time'),
   createScenarioContextBlock: () => null,
-  createVisualGroundingRulesBlock: () => block('visual_grounding_rules', 'foundation.visual_grounding', 'visual', { slot: 'foundation' }),
   createToolContextBlock: () => block('tool_context_explanation', 'context.tool_explanation', 'tools', { slot: 'capabilities' }),
   createAgentRegistrySummaryBlock: async () => block('agent_registry_summary', 'context.agent_registry', 'agents', { protection: 'overridable' }),
   createToolsDescriptionBlock: () => block('tools_description', 'context.tools_description', 'tools', { slot: 'capabilities' }),
@@ -407,6 +406,7 @@ for (const relativePath of [
 write('src/host/prompt/compiler/index.js', `
 exports.promptPackCompiler = require('./PromptPackCompiler').promptPackCompiler;
 `);
+compile('src/host/prompt/PromptBuiltInContent.ts');
 compile('src/host/prompt/ResolvedPromptPackAssembler.ts');
 
 const resolvedAssembler = load('src/host/prompt/ResolvedPromptPackAssembler.ts');

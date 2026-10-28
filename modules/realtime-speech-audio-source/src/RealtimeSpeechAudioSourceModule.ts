@@ -13,7 +13,6 @@ export type RealtimeSpeechAudioChunkEvent = {
 };
 
 export type RealtimeSpeechDetectedEvent = {
-  maxAmplitude: number;
   detectedAt: number;
 };
 

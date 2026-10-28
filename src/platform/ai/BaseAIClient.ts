@@ -6,7 +6,7 @@
  * @module platform/ai/BaseAIClient
  */
 
-import { getErrorDisplayInfo } from './errorMapping';
+import { getErrorDisplayInfo, redactAIErrorMessage } from './errorMapping';
 import { normalizeAIBaseURL } from './baseUrl';
 import { beginAIHttpCapture } from './HttpExchangeCapture';
 import type {
@@ -468,10 +468,7 @@ export class BaseAIClient {
       totalTokens: 0,
       success: false,
       // Provider 可能回显当前密钥；错误离开传输边界前脱敏，与是否开启诊断无关。
-      error: this.config.apiKey
-        ? [this.config.apiKey, JSON.stringify(this.config.apiKey).slice(1, -1), encodeURIComponent(this.config.apiKey)]
-          .reduce((message, secret) => message.split(secret).join('[REDACTED]'), errorMessage)
-        : errorMessage,
+      error: redactAIErrorMessage(errorMessage, this.config.apiKey),
       toolCalls: null,
       isToolCall: false,
     };
@@ -485,7 +482,7 @@ export class BaseAIClient {
       promptTokens: 0,
       totalTokens: 0,
       success: false,
-      error: errorMessage,
+      error: redactAIErrorMessage(errorMessage, this.config.apiKey),
     };
   }
 
@@ -1083,10 +1080,11 @@ async function sendStreamingRequestWithXMLHttpRequest(params: {
     let progressChain = Promise.resolve();
     let settled = false;
     let lastResponseText = '';
+    let responseContainsFailure = false;
 
     const saveResponse = () => {
       // Android 取消 XHR 后可能清空 responseText；保留取消前已收到的文本。
-      const rawText = String(xhr.responseText || '');
+      const rawText = responseContainsFailure ? '' : String(xhr.responseText || '');
       if (rawText) lastResponseText = rawText;
       if (xhr.status > 0) capture?.setResponse(xhr.status, lastResponseText);
       else capture?.appendResponse(lastResponseText);
@@ -1151,11 +1149,16 @@ async function sendStreamingRequestWithXMLHttpRequest(params: {
       };
 
       xhr.onerror = () => {
-        settleReject(new Error('Network request failed'));
+        // RN 在错误回调前把 responseText 替换为原生连接原因；它不是服务端响应正文。
+        responseContainsFailure = true;
+        const reason = xhr.responseText.trim();
+        settleReject(new Error(reason ? `Network request failed: ${reason}` : 'Network request failed'));
       };
 
       xhr.ontimeout = () => {
-        settleReject(new Error('Network request timed out'));
+        responseContainsFailure = true;
+        const reason = xhr.responseText.trim();
+        settleReject(new Error(reason ? `Network request timed out: ${reason}` : 'Network request timed out'));
       };
 
       xhr.onload = () => {

@@ -44,6 +44,8 @@ Built-in 与 MCP 最终都通过同一 Registry、Executor 和 RunLoop。工具�
 
 Host 冻结工具暴露面，Runtime 校验当前 allowlist 与 schema，Feature execute 裁决真正的业务前置条件。未知、未授权和非法参数都不执行。
 
+事务中的业务拒绝由拥有事务的 Repository 或 Host 组合出口恢复类型，再由工具转换成具体 `modelContent`；未知异常保留完整诊断，模型只收到通用失败提示。Runtime 不根据 Feature 错误类型判断业务结果。`code`、`retryable` 用于结构化结果和诊断，不写入模型的 tool history，也不驱动自动重试。
+
 | 结果 | 后续语义 |
 | --- | --- |
 | 未知或未授权工具 | 回灌明确错误并关闭工具，进入最终回答 |
@@ -55,7 +57,7 @@ Host 冻结工具暴露面，Runtime 校验当前 allowlist 与 schema，Feature
 
 ## 4. 预算、工具时限与重复调用
 
-Chat 固定为 **10 个工具回合、每回合最多 3 次、总计 30 次**。同一 step 的工具按模型返回顺序串行执行。单批超过 3 次时整批不执行，返回 `TOOL_BATCH_LIMIT_EXCEEDED` 供模型修正，避免部分副作用。
+Chat 固定为 **30 个工具回合、每回合最多 3 次、总计 30 次**，支持模型每次观察一个工具结果后再决定下一步；增加往返轮数不增加工具调用总额度。其他调用方仍显式提供自己的预算，Runtime 回合硬上限为三十。同一 step 的工具按模型返回顺序串行执行。单批超过 3 次时整批不执行，返回 `TOOL_BATCH_LIMIT_EXCEEDED` 供模型修正，避免部分副作用。
 
 工具回合或总额度耗尽后，尚未通过发送工具意图完成的 run 追加无工具模型回合，由模型根据已有 observation 给出最终正文；预算耗尽不是运行错误。
 
@@ -68,6 +70,8 @@ Runtime 不用参数指纹阻止重复调用，不猜测工具幂等性。one-pe
 ## 5. 取消、终态与事件
 
 模型请求与工具执行都接收 AbortSignal。取消阻止后续执行，不撤销已经由 Feature 成功提交的事实；晚到结果是否可提交由产品 revision/claim/fence 裁决。
+
+Host 在工具提交事务中确认持久运行资格已失效时，使用 `AgentRuntimeTerminalError('SUPERSEDED')` 表达明确终态。Executor 保留这个控制信号，包括被一层事务异常作为 `cause` 包装的情况，停止同批后续工具及下一轮模型请求；不根据普通 `AbortError` 的名称推断运行终态。已取消的 signal 仍按原有取消原因收口。
 
 Runtime 状态只存在于当前宿主进程；事件供调用方观察模型增量、工具开始/结果和终态，不构成第二套产品状态数据库。诊断按 runId 关联，禁止记录凭据、完整 Prompt 或私人正文。
 

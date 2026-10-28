@@ -204,6 +204,7 @@ async function deliverFloatingMessage(params: {
     };
   });
   let previewUpdates: Promise<void> = Promise.resolve();
+  const displayedSegments = new Map<string, { correlationId: string; displayed: boolean }>();
   const queuePreviewUpdate = <T>(update: () => Promise<T>): Promise<T> => {
     const result = previewUpdates.then(update);
     // 后续更新必须继续排队，即使某个原生预览调用失败；失败段会回退到系统通知。
@@ -232,7 +233,29 @@ async function deliverFloatingMessage(params: {
     aiConfig: buildCompanionAIRequestConfig(params.target.ai),
     correlationId: params.correlationId,
     replyCallbacks: {
+      onReplyDisplaySegment: async (payload) => {
+        const correlationId = deliveredSegmentCount === 0
+          ? params.correlationId
+          : `${params.correlationId}:reply-segment:${payload.clientMessageId}`;
+        deliveredSegmentCount++;
+        const segment = { correlationId, displayed: false };
+        displayedSegments.set(payload.clientMessageId, segment);
+        const displayed = await queuePreviewUpdate(() => updateReplyPreview({
+          correlationId, sessionId: payload.sessionId, status: 'reply', text: payload.previewText,
+        }));
+        segment.displayed = displayed;
+        return { userNotificationHandled: displayed };
+      },
       onReplySegment: async (payload) => {
+        if (payload.clientMessageId && displayedSegments.has(payload.clientMessageId)) {
+          const segment = displayedSegments.get(payload.clientMessageId)!;
+          // 沿同一预览身份绑定正式 ID，让实际可见回执和会话投影接管；不新增气泡。
+          await queuePreviewUpdate(() => updateReplyPreview({
+            correlationId: segment.correlationId, sessionId: payload.sessionId, messageId: payload.messageId,
+            status: 'reply', text: payload.previewText,
+          }));
+          return { userNotificationHandled: segment.displayed };
+        }
         const segmentCorrelationId = payload.segmentIndex === 0
           ? params.correlationId
           : `${params.correlationId}:reply-segment:${payload.segmentIndex}`;

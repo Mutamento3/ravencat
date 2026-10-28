@@ -124,6 +124,7 @@ export const MOMENT_MEDIA_SCHEMA = `
     analysis_model_config_id TEXT,
     analyzed_at TEXT,
     analysis_error_code TEXT,
+    analysis_error_message TEXT,
     analysis_revision INTEGER NOT NULL DEFAULT 0 CHECK (analysis_revision >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -201,6 +202,14 @@ export async function migrateMomentMediaAndSettings(db: DatabaseWriteExecutor): 
     await db.execAsync(index);
   }
   await db.execAsync(MOMENT_SETTINGS_SCHEMA);
+}
+
+/** 识别失败原因与状态一同保留；旧记录没有可恢复的接口原因，保持 NULL。 */
+export async function migrateMomentAnalysisErrorMessage(db: DatabaseWriteExecutor): Promise<void> {
+  const columns = await db.getAllAsync<{ name: string }>("PRAGMA table_info('moment_media')");
+  if (!columns.some(column => column.name === 'analysis_error_message')) {
+    await db.execAsync('ALTER TABLE moment_media ADD COLUMN analysis_error_message TEXT;');
+  }
 }
 
 /**

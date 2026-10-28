@@ -1,44 +1,5 @@
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-const require = createRequire(import.meta.url);
-const ts = require('typescript');
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const sourcePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: sourcePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(
-      Object.hasOwn(mocks, specifier),
-      `${relativePath} 存在未声明的运行时依赖：${specifier}`,
-    );
-    return mocks[specifier];
-  };
-  new Function('exports', 'require', 'module', compiled.outputText)(
-    module.exports,
-    requireMock,
-    module,
-  );
-  return module.exports;
-}
+import { loadTypeScriptModule, readRepoFile } from './helpers/load-typescript-module.mjs';
 
 const protectedAppsPolicy = loadTypeScriptModule(
   'src/features/phoneTools/application/ProtectedAppsPolicy.ts',
@@ -208,7 +169,7 @@ const deviceControlSources = [
   'src/features/deviceControl/aiTools/ReleaseSoftLockTool.ts',
   'src/features/deviceControl/aiTools/SearchInstalledAppsTool.ts',
   'src/features/deviceControl/application/DeviceControl.ts',
-].map(read).join('\n');
+].map(readRepoFile).join('\n');
 for (const packageName of SYSTEM_PROTECTED_PACKAGES) {
   assert.doesNotMatch(
     deviceControlSources,
@@ -221,7 +182,7 @@ const phoneToolsSources = [
   'src/features/phoneTools/application/ProtectedAppsPolicy.ts',
   'src/features/phoneTools/application/CurrentProtectedAppsPolicy.ts',
   'src/features/phoneTools/application/ProtectedAppsRuntimeDependencies.ts',
-].map(read).join('\n');
+].map(readRepoFile).join('\n');
 assert.doesNotMatch(
   phoneToolsSources,
   /@features\/companion|SelfWake|Autonomous/u,
@@ -231,15 +192,15 @@ assert.doesNotMatch(
 const screenCaptureSources = [
   'src/features/screenCapture/application/ScreenCapture.ts',
   'src/features/screenCapture/application/ScreenObservationPolicy.ts',
-].map(read).join('\n');
+].map(readRepoFile).join('\n');
 assert.doesNotMatch(
   screenCaptureSources,
   /@features\/companion|features\/companion\/(?:application|presentation)/u,
   'Screen Observation 不得反向依赖 Companion application/presentation',
 );
 
-const companionComposition = read('src/host/composition/configureCompanionRuntime.ts');
-const phoneToolsComposition = read('src/host/composition/configurePhoneToolsRuntime.ts');
+const companionComposition = readRepoFile('src/host/composition/configureCompanionRuntime.ts');
+const phoneToolsComposition = readRepoFile('src/host/composition/configurePhoneToolsRuntime.ts');
 assert.doesNotMatch(companionComposition, /configureProtectedAppsRuntimeDependencies/u);
 assert.match(phoneToolsComposition, /configureProtectedAppsRuntimeDependencies/u);
 assert.match(phoneToolsComposition, /userScreenCaptureBlacklist/u);

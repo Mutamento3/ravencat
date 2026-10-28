@@ -34,6 +34,8 @@ moment_media 保存排序、资产 ID、analysis 状态/正文/source、实际�
 
 用户可手动重新识别或编辑描述；新模型结果保存 model/source/time，重识别失败保留已有成功描述。手动编辑保存 completed/user，不要求模型确认。claim/revision CAS 拒绝旧分析覆盖手动正文、后续识别或已删媒体。
 
+模型失败原因由 AI Client 脱敏后，通过 Host 的结构化错误传入 Moments，与失败状态在同一次 CAS 中保存。大图的「失败原因」展示已保存说明；手动重试直接展示本次原因，即使因保留可靠描述而没有写入失败状态。成功识别或手动编辑清除旧原因。145 升级只追加可空原因列，历史失败保持未知，不补造接口原文、不重新请求模型；AI 详情继续只消费图片语义，不读取接口诊断。
+
 图片查看不改变文件或 analysis 语义。删 Moment 只撤销引用，再由 Media 全引用裁决共享文件；不直接删 backing，详见[媒体契约](../ravencat-media-asset-refactor-plan.md)。
 
 ## 4. Social Inbox 原子事实

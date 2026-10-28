@@ -18,6 +18,8 @@ import type {
 } from './ChatMessage';
 import type { DatabaseReadExecutor, DatabaseTransactionExecutor } from '@platform/persistence';
 import type { ChatRecordStatistics } from './ChatRecordStatistics';
+import type { ChatMessageSearchInput, ChatMessageSearchPage } from './ChatMessageSearch';
+import type { ChatMessageContext, ChatMessageContextInput } from './ChatMessageContext';
 
 /** 统一消息提交输入：消息内容 + 最终预览文本。 */
 export interface CommitMessageInput {
@@ -103,6 +105,14 @@ export interface ChatTimelineAnchorRecord {
  * 4. 所有返回的 ChatMessage 都是不可变对象（建议深拷贝）
  */
 export interface IMessageRepository {
+  /** 用户搜索当前会话的可见原文，不套用 AI 的成员资格。 */
+  searchMessagesForUser(input: ChatMessageSearchInput): Promise<ChatMessageSearchPage>;
+  /** 消息必须属于指定会话，附近原文沿用相同可见边界。 */
+  readMessageContextForUser(conversationId: string, input: Required<ChatMessageContextInput>): Promise<ChatMessageContext | null>;
+  /** 原文搜索不受摘要游标影响；身份授权、可见范围与结果来自同一数据库快照，读取失败抛出。 */
+  searchMessagesForAssistant(assistantId: string, input: ChatMessageSearchInput): Promise<ChatMessageSearchPage>;
+  /** 锚点授权与邻居读取共享快照；锚点不存在或不可访问时返回 null，不回退到其他消息。 */
+  readMessageContextForAssistant(assistantId: string, input: Required<ChatMessageContextInput>): Promise<ChatMessageContext | null>;
   listAgentActivityEvidence(runIds: readonly string[]): Promise<ChatAgentActivityEvidence[]>;
   /** 只结算不属于本进程活动句柄的旧记录，不重新执行模型。 */
   interruptInactiveAgentActivities(activeRunIds: readonly string[], occurredAt: string): Promise<string[]>;
@@ -198,8 +208,8 @@ export interface IMessageRepository {
   /** 删除后重设单聊预览；空会话的活动时间为 null。 */
   updateSessionPreviewInTransaction(transaction: DatabaseTransactionExecutor, sessionId: string, text: string, time: string | null): Promise<void>;
 
-  /** 分段到达期间的列表预览：排除未到达正文和不拥有预览的推理/工具过程。 */
-  getLatestArrivedPreviewMessage(sessionId: string, excludedMessageIds: readonly number[]): Promise<ChatMessage | null>;
+  /** 列表预览共用已到达正式消息与已持久交付的完整运行正文，不赋予运行片段正式消息身份。 */
+  getLatestArrivedConversationPreview(sessionId: string, excludedMessageIds: readonly number[]): Promise<Pick<ChatMessage, 'text' | 'metadataJson' | 'createdAt'> | null>;
 
   /**
    * 获取同一 logical_message_id 下的所有消息段

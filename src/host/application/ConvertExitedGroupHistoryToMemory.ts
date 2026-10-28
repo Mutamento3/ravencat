@@ -2,9 +2,9 @@
 import { aiAssistantRepository, getAssistantDisplayName } from '@features/assistants';
 import { GroupMembershipError } from '@features/chat';
 import { groupMembershipRepository } from '@features/chat/composition';
-import { getMemoryRuntimeDependencies, memoryEntryRepository, prepareMemoryRecord, emitMemoryChanged, MemoryInputError } from '@features/memory/composition';
+import { getMemoryRuntimeDependencies, memoryEntryRepository, prepareMemoryRecord, emitMemoryChanged, MemoryInputError, MemoryNotFoundError } from '@features/memory/composition';
 import { createAIClient } from '@platform/ai';
-import { databaseCoordinator } from '@platform/persistence';
+import { CoordinatedDatabaseError, databaseCoordinator } from '@platform/persistence';
 import type { AgentToolExecutionContext } from '@shared/aiTools';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { assertImageToolRunCurrent } from '../composition/agent/assertImageToolRunCurrent';
@@ -36,7 +36,7 @@ export async function convertExitedGroupHistoryToMemory(groupId: string, context
       { role: 'user', content: JSON.stringify(source) },
     ], { signal: context.abortSignal, includeSystemPrompt: false, allowReasoningLengthRetry: false });
     throwIfAbortSignalAborted(context.abortSignal);
-    if (!response.success) throw new MemoryInputError('群聊记忆转换请求失败，请检查当前 AI 的模型连接；退出历史仍保留');
+    if (!response.success) throw new MemoryInputError(`群聊记忆转换请求失败；退出历史仍保留。\n${response.error}`);
     if (response.finishReason === 'length') throw new MemoryInputError('模型输出未完成，未保存记忆；退出历史仍保留');
     const record = prepareMemoryRecord(space.poolId, response.text, `【群聊·${history.groupName}】`, writeKey);
     const entry = await databaseCoordinator.transaction({ name: 'memory.convert-exited-group', feature: 'memory', priority: 'interactive' }, async tx => {
@@ -48,8 +48,11 @@ export async function convertExitedGroupHistoryToMemory(groupId: string, context
     });
     emitMemoryChanged();
     return entry;
-  } catch (error) {
+  } catch (failure) {
+    // 组合事务由 Host 拥有，恢复来源资格与记忆写入的业务拒绝；不解包真正的存储故障。
+    const error = failure instanceof CoordinatedDatabaseError ? failure.cause : failure;
     if (error instanceof GroupMembershipError) throw new MemoryInputError(error.message);
-    throw error;
+    if (error instanceof MemoryInputError || error instanceof MemoryNotFoundError) throw error;
+    throw failure;
   }
 }

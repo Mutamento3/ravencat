@@ -1,21 +1,7 @@
 /** 验证无关刷新不重新投影历史，真实消息、到达进度和 transient 更新仍及时显示。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
+import { loadTypeScriptModule as load } from './helpers/load-typescript-module.mjs';
 
-const root = path.resolve(import.meta.dirname, '..');
-function load(relativePath, dependencies = {}) {
-  const output = ts.transpileModule(fs.readFileSync(path.join(root, relativePath), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  new Function('module', 'exports', 'require', output)(module, module.exports, (name) => {
-    assert.ok(Object.hasOwn(dependencies, name), `未声明的依赖：${name}`);
-    return dependencies[name];
-  });
-  return module.exports;
-}
 let cursor = 0;
 const slots = [];
 const react = {

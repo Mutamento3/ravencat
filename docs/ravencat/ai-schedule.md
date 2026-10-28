@@ -34,6 +34,8 @@ scheduled → cancelled
 
 scheduled 到点后不能更新或取消；历史不可改回未来。consumed 表示机会不能重复领取，不保证模型有响应或工具成功。真实响应与行动证据由 Chat 记录提供。
 
+用户／AI 的取消限制不影响系统终结：超过 15 分钟未开始、归并到最新日程、交给当前聊天，分别保存 cancelledReason 为 expired、merged_schedule、merged_chat。旧回调不能恢复这些安排。失败与跳过结果进入下次正常聊天的动态环境，按已提交回合确认单次告知；结果记录没有唤醒或重新执行能力。
+
 ## 3. 创建、查询与修改
 
 唯一正常工具族：
@@ -61,7 +63,7 @@ scheduled 到点后不能更新或取消；历史不可改回未来。consumed �
 → RunHeadlessAISchedule
 → 当前 Host Authority + scheduled → claimed CAS
 → RunHostAutonomousAgent
-→ 正常单聊 Agent Runtime / Chat 存档 / 工具提交
+→ 正常单聊 Agent Runtime / 持久展示 / T3 提交 / 工具与消息交付
 → consumed + native completion
 ```
 
@@ -69,13 +71,13 @@ deliveryEventId 是 `scheduleId@projectionToken`；eventId 仍是原始 schedule
 
 Alarm 只投递同一 keyed Worker。两个系统调度来源共用一个 gate，只有唯一 winner 能进入宿主。后台调度可能延迟；不保证准秒唤醒，也不借延迟创造补偿任务。
 
-启动／回前台只重建 future 投影。过期且没有投影的日程不补建立即 Work；匹配的既有系统投递可继续到达，错误版本被撤销。
+启动／回前台先终结超过 15 分钟仍未领取的任务，再重建 future 投影。仍在有效期内的既有投递按最新计划归并、聊天优先裁决；不排队补跑过期、失败或已归并的任务。
 
 ## 5. 中断与主动生活
 
 `AIScheduleRecovery` 将 claim 与当前进程活动 run 绑定，冷启动／前台只结算旧 claim，跳过当前活动句柄。正常 consume 与结算使用同一 run fence，先提交的终态不能被迟到路径覆盖。
 
-进程死亡或执行中断后不重新调用模型、工具或消息提交；Chat 保留已存档增量并补写中断终态。只有模型实际返回内容或工具请求才显示 AI 已响应，consumed 不能充当响应证据。
+进程死亡或执行中断后不重新调用模型、工具或消息提交；Chat 的共享回合与展示 owner 封闭终态、保留已交付增量。正文生成时直接显示为普通气泡，思考及工具过程进入行动步骤，不额外生成开始、响应或结束消息。只有模型实际返回内容或工具请求才显示 AI 已响应，consumed 不能充当响应证据。隐藏触发来源提供历史定位锚点，响应、终态及后续模型上下文沿共享事实读取。
 
 主动生活只读取日程与 Chat 证据，提供 future / running / history。未来计划在暂停时仍可查看；过期未 claim 显示未执行，执行失误与因故障中断分别呈现。聊天定位仅用 runId，不向日程复制 session 事实。
 

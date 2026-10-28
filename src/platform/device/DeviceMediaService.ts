@@ -6,7 +6,7 @@ import {
   persistentImageStore,
   persistentMediaStore,
   selectChatDocument,
-  selectChatImage,
+  selectChatImages,
 } from './index';
 
 export { PERSISTENT_IMAGE_CATEGORY, PERSISTENT_MEDIA_CATEGORY };
@@ -80,8 +80,8 @@ export async function readPersistentMediaAsText(uri: string) {
   return persistentMediaStore.readAsText(uri);
 }
 
-export async function pickChatImageFromDevice() {
-  return selectChatImage();
+export async function pickChatImagesFromDevice(selectionLimit: number) {
+  return selectChatImages(selectionLimit);
 }
 
 export async function captureChatPhotoFromDevice() {

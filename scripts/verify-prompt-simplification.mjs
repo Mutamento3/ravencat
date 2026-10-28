@@ -25,13 +25,14 @@ async function importTypeScript(relativePath) {
 }
 
 async function verifyLocale() {
-  // 单语化契约只断言「值」：三个常驻正文都是单个中文字符串（不是 locale map）。
+  // 单语化契约只断言「值」：内置正文都是单个中文字符串（不是 locale map）。
   // 不再用源码切片去找 `].join('\n');`——那会把实现写法（数组拼接）也一起钉死，
   // 属于 AGENTS §12.1 禁止的源码形状断言：正文换个等价写法不该让门禁变红。
   const builtIn = await importTypeScript('src/host/prompt/PromptBuiltInContent.ts');
   for (const id of [
     'DEFAULT_CORE_SYSTEM_PROMPTS',
-    'VISUAL_GROUNDING_REQUIREMENTS',
+    'DEFAULT_IMAGE_GROUNDING_PROMPT',
+    'DEFAULT_PARAGRAPH_BREAKS_PROMPT',
     'GROUP_MEMBER_REPLY_CONFIDENTIALITY_RULES',
   ]) {
     const value = builtIn[id];

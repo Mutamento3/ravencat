@@ -100,6 +100,34 @@ export interface CompanionNativeHealth {
   lastPendingWakeAtEpochMs: number;
 }
 
+export interface CompanionScheduleDiagnostics {
+  device: {
+    manufacturer: string;
+    model: string;
+    apiLevel: number;
+    packageName: string;
+    versionName: string;
+    versionCode: number;
+    deviceIdleMode: boolean;
+    powerSaveMode: boolean;
+    batteryOptimizationExempt: boolean;
+  };
+  companionSchedulingEnabled: boolean;
+  events: CompanionScheduleDiagnostic[];
+}
+
+/** 原生边界提供的有限阶段记录，不包含聊天、Prompt 或请求正文。 */
+export interface CompanionScheduleDiagnostic {
+  deliveryEventId: string;
+  stage: string;
+  recordedAtEpochMs: number;
+  expectedRemindAtEpochMs: number | null;
+  outcome: string | null;
+  deviceIdleMode: boolean;
+  powerSaveMode: boolean;
+  batteryOptimizationExempt: boolean;
+}
+
 export interface CompanionNativeSubscription {
   remove(): void;
 }
@@ -124,6 +152,7 @@ export interface CompanionNativePort {
   /** 恢复出厂：清空原生模块内的产品级持久化状态，不改变兼容存储标识。 */
   clearCompanionNativeDataForFactoryReset(): Promise<void>;
   getNativeHealth(): Promise<CompanionNativeHealth>;
+  getAIScheduleDiagnostics(): Promise<CompanionScheduleDiagnostics>;
   setCompanionSchedulingEnabled(enabled: boolean): Promise<void>;
   /** 为一条 AI 日程建立 / 替换独立 keyed native projection。 */
   scheduleAIScheduleTrigger(

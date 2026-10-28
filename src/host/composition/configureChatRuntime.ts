@@ -1,7 +1,10 @@
 /** 将 Chat 的仓储端口与数据库维护能力连接到具体实现。 */
 import { chatSummaryRepository } from './chatSummaryRepository';
+import { resolveImageGroundingPrompt } from '@features/prompting';
 import {
   configureChatRuntimeDependencies,
+  configureChatTextDrafts,
+  SQLiteChatTextDraftRepository,
   configureChatImageModels,
   resolveChatRecognitionModel,
   notifyChatImageModelsChanged,
@@ -59,6 +62,7 @@ import {
 } from '@host/prompt';
 import { prepareHostModelRun } from '@host/runtime/HostModelRunPreparation';
 import { getConversationTurnCoordinator } from '../runtime/ConversationTurnCoordinator';
+import { aiScheduleRepository } from '@features/companion/composition';
 import {
   MEDIA_ASSET_STORAGE_BACKEND,
   resolveMediaAsset,
@@ -72,6 +76,7 @@ export function configureChatRuntime(): void {
     return;
   }
   configured = true;
+  configureChatTextDrafts(new SQLiteChatTextDraftRepository());
   configureChatFavoriteRuntime(new SQLiteChatFavoriteRepository());
   configureChatTurnPresentation(chatTurnPresentationRepository);
   configureTurnDisplayPacing(awaitTurnDisplayArrival, setTurnDisplayOpen, async messageIds => {
@@ -109,12 +114,19 @@ export function configureChatRuntime(): void {
     },
     // canonical 用户消息 commit 后：abort 被 supersede 的旧句柄并启动新一轮 claimIfIdle。
     canonicalUserMessage: {
-      onCommitted: (payload) =>
-        getConversationTurnCoordinator().onCanonicalUserMessageCommitted(payload),
+      onCommitted: async (payload) => {
+        // T1 已撤销旧 fence；先持久交接日程背景，再允许新聊天组装上下文。
+        // 即使旧执行已抢先 consume，也不能丢掉此次交接。
+        if (payload.supersededRunId) await aiScheduleRepository.mergeClaimedRun(
+          payload.supersededRunId, null, new Date().toISOString());
+        const session = await sessionRepository.getSession(payload.sessionId);
+        if (session) await aiScheduleRepository.mergeDueIntoChat(session.aiAssistantId, new Date().toISOString());
+        await getConversationTurnCoordinator().onCanonicalUserMessageCommitted(payload);
+      },
     },
     regeneration: {
       onRequested: (sessionId) => getConversationTurnCoordinator().requestRegenerationFromHost(sessionId),
-      onInvalidated: (sessionId) => getConversationTurnCoordinator().abortRegeneration(sessionId),
+      onInvalidated: (sessionId) => getConversationTurnCoordinator().abortInvalidatedTurn(sessionId),
     },
     legacyChatAttachments: {
       locateLegacyChatFile: async (localUri, attachmentType) => {
@@ -179,6 +191,7 @@ export function configureChatRuntime(): void {
       resolveRuntimeContext: resolveToolRuntimeContext,
     },
     prompt: {
+      readImageGroundingReminder: resolveImageGroundingPrompt,
       assembleChat: assembleResolvedChatPromptPack,
       assembleLedger: assembleResolvedLedgerPromptPack,
       assembleStandalone: assembleResolvedStandalonePromptPack,

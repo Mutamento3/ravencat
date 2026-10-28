@@ -207,7 +207,7 @@ export async function execute(
     console.error('[GetLedgerContextTool] Failed:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : '账本工具执行失败',
+      error: '账本查询失败，请稍后再试。',
     };
   }
 }

@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS web_search_settings (
   revision INTEGER NOT NULL DEFAULT 0,
   default_engine TEXT CHECK (default_engine IN ('bing', 'duckduckgo', 'tavily', 'brave')),
   custom_configured INTEGER NOT NULL DEFAULT 0 CHECK (custom_configured IN (0, 1)),
-  allow_advanced INTEGER NOT NULL DEFAULT 0 CHECK (allow_advanced IN (0, 1))
+  allow_advanced INTEGER NOT NULL DEFAULT 0 CHECK (allow_advanced IN (0, 1)),
+  connection_mode TEXT NOT NULL DEFAULT 'direct' CHECK (connection_mode IN ('direct', 'system'))
 );
 CREATE TABLE IF NOT EXISTS web_search_sources (
   engine TEXT PRIMARY KEY CHECK (engine IN ('bing', 'duckduckgo', 'tavily', 'brave')),

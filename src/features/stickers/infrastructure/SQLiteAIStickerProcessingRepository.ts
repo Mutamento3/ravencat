@@ -4,7 +4,7 @@ import type { AIStickerClaim, AIStickerOperation, AIStickerProcessingRepository,
 import { StickerNotFoundError } from '../domain/Sticker';
 import type { StickerAnnotationMetadata } from '../domain/Sticker';
 import type { StickerEmbedding } from '../domain/StickerEmbedding';
-import { SQLiteStickerRepository, semanticFieldsChanged } from './SQLiteStickerRepository';
+import { SQLiteStickerRepository, semanticFieldsChanged, stickerTransaction } from './SQLiteStickerRepository';
 
 /** AI 处理与用户空闲 worker 共用收藏事实，但不共享自动重试队列。 */
 export class SQLiteAIStickerProcessingRepository implements AIStickerProcessingRepository {
@@ -14,7 +14,7 @@ export class SQLiteAIStickerProcessingRepository implements AIStickerProcessingR
   }
 
   async create(ownerId: string, asset: MediaAsset, name: string, fileName: string | null, id: string, now: string, guard: AIStickerCommitGuard) {
-    return this.database.withExclusiveTransactionAsync(async tx => {
+    return stickerTransaction(this.database, async tx => {
       await guard(tx);
       const existing = await this.stickers.getStickerByMediaAssetIdInTransaction(tx, asset.id, ownerId);
       if (existing) return { sticker: existing, reused: true };
@@ -29,7 +29,7 @@ export class SQLiteAIStickerProcessingRepository implements AIStickerProcessingR
   }
 
   async claim(ownerId: string, stickerId: string, operation: AIStickerOperation, claimId: string, executionId: string, now: string, guard: AIStickerCommitGuard): Promise<AIStickerClaim | null> {
-    return this.database.withExclusiveTransactionAsync(async tx => {
+    return stickerTransaction(this.database, async tx => {
       await guard(tx);
       const sticker = await this.stickers.getStickerByIdInTransaction(tx, stickerId, ownerId);
       if (!sticker) throw new StickerNotFoundError(stickerId);
@@ -48,7 +48,7 @@ export class SQLiteAIStickerProcessingRepository implements AIStickerProcessingR
   }
 
   async finish(claim: AIStickerClaim, result: { metadata?: StickerAnnotationMetadata; embedding?: StickerEmbedding; error?: string }, now: string, guard: AIStickerCommitGuard): Promise<boolean> {
-    return this.database.withExclusiveTransactionAsync(async tx => {
+    return stickerTransaction(this.database, async tx => {
       await guard(tx);
       const accepted = await tx.runAsync(`UPDATE ai_sticker_tasks SET status = ?, error = ?, updated_at = ?
         WHERE sticker_id = ? AND claim_id = ? AND status = 'processing'

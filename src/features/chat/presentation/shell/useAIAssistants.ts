@@ -15,8 +15,10 @@ export default function useAIAssistants() {
   const [aiListReady, setAiListReady] = useState(false);
   const loadFlightRef = useRef<Promise<AIProfile[]> | null>(null);
   const profilesRevisionRef = useRef(0);
+  const previewRevisionRef = useRef(0);
 
   const loadAIAssistants = useCallback(() => {
+    previewRevisionRef.current++;
     if (loadFlightRef.current) return loadFlightRef.current;
 
     const loadFlight = (async () => {
@@ -30,8 +32,10 @@ export default function useAIAssistants() {
           continue;
         }
         const arrival = getAssistantMessageArrivalSnapshot();
+        const previewRevision = previewRevisionRef.current;
         const list = await Promise.all(profiles.map((profile) => withArrivedConversationPreview(profile, profile.canonicalConversationId)));
-        if (profilesRevision !== profilesRevisionRef.current || arrival !== getAssistantMessageArrivalSnapshot()) continue;
+        // 正文交付不推进原生 canonical 到达版本；读取期间的新交付同样必须使旧结果失效。
+        if (previewRevision !== previewRevisionRef.current || profilesRevision !== profilesRevisionRef.current || arrival !== getAssistantMessageArrivalSnapshot()) continue;
         setAiList(list);
         setAiListReady(true);
         return list;

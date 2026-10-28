@@ -205,7 +205,7 @@ MCP-only 场景没有内置工具说明时，Host 提供最小的 toolsDescripti
 当本轮 selected MCP 工具非空时，Host 注册固定两个 meta-tool，并将 task.allowedToolNames 中的具体 MCP 名称全部替换为 meta-tool 名称。这样 AgentToolRegistry 的未知 allowlist 检查不会收到已经不在 Registry 中的具体工具名。
 
 MCP 与 Built-in Tool 使用同一份 Chat 预算，不再由 Host 按工具来源提高 `maxSteps`。当前统一预算为
-10 个工具回合、每回合最多 3 次、总计最多 30 次；工具额度耗尽后额外保留一次无工具最终回答。
+30 个工具回合、每回合最多 3 次、总计最多 30 次；工具额度耗尽后额外保留一次无工具最终回答。
 该预算覆盖常见的：
 
     list → call → final

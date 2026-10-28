@@ -3,6 +3,7 @@
 import type { ConversationKind } from '../../conversation/domain/ConversationRef';
 
 export type ChatSubScreen =
+  | 'search'
   | 'menu'
   | 'protocol'
   | 'modelSettings'
@@ -13,6 +14,7 @@ export type ChatSubScreen =
   | 'filePreview';
 
 export type GroupChatSubScreen =
+  | 'search'
   | 'menu'
   | 'summary'
   | 'adminSettings';

@@ -1,38 +1,5 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function read(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-function loadModule(relativePath, mocks) {
-  const code = read(relativePath);
-  const compiled = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: relativePath,
-    reportDiagnostics: true,
-  });
-  assert.deepEqual(
-    (compiled.diagnostics ?? []).filter((item) => item.category === ts.DiagnosticCategory.Error),
-    [],
-    `${relativePath} 无法编译`,
-  );
-  const module = { exports: {} };
-  new Function('exports', 'require', 'module', compiled.outputText)(
-    module.exports,
-    (specifier) => {
-      assert.ok(Object.hasOwn(mocks, specifier), `未声明运行时 mock：${specifier}`);
-      return mocks[specifier];
-    },
-    module,
-  );
-  return module.exports;
-}
+import { loadTypeScriptModule as loadModule, readRepoFile as read } from './helpers/load-typescript-module.mjs';
 
 // ---------------------------------------------------------------------------
 // 公共 Host autonomous bootstrap：assistant / session / transcript / tool
@@ -148,6 +115,7 @@ const wakeBlock = { content: JSON.stringify({ wakeContext: {
 } }) };
 
 const firstResult = await runHostAutonomousAgent({
+  sessionId: 'real-session',
   runId: 'run-autonomous',
   ownerAIId: 'host-ai',
   triggeredAt,
@@ -197,6 +165,7 @@ assert.deepEqual(capturedPromptParams.additionalBlocks, [wakeBlock, { togetherLi
 activeSession = null;
 transcriptVersion = 2;
 await runHostAutonomousAgent({
+  sessionId: 'ensured-session',
   runId: 'run-without-session', ownerAIId: 'host-ai', triggeredAt,
   correlationId: 'wake-claimed', scenarioId: 'raven_cat.ai_schedule_trigger',
   triggerSource: 'raven_cat_ai_schedule', triggerReason: 'ai_schedule',
@@ -209,6 +178,7 @@ assert.deepEqual(gatewayParams.initialMessages, [{ role: 'user', content: captur
 
 activeSession = { id: 'real-session', aiAssistantId: 'host-ai', name: '真实会话' };
 await runHostAutonomousAgent({
+  sessionId: 'real-session',
   runId: 'run-latest-context', ownerAIId: 'host-ai', triggeredAt,
   correlationId: 'wake-claimed', scenarioId: 'raven_cat.ai_schedule_trigger',
   triggerSource: 'raven_cat_ai_schedule', triggerReason: 'ai_schedule',
@@ -228,6 +198,7 @@ const promptBlocks = loadModule('src/features/companion/application/CompanionPro
 });
 assistant.enableTools = false;
 await runHostAutonomousAgent({
+  sessionId: 'real-session',
   runId: 'run-without-tools', ownerAIId: 'host-ai', triggeredAt,
   correlationId: 'wake-no-tools', scenarioId: 'raven_cat.ai_schedule_trigger',
   triggerSource: 'raven_cat_ai_schedule', triggerReason: 'ai_schedule',
@@ -248,6 +219,7 @@ const scheduleWrapper = loadModule('src/features/companion/application/RunAISche
   },
 });
 await scheduleWrapper.runAIScheduleAutonomousAgent({
+  sessionId: 'real-session',
   runId: 'run-s', claimedSchedule: {
     scheduleId: 'schedule-x', ownerAIId: 'host-ai', remindAt: '2026-09-13T09:00:00.000Z',
     summary: '考试', details: '数据库考试', sourceExcerpt: '用户说上午有考试',

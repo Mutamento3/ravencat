@@ -8,7 +8,7 @@ Device Observer 提供只读设备事实，Device Control 执行受控动作，�
 
 Device Control 不决定何时介入，不拥有 AI 日程、ChatMessage 或消息通知。调用方经 AI Tool 请求动作；消息仍走正常 Chat 提交与交付链。授予系统权限不等于授予某个 AI 业务动作权限。
 
-不 force-stop、冻结或修改第三方 App；不使用 root、Shizuku、adb，不提供 Accessibility 自动点击、手势注入、自动滚动或通用 UI 自动化。
+不 force-stop、冻结或修改第三方 App；产品执行不使用 root、Shizuku、adb。小红书文字笔记通过既有无障碍服务，按已采集页面布局执行区域点击、样式滑动和文字输入，不向模型开放通用坐标操作。业务准入由 Phone Tools 持有，原生页面适配见[小红书文字笔记](xiaohongshu-text-note.md)。
 
 ## 2. Soft Lock 的业务事实
 

@@ -9,7 +9,7 @@ export async function withArrivedConversationPreview<T extends { lastMessage?: s
 ): Promise<T> {
   const { pendingMessageIds } = getAssistantMessageArrivalSnapshot();
   if (!sessionId) return item;
-  const message = await getChatMessageRuntimeDependencies().messages.getLatestArrivedPreviewMessage(sessionId, pendingMessageIds);
+  const message = await getChatMessageRuntimeDependencies().messages.getLatestArrivedConversationPreview(sessionId, pendingMessageIds);
   return {
     ...item,
     lastMessage: message ? buildSessionPreviewTextFromMessage(message) : '',

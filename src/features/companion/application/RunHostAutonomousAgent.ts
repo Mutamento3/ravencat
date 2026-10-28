@@ -27,6 +27,7 @@ const AUTONOMOUS_TASK_BUDGET = {
 
 export interface RunHostAutonomousAgentInput {
   runId: string;
+  sessionId: string;
   ownerAIId: string;
   triggeredAt: string;
   correlationId: string;
@@ -55,10 +56,9 @@ export async function runHostAutonomousAgent(
     throw new Error(`autonomous owner ${input.ownerAIId} 不存在`);
   }
 
-  const session = await dependencies.chat.resolveCanonicalConversation({ aiId: assistant.id });
   const aiConfig = toAutonomousAIConfig(assistant);
   return dependencies.chat.runVisibleAgent({
-    sessionId: session.id,
+    sessionId: input.sessionId,
     runId: input.runId,
     aiConfig,
     runtimeContext: {
@@ -107,7 +107,7 @@ export async function runHostAutonomousAgent(
       const sharedState = { replyRunId: input.runId };
       const createToolContext = (abortSignal?: AbortSignal) => dependencies.tools.createContext({
         aiConfig,
-        sessionId: session.id,
+        sessionId: input.sessionId,
         triggerSource: input.triggerSource,
         triggerReason: input.triggerReason,
         relatedEntityType: input.relatedEntityType,
@@ -119,7 +119,7 @@ export async function runHostAutonomousAgent(
       const promptPack = await dependencies.prompt.assembleChatPromptPack({
         aiConfig,
         toolContext: createToolContext(),
-        sessionId: session.id,
+        sessionId: input.sessionId,
         currentInput: '',
         runtimeContext: {
           inputSource: 'application',
@@ -155,7 +155,7 @@ export async function runHostAutonomousAgent(
         initialMessages: promptPack.modelMessages,
         toolInstructionsSlot: promptPack.toolInstructionsSlot,
         diagnosticContext: {
-          sessionId: session.id,
+          sessionId: input.sessionId,
           runId: input.runId,
           correlationId: input.correlationId,
         },
@@ -163,7 +163,7 @@ export async function runHostAutonomousAgent(
       const task = createAutonomousTask({
         runId: input.runId,
         assistantId: assistant.id,
-        sessionId: session.id,
+        sessionId: input.sessionId,
         allowedToolNames,
         createdAt: input.triggeredAt,
         goal: input.taskGoal,

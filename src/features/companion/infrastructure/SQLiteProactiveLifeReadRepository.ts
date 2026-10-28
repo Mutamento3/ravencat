@@ -90,11 +90,12 @@ const HISTORY_ROWS = `
     COALESCE(claimed_at, remind_at) AS occurred_at,
     COALESCE(consumed_at, remind_at) AS terminal_at,
     claimed_by_run_id AS run_id,
-    CASE WHEN status = 'scheduled' THEN 'unexecuted' ELSE completion_disposition END AS completion_disposition,
+    CASE WHEN status IN ('scheduled','cancelled') THEN 'unexecuted' ELSE completion_disposition END AS completion_disposition,
     julianday(COALESCE(claimed_at, remind_at)) AS occurred_at_epoch
   FROM raven_cat_ai_schedules
   WHERE owner_ai_id = ?
-    AND (status = 'consumed' OR (status = 'scheduled' AND julianday(remind_at) <= julianday(?)))`;
+    AND (status = 'consumed' OR (status = 'cancelled' AND cancelled_reason IN ('expired','merged_schedule','merged_chat'))
+      OR (status = 'scheduled' AND julianday(remind_at) <= julianday(?)))`;
 
 export class SQLiteProactiveLifeReadRepository implements ProactiveLifeReadRepository {
   async loadOverview(input: {

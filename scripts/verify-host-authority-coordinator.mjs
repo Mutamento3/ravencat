@@ -255,6 +255,14 @@ const headlessSchedule = loadTypeScriptModule(
       getCompanionRuntimeDependencies: () => ({
         initializeDatabase: async () => raceEvents.push(['database']),
         generateAutonomousRunId: () => `authority-race-run-${++generatedRunNumber}`,
+        repositories: { aiSchedules: { prepareDispatch: async () => raceSchedule } },
+        chat: {
+          resolveCanonicalConversation: async () => ({ id: 'authority-race-session' }),
+          runInConversation: async (_sessionId, _runId, _schedule, execute) => ({
+            status: 'ran',
+            value: await execute({ signal: new AbortController().signal, displacedRunId: null }),
+          }),
+        },
       }),
     },
     './RunAIScheduleAutonomousAgent': {

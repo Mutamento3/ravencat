@@ -53,6 +53,7 @@ lockfile 的 `dev` 标记与 APK 实际打包范围不是同一回事，例如 E
 | `androidx.lifecycle:lifecycle-runtime` | `2.8.7` | Apache-2.0 | 原生生命周期 |
 | `androidx.work:work-runtime` | `2.8.0` | Apache-2.0 | 后台任务 |
 | `com.google.mlkit:text-recognition-chinese` | `16.0.1` | Google ML Kit / Google APIs 条款 | 中文 OCR |
+| `com.github.gkonovalov.android-vad:webrtc` | `2.0.10` | MIT（Android 封装）与 BSD（WebRTC VAD） | 通话本地人声检测 |
 | `com.facebook.react:react-android` | 由 React Native 工程解析 | MIT，另含各自许可的第三方组件 | React Native 原生接口 |
 
 测试还使用 JUnit `4.13.2`（[EPL-1.0](https://github.com/junit-team/junit4/blob/r4.13.2/LICENSE-junit.txt)）、Robolectric `4.14.1`（MIT）、`org.json:json:20240303`（该版本的上游 [Public Domain 声明](https://github.com/stleary/JSON-java/blob/20240303/LICENSE)）和 WorkManager 测试组件；这些不因仅用于测试就变成项目原创代码。
@@ -74,6 +75,10 @@ lockfile 的 `dev` 标记与 APK 实际打包范围不是同一回事，例如 E
 ### Google ML Kit
 
 ML Kit SDK 及模型有独立使用条款，不应标为本项目的 MIT 或 Apache 开源组件。输入图像和 OCR 结果在设备上处理；SDK 可能连接 Google 获取更新，并发送性能及使用指标。参见 [ML Kit 官方条款与隐私说明](https://developers.google.com/ml-kit/terms)。
+
+### 通话人声检测
+
+通话使用 android-vad 的 WebRTC VAD 本地分类器，Android 封装和 WebRTC VAD 分别保留各自署名与许可原文；来源与范围见[原生人声检测依赖](third-party/native-speech-detection.md)。发布许可附件同时包含这两份原文。
 
 ## 外部服务与参考实现
 

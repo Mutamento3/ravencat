@@ -109,6 +109,9 @@ const messageRepositorySource = transpileSource(
 ).replaceAll(
   `from '../domain/MessageTimeSeparator'`,
   `from '${timeSeparatorUrl}'`,
+).replaceAll(
+  `from '../domain/chatMessageMetadata'`,
+  `from '${chatMessageMetadataUrl}'`,
 );
 const messageRepositoryUrl = `data:text/javascript;base64,${Buffer.from(messageRepositorySource).toString('base64')}`;
 

@@ -128,6 +128,8 @@ assert.equal(saved[5].snapshot.attachments[0].type, 'image', '表情收藏使用
 const concurrent = await Promise.all([save(ids[0]), save(ids[0])]);
 assert.ok(concurrent.every(item => item.id === saved[0].id), '重复收藏与并发点击只保留一个快照');
 assert.equal((await favorites.listChatFavorites(null)).items.length, 6);
+assert.equal((await favorites.getChatFavoriteByMessage(ids[0])).id, saved[0].id);
+assert.equal(await favorites.getChatFavoriteByMessage(-1), null);
 for (const [category, count] of [['text', 2], ['audio', 1], ['image', 2], ['file', 1]]) assert.equal((await favorites.listChatFavorites(category)).items.length, count);
 db.prepare('UPDATE messages SET text=? WHERE id=?').run('后来修改的正文', ids[0]);
 assert.equal((await favorites.listChatFavorites('text')).items.find(item => item.id === saved[0].id).snapshot.text, '用户文字');
@@ -235,6 +237,7 @@ const native = {
   ScrollView: 'Scroll', Pressable: 'Pressable', Text: 'Text', TouchableOpacity: 'Button', TouchableWithoutFeedback: 'Touchable', View: 'View',
   StyleSheet: { create: styles => styles, hairlineWidth: 1 }, useWindowDimensions: () => ({ width: 360, height: 780 }),
   Modal: ({ visible, children }) => visible ? React.createElement('Modal', null, children) : null,
+  ToastAndroid: { SHORT: 0, show() {} },
 };
 boundaries.set('react-native', native);
 boundaries.set('@shared/theme', { useTheme: () => theme, useThemedStyles: create => create(theme), ThemedSurface: 'Surface' });
@@ -300,9 +303,84 @@ assert.ok(rendered.root.findByProps({ accessibilityLabel: '收藏' }));
 const menu = rendered.root.findAllByType('View').find(node => Array.isArray(node.props.style) && node.props.style[1]?.width);
 assert.ok(menu.props.style[1].width <= 336, '新增操作后菜单仍需留在手机屏幕内');
 await renderer.act(async () => rendered.unmount());
+// 菜单读取真实收藏事实，支持添加、再次取消、重新打开以及独立收藏页取消后的刷新。
+db.prepare("INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated_at) VALUES ('a','agent-a','测试 AI','test',?,?)").run(t, t);
+db.prepare("INSERT INTO sessions(id,ai_assistant_id,name,created_at,updated_at) VALUES ('s','a','测试聊天',?,?)").run(t, t);
+db.exec("INSERT INTO chat_conversations VALUES ('s','direct')");
+const actionMessage = messageById(insert('菜单收藏切换'));
+const otherActionMessage = messageById(insert('另一条消息'));
+const { useChatFavoriteAction } = load('src/features/chat/presentation/messages/components/useChatFavoriteAction.ts');
+function FavoriteMenu({ message }) {
+  const action = useChatFavoriteAction(message, '测试聊天', 'a');
+  return React.createElement(Menu, { visible: Boolean(message), onClose() {}, onCopy() {}, onFavorite: action.toggle, isFavorited: action.isFavorited });
+}
+const openFavoriteMenu = async message => {
+  await renderer.act(async () => rendered.update(React.createElement(FavoriteMenu, { message: null })));
+  await renderer.act(async () => rendered.update(React.createElement(FavoriteMenu, { message })));
+};
+await renderer.act(async () => { rendered = renderer.create(React.createElement(FavoriteMenu, { message: actionMessage })); });
+assert.equal(rendered.root.findByProps({ accessibilityLabel: '收藏' }).props.disabled, false);
+await renderer.act(async () => {
+  const press = rendered.root.findByProps({ accessibilityLabel: '收藏' }).props.onPress;
+  press(); press();
+});
+assert.equal(rendered.root.findByProps({ accessibilityLabel: '已收藏' }).props.accessibilityState.selected, true);
+assert.equal(rendered.root.findByType('Star').props.fill, theme.colors.brand.onPrimary);
+const menuFavorite = await favorites.getChatFavoriteByMessage(actionMessage.id);
+assert.ok(menuFavorite);
+await openFavoriteMenu(actionMessage);
+assert.ok(rendered.root.findByProps({ accessibilityLabel: '已收藏' }));
+const removeInTransaction = repository.removeInTransaction.bind(repository);
+let finishRemoval;
+let removalStarted;
+const startedRemoval = new Promise(resolve => { removalStarted = resolve; });
+repository.removeInTransaction = async (...args) => {
+  await new Promise(resolve => { finishRemoval = resolve; removalStarted(); });
+  return removeInTransaction(...args);
+};
+await renderer.act(async () => {
+  rendered.root.findByProps({ accessibilityLabel: '已收藏' }).props.onPress();
+  await startedRemoval;
+});
+await openFavoriteMenu(actionMessage);
+assert.equal(rendered.root.findByType('Star').props.fill, 'none');
+assert.equal(rendered.root.findByProps({ accessibilityLabel: '收藏' }).props.disabled, true, '写入未完成时重新打开菜单不能重复操作');
+await renderer.act(async () => finishRemoval());
+repository.removeInTransaction = removeInTransaction;
+assert.equal(await favorites.getChatFavoriteByMessage(actionMessage.id), null);
+assert.equal(rendered.root.findByType('Star').props.fill, 'none');
+assert.ok(rendered.root.findByProps({ accessibilityLabel: '收藏' }));
+await renderer.act(async () => rendered.root.findByProps({ accessibilityLabel: '收藏' }).props.onPress());
+await favorites.removeChatFavorite((await favorites.getChatFavoriteByMessage(actionMessage.id)).id);
+await openFavoriteMenu(actionMessage);
+assert.ok(rendered.root.findByProps({ accessibilityLabel: '收藏' }), '收藏页取消后重新打开菜单必须读取最新状态');
+
+// 旧消息的慢查询不能覆盖新选择；状态未知期间不能把已收藏误当成未收藏。
+const getBySource = repository.getBySource.bind(repository);
+let finishStatusRead;
+repository.getBySource = async id => id === actionMessage.id
+  ? new Promise(resolve => { finishStatusRead = resolve; }) : getBySource(id);
+await openFavoriteMenu(actionMessage);
+assert.equal(rendered.root.findByProps({ accessibilityLabel: '收藏' }).props.disabled, true);
+await renderer.act(async () => rendered.update(React.createElement(FavoriteMenu, { message: otherActionMessage })));
+await renderer.act(async () => finishStatusRead(menuFavorite));
+assert.equal(rendered.root.findByProps({ accessibilityLabel: '收藏' }).props.disabled, false);
+assert.equal(rendered.root.findByType('Star').props.fill, 'none');
+repository.getBySource = async () => { throw new Error('读取失败'); };
+await openFavoriteMenu(actionMessage);
+assert.equal(dialog.title, '收藏状态加载失败');
+assert.equal(rendered.root.findByProps({ accessibilityLabel: '收藏' }).props.disabled, true);
+repository.getBySource = getBySource;
+await openFavoriteMenu(actionMessage);
+db.prepare('DELETE FROM messages WHERE id=?').run(actionMessage.id);
+await renderer.act(async () => rendered.root.findByProps({ accessibilityLabel: '收藏' }).props.onPress());
+assert.equal(dialog.title, '收藏失败');
+assert.ok(rendered.root.findByProps({ accessibilityLabel: '收藏' }), '写入失败不能显示已收藏');
+await renderer.act(async () => rendered.unmount());
+db.exec("DELETE FROM messages; DELETE FROM sessions; DELETE FROM ai_assistants; DELETE FROM chat_conversations;");
 const countBeforeDamage = db.prepare('SELECT COUNT(*) n FROM chat_favorites').get().n;
 db.prepare('UPDATE chat_favorites SET snapshot_json=? WHERE id=?').run('{"text":123}', saved[0].id);
 await assert.rejects(favorites.listChatFavorites('text'), /收藏记录损坏/);
 assert.equal(db.prepare('SELECT COUNT(*) n FROM chat_favorites').get().n, countBeforeDamage, '损坏快照明确报告，不静默删除收藏');
 db.close();
-console.log('verify-chat-favorites: 快照、分类、幂等、删除竞态、媒体保留/释放、备份恢复、语音播放和文件上传策略通过。');
+console.log('verify-chat-favorites: 快照、分类、幂等、菜单状态切换与异步竞态、删除竞态、媒体保留/释放、备份恢复、语音播放和文件上传策略通过。');

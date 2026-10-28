@@ -19,6 +19,8 @@ android {
 }
 
 dependencies {
+  implementation project(':call-ringtone')
+  implementation project(':android-overlay-runtime')
   compileOnly "com.facebook.react:react-android"
   implementation "androidx.core:core-ktx:1.13.1"
   testImplementation 'junit:junit:4.13.2'

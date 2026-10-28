@@ -1,11 +1,11 @@
 /**
- * @fileoverview AIMessageDeliveryCoordinator —— AI 消息落库后的统一交付策略。
+ * @fileoverview AIMessageDeliveryCoordinator —— 正文展示版本或正式消息提交后的统一交付策略。
  *
  * Protected Contract:
  * 修改本文件或相关 delivery wiring 前必须阅读：
  * docs/architecture/ai-message-delivery-invariant.md
  * 
- * 唯一负责「assistant message committed 之后怎么办」的判定：
+ * 唯一负责「assistant 正文已持久交付之后怎么办」的判定：
  * 
  * - 当前会话正在前台真实呈现 → 抑制系统通知（已读标记由 Host UI 随未读刷新同序完成）；
  * - 其余情况（App 后台 / 前台其它页面）→ Native NotificationManager 聚合通知，
@@ -64,6 +64,9 @@ export function isAIMessageConversationForeground(payload: AIMessageObserverPayl
 }
 
 function buildNotificationEventId(payload: AIMessageReceivedPayload): string {
+  if (payload.clientMessageId) {
+    return payload.clientMessageId;
+  }
   if (payload.logicalMessageId) {
     return `${payload.logicalMessageId}:${payload.segmentIndex ?? 0}`;
   }
@@ -125,7 +128,7 @@ async function deliverAIMessage(
     groupId: payload.groupId || null,
     senderName: payload.aiName,
     senderAvatar: payload.aiAvatar || null,
-    // 优先使用逻辑分段；无逻辑分段时使用已提交消息 ID，禁止时间戳幂等键。
+    // 运行正文与 T3 共用稳定气泡身份；旁路消息沿逻辑分段或数据库 ID 幂等。
     eventId: buildNotificationEventId(payload),
   });
   if (posted) {

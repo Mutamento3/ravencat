@@ -1,5 +1,8 @@
 package expo.modules.kimiphonenotifications
 
+import expo.modules.androidoverlayruntime.CallPresentationReturn
+import com.facebook.react.bridge.ReactContext
+import com.facebook.react.common.LifecycleState
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -124,8 +127,10 @@ class KimiPhoneNotificationsModule : Module() {
     }
 
     AsyncFunction("postIncomingCallNotification") { payload: Map<String, Any?> ->
-      NotificationPublisher.postIncomingCall(context, payload)
-    }
+      val reactContext = (appContext.reactContext ?: throw Exceptions.ReactContextLost()) as ReactContext
+      val activity = if (reactContext.lifecycleState == LifecycleState.RESUMED) appContext.currentActivity else null
+      NotificationPublisher.postIncomingCall(reactContext, payload, activity)
+    }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
 
     AsyncFunction("upsertTogetherListeningPresentation") { payload: Map<String, Any?> ->
       NotificationPublisher.permissionStatus(context) +
@@ -153,8 +158,8 @@ class KimiPhoneNotificationsModule : Module() {
       null
     }
 
-    AsyncFunction("leaveCallScreen") { callId: String, finished: Boolean ->
-      CallPresentationReturn.leave(callId, finished, appContext.currentActivity)
+    AsyncFunction("leaveCallScreen") { callId: String ->
+      CallPresentationReturn.leave(callId, appContext.currentActivity)
     }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
 
     AsyncFunction("consumePendingNotificationResponses") {

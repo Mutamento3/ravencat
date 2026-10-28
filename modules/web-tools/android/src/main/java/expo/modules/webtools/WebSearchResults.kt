@@ -1,6 +1,7 @@
 package expo.modules.webtools
 
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONException
 import org.jsoup.Jsoup
@@ -47,8 +48,9 @@ object WebSearchResults {
     return finish("duckduckgo", "DuckDuckGo", query, items, limit)
   }
 
-  fun tavily(json: String, query: String, limit: Int): Map<String, Any> = parseJson {
-    val results = JSONObject(json).getJSONArray("results")
+  fun tavily(json: String, query: String, limit: Int, includeImages: Boolean): Map<String, Any> = parseJson {
+    val root = JSONObject(json)
+    val results = root.getJSONArray("results")
     val items = (0 until results.length()).map { index ->
       val row = results.getJSONObject(index)
       item(row.getString("title"), row.getString("url"), row.getString("content")).toMutableMap().apply {
@@ -56,7 +58,29 @@ object WebSearchResults {
         if (row.has("published_date") && !row.isNull("published_date")) put("publishedAt", row.getString("published_date").take(100))
       }
     }
-    finish("tavily", "Tavily", query, items, limit)
+    val result = finish("tavily", "Tavily", query, items, limit)
+    if (!includeImages) return@parseJson result
+    // Tavily 同时提供全局图片候选和逐网页图片；聚合后保留首次排序与可用来源。
+    val images = linkedMapOf<String, MutableMap<String, Any>>()
+    appendTavilyImages(root.getJSONArray("images"), null, images)
+    for (index in 0 until results.length()) {
+      val row = results.getJSONObject(index)
+      if (row.has("images")) appendTavilyImages(row.getJSONArray("images"), row.getString("url"), images)
+    }
+    result + ("images" to images.values.take(limit))
+  }
+
+  private fun appendTavilyImages(rows: JSONArray, sourceUrl: String?, images: MutableMap<String, MutableMap<String, Any>>) {
+    for (index in 0 until rows.length()) {
+      val row = rows.getJSONObject(index)
+      val url = row.getString("url").toHttpUrlOrNull()
+        ?: throw WebFailure("WEB_INVALID_RESPONSE", "搜索图片链接无效")
+      val description = Jsoup.parse(row.getString("description")).text().take(1000)
+      // 图片地址中的查询参数可能决定尺寸或访问签名，不套用网页跟踪参数去重。
+      val image = images.getOrPut(url.toString()) { mutableMapOf("url" to url.toString(),
+        "description" to description) }
+      if (sourceUrl != null) image.putIfAbsent("sourceUrl", sourceUrl)
+    }
   }
 
   fun brave(json: String, query: String, limit: Int): Map<String, Any> = parseJson {

@@ -1,48 +1,7 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function loadTypeScriptModule(relativePath) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const source = fs.readFileSync(absolutePath, 'utf8');
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: absolutePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const executeModule = new Function(
-    'exports',
-    'require',
-    'module',
-    '__filename',
-    '__dirname',
-    compiled.outputText,
-  );
-  executeModule(
-    module.exports,
-    () => {
-      throw new Error(`${relativePath} 不应存在运行时依赖`);
-    },
-    module,
-    absolutePath,
-    path.dirname(absolutePath),
-  );
-  return module.exports;
-}
-
+// 这两个模块必须零运行时依赖，因此不传 mocks：任何 require 都会被 helper 拒绝。
 const catalogModule = loadTypeScriptModule(
   'src/features/phoneTools/domain/PhoneToolCatalog.ts',
 );
@@ -54,6 +13,7 @@ const { PHONE_TOOL_CATALOG, PHONE_TOOL_CATEGORIES } = catalogModule;
 const { buildPhoneToolsDirectory } = directoryModule;
 
 const expectedAvailableNames = [
+  'read_clipboard',
   'search_installed_apps',
   'get_foreground_app',
   'get_app_usage',

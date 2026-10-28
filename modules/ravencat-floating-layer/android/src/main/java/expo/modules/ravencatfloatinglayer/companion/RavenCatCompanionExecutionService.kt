@@ -13,6 +13,8 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import expo.modules.androidoverlayruntime.OverlayLaunchIntentFactory
+import expo.modules.ravencatfloatinglayer.AIScheduleDiagnosticStage
+import expo.modules.ravencatfloatinglayer.RavenCatCompanionWakeStore
 
 /**
  * 一次 wake 执行的有界前台执行宿主。
@@ -51,9 +53,13 @@ class RavenCatCompanionExecutionService : Service() {
         ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
       )
       isForegroundRunning = true
+      RavenCatCompanionWakeStore.recordScheduleDiagnostic(this, deliveryEventId,
+        AIScheduleDiagnosticStage.FOREGROUND_STARTED)
       Log.i(TAG, "companion_execution_foreground_started deliveryEventId=$deliveryEventId")
       START_NOT_STICKY
     } catch (error: RuntimeException) {
+      RavenCatCompanionWakeStore.recordScheduleDiagnostic(this, deliveryEventId,
+        AIScheduleDiagnosticStage.FOREGROUND_REJECTED, outcome = error.javaClass.simpleName)
       // Android 12+ 的后台启动限制可能在 startForeground 这一层才拒绝（不只是 startForegroundService）。
       // 这是执行质量的降级而不是执行失败：立即收尾，让 execution host 继续以普通后台执行完成本次 wake。
       Log.w(TAG, "companion_execution_foreground_rejected", error)

@@ -160,6 +160,7 @@ export class AIScheduleProjectionOwner {
     runId: string;
     consumedAt: string;
     completionDisposition: AIScheduleCompletionDisposition;
+    failureCode?: string;
   }): Promise<ConsumeAIScheduleWithProjectionOutcome> {
     return this.enqueueOperation(() => this.commitAndProjectConsume(input));
   }
@@ -232,6 +233,7 @@ export class AIScheduleProjectionOwner {
     runId: string;
     consumedAt: string;
     completionDisposition: AIScheduleCompletionDisposition;
+    failureCode?: string;
   }): Promise<ConsumeAIScheduleWithProjectionOutcome> {
     const outcome = await consumeAIScheduleCommand(input);
     if (outcome.status === 'error') return { status: 'error', code: outcome.code, projection: null };
@@ -253,6 +255,7 @@ export class AIScheduleProjectionOwner {
     let scheduled: AISchedule[];
     try {
       state = await this.dependencies.companionState.ensureDefault();
+      await this.dependencies.schedules.expireScheduled(this.dependencies.now().toISOString());
       // 原生开关是执行镜像；同一 lane 内先同步它，再处理每条日程投影。
       await this.dependencies.native.setCompanionSchedulingEnabled(state.desiredEnabled);
       scheduled = await this.dependencies.schedules.listAllScheduled();
@@ -602,6 +605,7 @@ export function consumeAIScheduleWithProjection(input: {
   runId: string;
   consumedAt: string;
   completionDisposition: AIScheduleCompletionDisposition;
+  failureCode?: string;
 }): Promise<ConsumeAIScheduleWithProjectionOutcome> {
   return aiScheduleProjectionOwner.consume(input);
 }

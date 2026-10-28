@@ -18,7 +18,7 @@ export interface ChatTurnAIInput {
   userMessages: ChatMessage[];
   /** 逐条展示文本的联接，供 prompt 组装与审计字段使用。 */
   displayText: string;
-  /** 用户原文与其后已发生的独立执行记录，保留真实 role 与顺序。 */
+  /** 用户原文与应用附加的独立执行资料，按原输入位置保持顺序。 */
   turnInputMessages: ChatContextMessage[];
 }
 
@@ -55,7 +55,8 @@ export async function buildChatTurnAIInput(params: {
     turnInputMessages.push({ role: 'user', content: input.modelInput, createdAt: message.createdAt });
     // 未消费区间仍含原任务；把已发生结果放在它与“1 / 2”等新输入之间，而非再把原任务追加到结果之后。
     for (const run of contextByInput.get(message.id) ?? []) {
-      turnInputMessages.push({ role: 'assistant', content: run.content, createdAt: run.createdAt });
+      // 执行资料由应用附加，不是助手曾对用户说过的话，不能作为回复示例。
+      turnInputMessages.push({ role: 'user', content: run.content, createdAt: run.createdAt });
     }
   }
 

@@ -6,7 +6,7 @@ import { readPromptDefaults, listAssistantDirectToolNames } from '@features/prom
 import { createMomentToolForRun } from '@features/moments/composition';
 import { WebSearchTool, WebFetchTool, DownloadFileTool, KimiWebSearchTool, KimiWebFetchTool, KimiMewTool } from '@features/webTools';
 import { resolveMoonshotAPIBaseURL } from '@platform/ai';
-import { DownloadImageTool, ViewImageTool } from '@features/media';
+import { DownloadImageTool, QueryDownloadedImagesTool, ViewImageTool } from '@features/media';
 import { applicationSettingsTools } from './ApplicationSettingsTools';
 import { COMPLETION_INTENT_RULE } from '@shared/aiTools';
 import type {
@@ -69,11 +69,17 @@ import {
   GetForegroundAppTool,
   GetAppUsageTool,
   GetCurrentLocationTool,
+  ReadClipboardTool,
+  XiaohongshuGetPageTool, XiaohongshuEnterPublishingTool, XiaohongshuOpenTextEntryTool,
+  XiaohongshuStartTextNoteTool, XiaohongshuSetCardTextTool, XiaohongshuSetTitleTool,
+  XiaohongshuSetBodyTool, XiaohongshuAddTopicTool, XiaohongshuSelectStyleTool,
+  XiaohongshuSetVisibilityTool, XiaohongshuNextTool, XiaohongshuGoBackTool, XiaohongshuPreparePublishTool,
+  XiaohongshuPublishPreparedNoteTool,
   getPhoneToolPackageById,
 } from '@features/phoneTools';
 import { productionNetEaseChildTools } from '@features/phoneTools/neteaseComposition';
 import { ReadScreenAccessibilityTool, ReadScreenOcrTool } from '@features/screenCapture';
-import { SendVoiceMessageTool, SearchChatSummariesTool, GetSecondarySummaryTool, EditSecondarySummaryTool, EditPrimarySummaryTool, DeletePrimarySummaryTool, createConfiguredVoiceMessageTool } from '@features/chat';
+import { SendImageTool, SendVoiceMessageTool, SearchChatMessagesTool, ReadChatMessageContextTool, SearchChatSummariesTool, GetSecondarySummaryTool, EditSecondarySummaryTool, EditPrimarySummaryTool, DeletePrimarySummaryTool, createConfiguredVoiceMessageTool } from '@features/chat';
 import {
   ListStickerGroupsTool,
   ListStickersInGroupTool,
@@ -275,6 +281,7 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   agentNativeBuiltInTool(WebFetchTool, 'webTools', SAFE_READ),
   agentNativeBuiltInTool(DownloadFileTool, 'webTools', REVERSIBLE_ACTION),
   agentNativeBuiltInTool(DownloadImageTool, 'media', REVERSIBLE_ACTION, { directChatOnly: true, groupChatAllowed: true }),
+  agentNativeBuiltInTool(QueryDownloadedImagesTool, 'media', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true }),
   agentNativeBuiltInTool(ViewImageTool, 'media', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true }),
   ...applicationSettingsTools.map(({ tool, owner, hostOnly, mutating }) => agentNativeBuiltInTool(
     tool, owner, mutating ? REVERSIBLE_ACTION : PRIVATE_READ,
@@ -309,6 +316,8 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   agentNativeBuiltInTool(ConvertExitedGroupHistoryTool, 'memory', REVERSIBLE_WRITE, { memoryParticipation: 'read_write', toolPackageId: 'memory' }),
   agentNativeBuiltInTool(RecallMemoryTool, 'memory', PRIVATE_READ, { memoryParticipation: 'read_write' }),
   agentNativeBuiltInTool(SearchChatSummariesTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
+  agentNativeBuiltInTool(SearchChatMessagesTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
+  agentNativeBuiltInTool(ReadChatMessageContextTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
   agentNativeBuiltInTool(GetSecondarySummaryTool, 'chat', PRIVATE_READ, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
   agentNativeBuiltInTool(EditSecondarySummaryTool, 'chat', REVERSIBLE_WRITE, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
   agentNativeBuiltInTool(EditPrimarySummaryTool, 'chat', REVERSIBLE_WRITE, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'memory' }),
@@ -325,6 +334,14 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   builtInTool(GetForegroundAppTool, 'phoneTools', PRIVATE_READ, { hostOnly: true }),
   builtInTool(GetAppUsageTool, 'phoneTools', PRIVATE_READ, { hostOnly: true }),
   builtInTool(GetCurrentLocationTool, 'phoneTools', PRIVATE_READ, { hostOnly: true }),
+  builtInTool(ReadClipboardTool, 'phoneTools', PRIVATE_READ, { hostOnly: true }),
+  builtInTool(XiaohongshuGetPageTool, 'phoneTools', PRIVATE_READ, { hostOnly: true, phoneToolPackageId: 'xiaohongshu' }),
+  ...[
+    XiaohongshuEnterPublishingTool, XiaohongshuOpenTextEntryTool, XiaohongshuStartTextNoteTool,
+    XiaohongshuSetCardTextTool, XiaohongshuSetTitleTool, XiaohongshuSetBodyTool, XiaohongshuAddTopicTool,
+    XiaohongshuSelectStyleTool, XiaohongshuSetVisibilityTool, XiaohongshuNextTool, XiaohongshuGoBackTool, XiaohongshuPreparePublishTool,
+  ].map(tool => builtInTool(tool, 'phoneTools', REVERSIBLE_ACTION, { hostOnly: true, phoneToolPackageId: 'xiaohongshu' })),
+  builtInTool(XiaohongshuPublishPreparedNoteTool, 'phoneTools', EXTERNAL_SIDE_EFFECT, { hostOnly: true, phoneToolPackageId: 'xiaohongshu' }),
   ...productionNetEaseChildTools.map((tool) => builtInTool(
     tool,
     'phoneTools',
@@ -338,6 +355,7 @@ const BUILT_IN_TOOL_REGISTRATIONS: readonly BuiltInToolRegistration[] = [
   agentNativeBuiltInTool(GetAIScheduleTool, 'companion', PRIVATE_READ, { hostOnly: true }),
   agentNativeBuiltInTool(UpdateAIScheduleTool, 'companion', REVERSIBLE_WRITE, { hostOnly: true }),
   agentNativeBuiltInTool(CancelAIScheduleTool, 'companion', SENSITIVE_ACTION, { hostOnly: true }),
+  agentNativeBuiltInTool(SendImageTool, 'chat', EXTERNAL_SIDE_EFFECT, { directChatOnly: true, groupChatAllowed: true, toolPackageId: 'media' }),
   agentNativeBuiltInTool(
     SendVoiceMessageTool,
     'chat',
@@ -608,6 +626,8 @@ export async function resolveAllowedToolNames(assistantId: string): Promise<stri
       .map((permission) => [permission.toolName, permission.enabled]),
   );
   return BUILT_IN_TOOL_REGISTRATIONS
+    // 总开关先裁剪本次授权集合；拆包、星标和提示词都消费同一份结果。
+    .filter((registration) => !registration.phoneToolPackageId || defaults.appToolPackages[registration.phoneToolPackageId] === true)
     .filter((registration) => (
       overrides.get(registration.tool.name) ?? defaults.toolPermissions[registration.tool.name] ?? registration.defaultEnabled
     ))
@@ -628,6 +648,7 @@ export function buildToolsDescription(effectiveToolNames: readonly string[]): st
   const hasStickerReply = allowedToolNames.has('search_stickers')
     && allowedToolNames.has('select_sticker');
   const hasVoiceReply = allowedToolNames.has('send_voice_message');
+  const hasImageReply = allowedToolNames.has('send_image');
 
   return [
     '【工具运行要求】',
@@ -641,7 +662,10 @@ export function buildToolsDescription(effectiveToolNames: readonly string[]): st
       '同一件事一般只创建一条，调整已有安排仅使用本轮已授权的修改能力。',
       '日程提供行动机会，醒来以后仍可以决定不联系用户。不要自行套用固定 cadence。',
     ] : []),
-    ...(hasStickerReply || hasVoiceReply ? [COMPLETION_INTENT_RULE] : []),
+    ...(hasStickerReply || hasVoiceReply || hasImageReply ? [COMPLETION_INTENT_RULE] : []),
+    ...(hasImageReply ? [
+      'send_image 发送真实图片消息；网络图片先用 download_image 保存，再传入 mediaAssetId。图片可单独作为回复，正文中的图片链接不会自动发送图片。',
+    ] : []),
     ...(hasStickerReply ? [
       'search_stickers 与 select_sticker 用于生动表达自己的情绪，想发送的时候可以主动搜索再选择发送。',
       '表情包可以单独作为回复；无需用文字重复它已经表达清楚的意思。',

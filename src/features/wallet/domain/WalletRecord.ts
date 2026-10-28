@@ -8,7 +8,6 @@
  */
 
 export type WalletRecordType = 'income' | 'expense';
-export type CategoryType = 'income' | 'expense' | 'both';
 
 export type WalletCategories = Record<WalletRecordType, string[]>;
 
@@ -39,20 +38,6 @@ export interface QuickAction {
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface Category {
-  id: string;
-  name: string;
-  type: CategoryType;
-  icon?: string | null;
-  sortOrder?: number;
-  usageCount?: number;
-}
-
-export interface ValidationResult {
-  valid: boolean;
-  errors: string[];
 }
 
 // ==================== 历史记账功能新增类型 ====================
@@ -170,30 +155,10 @@ export function createQuickActionFromRow(row: QuickActionRow): QuickAction {
   };
 }
 
-export function createCategory(data: Partial<Category> = {}): Category {
-  return {
-    id: data.id || data.name || '',
-    name: data.name || '',
-    type: data.type || 'both',
-    icon: data.icon || null,
-    sortOrder: data.sortOrder ?? 0,
-    usageCount: data.usageCount ?? 0,
-  };
-}
-
 export function formatAmount(amount: number | string, withSymbol = true): string {
   const value = typeof amount === 'number' ? amount : parseFloat(amount) || 0;
   const formatted = value.toFixed(2);
   return withSymbol ? `¥${formatted}` : formatted;
-}
-
-export function getRecordSummary(record: WalletRecord | null | undefined): string {
-  if (!record) return '';
-
-  const typeText = record.type === 'expense' ? '支出' : '收入';
-  const detailText = record.detail ? `(${record.detail})` : '';
-
-  return `${record.category}${detailText} - ${typeText} ${formatAmount(record.amount)}`;
 }
 
 export function getRecordsSummary(records: WalletRecord[] | null | undefined): string {
@@ -230,49 +195,5 @@ export function getRecordsSummary(records: WalletRecord[] | null | undefined): s
   }
 
   return summary;
-}
-
-export function validateWalletRecord(record: WalletRecord): ValidationResult {
-  const errors: string[] = [];
-
-  if (!record.type || !['income', 'expense'].includes(record.type)) {
-    errors.push('type 必须是 income 或 expense');
-  }
-  if (!record.category || typeof record.category !== 'string') {
-    errors.push('category 不能为空');
-  }
-  if (typeof record.amount !== 'number' || Number.isNaN(record.amount) || record.amount < 0) {
-    errors.push('amount 必须是有效的非负数');
-  }
-  if (!record.recordDate || !/^\d{4}-\d{2}-\d{2}$/.test(record.recordDate)) {
-    errors.push('recordDate 格式必须是 YYYY-MM-DD');
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
-}
-
-export function validateQuickAction(action: QuickAction): ValidationResult {
-  const errors: string[] = [];
-
-  if (!action.name || typeof action.name !== 'string') {
-    errors.push('name 不能为空');
-  }
-  if (!action.type || !['income', 'expense'].includes(action.type)) {
-    errors.push('type 必须是 income 或 expense');
-  }
-  if (!action.category || typeof action.category !== 'string') {
-    errors.push('category 不能为空');
-  }
-  if (typeof action.amount !== 'number' || Number.isNaN(action.amount) || action.amount < 0) {
-    errors.push('amount 必须是有效的非负数');
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
 }
 

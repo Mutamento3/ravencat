@@ -10,6 +10,7 @@ export type ChatAttachmentSource =
   | 'gallery'
   | 'camera'
   | 'document'
+  | 'media_library'
   | 'screen_capture';
 
 export type AttachmentDraftStatus =

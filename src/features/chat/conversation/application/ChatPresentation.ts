@@ -6,18 +6,29 @@ import type { ChatSession } from '../domain/SessionRepository';
 import type { UserProfile } from '@features/profile';
 import { getCurrentUserProfile } from '@features/profile';
 import { emitChatMessagesReloadRequested, emitChatTurnExecutionChanged } from '../../messages/events/ChatEvents';
+import { releaseMediaAssetCandidates } from '@features/media';
+import { clearAgentTransientTimelineRun, getLiveAgentTimelineRunIds } from '../../messages/application/AgentTransientTimeline';
 
 export async function getCanonicalChatConversation(aiId: string): Promise<ChatSession | null> {
   return getChatConversationRuntimeDependencies().sessions.getCanonicalConversation(aiId);
 }
 
-export async function clearChatConversationHistory(sessionId: string): Promise<number | null> {
-  const boundary = await getChatConversationRuntimeDependencies().sessions
-    .clearConversationHistory(sessionId);
-  await getChatMessageRuntimeDependencies().regeneration?.onInvalidated(sessionId);
-  emitChatTurnExecutionChanged(sessionId);
-  emitChatMessagesReloadRequested(sessionId);
-  return boundary;
+export async function clearChatConversationHistory(sessionId: string): Promise<void> {
+  const dependencies = getChatMessageRuntimeDependencies();
+  const release = await dependencies.turnPresentation.freeze(sessionId);
+  let committed = false;
+  try {
+    const assets = await getChatConversationRuntimeDependencies().sessions.clearConversationHistory(sessionId);
+    committed = true;
+    for (const runId of getLiveAgentTimelineRunIds(sessionId)) clearAgentTransientTimelineRun(runId, sessionId);
+    emitChatMessagesReloadRequested(sessionId, true);
+    await dependencies.turnPresentation.interrupt(sessionId);
+    await dependencies.regeneration?.onInvalidated(sessionId);
+    emitChatTurnExecutionChanged(sessionId);
+    await releaseMediaAssetCandidates(assets);
+  } finally {
+    await release(committed);
+  }
 }
 
 export async function getChatDetailCurrentUser(): Promise<UserProfile> {

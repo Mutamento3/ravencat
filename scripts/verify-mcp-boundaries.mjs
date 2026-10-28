@@ -2287,7 +2287,7 @@ const uiScreenMocks = {
   'react-native': { ...Object.fromEntries(['ActivityIndicator', 'ScrollView', 'Switch', 'Text', 'TextInput', 'TouchableOpacity', 'View'].map((name) => [name, name])),
     StyleSheet: { create: (styles) => styles, hairlineWidth: 1 } },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
-  '@shared/theme': { useTheme: () => ({ colors: { text: { tertiary: '#888' } } }), useThemedStyles: () => ({}) },
+  '@shared/theme': { ThemedSurface: 'ThemedSurface', useTheme: () => ({ radius: { md: 12 }, colors: { text: { tertiary: '#888' } } }), useThemedStyles: () => ({}) },
   '@shared/ui/NavigationHeader': { default: 'NavigationHeader' },
   '@shared/ui': { Toggle: 'Toggle', showAppDialog: (dialog) => { uiAlerts.push(dialog); } },
   './McpConnectionFields': { default: 'McpConnectionFields' },
@@ -2310,6 +2310,10 @@ const uiScreenMocks = {
     { remoteToolName: 'ui_tool', localToolName: 'mcp.ui-server.ui_tool', description: '', stale: false, canAuthorize: true, enabled: true },
   ] },
 };
+uiScreenMocks['@shared/ui'].ToggleField = loadTypeScriptModule('src/shared/ui/ToggleField.tsx', {
+  react: { ...React, default: React }, 'react-native': uiScreenMocks['react-native'],
+  '@shared/theme': uiScreenMocks['@shared/theme'], './Toggle': { default: 'Toggle' },
+}).default;
 const uiScreenModule = loadTypeScriptModule('src/features/mcpTools/presentation/McpServerConfigScreen.tsx', uiScreenMocks);
 let ui;
 await act(async () => { ui = create(React.createElement(uiScreenModule.default, { serverId: null, onBack: () => undefined })); });
@@ -2399,6 +2403,7 @@ assert.deepEqual(ui.root.findByType('McpAssistantSelection').props.selectedIds, 
 await act(async () => { ui.unmount(); });
 // 收起只控制展示：展开后仍可多选，保存后的摘要随授权更新。
 const selectionModule = loadTypeScriptModule('src/features/mcpTools/presentation/McpAssistantSelection.tsx', {
+  '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname ?? assistant.name },
   react: uiScreenMocks.react,
   'react-native': uiScreenMocks['react-native'],
   'lucide-react-native': { Check: 'Check', ChevronDown: 'ChevronDown', ChevronUp: 'ChevronUp', Square: 'Square' },

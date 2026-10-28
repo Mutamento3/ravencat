@@ -245,7 +245,34 @@ export type MediaSessionTransportResult =
       reason: string;
     };
 
+export type XiaohongshuNoteCommand =
+  | { operation: 'get_page' | 'enter_publishing' | 'open_text_entry' | 'start_text_note' | 'next' | 'back' | 'prepare_publish' }
+  | { operation: 'set_card_text' | 'set_title' | 'set_body'; text: string }
+  | { operation: 'add_topic'; tag: string }
+  | { operation: 'select_style'; slot: number }
+  | { operation: 'set_visibility'; visibility: 'public' | 'private' }
+  | { operation: 'publish'; draft_id: string };
+
+export interface XiaohongshuNoteResult {
+  status: 'observed' | 'completed' | 'published' | 'not_completed' | 'publish_outcome_unknown';
+  step: string;
+  page: {
+    kind: string; label: string; packageName: string | null; windowId: number | null;
+    reliable: boolean; keyboardVisible: boolean; issue: string | null;
+    availableActions: string[]; fields: { role: string; text: string; truncated: boolean }[]; visibleLabels: string[];
+  };
+  draft_id?: string | null;
+  actionAttempted: boolean;
+  publishAttempted: boolean;
+  clipboardOverwritten?: boolean;
+  expectedPages?: string[];
+  reason?: string;
+}
+
 declare class DeviceControlNativeModule extends NativeModule {
+  beginXiaohongshuNote(): string;
+  cancelXiaohongshuNote(id: string): void;
+  executeXiaohongshuNote(id: string, actor: string, command: XiaohongshuNoteCommand): Promise<XiaohongshuNoteResult>;
   prepareSystemCalendar(): Promise<'ready' | 'permission_required' | 'no_writable_calendar'>;
   upsertSystemCalendarEvent(key: string, title: string, description: string, startAtEpochMs: number): Promise<void>;
   removeSystemCalendarEvent(key: string): Promise<void>;
@@ -273,6 +300,22 @@ declare class DeviceControlNativeModule extends NativeModule {
 const DeviceControl = requireNativeModule<DeviceControlNativeModule>(
   'RavenCatDeviceControl',
 );
+
+export async function executeXiaohongshuNote(
+  actor: string, command: XiaohongshuNoteCommand, signal?: AbortSignal,
+): Promise<XiaohongshuNoteResult> {
+  if (signal?.aborted) throw new Error('小红书操作已取消');
+  const id = DeviceControl.beginXiaohongshuNote();
+  const cancel = () => DeviceControl.cancelXiaohongshuNote(id);
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    if (signal?.aborted) cancel();
+    return await DeviceControl.executeXiaohongshuNote(id, actor, command);
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+    cancel();
+  }
+}
 
 /**
  * 从可见 RavenCat 同步 attach process runtime 后请求独立 FGS。

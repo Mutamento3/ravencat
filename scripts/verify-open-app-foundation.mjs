@@ -1,44 +1,5 @@
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-const require = createRequire(import.meta.url);
-const ts = require('typescript');
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const sourcePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: sourcePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(
-      Object.hasOwn(mocks, specifier),
-      `${relativePath} 存在未声明的运行时依赖：${specifier}`,
-    );
-    return mocks[specifier];
-  };
-  new Function('exports', 'require', 'module', compiled.outputText)(
-    module.exports,
-    requireMock,
-    module,
-  );
-  return module.exports;
-}
+import { loadTypeScriptModule, readRepoFile as read } from './helpers/load-typescript-module.mjs';
 
 // 复用真实 Protected Apps policy 作为 action admission 真值，只 mock 用户集合读取。
 const protectedAppsPolicy = loadTypeScriptModule(

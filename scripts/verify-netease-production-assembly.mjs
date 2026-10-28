@@ -1,41 +1,10 @@
 /** PHONE-8B2B2A：网易云 production child assembly 契约。 */
 
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-
-function loadTypeScriptModule(relativePath, mocks) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: absolutePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `存在未声明的运行时依赖：${specifier}`);
-    return mocks[specifier];
-  };
-  new Function('exports', 'require', 'module', compiled.outputText)(
-    module.exports,
-    requireMock,
-    module,
-  );
-  return module.exports;
-}
+import {
+  loadTypeScriptModule,
+  readRepoFile,
+} from './helpers/load-typescript-module.mjs';
 
 const publicDataBackend = { kind: 'production-public-data-backend' };
 const shareLinkResolver = { kind: 'production-share-link-resolver' };
@@ -105,7 +74,7 @@ assert.strictEqual(calls[5].dependency, playNetEaseSongById);
 assert.strictEqual(calls[6].dependency, getNetEasePlaybackSnapshot);
 assert.strictEqual(calls[7].dependency, controlNetEasePlayback);
 
-const compositionSource = read('src/features/phoneTools/neteaseComposition.ts');
+const compositionSource = readRepoFile('src/features/phoneTools/neteaseComposition.ts');
 assert.doesNotMatch(compositionSource, /modules\/netease-public-data|Eapi|redirect|orpheus:\/\//u);
 assert.match(
   compositionSource,

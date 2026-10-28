@@ -59,7 +59,7 @@ export const ListAISchedulesTool = {
   name: 'list_ai_schedules',
   definition: {
     name: 'list_ai_schedules',
-    description: '按 1 天至 3 个月的范围轻量浏览自己的 AI 日程',
+    description: '按 1 天至 3 个月的范围分页浏览自己的 AI 日程，返回 scheduleId、时间、摘要与状态。系统跳过或归并的记录属于 cancelled；用 get_ai_schedule 按 ID 查看具体原因。',
     parameters: {
       type: 'object',
       properties: {
@@ -91,7 +91,7 @@ export const GetAIScheduleTool = {
   name: 'get_ai_schedule',
   definition: {
     name: 'get_ai_schedule',
-    description: '读取一条 AI 日程的完整详情与创建时的来源快照',
+    description: '按 schedule_id 读取一条 AI 日程的完整详情、创建时的来源快照和 cancelledReason。expired 表示超过 15 分钟未开始，merged_schedule / merged_chat 表示已归并，不要重新唤醒或补跑。',
     parameters: idParameters(),
   },
   execute: executeGet,

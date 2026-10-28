@@ -20,12 +20,11 @@ import {
   DEFAULT_CORE_SYSTEM_PROMPTS,
   GROUP_MEMBER_REPLY_CONFIDENTIALITY_RULES,
   resolveBuiltInPromptContent,
-  VISUAL_GROUNDING_REQUIREMENTS,
+  DEFAULT_PARAGRAPH_BREAKS_PROMPT,
 } from './PromptBuiltInContent';
 export {
   DEFAULT_CORE_SYSTEM_PROMPTS,
   GROUP_MEMBER_REPLY_CONFIDENTIALITY_RULES,
-  VISUAL_GROUNDING_REQUIREMENTS,
 } from './PromptBuiltInContent';
 
 export interface ResolvedUserIdentity {
@@ -139,7 +138,7 @@ export class PromptPackBlockFactory {
     };
   }
 
-  createInteractionEnvironmentBlock(scenario: PromptPackScenario, runtime: PromptPackRuntimeContext): PromptPackBlock {
+  createInteractionEnvironmentBlock(scenario: PromptPackScenario, runtime: PromptPackRuntimeContext, scheduleContext = ''): PromptPackBlock {
     const group = runtime.groupChat;
     const location = group ? `多 AI 群聊“${group.groupName}”`
       : scenario.startsWith('call.') ? '你与用户的通话' : '你与用户的一对一单聊';
@@ -148,17 +147,20 @@ export class PromptPackBlockFactory {
       : runtime.inputSource === 'application' ? '应用事件触发本轮；触发资料不是用户新发言。'
       : '用户输入或当前交互触发本轮。';
     return this.createReadyBlock('interaction_environment', '本轮交互环境',
-      ['【本轮交互环境】', `- 交互位置：${location}。`, `- 触发来源：${trigger}`].join('\n'),
+      ['【本轮交互环境】', `- 交互位置：${location}。`, `- 触发来源：${trigger}`,
+        ...(scheduleContext ? [scheduleContext] : []),
+      ].join('\n'),
       'runtimeContext', false);
   }
 
   createFoundationBlock(aiConfig: PromptPackAIConfig, userDisplayName?: string): PromptPackBlock {
+    const content = resolveBuiltInContent(aiConfig, 'foundation.default_core', DEFAULT_CORE_SYSTEM_PROMPTS, userDisplayName);
     return {
       key: 'foundation_default_core',
       title: '系统基础规则',
-      content: resolveBuiltInContent(aiConfig, 'foundation.default_core', DEFAULT_CORE_SYSTEM_PROMPTS, userDisplayName),
-      required: true,
-      status: 'ready',
+      content,
+      required: false,
+      status: content.trim() ? 'ready' : 'omitted',
       source: 'PromptPackBlockFactory.DEFAULT_CORE_SYSTEM_PROMPT',
       truncatable: false,
       scenario: 'shared',
@@ -184,14 +186,14 @@ export class PromptPackBlockFactory {
     };
   }
 
-  createVisualGroundingRulesBlock(aiConfig: PromptPackAIConfig): PromptPackBlock {
+  createParagraphBreaksBlock(aiConfig: PromptPackAIConfig): PromptPackBlock {
     return {
-      key: 'visual_grounding_rules',
-      title: '视觉真实性规则',
-      content: resolveBuiltInContent(aiConfig, 'foundation.visual_grounding', VISUAL_GROUNDING_REQUIREMENTS),
-      required: true,
+      key: 'paragraph_breaks',
+      title: '换行规则',
+      content: resolveBuiltInContent(aiConfig, 'output.paragraph_breaks', DEFAULT_PARAGRAPH_BREAKS_PROMPT),
+      required: false,
       status: 'ready',
-      source: 'PromptPackBlockFactory.visualGroundingPolicy',
+      source: 'PromptPackBlockFactory.paragraphBreaks',
       truncatable: false,
       scenario: 'shared',
       placement: 'system',

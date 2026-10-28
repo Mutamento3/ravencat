@@ -1,7 +1,6 @@
 /** 使用 SQLite 实现 canonical 单聊 conversation 仓储。 */
 
 import { databaseCoordinator, type DatabaseTransactionExecutor } from '@platform/persistence';
-import { cancelRegenerationInTransaction } from '../../messages/infrastructure/ChatMessageMutationSql';
 import type { ChatSession, ISessionRepository } from '../domain/SessionRepository';
 
 interface SessionRow {
@@ -63,7 +62,7 @@ export class SessionRepository implements ISessionRepository {
     return row ? this.mapRow(row) : null;
   }
 
-  async clearConversationHistory(sessionId: string): Promise<number | null> {
+  async clearConversationHistory(sessionId: string): Promise<string[]> {
     const database = databaseCoordinator.openTaskExecutor({
       name: 'chat.clearConversationHistory', feature: 'chat', priority: 'interactive',
     });
@@ -74,26 +73,42 @@ export class SessionRepository implements ISessionRepository {
       if (!session) {
         throw new Error(`Canonical conversation 不存在：${sessionId}`);
       }
-      const latest = await transaction.getFirstAsync<{ id: number }>(
-        'SELECT id FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 1', [sessionId],
+      // 收集真正删除的引用，包含已隐藏原文和未采用的重写版本；文件释放在 commit 后裁决。
+      const assets = await transaction.getAllAsync<{ asset_id: string }>(
+        `WITH snapshots AS (
+          SELECT metadata_json AS body FROM messages WHERE session_id = ?
+          UNION ALL SELECT v.snapshot_json FROM chat_reply_versions v
+            JOIN chat_reply_version_sets s ON s.id = v.set_id WHERE s.session_id = ?
+        ) SELECT DISTINCT TRIM(CAST(tree.value AS TEXT)) AS asset_id
+          FROM snapshots, json_tree(CASE WHEN json_valid(body) THEN body END) tree
+          WHERE tree.type = 'text' AND tree.key IN ('mediaAssetId', 'thumbnailMediaAssetId')
+            AND TRIM(CAST(tree.value AS TEXT)) <> ''`,
+        [sessionId, sessionId],
       );
-      await cancelRegenerationInTransaction(transaction, sessionId);
-      const boundary = latest?.id ?? null;
+      await transaction.runAsync('DELETE FROM chat_regeneration_requests WHERE session_id = ?', [sessionId]);
       const clearedAt = new Date().toISOString();
-      // 两个 facet 同事务写入：message 边界给 Chat 时间线，时间边界给 Call context。
-      // 边界是「事件级」的：同一通跨边界的电话，之后产生的 CallEvent 仍然可见。
-      // last_time 一并清空：清除后当前可见时间线为空，会话列表排序不得继续引用
-      // 已被隐藏的旧消息时间（空可见时间线由 createdAt 回落）。
+      // 撤销旧回合的持久资格，迟到的模型结果和宿主回执不能让已清除的聊天复活。
+      await transaction.runAsync(`UPDATE conversation_turn_runs
+        SET status = 'cancelled', terminal_reason = 'history_cleared', terminal_at = ?
+        WHERE session_id = ? AND status = 'active'`, [clearedAt, sessionId]);
+      await transaction.runAsync(`UPDATE conversation_turn_state
+        SET active_run_id = NULL, active_run_kind = NULL, revision = revision + 1,
+            host_request_revision = host_request_revision + 1, host_request_input_id = NULL,
+            host_request_status = NULL, host_request_at = NULL, updated_at = ?
+        WHERE session_id = ?`, [clearedAt, sessionId]);
+      await transaction.runAsync('DELETE FROM chat_turn_presentations WHERE session_id = ?', [sessionId]);
+      await transaction.runAsync('DELETE FROM chat_reply_version_sets WHERE session_id = ?', [sessionId]);
+      // 不删除 conversation 身份；摘要与记忆空间由各自 owner 保留，固定起点由外键取消。
+      await transaction.runAsync('DELETE FROM messages WHERE session_id = ?', [sessionId]);
+      // 通话记录属于 Calls，仍按事件时间切断旧聊天上下文；跨清除时刻的新事件照常可见。
       await transaction.runAsync(
         `UPDATE sessions
-         SET visible_after_message_id = ?, visible_after_at = ?, last_message = '',
+         SET visible_after_message_id = NULL, visible_after_at = ?, last_message = '',
              last_time = NULL, updated_at = ?
          WHERE id = ?`,
-        [boundary, clearedAt, clearedAt, sessionId],
+        [clearedAt, clearedAt, sessionId],
       );
-      // 清空是隐藏历史；起点必须与可见范围一起取消，旧摘要与生成开关保持不变。
-      await transaction.runAsync('UPDATE chat_summary_settings SET fixed_message_id = NULL WHERE conversation_id = ?', [sessionId]);
-      return boundary;
+      return assets.map(row => row.asset_id);
     });
   }
 

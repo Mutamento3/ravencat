@@ -138,6 +138,8 @@ export async function sendAIIncomingCallNotification(
       aiAvatar: normalizeNotificationAvatarUri(params.aiAvatar) || null,
       sessionId: params.sessionId,
       body: truncateNotificationBody(params.openingLine || params.reason || '邀请你接听视频电话'),
+      ringtoneUri: params.ringtoneUri,
+      ringDurationMs: params.ringDurationMs,
     });
     if (!result.posted) {
       console.warn('[Notification] Android 原生来电通知未发送。', result);

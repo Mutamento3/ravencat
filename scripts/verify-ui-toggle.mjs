@@ -77,6 +77,32 @@ assert.deepEqual(changes, [true, true, false]);
 await act(async () => { renderer.unmount(); });
 
 const flatten = (style) => Object.assign({}, ...[style].flat().filter(Boolean));
+for (const layout of ['stacked', 'inline']) {
+  await act(async () => { renderer = create(React.createElement(ToggleField, {
+    layout, label: '页面标题', hint: '页面说明', accessibilityLabel: '独立读屏名称', value: false, onValueChange: () => {},
+    rowStyle: { flexDirection: 'row', gap: 7, paddingVertical: 3 },
+    contentStyle: { flex: 2, gap: 9 }, labelStyle: { fontSize: 19, color: '#123456' },
+    hintStyle: { fontSize: 11, lineHeight: 17 }, toggleStyle: { marginLeft: 6 },
+    leading: React.createElement('Icon', { name: '编号' }),
+  })); });
+  assert.equal(control().props.accessibilityLabel, '独立读屏名称');
+  assert.equal(renderer.root.findByType('Icon').props.name, '编号');
+  const title = renderer.root.findAllByType('Text').find(node => node.children.includes('页面标题'));
+  const hint = renderer.root.findAllByType('Text').find(node => node.children.includes('页面说明'));
+  assert.deepEqual(flatten(title.props.style), { fontSize: 19, color: '#123456' }, '标题使用页面传入的完整样式');
+  assert.deepEqual(flatten(hint.props.style), { fontSize: 11, lineHeight: 17 }, '说明使用页面传入的完整样式');
+  assert.equal(flatten(control().props.style({ pressed: false })).marginLeft, 6, '开关样式由页面补充');
+  assert.ok(renderer.root.findAllByType('View').some(node => flatten(node.props.style).gap === 7), '保留页面行布局');
+  await act(async () => { renderer.unmount(); });
+}
+await act(async () => { renderer = create(React.createElement(ToggleField, {
+  layout: 'inline', label: '复杂条目', value: true, onValueChange: value => changes.push(value),
+  rowStyle: { flexDirection: 'row' },
+}, React.createElement('Badge', { title: '权限就绪' }))); });
+assert.equal(renderer.root.findByType('Badge').props.title, '权限就绪', '页面可保留状态标签和自定义内容');
+assert.equal(checked(), true);
+await act(async () => { renderer.unmount(); });
+
 for (theme of themes) {
   const props = { accessibilityLabel: '主题开关', onValueChange: () => {} };
   await act(async () => { renderer = create(React.createElement(Toggle, { ...props, value: false })); });
@@ -98,4 +124,4 @@ for (theme of themes) {
   assert.equal(control().props.disabled, true);
   await act(async () => { renderer.unmount(); });
 }
-console.log('统一开关验证通过：异步保存、取消确认、外部状态更新、禁用及五个主题的可见性。');
+console.log('统一开关验证通过：页面布局与文字样式、自定义内容、异步保存、取消确认、外部状态更新、禁用及五个主题的可见性。');

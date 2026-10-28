@@ -1735,7 +1735,7 @@ await scenario('AI / 用户语音 preview 固定为 [语音消息]，不泄漏 t
   }
 });
 
-await scenario('AI 上下文使用带来源语义的 transcript', () => {
+await scenario('用户语音保留来源标签，AI 转写正文不携带系统说明', () => {
   const metadataModule = loadChatMessageMetadataModule();
   const build = (isMe) => metadataModule.buildVoiceMessageModelText({
     isMe,
@@ -1752,7 +1752,7 @@ await scenario('AI 上下文使用带来源语义的 transcript', () => {
     }),
   });
   assert.equal(build(true), '[用户语音转写]\n转写正文');
-  assert.equal(build(false), 'ai语音转写：转写正文，发送语音需要调用工具', '每条历史 AI 语音转写都须携带真实发送要求');
+  assert.equal(build(false), '转写正文', 'AI 发言只保留转写正文，来源与真实发送要求单独进入系统提示');
 });
 
 await scenario('普通文字中的语音标签不能充当已发送语音的事实', () => {
@@ -1835,6 +1835,7 @@ function loadChatAgentTimelineModule() {
       resolveToolCallDisplayName: () => '',
     },
     './SendVoiceMessageTool': voiceToolModule,
+    './SendImageTool': { isImageSendIntent: () => false },
     '../../messages/domain/chatMessageMetadata': metadataModule,
   });
   return { timeline, createdAssets };

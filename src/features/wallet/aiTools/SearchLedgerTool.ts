@@ -110,7 +110,7 @@ export async function execute(
     console.error('[SearchLedgerTool] Failed:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : '账本搜索工具执行失败',
+      error: '账本搜索失败，请稍后再试。',
     };
   }
 }

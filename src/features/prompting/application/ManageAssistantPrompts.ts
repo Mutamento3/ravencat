@@ -17,6 +17,8 @@ import {
 
 export interface AssistantPromptEditorDetails {
   directToolNames: string[];
+  paragraphBreaksEnabled: boolean;
+  imageGroundingEnabled: boolean;
   timeEnabled: boolean;
   messageTimestampsEnabled: boolean;
   batteryEnabled: boolean;
@@ -48,6 +50,7 @@ export interface AssistantPromptAdvancedSnapshot {
 
 export interface ResolvedAssistantPromptConfiguration {
   agentRegistryExcludedAssistantIds: string[];
+  paragraphBreaksEnabled: boolean;
   timeEnabled: boolean;
   messageTimestampsEnabled: boolean;
   batteryEnabled: boolean;
@@ -98,6 +101,8 @@ export async function getAssistantPromptEditorDetails(
   return {
     directToolNames,
     settings,
+    paragraphBreaksEnabled: states.find((state) => state.definitionId === 'output.paragraph_breaks')?.enabled ?? false,
+    imageGroundingEnabled: states.find((state) => state.definitionId === 'input.image_grounding')?.enabled ?? true,
     timeEnabled: states.find((state) => state.definitionId === 'context.time_awareness')?.enabled ?? true,
     messageTimestampsEnabled: states.find((state) => state.definitionId === 'context.message_timestamps')?.enabled ?? false,
     batteryEnabled: states.find((state) => state.definitionId === 'context.device_battery')?.enabled ?? true,
@@ -145,6 +150,7 @@ export async function resolveAssistantPromptConfiguration(params: {
     getPromptingRuntimeDependencies().defaults.read(),
   ]);
   return {
+    paragraphBreaksEnabled: states.find((state) => state.definitionId === 'output.paragraph_breaks')?.enabled ?? false,
     timeEnabled: states.find((state) => state.definitionId === 'context.time_awareness')?.enabled ?? true,
     messageTimestampsEnabled: states.find((state) => state.definitionId === 'context.message_timestamps')?.enabled ?? false,
     batteryEnabled: states.find((state) => state.definitionId === 'context.device_battery')?.enabled ?? true,
@@ -166,6 +172,36 @@ export async function resolveAssistantPromptConfiguration(params: {
         .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id)),
     ],
   };
+}
+
+/** 图片附件 owner 在确认直传路线后读取；OCR 和工具观察不消费这条提醒。 */
+export async function resolveImageGroundingPrompt(assistantId: string): Promise<string | null> {
+  const dependencies = getPromptingRuntimeDependencies();
+  const states = await dependencies.assistantPrompts.listDefinitionStates(assistantId);
+  if (states.find((state) => state.definitionId === 'input.image_grounding')?.enabled === false) return null;
+  const [overrides, defaults] = await Promise.all([
+    dependencies.assistantPrompts.listDefinitionOverrides(assistantId),
+    dependencies.defaults.read(),
+  ]);
+  return overrides.find((override) => override.definitionId === 'input.image_grounding' && override.locale === RESOLVED_PROMPT_LOCALE)?.content
+    ?? defaults.overrides['input.image_grounding']
+    ?? dependencies.catalog.getById('input.image_grounding')!.defaultContent!;
+}
+
+/** 群摘要没有所属 AI，只读全局正文；未覆盖时由 Chat 选择对应来源的代码默认值。 */
+export async function resolveChatSummaryPromptOverride(assistantId: string | null, level: 'primary' | 'secondary'): Promise<string | undefined> {
+  const dependencies = getPromptingRuntimeDependencies();
+  const definitionId = level === 'primary' ? 'internal.chat_summary' : 'internal.chat_secondary_summary';
+  const [overrides, defaults] = await Promise.all([
+    assistantId === null ? [] : dependencies.assistantPrompts.listDefinitionOverrides(assistantId),
+    dependencies.defaults.read(),
+  ]);
+  return overrides.find((override) => override.definitionId === definitionId && override.locale === RESOLVED_PROMPT_LOCALE)?.content
+    ?? defaults.overrides[definitionId];
+}
+
+export function getSummaryPromptGenerationState(assistantId: string) {
+  return getPromptingRuntimeDependencies().summary.getGenerationState(assistantId);
 }
 
 export function setAssistantPromptLanguage(
@@ -205,10 +241,25 @@ export function saveAssistantDefinitionOverride(params: {
 }): Promise<AssistantPromptDefinitionOverride> {
   const definition = getPromptingRuntimeDependencies().catalog.getById(params.definitionId);
   if (!definition?.defaultContent) throw new Error('该内置提示词不支持正文覆盖');
-  if (!params.content.trim()) throw new Error('提示词正文不能为空');
+  if (params.definitionId !== 'foundation.default_core' && !params.content.trim()) throw new Error('提示词正文不能为空');
   return getPromptingRuntimeDependencies().assistantPrompts.saveDefinitionOverride({
     ...params,
     updatedAt: new Date().toISOString(),
+  });
+}
+
+/** 使用编辑器草稿覆盖现有 AI 的同一项正文，不改变每位 AI 的注入开关。 */
+export async function applyAssistantDefinitionGlobally(params: {
+  definitionId: string;
+  content: string;
+}): Promise<void> {
+  const dependencies = getPromptingRuntimeDependencies();
+  const definition = dependencies.catalog.getById(params.definitionId);
+  if (!definition?.defaultContent) throw new Error('该内置提示词不支持正文覆盖');
+  if (params.definitionId !== 'foundation.default_core' && !params.content.trim()) throw new Error('提示词正文不能为空');
+  const assistants = await dependencies.assistants.listOptions();
+  await dependencies.assistantPrompts.applyDefinitionOverrideSnapshot(assistants.map((assistant) => assistant.id), {
+    ...params, locale: RESOLVED_PROMPT_LOCALE, updatedAt: new Date().toISOString(),
   });
 }
 

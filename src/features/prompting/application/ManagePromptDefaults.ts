@@ -6,6 +6,14 @@ export function readPromptDefaults() {
   return getPromptingRuntimeDependencies().defaults.read();
 }
 
+export async function getAppToolPackageSettings() {
+  return (await readPromptDefaults()).appToolPackages;
+}
+
+export function setAppToolPackageEnabled(packageId: string, enabled: boolean) {
+  return getPromptingRuntimeDependencies().defaults.setEnabled(`app_tool_package:${packageId}`, enabled);
+}
+
 export async function getDefaultPromptEditor() {
   const dependencies = getPromptingRuntimeDependencies();
   const [defaults, tools] = await Promise.all([dependencies.defaults.read(), dependencies.tools.list()]);
@@ -18,7 +26,7 @@ export async function getDefaultPromptEditor() {
 export function saveDefaultDefinition(definitionId: string, content: string) {
   const dependencies = getPromptingRuntimeDependencies();
   if (!dependencies.catalog.getById(definitionId)?.defaultContent) throw new Error('该条目没有可编辑的默认正文');
-  if (!content.trim()) throw new Error('提示词正文不能为空');
+  if (definitionId !== 'foundation.default_core' && !content.trim()) throw new Error('提示词正文不能为空');
   return dependencies.defaults.saveOverride(definitionId, content);
 }
 

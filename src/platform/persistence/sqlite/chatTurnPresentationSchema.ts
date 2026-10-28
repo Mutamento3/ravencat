@@ -20,6 +20,7 @@ export const CHAT_TURN_PRESENTATIONS_SCHEMA = `
     snapshot_json TEXT NOT NULL,
     shown_version INTEGER NOT NULL DEFAULT 0,
     shown_json TEXT,
+    is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
     message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
     PRIMARY KEY (run_id, identity)
   );
@@ -32,6 +33,15 @@ export const CHAT_TURN_PRESENTATIONS_SCHEMA = `
     WHERE i.message_id IS NULL OR (i.shown_json IS NOT NULL
       AND json_extract(i.shown_json, '$.text') = m.text);
 `;
+
+/** 旧运行片段没有已读事实，不在升级后突然制造历史红点；已绑定消息沿用正式已读值。 */
+export async function migrateChatTurnDisplayReadState(db: DatabaseWriteExecutor): Promise<void> {
+  const columns = await db.getAllAsync<{ name: string }>("PRAGMA table_info('chat_turn_display_items')");
+  if (columns.some(column => column.name === 'is_read')) return;
+  await db.execAsync('ALTER TABLE chat_turn_display_items ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1));');
+  await db.execAsync(`UPDATE chat_turn_display_items SET is_read = CASE WHEN message_id IS NULL THEN 1
+      ELSE COALESCE((SELECT is_read FROM messages WHERE id = message_id), 0) END;`);
+}
 
 /** 修复旧版被屏幕回执错误扣留的过程记录；未完成正文和媒体意图不补发。 */
 export async function migrateChatTurnPublication(db: DatabaseWriteExecutor): Promise<void> {

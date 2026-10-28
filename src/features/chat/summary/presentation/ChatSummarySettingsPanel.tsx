@@ -1,7 +1,7 @@
 /** 设置按会话保存，输入草稿与持久事实分离；无效阈值不阻止独立开关保存。 */
 import React, { forwardRef, useImperativeHandle, useMemo } from 'react';
 import { Text, View } from 'react-native';
-import { AppTextInput, Toggle, showAppDialog } from '@shared/ui';
+import { AppTextInput, ToggleField, showAppDialog } from '@shared/ui';
 import { AutoSaveErrors } from '@shared/ui/AutoSaveErrors';
 import { useAutoSaveDraft } from '@shared/ui/useAutoSaveDraft';
 import { ThemedSurface, useTheme, useThemedStyles } from '@shared/theme';
@@ -55,17 +55,21 @@ export default forwardRef<ChatSummarySettingsEditor, {
     catch (failure) { showAppDialog({ title: '操作失败', message: failure instanceof Error ? failure.message : '请稍后再试', tone: 'error' }); }
   };
   return <ThemedSurface variant="card" nativeGlass={false} style={styles.card}>
-    <View style={styles.row}><Text style={styles.body}>注入已有摘要</Text><Toggle accessibilityLabel="注入已有摘要"
-      value={settings.injectEnabled} disabled={busy} onValueChange={(injectEnabled) => { void saveSwitch({ injectEnabled }); }} /></View>
+    <ToggleField layout="inline" rowStyle={styles.row} label="注入已有摘要"
+      value={settings.injectEnabled} disabled={busy} onValueChange={(injectEnabled) => { void saveSwitch({ injectEnabled }); }}>
+      <Text style={styles.body}>注入已有摘要</Text>
+    </ToggleField>
     <Text style={styles.subtitle}>控制来源会话的摘要是否进入主客上下文，不删除记录，也不影响自动生成。关闭后仍可查看和主动查询。</Text>
     {group && <><View style={styles.row}><Text style={styles.body}>群摘要触发条数</Text><AppTextInput accessibilityLabel="群摘要触发条数"
       style={styles.thresholdInput} value={thresholdEditor.draft.trigger} keyboardType="number-pad" editable={!busy}
       onChangeText={(trigger) => thresholdEditor.change({ trigger })} onBlur={() => { void thresholdEditor.commit(); }} /></View>
       {thresholdEditor.errors.trigger && <Text style={styles.danger}>{thresholdEditor.errors.trigger}</Text>}
       <Text style={styles.subtitle}>全群共用，独立于各成员的主客条数和管理员调度窗口。达到门槛后按群处理进度生成。</Text></>}
-    <View style={styles.row}><Text style={styles.body}>自动生成摘要</Text><Toggle accessibilityLabel="自动生成摘要"
+    <ToggleField layout="inline" rowStyle={styles.row} label="自动生成摘要"
       value={settings.generationEnabled} disabled={busy || settings.fixedMessageId !== null}
-      onValueChange={(generationEnabled) => { void saveSwitch({ generationEnabled }); }} /></View>
+      onValueChange={(generationEnabled) => { void saveSwitch({ generationEnabled }); }}>
+      <Text style={styles.body}>自动生成摘要</Text>
+    </ToggleField>
     <Text style={styles.subtitle}>{settings.fixedMessageId !== null
       ? '已固定消息起点，自动生成暂停。取消固定后仍保持关闭，需手动开启，从原来的总结进度继续。'
       : group ? '开启后按群触发条数与处理进度总结，一级达到 token 阈值后生成二级。关闭时使用各成员的主·群聊窗口，已有摘要按上方开关注入。'
@@ -76,8 +80,10 @@ export default forwardRef<ChatSummarySettingsEditor, {
       onChangeText={(primaryLimit) => { void thresholdEditor.change({ primaryLimit }); }} onBlur={() => { void thresholdEditor.commit(); }} /></View>
       {thresholdEditor.errors.primaryLimit && <Text accessibilityRole="alert" style={styles.danger}>{thresholdEditor.errors.primaryLimit}</Text>}
       <Text style={styles.subtitle}>每次自动整理多少条新对话。留空跟随该 AI 的单聊主视角条数，改主视角会同步变化；手动填写后固定为填写值，不再跟随。</Text></>}
-    <View style={styles.row}><Text style={styles.body}>开启二级摘要</Text><Toggle accessibilityLabel="开启二级摘要"
-      value={settings.secondaryEnabled} disabled={busy} onValueChange={(secondaryEnabled) => { void saveSwitch({ secondaryEnabled }); }} /></View>
+    <ToggleField layout="inline" rowStyle={styles.row} label="开启二级摘要"
+      value={settings.secondaryEnabled} disabled={busy} onValueChange={(secondaryEnabled) => { void saveSwitch({ secondaryEnabled }); }}>
+      <Text style={styles.body}>开启二级摘要</Text>
+    </ToggleField>
     <Text style={styles.subtitle}>只归纳已形成的一级摘要，保留重要事件与实体。关闭二级摘要时恢复注入现存一级摘要，暂停新的归纳。</Text>
     <View style={styles.row}><Text style={styles.body}>一级摘要最大 token</Text><AppTextInput accessibilityLabel="一级摘要最大 token"
       style={[styles.thresholdInput, error && { borderColor: theme.colors.feedback.error }]} value={thresholdEditor.draft.threshold}

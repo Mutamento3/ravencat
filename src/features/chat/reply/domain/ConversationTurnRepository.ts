@@ -24,6 +24,14 @@ import type {
 } from './ConversationTurn';
 
 export interface IConversationTurnRepository {
+  listRunStates(runIds: readonly string[]): Promise<{ runId: string; status: ConversationTurnRun['status'] }[]>;
+  getActiveRun(sessionId: string): Promise<ConversationTurnRun | null>;
+  /** 启动恢复只终结不属于本进程的自主 owner，不重放其模型或工具。 */
+  interruptAbandonedAutonomousRuns(activeRunIds: readonly string[]): Promise<string[]>;
+  /** 与用户回复共用唯一 active 槽；有待回复输入或未完成交付时让用户优先。 */
+  claimAutonomousIfIdle(sessionId: string, runId: string): Promise<ConversationTurnRun | null>;
+  /** 自主执行只释放所有权，不消费或推进用户回复游标。 */
+  finishAutonomous(run: ConversationTurnRun): Promise<void>;
   beginExecutionHostRequests(sessionIds: readonly string[]): Promise<ConversationHostStartAttempt[]>;
   finishExecutionHostRequests(attempts: readonly ConversationHostStartAttempt[], accepted: boolean): Promise<void>;
   isRunCurrentInTransaction(transaction: DatabaseTransactionExecutor, runId: string): Promise<boolean>;

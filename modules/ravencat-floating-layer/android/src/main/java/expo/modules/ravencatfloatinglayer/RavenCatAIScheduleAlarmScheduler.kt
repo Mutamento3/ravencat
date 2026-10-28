@@ -46,11 +46,15 @@ class RavenCatAIScheduleAlarmReceiver : BroadcastReceiver() {
     val token = intent.getStringExtra("projectionToken")?.takeIf { it.isNotBlank() } ?: return
     val expectedAt = intent.getLongExtra("expectedRemindAtEpochMs", 0L)
     if (expectedAt <= 0L) return
+    RavenCatCompanionWakeStore.recordScheduleDiagnostic(context, "$scheduleId@$token",
+      AIScheduleDiagnosticStage.ALARM_RECEIVED, expectedAt)
     val pending = goAsync()
     EXECUTOR.execute {
       try {
         RavenCatAIScheduleScheduler.enqueueFromAlarm(context.applicationContext, scheduleId, expectedAt, token)
       } catch (error: Exception) {
+        RavenCatCompanionWakeStore.recordScheduleDiagnostic(context, "$scheduleId@$token",
+          AIScheduleDiagnosticStage.ALARM_ENQUEUE_FAILED, expectedAt, error.javaClass.simpleName)
         Log.e("RavenCatAISchedule", "日程 Alarm 投递失败", error)
       } finally {
         pending.finish()

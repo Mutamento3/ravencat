@@ -21,7 +21,11 @@ export type AIScheduleCompletionDisposition =
  * 而 owner 不再是当前主理 AI 时由系统终结，保留原 owner identity 并记录原因。
  */
 export const AI_SCHEDULE_CANCELLED_REASON_OWNER_REVOKED = 'owner_revoked';
-export type AIScheduleCancelledReason = typeof AI_SCHEDULE_CANCELLED_REASON_OWNER_REVOKED;
+export type AIScheduleCancelledReason = typeof AI_SCHEDULE_CANCELLED_REASON_OWNER_REVOKED
+  | 'expired' | 'merged_schedule' | 'merged_chat';
+
+/** 最迟领取时间；过期后只交接结果资料，不能重新取得自主执行机会。 */
+export const AI_SCHEDULE_START_GRACE_MS = 15 * 60 * 1000;
 
 export const AI_SCHEDULE_SUMMARY_MAX_LENGTH = 160;
 export const AI_SCHEDULE_DETAILS_MAX_LENGTH = 4_000;
@@ -182,7 +186,7 @@ export function assertAISchedule(schedule: AISchedule): void {
     throw new Error('cancelled AI Schedule 不得拥有 claim/consume，且必须拥有 cancelledAt');
   } else if (
     schedule.cancelledReason !== null
-    && schedule.cancelledReason !== AI_SCHEDULE_CANCELLED_REASON_OWNER_REVOKED
+    && !['owner_revoked', 'expired', 'merged_schedule', 'merged_chat'].includes(schedule.cancelledReason)
   ) {
     throw new Error('cancelled AI Schedule 的 cancelledReason 非法');
   }

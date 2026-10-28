@@ -3,50 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import ts from 'typescript';
+import { loadTypeScriptModule, readRepoFile as read } from './helpers/load-typescript-module.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function read(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: absolutePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const executeModule = new Function(
-    'exports',
-    'require',
-    'module',
-    '__filename',
-    '__dirname',
-    compiled.outputText,
-  );
-  executeModule(
-    module.exports,
-    (specifier) => {
-      if (Object.hasOwn(mocks, specifier)) return mocks[specifier];
-      throw new Error(`${relativePath} 不应存在运行时依赖`);
-    },
-    module,
-    absolutePath,
-    path.dirname(absolutePath),
-  );
-  return module.exports;
-}
 
 const packageCatalogModule = loadTypeScriptModule(
   'src/features/phoneTools/toolPackages/ToolPackageCatalog.ts',
@@ -133,6 +92,7 @@ assert.equal(
 );
 
 const expectedDirectTools = [
+  'read_clipboard',
   'get_current_location',
   'search_installed_apps',
   'get_foreground_app',
@@ -188,7 +148,7 @@ const readyAccess = {
   notificationListenerGranted: true,
   location: { permission: 'precise', servicesEnabled: true },
 };
-for (const tool of [...PHONE_TOOL_CATALOG, ...neteaseMusic.tools]) {
+for (const tool of [...PHONE_TOOL_CATALOG, ...PHONE_TOOL_PACKAGE_CATALOG.flatMap(item => item.tools)]) {
   assert.equal(getPhoneToolReadinessLabel(tool.toolName, true, readyAccess), '权限就绪');
   assert.equal(getPhoneToolReadinessLabel(tool.toolName, false, readyAccess), '已关闭');
 }
@@ -196,7 +156,7 @@ assert.equal(getPhoneToolReadinessLabel('get_app_usage', true, { ...readyAccess,
 assert.equal(getPhoneToolReadinessLabel('get_current_location', true, { ...readyAccess, location: { permission: 'not_granted', servicesEnabled: true } }), '待授权定位');
 assert.equal(getPhoneToolReadinessLabel('get_current_location', true, { ...readyAccess, location: { permission: 'precise', servicesEnabled: false } }), '系统定位已关闭');
 assert.equal(getPhoneToolReadinessLabel('get_current_location', true, { ...readyAccess, location: { permission: 'approximate', servicesEnabled: true } }), '权限就绪');
-for (const name of ['get_foreground_app', 'read_screen_accessibility', 'read_screen_ocr', 'soft_lock_app']) {
+for (const name of ['get_foreground_app', 'read_screen_accessibility', 'read_screen_ocr', 'soft_lock_app', ...getPhoneToolPackageById('xiaohongshu').tools.map(tool => tool.toolName)]) {
   assert.equal(getPhoneToolReadinessLabel(name, true, { ...readyAccess, observer: { ...readyAccess.observer, accessibilityEnabled: false } }), '待授权无障碍');
   assert.equal(getPhoneToolReadinessLabel(name, true, { ...readyAccess, observer: { ...readyAccess.observer, accessibilityConnected: false } }), '无障碍未连接');
 }
@@ -222,6 +182,8 @@ let usageGranted = false;
 let locationPermission = 'not_granted';
 const permissions = new Map([...PHONE_TOOL_CATALOG, ...neteaseMusic.tools].map(({ toolName }) => [toolName, true]));
 const writes = [];
+const packageWrites = [];
+const appToolPackages = { neteaseMusic: true };
 const dialogs = [];
 let failRead = false;
 let failWrite = false;
@@ -233,6 +195,12 @@ const { usePhoneToolSettings } = loadTypeScriptModule('src/features/miniPrograms
   } } },
   '@react-navigation/native': { useFocusEffect: (callback) => React.useEffect(callback, [callback]) },
   '@features/prompting': {
+    getAppToolPackageSettings: async () => ({ ...appToolPackages }),
+    setAppToolPackageEnabled: async (packageId, enabled) => {
+      if (failWrite) throw new Error('保存失败');
+      packageWrites.push({ packageId, enabled });
+      appToolPackages[packageId] = enabled;
+    },
     listPromptAssistantOptions: async () => hostPresent ? [{ id: 'host-ai', name: '主理', isHostAI: true }] : [],
     getAssistantToolPermissions: async () => {
       if (failRead) throw new Error('读取失败');
@@ -254,6 +222,7 @@ const { usePhoneToolSettings } = loadTypeScriptModule('src/features/miniPrograms
     getDeviceLocationAccessState: async () => ({ permission: locationPermission, servicesEnabled: true }),
   },
   '@shared/ui': { showAppDialog: (dialog) => dialogs.push(dialog) },
+  '@features/phoneTools': packageCatalogModule,
   './ToolPackageDisplayModel': displayModelModule,
 });
 let settings;
@@ -264,6 +233,18 @@ assert.equal(settings.disabled, false);
 assert.equal(settings.statusLabel('get_app_usage'), '待授权使用情况');
 assert.equal(settings.statusLabel('get_current_location'), '待授权定位');
 assert.equal(settings.statusLabel('netease_control_playback'), '待授权通知使用权');
+assert.equal(settings.isPackageEnabled('xiaohongshu'), false, '未配置的应用包默认关闭');
+assert.equal(settings.isPackageEnabled('neteaseMusic'), true);
+await act(async () => { await settings.togglePackage('neteaseMusic', false); });
+assert.equal(settings.statusLabel('netease_search_songs'), '工具包已关闭');
+assert.equal(settings.isEnabled('netease_search_songs'), true, '总开关不改写单项偏好');
+failWrite = true;
+await act(async () => { await settings.togglePackage('neteaseMusic', true); });
+assert.equal(settings.isPackageEnabled('neteaseMusic'), false, '总开关保存失败不伪造状态');
+failWrite = false;
+await act(async () => { await settings.togglePackage('neteaseMusic', true); });
+assert.equal(settings.statusLabel('netease_search_songs'), '权限就绪');
+assert.deepEqual(packageWrites, [{ packageId: 'neteaseMusic', enabled: false }, { packageId: 'neteaseMusic', enabled: true }]);
 await act(async () => { await settings.toggleTool('netease_search_songs', false); });
 assert.deepEqual(writes, [{ assistantId: 'host-ai', toolName: 'netease_search_songs', enabled: false }]);
 assert.equal(settings.isEnabled('netease_search_songs'), false);
@@ -291,20 +272,65 @@ assert.equal(settings.disabled, true);
 assert.equal(settings.statusLabel('get_app_usage'), '未设置主理 AI');
 await act(async () => { await settings.toggleTool('get_app_usage', true); });
 assert.equal(writes.length, 1, '未设置主理 AI 时不得借用其他 AI 的权限');
+assert.equal(settings.packageDisabled, false, '全局总开关不借用某位 AI 的身份');
+await act(async () => { await settings.togglePackage('xiaohongshu', true); });
+assert.equal(settings.isPackageEnabled('xiaohongshu'), true);
 await act(async () => { renderer.unmount(); });
 
-const homeScreen = read(
-  'src/features/miniPrograms/presentation/phoneTools/PhoneToolsScreen.tsx',
-);
-assert.match(homeScreen, /PHONE_TOOL_PACKAGE_CATALOG\.map\(/, '主页 package 区域必须来自 Package Catalog');
-assert.match(homeScreen, /应用工具包/, '主页必须包含独立的应用工具包区域');
-assert.ok(
-  homeScreen.indexOf('PHONE_TOOL_SECTIONS.map') < homeScreen.indexOf('PHONE_TOOL_PACKAGE_CATALOG.map'),
-  '应用工具包区域必须位于普通 Tool sections 之后',
-);
-assert.doesNotMatch(homeScreen, /neteaseMusic|网易云音乐工具包/, '主页 JSX 不得硬编码网易云 package');
-assert.match(homeScreen, /TouchableOpacity[\s\S]*onOpenToolPackage/, 'planned package 必须保持可导航');
-assert.match(homeScreen, /chevron-forward-outline/, 'package 行必须显示 chevron');
+// 真实公共开关与目录页一起渲染，保护开关/详情互不触发以及各主题的 token 使用。
+const ts = require('typescript');
+function loadComponent(relative, mocks) {
+  const compiled = ts.transpileModule(read(relative), { fileName: relative, compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true,
+  } });
+  const module = { exports: {} };
+  new Function('require', 'module', 'exports', compiled.outputText)((id) => {
+    if (id === 'react' || id === 'react/jsx-runtime') return require(id);
+    assert.ok(Object.hasOwn(mocks, id), `${relative} 未提供依赖 ${id}`);
+    return mocks[id];
+  }, module, module.exports);
+  return module.exports;
+}
+const native = Object.fromEntries(['View', 'Text', 'ScrollView', 'TouchableOpacity', 'Pressable'].map(name => [name, name]));
+native.StyleSheet = { create: styles => styles, hairlineWidth: 1, absoluteFillObject: {} };
+native.Animated = { View: 'AnimatedView', Value: class { interpolate() { return 0; } }, timing: () => ({ start() {}, stop() {} }) };
+let currentTheme;
+const themeMock = { useTheme: () => currentTheme, useThemedStyles: factory => factory(currentTheme), ThemedSurface: 'ThemedSurface' };
+const Toggle = loadComponent('src/shared/ui/Toggle.tsx', { 'react-native': native, '@shared/theme': themeMock }).default;
+const ToggleField = loadComponent('src/shared/ui/ToggleField.tsx', { 'react-native': native, '@shared/theme': themeMock, './Toggle': { default: Toggle, __esModule: true } }).default;
+const uiActions = [];
+const screenSettings = { isEnabled: () => false, statusLabel: () => '已关闭', toggleTool: async () => {},
+  isPackageEnabled: () => false, togglePackage: async (...args) => { uiActions.push(['toggle', ...args]); },
+  disabled: false, packageDisabled: false, hostName: '主理', notice: null };
+const Screen = loadComponent('src/features/miniPrograms/presentation/phoneTools/PhoneToolsScreen.tsx', {
+  'react-native': native, '@shared/theme': themeMock, '@shared/ui': { ToggleField },
+  'lucide-react-native': Object.fromEntries(['ClipboardPaste', 'MapPin', 'Music2', 'NotebookPen'].map(name => [name, name])),
+  'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
+  '@expo/vector-icons': { Ionicons: 'Ionicons' },
+  '@features/phoneTools': { ...packageCatalogModule, ...directCatalogModule },
+  '@shared/ui/NavigationHeader': { default: 'NavigationHeader', __esModule: true },
+  './PhoneToolsDirectoryModel': loadTypeScriptModule('src/features/miniPrograms/presentation/phoneTools/PhoneToolsDirectoryModel.ts'),
+  './usePhoneToolSettings': { usePhoneToolSettings: () => screenSettings },
+}).default;
+for (const themeName of ['defaultLight', 'defaultDark', 'liquidGlass']) {
+  currentTheme = loadTypeScriptModule(`src/shared/theme/themes/${themeName}.ts`)[`${themeName}Theme`];
+  await act(async () => { renderer = create(React.createElement(Screen, {
+    onBack() {}, onOpenToolPackage: id => uiActions.push(['details', id]),
+  })); });
+  for (const toolPackage of PHONE_TOOL_PACKAGE_CATALOG) {
+    const toggle = renderer.root.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === `启用${toolPackage.title}`);
+    assert.equal(toggle.props.accessibilityState.checked, false);
+    const before = uiActions.length;
+    await act(async () => { toggle.props.onPress(); });
+    assert.deepEqual(uiActions.slice(before), [['toggle', toolPackage.id, true]], '总开关不能触发详情导航');
+    const details = renderer.root.find(node => node.type === 'TouchableOpacity' && node.props.accessibilityLabel === `查看${toolPackage.title}详情`);
+    details.props.onPress();
+    assert.deepEqual(uiActions.at(-1), ['details', toolPackage.id]);
+    assert.equal(uiActions.length, before + 2, '查看详情不能翻转总开关');
+  }
+  assert.ok(renderer.root.findAllByType('ThemedSurface').every(node => node.props.nativeGlass && node.props.variant === 'card'));
+  await act(async () => { renderer.unmount(); });
+}
 
 const directoryModel = read(
   'src/features/miniPrograms/presentation/phoneTools/PhoneToolsDirectoryModel.ts',

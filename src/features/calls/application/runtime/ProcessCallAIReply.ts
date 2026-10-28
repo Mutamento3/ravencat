@@ -39,6 +39,7 @@ export async function processCallAIReply(params: {
   runId: string;
   userText: string;
   userAudio?: Promise<CallInputAudio | null>;
+  onUserTextCommitted?: () => void;
   aiConfig: CallAIConfig;
   signal: AbortSignal;
   onToolExecutionChanged?: (active: boolean) => void;
@@ -63,6 +64,7 @@ export async function processCallAIReply(params: {
     text,
     audio: params.userAudio,
   });
+  params.onUserTextCommitted?.();
 
   let failureStage = '通话回复准备';
   try {

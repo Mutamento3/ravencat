@@ -1,45 +1,5 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(
-    fs.readFileSync(absolutePath, 'utf8'),
-    {
-      compilerOptions: {
-        module: ts.ModuleKind.CommonJS,
-        target: ts.ScriptTarget.ES2022,
-      },
-      fileName: absolutePath,
-      reportDiagnostics: true,
-    },
-  );
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 存在未声明的运行时依赖：${specifier}`);
-    return mocks[specifier];
-  };
-  const executeModule = new Function(
-    'exports',
-    'require',
-    'module',
-    '__filename',
-    '__dirname',
-    compiled.outputText,
-  );
-  executeModule(module.exports, requireMock, module, absolutePath, path.dirname(absolutePath));
-  return module.exports;
-}
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 
 const { resolveAIReplyPolicy } = loadTypeScriptModule(
   'src/features/chat/reply/application/ReplyPolicy.ts',
@@ -339,6 +299,7 @@ const chatReplyErrors = loadTypeScriptModule('src/features/chat/reply/applicatio
   },
   './ChatReplyUtils': { formatMessageTime: () => '12:00' },
 });
+class ChatAgentModelRequestError extends Error {}
 class ChatAgentRunFailedError extends Error {
   constructor(diagnosticText) {
     super('Chat Agent run failed');
@@ -362,7 +323,7 @@ const { processAIReply } = loadTypeScriptModule(
     },
     '@platform/ai': {
       createAIClient: () => ({}),
-      getErrorDisplayInfo: (error) => ({ message: error instanceof Error ? error.message : String(error) }),
+      ...loadTypeScriptModule('src/platform/ai/errorMapping.ts'),
     },
     './ChatReplyRuntimeDependencies': {
       getChatReplyRuntimeDependencies: () => processRuntimeDependencies,
@@ -407,7 +368,7 @@ const { processAIReply } = loadTypeScriptModule(
       },
     },
     '../agent/ChatAgentModelGateway': {
-      ChatAgentModelRequestError: class ChatAgentModelRequestError extends Error {},
+      ChatAgentModelRequestError,
     },
     '../agent/ChatAgentRunProjector': { ChatAgentRunFailedError },
   },
@@ -573,10 +534,31 @@ assert.deepEqual(
 
 let processConsoleErrorCount = 0;
 const originalConsoleError = console.error;
+const originalConsoleWarn = console.warn;
+console.warn = () => {};
 console.error = () => {
   processConsoleErrorCount += 1;
 };
 try {
+  // 真实错误映射与持久化必须保留厂商原因，不能只留下分类后的通用提示。
+  for (const reason of [
+    'HTTP 400: {"message":"unsupported multipart type for this model, only support text and audio","code":"invalid_request_error"}',
+    'HTTP 400: unsupported image input',
+    'HTTP 400: temperature must be 1',
+    'HTTP 401: invalid API key [REDACTED]',
+    'HTTP 402: insufficient balance',
+    'HTTP 429: code=1302, too many requests',
+  ]) {
+    processFlowError = new ChatAgentModelRequestError(reason);
+    processConsoleErrorCount = 0;
+    await runProcessExposureCase({ enableTools: false });
+    assert.ok(capturedPersistedErrorMessage.includes(reason), '聊天错误气泡必须保留接口具体原因');
+    assert.ok(savedErrorMessages.at(-1).text.includes(reason), '具体原因必须随错误消息持久化');
+    assert.doesNotMatch(savedErrorMessages.at(-1).text, /模型服务暂时无法完成回复/u);
+    assert.equal(savedErrorMessages.at(-1).senderType, 'system');
+    assert.equal(JSON.parse(savedErrorMessages.at(-1).metadataJson).kind, 'error');
+    assert.equal(processConsoleErrorCount, 0, '模型拒绝仍走正常失败收尾');
+  }
   processFlowError = new Error('unexpected failure');
   processConsoleErrorCount = 0;
   await runProcessExposureCase({ enableTools: true });
@@ -601,6 +583,7 @@ try {
 } finally {
   processFlowError = null;
   console.error = originalConsoleError;
+  console.warn = originalConsoleWarn;
 }
 
 const promptBuiltInContent = loadTypeScriptModule(

@@ -187,6 +187,10 @@ export type DeviceBatterySnapshot =
   | { status: 'available'; levelPercent: number; chargingState: 'charging' | 'full' | 'not_charging' | 'unknown' }
   | { status: 'unavailable' };
 
+export type DeviceClipboardSnapshot =
+  | { status: 'available'; text: string; truncated: boolean }
+  | { status: 'app_not_focused' | 'clipboard_unavailable' | 'no_text' };
+
 export interface AppUsageEntry {
   packageName: string;
   foregroundTimeMs: number;
@@ -217,6 +221,7 @@ export type DeviceLocationSnapshot =
   | { status: 'permission_not_granted' | 'location_services_disabled' | 'location_provider_unavailable' | 'location_unavailable' };
 
 declare class DeviceObserverNativeModule extends NativeModule {
+  readClipboardText(): Promise<DeviceClipboardSnapshot>;
   getLocationAccessState(): Promise<DeviceLocationAccessState>;
   getCurrentLocation(): Promise<DeviceLocationSnapshot>;
   openLocationSettings(): Promise<void>;
@@ -438,6 +443,10 @@ function normalizeInstalledAppsQueryError(error: unknown): InstalledAppsQueryErr
 
 export function getDeviceBatterySnapshot(): Promise<DeviceBatterySnapshot> {
   return DeviceObserver.getBatterySnapshot();
+}
+
+export function readDeviceClipboardText(): Promise<DeviceClipboardSnapshot> {
+  return DeviceObserver.readClipboardText();
 }
 
 export function isUsageAccessGranted(): Promise<boolean> {

@@ -1,47 +1,6 @@
 import { CHAT_PROMPT_READING_FLOW } from './helpers/prompt-reading-flow.mjs';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function read(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: absolutePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 存在未声明的运行时依赖：${specifier}`);
-    return mocks[specifier];
-  };
-  const executeModule = new Function(
-    'exports',
-    'require',
-    'module',
-    '__filename',
-    '__dirname',
-    compiled.outputText,
-  );
-  executeModule(module.exports, requireMock, module, absolutePath, path.dirname(absolutePath));
-  return module.exports;
-}
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 
 const tokenEstimator = { ...loadTypeScriptModule('src/shared/prompt/estimateTextTokens.ts'),
   ...loadTypeScriptModule('src/shared/prompt/messageTimestamp.ts') };
@@ -348,10 +307,11 @@ assert.ok(
   'U+061C 归一化不得影响其它占位符',
 );
 
-// 单语化契约只断言「值」：三个常驻正文都是单个中文字符串，不是 locale map。
+// 单语化契约只断言「值」：内置正文都是单个中文字符串，不是 locale map。
 for (const id of [
   'DEFAULT_CORE_SYSTEM_PROMPTS',
-  'VISUAL_GROUNDING_REQUIREMENTS',
+  'DEFAULT_IMAGE_GROUNDING_PROMPT',
+  'DEFAULT_PARAGRAPH_BREAKS_PROMPT',
   'GROUP_MEMBER_REPLY_CONFIDENTIALITY_RULES',
 ]) {
   const value = promptBuiltInContent[id];

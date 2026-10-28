@@ -1,6 +1,7 @@
 package expo.modules.callruntime
 
 import android.app.AppOpsManager
+import android.app.ActivityOptions
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -22,7 +23,7 @@ internal class CallOverlayController(private val service: CallExecutionService) 
   private val bounds = OverlayBoundsResolver(service)
   private val appOps = service.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
   private val handler = Handler(Looper.getMainLooper())
-  private var root: View? = null
+  private var root: CallFloatingFrame? = null
   private var preview: PreviewView? = null
   private var avatar: ImageView? = null
   private var params: WindowManager.LayoutParams? = null
@@ -33,6 +34,9 @@ internal class CallOverlayController(private val service: CallExecutionService) 
   private var closed = false
   private var connectedAt: Long? = null
   private var title: TextView? = null
+  private var restoring = false
+  private var restoreRevision = 0
+  private var attachedPresentation: View? = null
   private val permissionListener = AppOpsManager.OnOpChangedListener { operation, packageName ->
     if (operation == AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW && packageName == service.packageName) handler.post { update() }
   }
@@ -47,9 +51,19 @@ internal class CallOverlayController(private val service: CallExecutionService) 
 
   init { appOps.startWatchingMode(AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, service.packageName, permissionListener) }
 
-  fun setFullScreen(value: Boolean) { fullScreen = value; update() }
-  fun setAppVisible(value: Boolean) { appVisible = value; update() }
+  fun setFullScreen(value: Boolean) {
+    if (fullScreen && !value) cancelRestore()
+    fullScreen = value
+    update()
+  }
+  fun setAppVisible(value: Boolean) {
+    if (appVisible && !value) cancelRestore()
+    appVisible = value
+    if (value && restoring) attachedPresentation?.invalidate()
+    update()
+  }
   fun setCameraEnabled(value: Boolean) {
+    if (cameraEnabled != value) cancelRestore()
     cameraEnabled = value
     preview?.visibility = if (value) View.VISIBLE else View.GONE
     avatar?.visibility = if (value) View.GONE else View.VISIBLE
@@ -59,13 +73,59 @@ internal class CallOverlayController(private val service: CallExecutionService) 
   fun avatarChanged() { avatar?.setImageBitmap(service.avatarBitmap) }
 
   private fun restore() {
-    service.startActivity(OverlayLaunchIntentFactory.createIntent(service, service.returnUri))
+    if ((fullScreen && appVisible) || restoring) return
+    restoring = true
+    restoreRevision++
+    CallPresentationReturn.entered(service.callId, !CallPresentationReturn.isAppVisible)
+    try {
+      // 窗口保持小窗几何，只由通话页原地淡入，避免任务动画再次移动整幅画面。
+      service.startActivity(OverlayLaunchIntentFactory.createIntent(service, service.returnUri),
+        ActivityOptions.makeCustomAnimation(service, 0, 0).toBundle())
+      attachedPresentation?.invalidate()
+    } catch (failure: SecurityException) {
+      CallPresentationReturn.leave(service.callId, null)
+      cancelRestore()
+      update()
+    }
+  }
+
+  val pendingPresentation: Int? get() = if (restoring) restoreRevision else null
+  fun ownsPresentation(view: View) = attachedPresentation === view
+
+  fun attachPresentation(view: View) { attachedPresentation = view }
+
+  fun setPresentationProgress(view: View, expected: Int, progress: Float) {
+    if (attachedPresentation !== view || pendingPresentation != expected) return
+    if (!cameraEnabled) root?.alpha = 1f - progress
+  }
+
+  fun completeRestore(view: View, expected: Int) {
+    if (attachedPresentation !== view || pendingPresentation != expected) return
+    restoring = false
+    update()
+    root?.alpha = 1f
+    view.invalidate()
+  }
+
+  fun presentationDetached(view: View) {
+    if (attachedPresentation !== view) return
+    attachedPresentation = null
+    cancelRestore()
+    update()
+  }
+
+  private fun cancelRestore() {
+    if (!restoring) return
+    restoring = false
+    root?.alpha = 1f
+    attachedPresentation?.invalidate()
   }
 
   private fun update() {
     if (closed) return
     // 摄像头开启后只有这一块预览窗口，页面/Activity 切换不拆 surface 或重置位置。
-    if ((!cameraEnabled && fullScreen && appVisible) || !OverlayPermissionGateway.isGranted(service)) { remove(); return }
+    if (!OverlayPermissionGateway.isGranted(service)
+      || (!cameraEnabled && fullScreen && appVisible && !restoring)) { remove(); return }
     if (root != null) return
     val size = OverlaySize(dp(112), dp(150))
     val available = bounds.resolveScreenBounds()
@@ -129,12 +189,14 @@ internal class CallOverlayController(private val service: CallExecutionService) 
   }
 
   fun reposition() {
+    cancelRestore()
     val layout = params ?: return
     move(OverlayGeometry.constrainVisible(OverlayPosition(layout.x, layout.y), OverlaySize(layout.width, layout.height), bounds.resolveScreenBounds()))
   }
 
   private fun remove() {
     val view = root ?: return
+    cancelRestore()
     preview?.let { service.camera.detach(it) }
     root = null; preview = null; params = null; title = null; avatar = null
     handler.removeCallbacks(tick)
@@ -146,6 +208,7 @@ internal class CallOverlayController(private val service: CallExecutionService) 
     if (closed) return
     closed = true
     remove()
+    attachedPresentation = null
     appOps.stopWatchingMode(permissionListener)
   }
   private fun dp(value: Int) = (value * service.resources.displayMetrics.density).toInt()

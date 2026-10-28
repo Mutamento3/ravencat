@@ -22,7 +22,7 @@ SQLite、原生或外部服务适配 -> infrastructure
 |---|---|---|
 | 聊天列表、输入、消息气泡异常 | `src/features/chat/presentation/shell/`、`presentation/messages/` | 对应 Chat application |
 | AI 回复、工具调用、分段投递异常 | `src/features/chat/reply/application/`、`reply/agent/` | `src/host/prompt/`、`src/host/composition/agent/`、`src/platform/ai/` |
-| AI 提示词、语言、覆盖、工具权限或高级检查器异常 | `src/features/prompting/` | `src/host/prompt/catalog/`、`compiler/`、`preview/` |
+| AI 提示词、语言、覆盖或工具权限异常 | `src/features/prompting/` | `src/host/prompt/catalog/`、`compiler/` |
 | 通话状态、TTS、快照异常 | `src/features/calls/` | Calls infrastructure、`src/platform/device/` |
 | 主动伴随、AI 日程执行异常 | `src/features/companion/` | Companion infrastructure、`src/host/composition/`、顶层 `modules/` |
 | 悬浮层、气泡皮肤或悬浮交互异常 | `src/features/floatingLayer/` | Floating Layer infrastructure、`src/platform/device/`、顶层 `modules/` |

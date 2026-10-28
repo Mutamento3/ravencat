@@ -8,6 +8,7 @@ import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.androidoverlayruntime.OverlayPermissionGateway
+import expo.modules.androidoverlayruntime.CallPresentationReturn
 import kotlinx.coroutines.*
 import com.facebook.react.common.LifecycleState
 import com.facebook.react.bridge.ReactContext
@@ -25,6 +26,7 @@ class CallRuntimeModule : Module() {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private val emitter: (String, Map<String, Any?>) -> Unit = { name, data -> sendEvent(name, data) }
   private var ownedContext: ReactContext? = null
+  private var unsubscribeVisibility: (() -> Unit)? = null
   private val context: ReactContext get() = appContext.reactContext as ReactContext
   private fun run(promise: Promise, action: suspend () -> Any?) {
     scope.launch {
@@ -35,13 +37,21 @@ class CallRuntimeModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("CallRuntime")
     Events("onCommand", "onCancelled", "onRoute")
+    View(CallPresentationView::class) {
+      Prop("callId") { view: CallPresentationView, value: String -> view.callId = value }
+      Prop("ready") { view: CallPresentationView, value: Boolean -> view.ready = value }
+    }
     OnCreate {
       val initialContext = context
       ownedContext = initialContext
-      val visible = initialContext.lifecycleState == LifecycleState.RESUMED
       dispatchCallLifecycle {
         CallExecutionRegistry.emit = emitter
-        CallExecutionRegistry.appVisible = visible
+        unsubscribeVisibility = CallPresentationReturn.subscribeAppVisibility { visible ->
+          if (CallExecutionRegistry.emit === emitter) {
+            CallExecutionRegistry.appVisible = visible
+            CallExecutionRegistry.host?.overlay?.setAppVisible(visible)
+          }
+        }
       }
     }
     AsyncFunction("start") { options: Map<String, Any?>, promise: Promise -> run(promise) {
@@ -56,10 +66,7 @@ class CallRuntimeModule : Module() {
       CallExecutionRegistry.ready.complete(Unit); null
     } }
     AsyncFunction("finish") { id: String, promise: Promise -> run(promise) {
-      if (CallExecutionRegistry.callId == id) {
-        CallExecutionRegistry.alive = false
-        CallExecutionRegistry.host?.finish()
-      }
+      CallExecutionRegistry.finish(id)
       null
     } }
     AsyncFunction("activate") { id: String, promise: Promise -> run(promise) { CallExecutionRegistry.requireHost(id).activate(); null } }
@@ -88,25 +95,11 @@ class CallRuntimeModule : Module() {
     AsyncFunction("selectRoute") { id: String, route: String, promise: Promise -> run(promise) { CallExecutionRegistry.requireHost(id).selectRoute(route); null } }
     AsyncFunction("hasOverlayPermission") { OverlayPermissionGateway.isGranted(context) }
     AsyncFunction("requestOverlayPermission") { promise: Promise -> run(promise) { OverlayPermissionGateway.openSettings(checkNotNull(appContext.currentActivity)); null } }
-    OnActivityEntersForeground {
-      dispatchCallLifecycle {
-        if (CallExecutionRegistry.emit === emitter) {
-          CallExecutionRegistry.appVisible = true
-          CallExecutionRegistry.host?.overlay?.setAppVisible(true)
-        }
-      }
-    }
-    OnActivityEntersBackground {
-      dispatchCallLifecycle {
-        if (CallExecutionRegistry.emit === emitter) {
-          CallExecutionRegistry.appVisible = false
-          CallExecutionRegistry.host?.overlay?.setAppVisible(false)
-        }
-      }
-    }
     OnDestroy {
       val destroyedContext = ownedContext
       dispatchCallLifecycle {
+        unsubscribeVisibility?.invoke()
+        unsubscribeVisibility = null
         if (CallExecutionRegistry.emit === emitter) CallExecutionRegistry.emit = null
         // bridge 与执行宿主按 ReactContext 配对；旧实例只能结束它自己的电话。
         if (destroyedContext != null && CallExecutionRegistry.executionContext === destroyedContext) {

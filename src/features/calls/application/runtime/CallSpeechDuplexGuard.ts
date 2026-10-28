@@ -9,7 +9,7 @@ export class CallSpeechDuplexGuard {
   private ignoredSegmentIndexes = new Set<number>();
   private silenceChunk: ArrayBuffer | null = null;
   private echoCancellationEnabled = false;
-  private userSpeechConfirmedDuringAIOutput = false;
+  private speechActivityDuringAIOutput = false;
 
   constructor(echoCooldownMs = DEFAULT_ECHO_COOLDOWN_MS) {
     this.echoCooldownMs = echoCooldownMs;
@@ -17,7 +17,7 @@ export class CallSpeechDuplexGuard {
 
   beginAIOutput(): void {
     if (this.activeAIOutputCount === 0) {
-      this.userSpeechConfirmedDuringAIOutput = false;
+      this.speechActivityDuringAIOutput = false;
     }
     this.activeAIOutputCount += 1;
     this.cooldownUntil = 0;
@@ -25,26 +25,26 @@ export class CallSpeechDuplexGuard {
 
   setEchoCancellationEnabled(enabled: boolean): void {
     this.echoCancellationEnabled = enabled;
+    this.speechActivityDuringAIOutput = false;
     if (enabled) {
       this.ignoredSegmentIndexes.clear();
     }
   }
 
-  confirmUserSpeechDuringAIOutput(): boolean {
+  observeSpeechActivityDuringAIOutput(): void {
     if (!this.echoCancellationEnabled || this.activeAIOutputCount === 0) {
-      return false;
+      return;
     }
 
-    this.userSpeechConfirmedDuringAIOutput = true;
+    this.speechActivityDuringAIOutput = true;
     this.ignoredSegmentIndexes.clear();
-    return true;
   }
 
   endAIOutput(now = Date.now()): void {
     this.activeAIOutputCount = Math.max(0, this.activeAIOutputCount - 1);
     if (this.activeAIOutputCount === 0) {
       this.cooldownUntil = now + this.echoCooldownMs;
-      this.userSpeechConfirmedDuringAIOutput = false;
+      this.speechActivityDuringAIOutput = false;
     }
   }
 
@@ -54,7 +54,7 @@ export class CallSpeechDuplexGuard {
     this.ignoredSegmentIndexes.clear();
     this.silenceChunk = null;
     this.echoCancellationEnabled = false;
-    this.userSpeechConfirmedDuringAIOutput = false;
+    this.speechActivityDuringAIOutput = false;
   }
 
   isMicrophoneSuppressed(now = Date.now()): boolean {
@@ -78,14 +78,14 @@ export class CallSpeechDuplexGuard {
     now = Date.now()
   ): boolean {
     const ignoredEarlier = this.ignoredSegmentIndexes.has(segmentIndex);
-    const awaitingUserSpeechConfirmation =
+    const awaitingSpeechActivity =
       this.echoCancellationEnabled &&
       this.activeAIOutputCount > 0 &&
-      !this.userSpeechConfirmedDuringAIOutput;
+      !this.speechActivityDuringAIOutput;
     const shouldIgnore =
       ignoredEarlier ||
       this.isMicrophoneSuppressed(now) ||
-      awaitingUserSpeechConfirmation;
+      awaitingSpeechActivity;
     if (!shouldIgnore) {
       return false;
     }

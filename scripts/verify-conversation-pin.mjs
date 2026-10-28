@@ -11,7 +11,7 @@ import { chatMutationModuleUrl, installChatTimelineSchema } from './chat-timelin
  *      取消置顶必须把 pinned_at 清空（否则会继续赖在普通区前面）；
  *   D. 群聊置顶语义与单聊一致；
  *   E. 目标不存在时返回 null（不得静默成功）；
- *   F. clear history 只推进可见边界，不得改动置顶事实；
+ *   F. clear history 删除消息，不得改动置顶事实；
  *   G. 迁移89：legacy 库（无 pinned_at）补齐列、幂等、迁移后可正常置顶；
  *   H. AIProfile canonical conversation projection 在所有完整 AIProfile 查询入口一致
  *      （getAll / getById / getHostAI / getLedgerAI）。
@@ -202,6 +202,7 @@ function createDatabase({ withPinnedAt = true } = {}) {
       session_id TEXT NOT NULL,
       text TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      metadata_json TEXT,
       turn_run_id TEXT,
       turn_item_index INTEGER
     );
@@ -413,17 +414,17 @@ const columnNames = (db, table) => db.prepare(`PRAGMA table_info('${table}')`).a
     lastMessage: 'B', lastTime: T2,
   });
   insertMessage(db, 'session_clear', 'A');
-  const bId = insertMessage(db, 'session_clear', 'B');
+  insertMessage(db, 'session_clear', 'B');
 
-  const returnedBoundary = await repository.clearConversationHistory('session_clear');
+  await repository.clearConversationHistory('session_clear');
   const row = readSession(db, 'session_clear');
 
-  assert.equal(returnedBoundary, bId, 'clear 边界为当前最新消息 id');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id = ?').get('session_clear').count, 0, 'clear 删除全部消息');
   assert.equal(row.last_message, '', 'clear 后 preview 必须为空');
   assert.equal(
     row.last_time,
     null,
-    'clear 后 last_time 必须为 NULL：排序时间不允许继续引用已被隐藏的旧消息',
+    'clear 后 last_time 必须为 NULL：排序时间不允许继续引用已删除的旧消息',
   );
   assert.equal(row.is_pinned, 1, 'clear history 不得改动置顶状态');
   assert.equal(row.pinned_at, T1, 'clear history 不得改动 pinned_at');

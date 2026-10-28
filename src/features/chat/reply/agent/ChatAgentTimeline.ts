@@ -31,7 +31,7 @@ import {
 } from '../application/ChatReplyMetadata';
 import { normalizeAssistantResponseText } from '../application/AssistantReplyPersistence';
 import { segmentAssistantReplyProgress } from '../application/AssistantReplySegmentation';
-import { autonomousActivityText, isAutonomousSilentReply } from '../application/AutonomousReplyContract';
+import { AUTONOMOUS_SILENT_REPLY, isAutonomousSilentReply } from '../application/AutonomousReplyContract';
 import { buildAssistantTurnItems } from '../application/AssistantTurnCommit';
 import { formatMessageTime } from '../application/ChatReplyUtils';
 import type { ConversationTurnCommitItem } from '../domain/ConversationTurn';
@@ -47,6 +47,7 @@ import {
   type VoiceMessageSendIntent,
 } from './SendVoiceMessageTool';
 import { buildChatVoiceMessageMetadata } from '../../messages/domain/chatMessageMetadata';
+import { isImageSendIntent, type ImageSendIntent } from './SendImageTool';
 
 export type FinalAssistantPolicy = 'commit_as_reply' | 'autonomous_reply';
 
@@ -104,6 +105,7 @@ interface TimelineStep {
   toolItem: AgentTimelineItem | null;
   readonly stickerItems: StickerTimelineItem[];
   readonly voiceItems: VoiceTimelineItem[];
+  readonly imageItems: ImageTimelineItem[];
   readonly outcomes: Map<string, AgentToolOutcome>;
 }
 
@@ -123,6 +125,15 @@ interface VoiceTimelineItem {
   readonly stepIndex: number;
   readonly toolCallId: string;
   readonly intent: VoiceMessageSendIntent;
+  readonly apiMessageId: string | null;
+  readonly createdAt: string;
+  readonly time: string;
+}
+
+interface ImageTimelineItem {
+  readonly sequence: number;
+  readonly stepIndex: number;
+  readonly intent: ImageSendIntent;
   readonly apiMessageId: string | null;
   readonly createdAt: string;
   readonly time: string;
@@ -155,8 +166,6 @@ export interface BuildAgentTimelineItemsParams {
   policy: Pick<AIReplyPolicy, 'bubbleDeliveryMode'>;
   finalAssistantPolicy: FinalAssistantPolicy;
   finalStepIndex: number;
-  /** 仅正常终态允许把自主执行的最终正文物化为消息；增量与失败只存过程。 */
-  commitAutonomousReply?: boolean;
 }
 
 export class ChatAgentTimeline {
@@ -200,6 +209,7 @@ export class ChatAgentTimeline {
       toolItem: null,
       stickerItems: [],
       voiceItems: [],
+      imageItems: [],
       outcomes: new Map(),
     });
   }
@@ -308,6 +318,17 @@ export class ChatAgentTimeline {
     if (outcome.status === 'success' && isVoiceMessageSendIntent(outcome.data)) {
       step.voiceItems.push(this.createVoiceTimelineItem(step, toolCallId, outcome.data));
     }
+    if (outcome.status === 'success' && isImageSendIntent(outcome.data)) {
+      const now = new Date();
+      step.imageItems.push({
+        sequence: this.nextSequence++,
+        stepIndex,
+        intent: outcome.data,
+        apiMessageId: step.turn!.messageId,
+        createdAt: now.toISOString(),
+        time: formatMessageTime(now),
+      });
+    }
     if (!step.toolItem || !step.turn || step.outcomes.size !== step.turn.toolCalls.length) {
       this.publish();
       return;
@@ -388,10 +409,9 @@ export class ChatAgentTimeline {
   private snapshotItems(items: readonly AgentTimelineItem[]): AgentTimelineItemSnapshot[] {
     return items.flatMap(item => {
       let snapshot = toSnapshot(item);
-      if (this.finalAssistantPolicy === 'autonomous_reply' && item.kind === 'assistant') {
-        const text = autonomousActivityText(item.text);
-        return text ? [{ ...snapshot, text }] : [];
-      }
+      // 静默控制信号尚未收齐时也不能泄漏到普通气泡；其余正文沿统一流式分段展示。
+      if (this.finalAssistantPolicy === 'autonomous_reply' && item.kind === 'assistant'
+        && AUTONOMOUS_SILENT_REPLY.startsWith(item.text.trim())) return [];
       if (item.kind === 'assistant' && item.status === 'streaming') snapshot = { ...snapshot, streamingDelivery: true };
       if (!this.presentationPolicy || item.kind !== 'assistant'
         || (item.status === 'streaming' && this.presentationPolicy.bubbleDeliveryMode === 'single-bubble')) return [snapshot];
@@ -413,7 +433,7 @@ export class ChatAgentTimeline {
     const projected: {
       sourceSequence: number;
       segmentIndex: number;
-      item: AgentTimelineItem | StickerTimelineItem | VoiceTimelineItem;
+      item: AgentTimelineItem | StickerTimelineItem | VoiceTimelineItem | ImageTimelineItem;
       commitItem: ConversationTurnCommitItem;
     }[] = [];
 
@@ -422,17 +442,15 @@ export class ChatAgentTimeline {
     for (const step of this.steps.values()) {
       const reasoningItem = step.reasoningItem;
       const assistantItem = step.assistantItem;
-      const autonomous = params.finalAssistantPolicy === 'autonomous_reply';
-      const isFinalReply = autonomous && params.commitAutonomousReply === true
+      const silent = params.finalAssistantPolicy === 'autonomous_reply'
         && step.stepIndex === params.finalStepIndex
         && step.turn!.toolCalls.length === 0
-        && !isAutonomousSilentReply(assistantItem?.text ?? '');
-      const activityText = autonomous && assistantItem ? autonomousActivityText(assistantItem.text) : '';
+        && isAutonomousSilentReply(assistantItem?.text ?? '');
       if (reasoningItem || assistantItem) {
         const response = toAIResponseForStep(step);
         const normalized = assistantItem
-          ? autonomous && !isFinalReply
-            ? { text: activityText, segments: activityText ? [activityText] : [] }
+          ? silent
+            ? { text: '本次选择不发送消息', segments: ['本次选择不发送消息'] }
             : normalizeAssistantResponseText(assistantItem.text, params.policy)
           : { text: '', segments: [] };
         const built = buildAssistantTurnItems({
@@ -460,14 +478,11 @@ export class ChatAgentTimeline {
             item: target,
             commitItem: {
               message: this.withStableIdentity(
-                autonomous && (entry.message.senderType === 'reasoning' || !isFinalReply)
+                silent && entry.message.senderType === 'assistant'
                   ? { ...entry.message,
-                      text: entry.message.senderType === 'reasoning' ? target.text : activityText,
-                      senderType: entry.message.senderType === 'assistant' ? 'system' : 'reasoning',
-                      status: target.status === 'failed' ? 'failed'
-                        : target.status === 'running' || target.status === 'streaming' ? 'streaming' : 'sent',
+                      senderType: 'system',
                       metadataJson: JSON.stringify({ ...parseMetadata(entry.message.metadataJson),
-                        type: 'agentActivity', source: 'chatAgentRun', phase: entry.message.senderType }),
+                        type: 'agentActivity', source: 'chatAgentRun', phase: 'assistant' }),
                     }
                   : entry.message,
                 target, segmentIndex,
@@ -502,6 +517,14 @@ export class ChatAgentTimeline {
           segmentIndex: 0,
           item: voiceItem,
           commitItem: this.buildVoiceMessage(voiceItem, params),
+        });
+      }
+      for (const imageItem of step.imageItems) {
+        projected.push({
+          sourceSequence: imageItem.sequence,
+          segmentIndex: 0,
+          item: imageItem,
+          commitItem: { message: this.buildImageMessage(imageItem, params) },
         });
       }
     }
@@ -781,6 +804,41 @@ export class ChatAgentTimeline {
         timelineKind: 'sticker',
         stepIndex: item.stepIndex,
       }),
+    };
+  }
+
+  private buildImageMessage(
+    item: ImageTimelineItem,
+    params: BuildAgentTimelineItemsParams,
+  ): CreateMessageInput {
+    const clientMessageId = buildAgentTimelineClientMessageId(this.runId, item.sequence);
+    return {
+      sessionId: params.sessionId,
+      text: '',
+      isMe: false,
+      senderType: 'assistant',
+      agentId: params.aiConfig?.agentId ?? null,
+      apiMessageId: item.apiMessageId,
+      clientMessageId,
+      time: item.time,
+      createdAt: item.createdAt,
+      updatedAt: item.createdAt,
+      replyToId: null,
+      replyToText: null,
+      status: 'sent',
+      deliveryStatus: 'delivered',
+      tokensUsed: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      logicalMessageId: buildAgentTimelineLogicalMessageId(this.runId, item.stepIndex),
+      metadataJson: JSON.stringify(buildMessageMetadata(params.aiConfig, params.runtimeContext ?? {}, {
+        kind: 'image',
+        attachments: [item.intent.attachment],
+        transientIdentity: clientMessageId,
+        timelineSequence: item.sequence,
+        timelineKind: 'image',
+        stepIndex: item.stepIndex,
+      })),
     };
   }
 

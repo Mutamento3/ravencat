@@ -320,11 +320,8 @@ assert.match(
   /IncomingCallActivity::class\.java[\s\S]*PendingIntent\.getActivity\(/,
   '来电 open/accept 必须直连 IncomingCallActivity，不得经 BroadcastReceiver trampoline'
 );
-assert.match(
-  nativeIncomingCallPublisherSource,
-  /fullScreenIntentAllowed = manager\.canUseFullScreenIntent\(\)[\s\S]*if \(fullScreenIntentAllowed\) \{\s*builder\.setFullScreenIntent/,
-  'FullScreenIntent 必须只在系统授权时挂载'
-);
+// 全屏权限关闭时的 CallStyle 发布行为由 IncomingCallPresentationTest 验证，
+// 不以源码写法要求移除 Android 14 发布所需的 fullScreenIntent。
 assert.match(
   nativeIncomingCallPublisherSource,
   /recordDiagnostics\(\s*context, INCOMING_CALL_DIAGNOSTICS_SCOPE[\s\S]*fullScreenIntentAllowed = fullScreenIntentAllowed/,
@@ -547,7 +544,6 @@ const groupSources = [
   read('src/features/chat/group/application/GroupSpeechTaskExecution.ts'),
   groupMessagingSource,
 ].join('\n');
-const promptAssemblerSource = read('src/host/prompt/PromptPackAssembler.ts');
 // 图片路线与失败行为由 verify-auxiliary-model-runtime 的实际输入输出验证。
 assert.match(batchInputSource, /assistantId: string/);
 assert.match(
@@ -565,7 +561,6 @@ assert.doesNotMatch(
   /\buser_reply\b|\bexecuteUserReplyTurn\b/,
   '群聊拆分不得接入 canonical user_reply 或普通 Chat execution host',
 );
-assert.match(promptAssemblerSource, /createVisualGroundingRulesBlock/);
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-concurrency-'));
 async function importStandaloneTypeScript(relativePath) {

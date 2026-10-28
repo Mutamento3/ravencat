@@ -61,6 +61,7 @@ export interface MomentRecordMedia {
   analysisModelConfigId: string | null;
   analyzedAt: string | null;
   analysisErrorCode: string | null;
+  analysisErrorMessage: string | null;
 }
 
 export interface MomentRecord extends MomentRecordActor {
@@ -104,6 +105,7 @@ export async function listMomentRecords(
       analysisModelConfigId: item.analysisModelConfigId,
       analyzedAt: item.analyzedAt,
       analysisErrorCode: item.analysisErrorCode,
+      analysisErrorMessage: item.analysisErrorMessage,
     }));
     const momentActor = directory.resolve({
       actorType: moment.authorType,

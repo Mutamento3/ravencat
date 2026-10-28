@@ -28,6 +28,9 @@ import { shouldShowTimeSeparatorBefore } from '../domain/MessageTimeSeparator';
 import { cancelRegenerationInTransaction } from './ChatMessageMutationSql';
 import { deleteReplyVersionsForMessages, editSelectedReplyVersion } from '../../reply/infrastructure/ChatReplyVersionSql';
 import type { ChatRecordStatistics } from '../domain/ChatRecordStatistics';
+import type { ChatMessageRecord, ChatMessageSearchInput, ChatMessageSearchPage } from '../domain/ChatMessageSearch';
+import type { ChatMessageContext, ChatMessageContextInput } from '../domain/ChatMessageContext';
+import { buildGroupMentionModelText } from '../domain/chatMessageMetadata';
 
 interface MessageRow {
   turn_presentation_state?: string;
@@ -59,6 +62,21 @@ interface MessageRow {
   turn_run_id: string | null;
   turn_item_index: number | null;
 }
+
+interface MessageLookupRow extends MessageRow {
+  owner_assistant_id: string | null;
+  owner_name: string | null;
+  owner_nickname: string | null;
+}
+
+// 搜索与附近上下文共用原文读取边界；摘要和近期窗口不改变仍保存的发言。
+const MESSAGE_LOOKUP_VISIBILITY = `m.status = 'sent' AND m.sender_type IN ('user', 'assistant')
+  AND m.delivery_status IS NOT 'cancelled' AND m.id > COALESCE(s.visible_after_message_id, 0)`;
+const MESSAGE_LOOKUP_ACCESS = `(s.ai_assistant_id = ? OR EXISTS (SELECT 1 FROM group_chat_members member
+  JOIN group_chats g ON g.id = member.group_id
+  WHERE member.group_id = m.session_id AND member.ai_assistant_id = ? AND member.enabled = 1))`;
+const MESSAGE_LOOKUP_JOINS = `LEFT JOIN sessions s ON s.id = m.session_id
+  LEFT JOIN ai_assistants a ON a.id = s.ai_assistant_id`;
 
 
 interface TimelineAnchorRow {
@@ -159,11 +177,113 @@ function normalizeMessageIds(messageIds: readonly number[]): number[] {
 }
 
 export class MessageRepository implements IMessageRepository {
+  searchMessagesForUser(input: ChatMessageSearchInput): Promise<ChatMessageSearchPage> {
+    return this.searchMessages(input);
+  }
+
+  async searchMessagesForAssistant(assistantId: string, input: ChatMessageSearchInput): Promise<ChatMessageSearchPage> {
+    return this.searchMessages(input, assistantId);
+  }
+
+  private async searchMessages(input: ChatMessageSearchInput, assistantId?: string): Promise<ChatMessageSearchPage> {
+    const db = databaseCoordinator.openTaskExecutor({ name: 'chat.searchMessages', feature: 'chat', priority: assistantId === undefined ? 'interactive' : 'runtime' });
+    return db.withExclusiveTransactionAsync(async tx => {
+      const conditions = [
+        'm.session_id = ?', MESSAGE_LOOKUP_VISIBILITY,
+        '(' + input.keywords.map(() => 'instr(lower(m.text), lower(?)) > 0').join(' OR ') + ')',
+      ];
+      const params: (string | number)[] = [input.conversationId, ...input.keywords];
+      if (assistantId !== undefined) { conditions.push(MESSAGE_LOOKUP_ACCESS); params.push(assistantId, assistantId); }
+      if (input.from !== undefined) { conditions.push('julianday(m.created_at) >= julianday(?)'); params.push(input.from); }
+      if (input.to !== undefined) { conditions.push('julianday(m.created_at) <= julianday(?)'); params.push(input.to); }
+      const offset = input.offset ?? 0;
+      const rows = await tx.getAllAsync<MessageLookupRow>(
+        `SELECT m.*, s.ai_assistant_id AS owner_assistant_id, a.name AS owner_name, a.nickname AS owner_nickname
+         FROM chat_visible_messages m ${MESSAGE_LOOKUP_JOINS}
+         WHERE ${conditions.join(' AND ')} ORDER BY julianday(m.created_at) DESC, m.id DESC LIMIT 21 OFFSET ?`,
+        [...params, offset],
+      );
+      return {
+        entries: await this.projectMessageLookupRows(tx, input.conversationId, rows.slice(0, 20), assistantId !== undefined),
+        nextOffset: rows.length > 20 ? offset + 20 : null,
+      };
+    });
+  }
+
+  async readMessageContextForAssistant(assistantId: string, input: Required<ChatMessageContextInput>): Promise<ChatMessageContext | null> {
+    return this.readMessageContext(input, { assistantId });
+  }
+
+  readMessageContextForUser(conversationId: string, input: Required<ChatMessageContextInput>): Promise<ChatMessageContext | null> {
+    return this.readMessageContext(input, { conversationId });
+  }
+
+  private async readMessageContext(input: Required<ChatMessageContextInput>, scope: { assistantId: string } | { conversationId: string }): Promise<ChatMessageContext | null> {
+    const forAssistant = 'assistantId' in scope;
+    const db = databaseCoordinator.openTaskExecutor({ name: 'chat.messageContext', feature: 'chat', priority: forAssistant ? 'runtime' : 'interactive' });
+    return db.withExclusiveTransactionAsync(async tx => {
+      const anchor = await tx.getFirstAsync<MessageLookupRow & TimelineOrderRow>(
+        `${timelineOrderedMessagesCte('m.id = ?')}
+         SELECT m.*, s.ai_assistant_id AS owner_assistant_id, a.name AS owner_name, a.nickname AS owner_nickname
+         FROM ordered_messages m ${MESSAGE_LOOKUP_JOINS}
+         WHERE ${MESSAGE_LOOKUP_VISIBILITY} AND ${forAssistant ? MESSAGE_LOOKUP_ACCESS : 'm.session_id = ?'}`,
+        forAssistant ? [input.messageId, scope.assistantId, scope.assistantId] : [input.messageId, scope.conversationId],
+      );
+      if (!anchor) return null;
+      // 锚点已在同一事务裁决权限；邻居只读取这个会话，不重复校验或猜测相邻 ID。
+      const readNeighbors = (order: 'ASC' | 'DESC', count: number) => {
+        const cursor = timelineCursorCondition(order, anchor);
+        return tx.getAllAsync<MessageLookupRow>(
+          `${timelineOrderedMessagesCte('m.session_id = ?')}
+           SELECT m.*, s.ai_assistant_id AS owner_assistant_id, a.name AS owner_name, a.nickname AS owner_nickname
+           FROM (SELECT * FROM ordered_messages WHERE ${cursor.sql}) m ${MESSAGE_LOOKUP_JOINS}
+           WHERE ${MESSAGE_LOOKUP_VISIBILITY}
+           ORDER BY ${timelineProjectionOrderBy(order, 'm')} LIMIT ?`,
+          [anchor.session_id, ...cursor.params, count + 1],
+        );
+      };
+      const before = await readNeighbors('DESC', input.before);
+      const after = await readNeighbors('ASC', input.after);
+      return {
+        anchorMessageId: anchor.id,
+        conversationId: anchor.session_id,
+        entries: await this.projectMessageLookupRows(tx, anchor.session_id,
+          [...before.slice(0, input.before).reverse(), anchor, ...after.slice(0, input.after)], forAssistant),
+        hasMoreBefore: before.length > input.before,
+        hasMoreAfter: after.length > input.after,
+      };
+    });
+  }
+
+  private async projectMessageLookupRows(tx: DatabaseReadExecutor, conversationId: string, rows: MessageLookupRow[], forAssistant: boolean): Promise<ChatMessageRecord[]> {
+    if (rows.length === 0) return [];
+    const members = await tx.getAllAsync<{ aiAssistantId: string; agentId: string; name: string; nickname: string | null }>(
+      `SELECT member.ai_assistant_id AS aiAssistantId, member.agent_id AS agentId, a.name, a.nickname
+       FROM group_chat_members member JOIN ai_assistants a ON a.id = member.ai_assistant_id WHERE member.group_id = ?`,
+      [conversationId],
+    );
+    return rows.map(row => {
+      const member = members.find(candidate => candidate.agentId === row.agent_id);
+      const publicName = member?.name ?? row.owner_name ?? 'AI';
+      const displayName = (member ? member.nickname : row.owner_nickname) ?? publicName;
+      return {
+        messageId: row.id, conversationId: row.session_id,
+        author: {
+          role: row.sender_type as 'user' | 'assistant',
+          name: row.is_me === 1 ? '用户' : forAssistant ? publicName : displayName,
+          assistantId: row.is_me === 1 ? null : member?.aiAssistantId ?? row.owner_assistant_id,
+        },
+        text: forAssistant ? buildGroupMentionModelText(row.text, { metadataJson: row.metadata_json }, members) : row.text,
+        createdAt: row.created_at,
+      };
+    });
+  }
+
   async listAgentActivityEvidence(runIds: readonly string[]) {
     const rows = await databaseCoordinator.openTaskExecutor({
       name: 'chat.agent-activity-evidence', feature: 'chat', priority: 'interactive',
     }).getAllAsync<{ run_id: string; responded_at: string | null; terminal_code: string | null }>(
-      `SELECT turn_run_id AS run_id,
+      `WITH legacy AS (SELECT turn_run_id AS run_id,
               MIN(CASE WHEN json_extract(metadata_json, '$.phase') = 'responded'
                          OR (json_extract(metadata_json, '$.phase') IN ('reasoning', 'assistant') AND length(text) > 0)
                          OR json_extract(metadata_json, '$.type') = 'toolStatus'
@@ -172,7 +292,22 @@ export class MessageRepository implements IMessageRepository {
                        THEN json_extract(metadata_json, '$.terminalCode') END) AS terminal_code
        FROM messages WHERE turn_run_id IN (SELECT value FROM json_each(?))
          AND json_valid(metadata_json) AND json_extract(metadata_json, '$.type') IN ('agentActivity', 'toolStatus')
-       GROUP BY turn_run_id`, [JSON.stringify(runIds)],
+       GROUP BY turn_run_id), current_runs AS (
+         SELECT r.run_id,
+           (SELECT MIN(json_extract(i.shown_json, '$.createdAt')) FROM chat_turn_display_items i
+             WHERE i.run_id = r.run_id AND i.shown_json IS NOT NULL
+               AND length(json_extract(i.shown_json, '$.text')) > 0) AS responded_at,
+           CASE WHEN r.status IN ('superseded', 'cancelled') THEN 'CANCELLED_BY_USER'
+             WHEN p.state = 'interrupted' THEN CASE WHEN p.reason IN ('process_restarted', 'execution_interrupted', 'new_input')
+               THEN 'INTERRUPTED' ELSE p.reason END
+             WHEN r.status = 'failed' THEN 'INTERRUPTED'
+             WHEN r.status = 'committed' AND p.state = 'completed' THEN 'COMPLETED'
+             ELSE NULL END AS terminal_code
+         FROM conversation_turn_runs r JOIN chat_turn_presentations p ON p.run_id = r.run_id
+         WHERE r.kind = 'autonomous' AND r.run_id IN (SELECT value FROM json_each(?))
+       ) SELECT * FROM current_runs UNION ALL SELECT * FROM legacy
+         WHERE NOT EXISTS (SELECT 1 FROM current_runs c WHERE c.run_id = legacy.run_id)`,
+      [JSON.stringify(runIds), JSON.stringify(runIds)],
     );
     return rows.map((row) => ({ runId: row.run_id, respondedAt: row.responded_at, terminalCode: row.terminal_code }));
   }
@@ -185,6 +320,7 @@ export class MessageRepository implements IMessageRepository {
         `SELECT m.* FROM messages m
          WHERE json_valid(m.metadata_json) AND json_extract(m.metadata_json, '$.type') = 'agentActivity'
            AND json_extract(m.metadata_json, '$.phase') = 'started'
+           AND NOT EXISTS (SELECT 1 FROM chat_turn_presentations p WHERE p.run_id = m.turn_run_id)
            AND m.turn_run_id NOT IN (SELECT value FROM json_each(?))
            AND NOT EXISTS (SELECT 1 FROM messages t WHERE t.turn_run_id = m.turn_run_id
              AND json_valid(t.metadata_json) AND json_extract(t.metadata_json, '$.type') = 'agentActivity'
@@ -498,8 +634,45 @@ export class MessageRepository implements IMessageRepository {
     await transaction.runAsync('UPDATE sessions SET last_message = ?, last_time = ? WHERE id = ?', [text, time, sessionId]);
   }
 
-  async getLatestArrivedPreviewMessage(sessionId: string, excludedMessageIds: readonly number[]): Promise<ChatMessage | null> {
-    return this.readLatestVisibleMessage(sessionId, excludedMessageIds, true);
+  async getLatestArrivedConversationPreview(sessionId: string, excludedMessageIds: readonly number[]): Promise<Pick<ChatMessage, 'text' | 'metadataJson' | 'createdAt'> | null> {
+    const db = databaseCoordinator.openTaskExecutor({ name: 'chat.arrived-conversation-preview', feature: 'chat', priority: 'interactive' });
+    // 只读 shown_json：通知已经交付的正文不能继续等待整轮 T3，也不能把未交付快照带进列表。
+    // 两种来源在同一 SQLite 快照内选取，展示投影不回写持久预览或回复游标。
+    const row = await db.getFirstAsync<{ text: string; metadata_json: string | null; created_at: string }>(
+      `${timelineOrderedMessagesCte(`m.session_id = ? AND m.id > COALESCE(
+        (SELECT visible_after_message_id FROM sessions WHERE id = m.session_id), 0)`)}
+       , canonical_preview AS (
+         SELECT text, metadata_json, created_at, id AS anchor_id, 0 AS source_rank,
+           COALESCE(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.timelineSequence') END, 0) AS source_sequence,
+           COALESCE(segment_index, 0) AS segment_index FROM ordered_messages
+         WHERE id NOT IN (SELECT value FROM json_each(?)) AND sender_type NOT IN ('reasoning', 'tool')
+           AND COALESCE(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.type') END, '') NOT IN ('toolStatus', 'agentActivity')
+         ORDER BY ${timelineProjectionOrderBy('DESC')} LIMIT 1
+       ), display_preview AS (
+         SELECT json_extract(i.shown_json, '$.text') AS text,
+           json_extract(i.shown_json, '$.metadataJson') AS metadata_json,
+           json_extract(i.shown_json, '$.createdAt') AS created_at,
+           CASE WHEN r.kind = 'autonomous' THEN origin.id ELSE r.input_high_watermark END AS anchor_id,
+           1 AS source_rank, json_extract(i.shown_json, '$.sequence') AS source_sequence,
+           COALESCE(json_extract(i.shown_json, '$.segmentIndex'), 0) AS segment_index
+         FROM chat_turn_presentations p JOIN conversation_turn_runs r ON r.run_id = p.run_id
+         JOIN chat_turn_display_items i ON i.run_id = p.run_id JOIN sessions s ON s.id = p.session_id
+         LEFT JOIN messages origin ON origin.client_message_id = 'agent_activity:' || r.run_id || ':started'
+         WHERE p.session_id = ? AND i.shown_json IS NOT NULL
+           AND json_extract(i.shown_json, '$.kind') = 'assistant' AND json_extract(i.shown_json, '$.status') = 'sent'
+           AND (r.kind <> 'regenerate' OR r.status = 'committed')
+           AND CASE WHEN r.kind = 'autonomous' THEN origin.id ELSE r.input_high_watermark END > COALESCE(s.visible_after_message_id, 0)
+           AND NOT EXISTS (SELECT 1 FROM ordered_messages newer WHERE newer.sender_type = 'user'
+             AND newer.id > CASE WHEN r.kind = 'autonomous' THEN origin.id ELSE r.input_high_watermark END
+             AND COALESCE(CASE WHEN json_valid(newer.metadata_json) THEN json_extract(newer.metadata_json, '$.type') END, '') <> 'callStatus')
+         ORDER BY created_at DESC, anchor_id DESC, json_extract(i.shown_json, '$.sequence') DESC,
+           json_extract(i.shown_json, '$.segmentIndex') DESC LIMIT 1
+       ) SELECT text, metadata_json, created_at FROM (
+         SELECT * FROM canonical_preview UNION ALL SELECT * FROM display_preview
+       ) ORDER BY created_at DESC, source_sequence DESC, segment_index DESC, anchor_id DESC, source_rank DESC LIMIT 1`,
+      [sessionId, JSON.stringify(excludedMessageIds), sessionId],
+    );
+    return row ? { text: row.text, metadataJson: row.metadata_json, createdAt: row.created_at } : null;
   }
 
   private async readLatestVisibleMessage(sessionId: string, excludedMessageIds: readonly number[], previewOnly: boolean): Promise<ChatMessage | null> {
@@ -725,15 +898,30 @@ export class MessageRepository implements IMessageRepository {
     try {
       const db = databaseCoordinator.openTaskExecutor({ name: 'chat.getUnreadCountByAI', feature: 'chat', priority: 'interactive' });
       const result = await db.getFirstAsync<{ count?: number }>(
-        `SELECT COUNT(*) as count
+        `SELECT COUNT(*) as count FROM (
+         SELECT m.id
          FROM chat_visible_messages m
          INNER JOIN sessions s ON s.id = m.session_id
+         LEFT JOIN chat_turn_display_items i ON i.message_id = m.id
          WHERE s.ai_assistant_id = ?
            AND m.is_me = 0
            AND m.sender_type = 'assistant'
            AND COALESCE(m.is_read, 0) = 0
-           AND m.id NOT IN (SELECT value FROM json_each(?))`,
-        [aiId, JSON.stringify(excludedMessageIds)]
+           AND m.id > COALESCE(s.visible_after_message_id, 0)
+           AND (m.id NOT IN (SELECT value FROM json_each(?))
+             OR (json_extract(i.shown_json, '$.kind') = 'assistant' AND json_extract(i.shown_json, '$.status') = 'sent'))
+         UNION ALL
+         SELECT NULL FROM chat_turn_display_items i
+         JOIN chat_turn_presentations p ON p.run_id = i.run_id
+         JOIN conversation_turn_runs r ON r.run_id = p.run_id
+         JOIN sessions s ON s.id = p.session_id
+         LEFT JOIN messages origin ON origin.client_message_id = 'agent_activity:' || r.run_id || ':started'
+         WHERE s.ai_assistant_id = ? AND i.message_id IS NULL AND i.is_read = 0
+           AND json_extract(i.shown_json, '$.kind') = 'assistant' AND json_extract(i.shown_json, '$.status') = 'sent'
+           AND (r.kind <> 'regenerate' OR r.status = 'committed')
+           AND CASE WHEN r.kind = 'autonomous' THEN origin.id ELSE r.input_high_watermark END > COALESCE(s.visible_after_message_id, 0)
+         )`,
+        [aiId, JSON.stringify(excludedMessageIds), aiId]
       );
 
       return result?.count || 0;
@@ -1050,12 +1238,13 @@ export class MessageRepository implements IMessageRepository {
           input.message.metadataJson,
         );
         const updatedAt = new Date().toISOString();
-        // 自主执行的正文先按过程存档，正常完成后沿同一身份成为消息及分段。
+        // 同一条目可从来电状态变成系统故障，发送者与 AI 身份必须和内容一起更新。
         await transaction.runAsync(
           `UPDATE messages
            SET text = ?, metadata_json = ?, is_read = ?, updated_at = ?, status = ?,
                api_message_id = ?, tokens_used = ?, prompt_tokens = ?, completion_tokens = ?,
-               sender_type = ?, logical_message_id = ?, segment_index = ?, segment_total = ?, delivery_status = ?
+               sender_type = ?, logical_message_id = ?, segment_index = ?, segment_total = ?, delivery_status = ?,
+               is_me = ?, agent_id = ?
            WHERE id = ?`,
           [
             input.message.text,
@@ -1072,6 +1261,8 @@ export class MessageRepository implements IMessageRepository {
             input.message.segmentIndex ?? 0,
             input.message.segmentTotal ?? 1,
             input.message.deliveryStatus ?? null,
+            input.message.isMe ? 1 : 0,
+            input.message.agentId ?? null,
             existingRow.id,
           ],
         );
@@ -1313,18 +1504,22 @@ export class MessageRepository implements IMessageRepository {
 
   async markMessagesAsRead(sessionId: string): Promise<number> {
     try {
-      const db = databaseCoordinator.openTaskExecutor({ name: 'chat.markMessagesAsRead', feature: 'chat', priority: 'interactive' });
-      const result = await db.runAsync(
-        `UPDATE messages
-         SET is_read = 1
-         WHERE session_id = ?
-           AND is_me = 0
-           AND sender_type = 'assistant'
-           AND COALESCE(is_read, 0) = 0`,
-        [sessionId]
-      );
+      return await databaseCoordinator.transaction({ name: 'chat.markMessagesAsRead', feature: 'chat', priority: 'interactive' }, async db => {
+        const result = await db.runAsync(
+          `UPDATE messages
+           SET is_read = 1
+           WHERE session_id = ?
+             AND is_me = 0
+             AND sender_type = 'assistant'
+             AND COALESCE(is_read, 0) = 0`,
+          [sessionId]
+        );
 
-      return result?.changes || 0;
+        const display = await db.runAsync(`UPDATE chat_turn_display_items SET is_read = 1
+          WHERE run_id IN (SELECT run_id FROM chat_turn_presentations WHERE session_id = ?)
+            AND message_id IS NULL AND is_read = 0 AND json_extract(shown_json, '$.kind') = 'assistant'`, [sessionId]);
+        return result.changes + display.changes;
+      });
     } catch (error) {
       console.error('[MessageRepository] Failed to mark messages as read:', error);
       throw error;

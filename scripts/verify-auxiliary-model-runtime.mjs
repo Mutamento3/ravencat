@@ -393,7 +393,8 @@ function initialModelRuntime(db) {
     '@features/integrations/composition': { ...translation, translationSettingsRepository },
     '@features/moments': {}, '@features/protocol': {}, '@features/profile': {}, '@features/wallet': {},
     '@features/chat': {}, '@features/chat/composition': {}, '@features/calls': {},
-    '@features/calls/composition': { configureCallRuntimeDependencies() {}, configureCallBackgroundRuntime() {}, createCallExecutionAdapter: () => ({}) },
+    '@features/calls/composition': { configureCallRuntimeDependencies() {}, configureCallBackgroundRuntime() {},
+      configureCallRingtoneRuntime() {}, createCallExecutionAdapter: () => ({}) },
     '@features/companion': {}, '@host/prompt': {},
   });
   host.configureAIRuntime();

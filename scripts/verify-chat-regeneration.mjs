@@ -199,7 +199,7 @@ for (const change of ['send', 'edit', 'delete', 'clear', 'orphan']) {
     assert.equal(await turns.takeOverOrphan(change, 'user_reply'), null);
   }
   assert.equal((await commit(run, [makeMessage(change, '迟到结果')])).outcome, 'fence_failed');
-  assert.ok(await messages.getMessageById(fixture.target.id));
+  assert.equal(Boolean(await messages.getMessageById(fixture.target.id)), change !== 'clear', '清除删除原回复，其他失效路径保留原回复');
   assert.equal((await turns.getRegenerationState(change)).sourceRunId, null);
   if (change === 'send' || change === 'clear') assert.equal((await turns.getRegenerationState(change)).eligibleRunId, null);
 }
@@ -259,7 +259,7 @@ const coordinator = createConversationTurnCoordinator({
 });
 runtime.configureChatMessageRuntime({
   messages, turns, turnPresentation,
-  regeneration: { onRequested: (sessionId) => coordinator.requestRegenerationFromHost(sessionId), onInvalidated: (sessionId) => coordinator.abortRegeneration(sessionId) },
+  regeneration: { onRequested: (sessionId) => coordinator.requestRegenerationFromHost(sessionId), onInvalidated: (sessionId) => coordinator.abortInvalidatedTurn(sessionId) },
 });
 const { regenerateChatReply } = load('src/features/chat/reply/application/RegenerateChatReply.ts');
 for (const behavior of ['success', 'failure', 'empty']) {
@@ -340,7 +340,7 @@ const lateCoordinator = createConversationTurnCoordinator({
 });
 const configureWithCoordinator = (owner) => runtime.configureChatMessageRuntime({
   messages, turns, turnPresentation,
-  regeneration: { onRequested: (sessionId) => owner.requestRegenerationFromHost(sessionId), onInvalidated: (sessionId) => owner.abortRegeneration(sessionId) },
+  regeneration: { onRequested: (sessionId) => owner.requestRegenerationFromHost(sessionId), onInvalidated: (sessionId) => owner.abortInvalidatedTurn(sessionId) },
 });
 configureWithCoordinator(lateCoordinator);
 const firstLaunchRequest = regenerateChatReply('late-launch', lateLaunch.target.id);
@@ -357,12 +357,55 @@ assert.equal(lateCoordinator.hasActiveHandle('late-launch'), true);
 assert.equal(liveParams.signal.aborted, false, '迟到启动失败不能 abort 后来一次重写的句柄');
 assert.equal((await turns.getRegenerationState('late-launch')).activeRunId, liveParams.run.runId);
 await turns.cancelRegeneration('late-launch', liveParams.run.revisionAtClaim - 1);
-await lateCoordinator.abortRegeneration('late-launch');
+await lateCoordinator.abortInvalidatedTurn('late-launch');
 assert.equal(liveParams.signal.aborted, true, '真正失去持久 owner 后清理原句柄');
 finishNewModel('empty_reply');
 await runningModel;
 assert.deepEqual(cancelledErrors, [], '已经撤销的回合安静收尾，不能向新 owner 弹失败提示');
 stopCancellationObservation();
+configureWithCoordinator(coordinator);
+
+// 清除用例同时关闭普通回复，不能只取消重写而让旧模型继续提交。
+await initial('clear-running-reply');
+await messages.commitMessage({ message: makeMessage('clear-running-reply', '等待回复的新输入', { isMe: true, senderType: 'user' }), previewText: '等待回复的新输入' });
+let clearedRunParams;
+let markClearRunStarted;
+let finishClearedModel;
+const clearRunStarted = new Promise(resolve => { markClearRunStarted = resolve; });
+const clearedModel = new Promise(resolve => { finishClearedModel = resolve; });
+const clearCoordinator = createConversationTurnCoordinator({
+  turns, resolveAIConfig: async () => ai,
+  executeTurn: async params => { clearedRunParams = params; markClearRunStarted(); return clearedModel; },
+});
+configureWithCoordinator(clearCoordinator);
+const clearingExecution = clearCoordinator.executeTurnFromHost('clear-running-reply');
+await clearRunStarted;
+const clearingPreview = new display.ChatTurnPresentation(clearedRunParams.run, ai.agentId, ai.id);
+await clearingPreview.start();
+clearingPreview.sink.onDirty(() => [{ runId: clearedRunParams.run.runId, sequence: 1, stepIndex: 1, kind: 'reasoning',
+  status: 'streaming', text: '即将清除的过程', clientMessageId: `agent-timeline:${clearedRunParams.run.runId}:1:0`, createdAt: time, time: '18:00' }]);
+await clearingPreview.flush();
+const transient = load('src/features/chat/messages/application/AgentTransientTimeline.ts');
+assert.ok(transient.snapshotAgentTransientTimelineWithReplacements('clear-running-reply').length);
+mocks['@features/profile'] = {};
+load('src/features/chat/conversation/application/ChatConversationRuntime.ts').configureChatConversationRuntime({
+  sessions: load('src/features/chat/conversation/infrastructure/SQLiteSessionRepository.ts').sessionRepository,
+});
+let resetPublished = false;
+const stopClearObservation = events.setChatEventBus({ emit: (name, payload) => {
+  if (name !== 'messagesReloadRequested' || !payload.resetHistory) return;
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id = ?').get(payload.sessionId).count, 0, '清除事实必须在 commit 后发布');
+  resetPublished = true;
+} });
+await load('src/features/chat/conversation/application/ChatPresentation.ts').clearChatConversationHistory('clear-running-reply');
+assert.equal(resetPublished, true);
+assert.equal(clearedRunParams.signal.aborted, true, '清除普通回复也取消其模型句柄');
+assert.equal(transient.snapshotAgentTransientTimelineWithReplacements('clear-running-reply').length, 0, '删除持久快照时也释放当前运行投影');
+assert.equal((await commit(clearedRunParams.run, [makeMessage('clear-running-reply', '清除后迟到的回复')])).outcome, 'fence_failed');
+finishClearedModel('empty_reply');
+await clearingExecution;
+await clearingPreview.finish();
+stopClearObservation();
 configureWithCoordinator(coordinator);
 
 // 原输入可能已被摘要移出原文，但不能直接注入原回复、工具记录或后续通话。

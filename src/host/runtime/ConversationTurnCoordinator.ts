@@ -1,5 +1,5 @@
 /**
- * @fileoverview ConversationTurnCoordinator —— canonical user_reply 的内存仲裁层（Phase 5A，方案 16.3/16.7）。
+ * @fileoverview ConversationTurnCoordinator —— 普通回复、重写与 AI 日程的会话执行权协调。
  *
  * 裁决"这个会话现在谁可以发起一轮回复"：
  * - activeHandles 只持有 run 句柄与 AbortController，不是事实来源；
@@ -30,6 +30,7 @@ import {
   emitChatMessagesReloadRequested,
   emitChatTurnExecutionChanged,
   interruptChatRunPresentation,
+  recoverTurnPresentationDisplays,
   isChatReplyRunCancellationError,
   type CanonicalUserMessageCommittedPayload,
   type ConversationTurnRun,
@@ -104,6 +105,14 @@ export interface ConversationTurnCoordinatorDeps {
 }
 
 export interface ConversationTurnCoordinator {
+  /** 聊天优先；自主机会按计划时间取最新，不等待旧任务形成补跑队列。 */
+  runAutonomousFromHost<T>(
+    sessionId: string,
+    runId: string,
+    priority: AutonomousPriority,
+    execute: (context: { signal: AbortSignal; displacedRunId?: string }) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<AutonomousConversationResult<T>>;
   /**
    * 启动一轮回复：claim + 注册句柄 + fire-and-forget 执行。
    * 返回是否成功启动；已有活句柄或无待回复输入时返回 false。
@@ -139,10 +148,15 @@ export interface ConversationTurnCoordinator {
   cancelActiveTurnsForReset(): Promise<void>;
   resumeTurnsAfterReset(): void;
   requestRegenerationFromHost(sessionId: string): Promise<boolean>;
-  abortRegeneration(sessionId: string): Promise<void>;
+  abortInvalidatedTurn(sessionId: string): Promise<void>;
 }
 
+interface AutonomousPriority { plannedAt: string; updatedAt: string; scheduleId: string }
+type AutonomousConversationResult<T> = { status: 'ran'; value: T }
+  | { status: 'chat_busy' } | { status: 'superseded'; scheduleId: string };
+
 interface ActiveHandle {
+  priority?: AutonomousPriority;
   kind: ConversationTurnRun['kind'];
   runId: string;
   abort: AbortController;
@@ -165,6 +179,8 @@ export function createConversationTurnCoordinator(
   const activeHandles = new Map<string, ActiveHandle>();
   let acceptingTurns = true;
   const sessionFlights = new Map<string, Promise<unknown>>();
+  const autonomousControllers = new Map<string, AbortController>();
+  const autonomousAdmissions = new Map<string, Promise<void>>();
   const yieldControl = deps.yieldControl ?? defaultYieldControl;
   const recoveryBatchSize = deps.recoveryBatchSize ?? 50;
 
@@ -250,7 +266,6 @@ export function createConversationTurnCoordinator(
       }
     } finally {
       // T4 的持久终态提交后再刷新展示，不能以执行函数的 finally 代替事务完成。
-      emitChatTurnExecutionChanged(sessionId);
       emitChatMessagesReloadRequested(sessionId);
       emitChatTypingStatusChanged(sessionId, false, context.correlationId || run.runId);
       if (run.kind === 'regenerate') emitChatRegenerationChanged(sessionId, regenerationError);
@@ -259,6 +274,7 @@ export function createConversationTurnCoordinator(
       if (current?.runId === run.runId) {
         activeHandles.delete(sessionId);
       }
+      emitChatTurnExecutionChanged(sessionId);
     }
   }
 
@@ -351,6 +367,97 @@ export function createConversationTurnCoordinator(
   }
 
   return {
+    async runAutonomousFromHost<T>(sessionId: string, runId: string, priority: AutonomousPriority,
+      execute: (context: { signal: AbortSignal; displacedRunId?: string }) => Promise<T>,
+      sourceSignal?: AbortSignal): Promise<AutonomousConversationResult<T>> {
+      const controller = new AbortController();
+      const forwardAbort = () => controller.abort(sourceSignal!.reason);
+      sourceSignal?.addEventListener('abort', forwardAbort, { once: true });
+      if (sourceSignal?.aborted) forwardAbort();
+      autonomousControllers.set(runId, controller);
+      const assertActive = () => {
+        if (!acceptingTurns || controller.signal.aborted) throw new Error('Autonomous execution aborted');
+      };
+      try {
+        // 这里只串行化短小的 owner 交接，不等待模型、工具或分段交付。
+        for (;;) {
+          assertActive();
+          const pending = autonomousAdmissions.get(sessionId);
+          if (!pending) break;
+          await pending;
+        }
+        assertActive();
+        const active = activeHandles.get(sessionId);
+        if (sessionFlights.has(sessionId) || (active && active.kind !== 'autonomous')) return { status: 'chat_busy' };
+        if (active) {
+          const previous = active.priority!;
+          const byTime = Date.parse(priority.plannedAt) - Date.parse(previous.plannedAt);
+          const byVersion = priority.updatedAt.localeCompare(previous.updatedAt);
+          if (byTime < 0 || (byTime === 0 && (byVersion < 0 || (byVersion === 0 && priority.scheduleId <= previous.scheduleId)))) {
+            return { status: 'superseded', scheduleId: previous.scheduleId };
+          }
+        }
+        const admission = Promise.resolve().then(async () => {
+          assertActive();
+          let displacedRunId: string | undefined;
+          const previous = await deps.turns.getActiveRun(sessionId);
+          if (previous?.kind === 'autonomous') {
+            // 先撤销持久 fence，再发协作式取消；旧网络返回不能取得新回合提交资格。
+            await deps.turns.revoke(previous, 'cancelled', 'newer_schedule');
+            const oldHandle = activeHandles.get(sessionId);
+            if (oldHandle?.runId === previous.runId) {
+              oldHandle.abort.abort('newer_schedule');
+              await interruptChatRunPresentation(previous.runId, 'newer_schedule');
+              if (activeHandles.get(sessionId) === oldHandle) activeHandles.delete(sessionId);
+            }
+            displacedRunId = previous.runId;
+          }
+          if (active?.kind === 'autonomous' && activeHandles.get(sessionId) === active) {
+            active.abort.abort('newer_schedule');
+            await interruptChatRunPresentation(active.runId, 'newer_schedule');
+            if (activeHandles.get(sessionId) === active) activeHandles.delete(sessionId);
+            displacedRunId = active.runId;
+          }
+          await recoverTurnPresentationDisplays([...activeHandles.values()].map(handle => handle.runId));
+          assertActive();
+          const run = await deps.turns.claimAutonomousIfIdle(sessionId, runId);
+          if (!run) return null;
+          const completion = Promise.resolve().then(async () => {
+            try {
+              assertActive();
+              const value = await execute({ signal: controller.signal, displacedRunId });
+              if (controller.signal.aborted) await deps.turns.revoke(run, 'cancelled', 'autonomous_cancelled');
+              else await deps.turns.finishAutonomous(run);
+              return value;
+            } catch (error) {
+              await deps.turns.revoke(run, controller.signal.aborted ? 'cancelled' : 'failed', reasonOf(error));
+              throw error;
+            } finally {
+              if (activeHandles.get(sessionId)?.runId === runId) activeHandles.delete(sessionId);
+              emitChatTurnExecutionChanged(sessionId);
+            }
+          });
+          activeHandles.set(sessionId, { runId, kind: 'autonomous', priority, abort: controller,
+            completion: completion.then(() => undefined, () => undefined) });
+          emitChatTurnExecutionChanged(sessionId);
+          return { completion };
+        });
+        const settledAdmission = admission.then(() => undefined, () => undefined);
+        autonomousAdmissions.set(sessionId, settledAdmission);
+        sessionFlights.set(sessionId, admission);
+        let admitted;
+        try { admitted = await admission; }
+        finally {
+          if (autonomousAdmissions.get(sessionId) === settledAdmission) autonomousAdmissions.delete(sessionId);
+          if (sessionFlights.get(sessionId) === admission) sessionFlights.delete(sessionId);
+        }
+        return admitted ? { status: 'ran', value: await admitted.completion } : { status: 'chat_busy' };
+      } finally {
+        sourceSignal?.removeEventListener('abort', forwardAbort);
+        autonomousControllers.delete(runId);
+      }
+    },
+
     launchTurn(sessionId, _origin, mode, context = {}) {
       return launch(sessionId, mode, context);
     },
@@ -414,6 +521,8 @@ export function createConversationTurnCoordinator(
 
     async recoverConversationTurns() {
       if (!acceptingTurns) return;
+      const interrupted = await deps.turns.interruptAbandonedAutonomousRuns([...autonomousControllers.keys()]);
+      for (const sessionId of interrupted) emitChatTurnExecutionChanged(sessionId);
       // 页面 runtime 只负责发现待恢复会话；claim/执行全部委派 execution host，
       // 多个会话在 Headless 任务内串行完成（模型请求并发有界为 1）。
       if (!deps.executionHost) {
@@ -462,12 +571,12 @@ export function createConversationTurnCoordinator(
       return deps.executionHost.start([sessionId], {});
     },
 
-    async abortRegeneration(sessionId) {
+    async abortInvalidatedTurn(sessionId) {
       const handle = activeHandles.get(sessionId);
-      if (handle?.kind !== 'regenerate') return;
-      const state = await deps.turns.getRegenerationState(sessionId);
+      if (!handle) return;
+      const active = await deps.turns.getActiveRun(sessionId);
       // 取消通知可能晚于新 owner 的 claim；只清理已经失去持久所有权的原句柄。
-      if (state.activeRunId === handle.runId || activeHandles.get(sessionId) !== handle) return;
+      if (active?.runId === handle.runId || activeHandles.get(sessionId) !== handle) return;
       handle.abort.abort();
       activeHandles.delete(sessionId);
       emitChatTypingStatusChanged(sessionId, false, handle.runId);
@@ -479,6 +588,7 @@ export function createConversationTurnCoordinator(
 
     async cancelActiveTurnsForReset() {
       acceptingTurns = false;
+      for (const controller of autonomousControllers.values()) controller.abort('CANCELLED_BY_USER');
       const handles = [...activeHandles.values()];
       for (const handle of handles) handle.abort.abort('CANCELLED_BY_USER');
       // claim 中的 flight 也要排空：它返回后登记的句柄会立即取消，不进入模型准备。

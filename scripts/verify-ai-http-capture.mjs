@@ -1,22 +1,6 @@
 /** 在真实 Client 与传输边界验证 HTTP 原文采集，不经过业务响应归一化。 */
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
-
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-function load(file, dependencies = {}) {
-  const output = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  new Function('require', 'module', 'exports', output)((name) => {
-    assert.ok(Object.hasOwn(dependencies, name), `未装配的测试依赖：${name}`);
-    return dependencies[name];
-  }, module, module.exports);
-  return module.exports;
-}
+import { loadTypeScriptModule as load } from './helpers/load-typescript-module.mjs';
 
 const apiKey = 'sk-http-capture-private-key';
 const records = [], requests = [], logs = [];
@@ -193,6 +177,7 @@ try {
     const controller = new AbortController();
     const raw = outcome === 'success' ? sse : outcome === 'http-error' ? 'proxy rejected\r\n' : partial;
     const status = outcome === 'http-error' ? 503 : 200;
+    const nativeFailure = outcome === 'timeout' ? 'Read timed out' : 'Unable to resolve host "capture.example"';
     globalThis.XMLHttpRequest = class {
       status = status;
       responseText = '';
@@ -202,8 +187,8 @@ try {
         rememberRequest(this.url, body);
         this.responseText = raw;
         this.onprogress();
-        if (outcome === 'network-error') this.onerror();
-        else if (outcome === 'timeout') this.ontimeout();
+        if (outcome === 'network-error') { this.responseText = nativeFailure; this.onerror(); }
+        else if (outcome === 'timeout') { this.responseText = nativeFailure; this.ontimeout(); }
         else if (outcome === 'abort') controller.abort();
         else this.onload();
       }
@@ -211,10 +196,22 @@ try {
     };
     const promise = client().chatStreamWithTools(messages, [], { signal: controller.signal });
     if (outcome === 'abort') await assert.rejects(promise, /abort/i);
-    else assert.equal((await promise).success, outcome === 'success', outcome);
+    else {
+      const result = await promise;
+      assert.equal(result.success, outcome === 'success', outcome);
+      if (outcome === 'network-error' || outcome === 'timeout') {
+        assert.ok(result.error.includes(nativeFailure), '传输错误保留原生原因，不丢成笼统的 API 地址错误');
+        const { getErrorDisplayInfo } = load('src/platform/ai/errorMapping.ts');
+        assert.equal(getErrorDisplayInfo(result.error).type, outcome === 'timeout' ? 'timeout' : 'network');
+      }
+    }
     const exchange = lastExchange(raw, status);
     assert.equal(exchange.transport, 'stream');
     if (outcome !== 'success') assert.ok(exchange.error, outcome);
+  }
+  const { getErrorDisplayInfo } = load('src/platform/ai/errorMapping.ts');
+  for (const reason of ['Network request timed out', 'Network request failed: timeout', 'Network request failed: Read timed out']) {
+    assert.equal(getErrorDisplayInfo(reason).type, 'timeout', '超时不能被 Network 前缀误分为 API 地址问题');
   }
 
   globalThis.XMLHttpRequest = undefined;

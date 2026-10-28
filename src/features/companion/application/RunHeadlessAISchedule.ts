@@ -33,6 +33,7 @@ export interface HeadlessAIScheduleData {
 export type HeadlessAIScheduleOutcome =
   | { status: 'ran'; result: AgentRunResult }
   | { status: 'ignored'; reason: 'not_current_host' }
+  | { status: 'ignored'; reason: 'expired_or_merged' | 'merged_chat' | 'merged_schedule' }
   | {
       status: 'ignored';
       reason: 'claim_rejected';
@@ -47,16 +48,13 @@ export async function runHeadlessAISchedule(
   const callback = parseFormalAIScheduleCallback(data);
   await dependencies.initializeDatabase();
   const authority = await runAsCurrentHostAuthority(callback.hostAIId, async () => {
-    const runId = dependencies.generateAutonomousRunId();
-    const claim = await claimAndTrackAIScheduleRun(runId, () => claimAIScheduleForHeadless({
-      scheduleId: callback.scheduleId,
-      ownerAIId: callback.hostAIId,
-      runId,
-      claimedAt: callback.triggeredAt,
-      expectedRemindAt: callback.expectedRemindAt,
-      projectionToken: callback.projectionToken,
-    }));
-    return { runId, claim };
+    const selected = await dependencies.repositories.aiSchedules.prepareDispatch({
+      scheduleId: callback.scheduleId, ownerAIId: callback.hostAIId, expectedRemindAt: callback.expectedRemindAt,
+      projectionToken: callback.projectionToken, occurredAt: new Date().toISOString(),
+    });
+    if (!selected) return null;
+    const session = await dependencies.chat.resolveCanonicalConversation({ aiId: callback.hostAIId });
+    return { selected, sessionId: session.id };
   });
 
   if (authority.status === 'not_current_host') {
@@ -67,25 +65,49 @@ export async function runHeadlessAISchedule(
     return { status: 'ignored', reason: authority.status };
   }
 
-  const { runId, claim } = authority.value;
-  if (claim.status !== 'claimed') {
-    console.info('[RavenCatAIScheduleTask] AI Schedule callback 未取得执行权', {
-      scheduleId: callback.scheduleId,
-      claimStatus: claim.code,
+  if (!authority.value) return { status: 'ignored', reason: 'expired_or_merged' };
+  const { sessionId, selected } = authority.value;
+  const runId = dependencies.generateAutonomousRunId();
+  const admission = await dependencies.chat.runInConversation<HeadlessAIScheduleOutcome>(sessionId, runId,
+    { plannedAt: selected.remindAt, updatedAt: selected.updatedAt, scheduleId: selected.scheduleId }, async execution => {
+    if (execution.displacedRunId) await dependencies.repositories.aiSchedules.mergeClaimedRun(
+      execution.displacedRunId, selected.scheduleId, new Date().toISOString());
+    // owner 交接期间主理身份或开关可能改变；真正开始时才 claim。
+    const currentAuthority = await runAsCurrentHostAuthority(callback.hostAIId, () =>
+      claimAndTrackAIScheduleRun(runId, () => claimAIScheduleForHeadless({
+        scheduleId: selected.scheduleId, ownerAIId: callback.hostAIId, runId,
+        claimedAt: new Date().toISOString(), expectedRemindAt: selected.remindAt,
+        projectionToken: selected.updatedAt,
+      })));
+    if (currentAuthority.status === 'not_current_host') return { status: 'ignored', reason: 'not_current_host' };
+    const claim = currentAuthority.value;
+    if (claim.status !== 'claimed') {
+      console.info('[RavenCatAIScheduleTask] AI Schedule callback 未取得执行权', {
+        scheduleId: callback.scheduleId, claimStatus: claim.code,
+      });
+      return { status: 'ignored', reason: 'claim_rejected', claimStatus: claim.code };
+    }
+    const result = await runClaimedAISchedule({
+      runId, sessionId,
+      claimedSchedule: claim.schedule, triggeredAt: callback.triggeredAt, signal: execution.signal,
     });
-    return { status: 'ignored', reason: 'claim_rejected', claimStatus: claim.code };
-  }
-  const result = await runClaimedAISchedule({
-    runId,
-    claimedSchedule: claim.schedule,
-    triggeredAt: callback.triggeredAt,
-    signal,
+    return { status: 'ran', result };
+  }, signal).catch(async error => {
+    await dependencies.repositories.aiSchedules.mergeScheduled(selected.scheduleId, null, new Date().toISOString(),
+      signal?.aborted ? 'execution_interrupted' : 'dispatch_failed');
+    throw error;
   });
-  return { status: 'ran', result };
+  if (admission.status !== 'ran') {
+    await dependencies.repositories.aiSchedules.mergeScheduled(selected.scheduleId,
+      admission.status === 'superseded' ? admission.scheduleId : null, new Date().toISOString());
+    return { status: 'ignored', reason: admission.status === 'superseded' ? 'merged_schedule' : 'merged_chat' };
+  }
+  return admission.value;
 }
 
 async function runClaimedAISchedule(input: {
   runId: string;
+  sessionId: string;
   claimedSchedule: AISchedule;
   triggeredAt: string;
   signal?: AbortSignal;
@@ -118,6 +140,8 @@ async function runClaimedAISchedule(input: {
           runId: input.runId,
           consumedAt: new Date().toISOString(),
           completionDisposition,
+          failureCode: result && result.terminalCode !== 'COMPLETED' ? result.terminalCode
+            : result?.steps.some(step => step.toolCalls.some(call => call.outcome.status === 'error')) ? 'tool_failed' : undefined,
         });
         if (outcome.status !== 'consumed' && outcome.code !== 'already_terminal') {
           throw new Error(

@@ -28,6 +28,7 @@ interface ChatMessageActionMenuProps {
   onQuote?: () => void;
   onTranslate?: () => void;
   onFavorite?: () => void;
+  isFavorited?: boolean;
   onToggleVoiceTranscript?: () => void;
   isVoiceTranscriptExpanded?: boolean;
   onFixedStart?: () => void;
@@ -59,6 +60,7 @@ function ChatMessageActionMenu({
   onQuote,
   onTranslate,
   onFavorite,
+  isFavorited = false,
   onToggleVoiceTranscript,
   isVoiceTranscriptExpanded = false,
   onFixedStart,
@@ -85,7 +87,7 @@ function ChatMessageActionMenu({
     { key: 'quote', label: '引用', icon: 'return-up-back-outline', onPress: onQuote },
     { key: 'translate', label: '翻译', icon: 'language-outline', onPress: onTranslate },
     { key: 'forward', label: '分享', icon: 'arrow-redo-outline', onPress: onForward },
-    { key: 'favorite', label: '收藏', icon: 'star-outline', onPress: onFavorite },
+    { key: 'favorite', label: isFavorited ? '已收藏' : '收藏', icon: 'star-outline', onPress: onFavorite },
   ] satisfies ActionItem[];
 
   if (!actions.some((item) => item.onPress)) return null;
@@ -135,11 +137,11 @@ function ChatMessageActionMenu({
         activeOpacity={0.6}
         accessibilityRole="button"
         accessibilityLabel={item.label}
-        accessibilityState={{ disabled: !action }}
+        accessibilityState={{ disabled: !action, ...(item.key === 'favorite' ? { selected: isFavorited } : {}) }}
         disabled={!action}
         onPress={action ? () => { action(); onClose(); } : undefined}
       >
-        {item.key === 'history' ? <History size={22} color={theme.colors.brand.onPrimary} /> : item.key === 'favorite' ? <Star size={22} color={theme.colors.brand.onPrimary} /> : item.key === 'fixedStart'
+        {item.key === 'history' ? <History size={22} color={theme.colors.brand.onPrimary} /> : item.key === 'favorite' ? <Star size={22} color={theme.colors.brand.onPrimary} fill={isFavorited ? theme.colors.brand.onPrimary : 'none'} /> : item.key === 'fixedStart'
           ? (isFixedStart ? <PinOff size={22} color={theme.colors.brand.onPrimary} /> : <Pin size={22} color={theme.colors.brand.onPrimary} />)
           : <Ionicons name={item.icon} size={22} color={theme.colors.brand.onPrimary} />}
         <Text style={[styles.actionLabel, { color: theme.colors.brand.onPrimary }]}>{item.label}</Text>

@@ -169,6 +169,37 @@ class RavenCatAIScheduleSchedulerTest {
     assertEquals(1, executionPort.headlessStarts.get())
     assertEquals(listOf("$scheduleId@v1"), executionPort.headlessDeliveryEventIds)
     assertNull(RavenCatAIScheduleStore.get(context, scheduleId))
+    val stages = RavenCatCompanionWakeStore.scheduleDiagnostics(context)
+    assertEquals("WORKER_STARTED", stages.first()["stage"])
+    assertEquals("HOST_FINISHED", stages.last()["stage"])
+    assertEquals(setOf("$scheduleId@v1"), stages.map { it["deliveryEventId"] }.toSet())
+  }
+
+  @Test
+  fun `diagnostics retain bounded separate deliveries without request content`() {
+    repeat(RavenCatCompanionWakeStore.MAX_SCHEDULE_DIAGNOSTICS + 3) { index ->
+      RavenCatCompanionWakeStore.recordScheduleDiagnostic(context, "schedule-$index@v1",
+        AIScheduleDiagnosticStage.ALARM_RECEIVED, remindAtEpochMs)
+    }
+    val history = RavenCatCompanionWakeStore.scheduleDiagnostics(context)
+    assertEquals(RavenCatCompanionWakeStore.MAX_SCHEDULE_DIAGNOSTICS, history.size)
+    assertEquals("schedule-3@v1", history.first()["deliveryEventId"])
+    assertEquals(remindAtEpochMs, history.first()["expectedRemindAtEpochMs"])
+    RavenCatCompanionWakeStore.recordRunnerCompletion(context, "failed@v1", false, "private request content")
+    assertEquals("FAILED", RavenCatCompanionWakeStore.scheduleDiagnostics(context).last()["outcome"])
+    RavenCatCompanionWakeStore.recordRunnerCompletion(context, "model@v1", true, "agent_terminal:MODEL_REQUEST_FAILED")
+    assertEquals("agent_terminal:MODEL_REQUEST_FAILED", RavenCatCompanionWakeStore.scheduleDiagnostics(context).last()["outcome"])
+    RavenCatCompanionWakeStore.clearAllForFactoryReset(context)
+    assertEquals(emptyList<Map<String, Any?>>(), RavenCatCompanionWakeStore.scheduleDiagnostics(context))
+  }
+
+  @Test
+  fun `diagnostic storage failure cannot prevent schedule execution`() {
+    context.getSharedPreferences("ravencat_companion_wake_store", Context.MODE_PRIVATE)
+      .edit().putString("aiScheduleDiagnostics", "invalid json").commit()
+    RavenCatAIScheduleStore.put(context, projection("v1"))
+    assertEquals(ListenableWorker.Result.success(), worker("v1").doWork())
+    assertEquals(1, executionPort.headlessStarts.get())
   }
 
   @Test

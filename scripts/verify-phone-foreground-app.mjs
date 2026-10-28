@@ -1,51 +1,6 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function read(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
-}
-
-function loadTypeScriptModule(relativePath, mocks = {}) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const compiled = ts.transpileModule(read(relativePath), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-    fileName: absolutePath,
-    reportDiagnostics: true,
-  });
-  const errors = (compiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  assert.deepEqual(errors, [], `${relativePath} 无法编译`);
-
-  const module = { exports: {} };
-  const executeModule = new Function(
-    'exports',
-    'require',
-    'module',
-    '__filename',
-    '__dirname',
-    compiled.outputText,
-  );
-  executeModule(
-    module.exports,
-    (specifier) => {
-      assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 存在未声明依赖：${specifier}`);
-      return mocks[specifier];
-    },
-    module,
-    absolutePath,
-    path.dirname(absolutePath),
-  );
-  return module.exports;
-}
+import { loadTypeScriptModule, readRepoFile } from './helpers/load-typescript-module.mjs';
 
 const abortSignalRuntime = loadTypeScriptModule('src/shared/runtime/abortSignal.ts');
 const protectedAppsPolicy = loadTypeScriptModule(
@@ -151,7 +106,7 @@ const phoneToolBoundaryFiles = [
 for (const relativePath of phoneToolBoundaryFiles) {
   const sourceFile = ts.createSourceFile(
     relativePath,
-    read(relativePath),
+    readRepoFile(relativePath),
     ts.ScriptTarget.Latest,
     true,
   );

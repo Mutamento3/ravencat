@@ -811,6 +811,7 @@ function createPreloadHarness() {
   });
   const preparation = load('src/features/chat/presentation/shell/ConversationPreparationController.ts');
   const router = load('src/features/chat/presentation/shell/ChatRouterContext.tsx', {
+    './ChatTextDraftProvider': { ChatTextDraftProvider: ({ children }) => children },
     './useChatScreen': screen,
     './ConversationPreparationController': preparation,
     './conversationPreloadCandidates': preloadCandidatesModule,

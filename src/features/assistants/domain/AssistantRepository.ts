@@ -87,9 +87,6 @@ export interface IAIAssistantRepository {
   delete(assistantId: string): Promise<AIAssistantDeletionResult>;
   getAvatarMediaAssetReference(ownerId: string): Promise<AIAvatarMediaAssetReference | null>;
   listAvatarMediaAssetMigrationCandidates(): Promise<AIAvatarMediaAssetMigrationCandidate[]>;
-  getAvatarMediaAssetMigrationCandidate(
-    ownerId: string,
-  ): Promise<AIAvatarMediaAssetMigrationCandidate | null>;
   commitAvatarMediaAssetReferenceInTransaction(
     transaction: DatabaseTransactionExecutor,
     input: CommitAIAvatarMediaAssetReferenceInput,

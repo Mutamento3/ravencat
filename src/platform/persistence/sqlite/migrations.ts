@@ -8,11 +8,13 @@ import { migrateStickerOwnership } from './stickerOwnershipMigration';
 import { migrateApplicationSettingsTools } from './applicationSettingsMigration';
 import { migrateChatTurnObservability } from './chatTurnObservabilitySchema';
 import { migrateAssistantNicknameHistory } from './assistantNicknameHistoryMigration';
-import { migrateChatTurnPublication } from './chatTurnPresentationSchema';
+import { migrateChatTurnPublication, migrateChatTurnDisplayReadState } from './chatTurnPresentationSchema';
 import { migrateGroupMembership } from './groupMembershipSchema';
+import { migrateMomentAnalysisErrorMessage } from './momentsSchema';
+import { migrateAIScheduleContext } from './ravenCatCompanionSchema';
 
-/** 143 已安装库可能尚无截图表；正式升级补齐结构，保留已有通话与媒体引用。 */
-export const DATABASE_SCHEMA_VERSION = 144;
+/** 150 增加联网连接方式，已有配置默认保持直连。 */
+export const DATABASE_SCHEMA_VERSION = 150;
 /** 114/115 是旧代码里的迁移编号；已发布数据库实际停在 user_version=108。 */
 const PUBLIC_RELEASE_VERSION = 108;
 
@@ -56,14 +58,14 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
     }
     return;
   }
-  if (version !== 0 && version !== PUBLIC_RELEASE_VERSION && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143) {
+  if (version !== 0 && version !== PUBLIC_RELEASE_VERSION && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143 && version !== 144 && version !== 145 && version !== 146 && version !== 147 && version !== 148 && version !== 149) {
     throw new Error(`数据库版本 ${version} 不受当前版本支持，请使用匹配的 RavenCat 版本。`);
   }
   const tables = await db.getAllAsync<{ name: string }>(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'android_metadata'",
   );
   const fresh = tables.length === 0;
-  if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143) {
+  if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143 && version !== 144 && version !== 145 && version !== 146 && version !== 147 && version !== 148 && version !== 149) {
     // 在任何 DDL/default 写入之前检查；失败不修改旧库。
     await assertPublicReleaseSchema(db);
     const retiredTables = new Set(['raven_cat_self_wakes', 'capability_bindings', 'assistant_capability_bindings', 'memory_entries']);
@@ -88,6 +90,7 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
     // 工具包暴露只是临时选择，不兼容旧三轮状态；重建空表，其他业务资料保持不变。
     if (!fresh && version < 127) await db.execAsync('DROP TABLE IF EXISTS chat_tool_package_exposure;');
     for (const sql of Object.values(SCHEMAS)) await db.execAsync(sql);
+    if (!fresh && version < 148) await migrateChatTurnDisplayReadState(db);
     if (!fresh) await migrateChatTurnObservability(db);
     if (!fresh) await migrateChatTurnPublication(db);
     if (!fresh && version < 135) await migrateAssistantNicknameHistory(db, version);
@@ -104,8 +107,16 @@ export async function runMigrations(db: DatabaseWriteExecutor): Promise<void> {
     if (!fresh && version < 141) await migrateGroupMembership(db);
     for (const sql of Object.values(INDEXES)) await db.execAsync(sql);
     if (!fresh && version < 142) await migrateChatSummaryWorkQueue(db);
+    if (!fresh && version < 145) await migrateMomentAnalysisErrorMessage(db);
+    if (!fresh && version < 149) await migrateAIScheduleContext(db);
+    if (!fresh && version < 150) {
+      const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(web_search_settings)');
+      if (!columns.some(column => column.name === 'connection_mode')) {
+        await db.execAsync("ALTER TABLE web_search_settings ADD COLUMN connection_mode TEXT NOT NULL DEFAULT 'direct' CHECK (connection_mode IN ('direct', 'system'));");
+      }
+    }
     if (!fresh) await migrateApplicationSettingsTools(db);
-    if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143) {
+    if (!fresh && version !== 116 && version !== 117 && version !== 118 && version !== 119 && version !== 120 && version !== 121 && version !== 122 && version !== 123 && version !== 124 && version !== 125 && version !== 126 && version !== 127 && version !== 128 && version !== 129 && version !== 130 && version !== 131 && version !== 132 && version !== 133 && version !== 134 && version !== 135 && version !== 136 && version !== 137 && version !== 138 && version !== 139 && version !== 140 && version !== 141 && version !== 142 && version !== 143 && version !== 144 && version !== 145 && version !== 146 && version !== 147 && version !== 148 && version !== 149) {
       // 纳入公开版115的定向修复：只清理无有效主体的 MCP 授权，正常授权原样保留。
       await db.execAsync(`
         DELETE FROM mcp_server_assistants

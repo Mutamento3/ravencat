@@ -170,10 +170,10 @@ export default function AIModelSettings({
 
           <View style={[styles.section, styles.sectionLightBorder]}>
             <ToggleField
-              label="关闭思维链"
-              hint="开启后关闭思考，关掉则开启思考。非思考模型保持原样；固定思考模型无法关闭。"
-              value={disableThinking}
-              onValueChange={setDisableThinking}
+              label="启用思维链"
+              hint="开启时先思考再回答，关闭时请求直接回答。非思考模型不受影响；固定思考模型无法关闭。"
+              value={!disableThinking}
+              onValueChange={(enabled) => setDisableThinking(!enabled)}
             />
           </View>
 

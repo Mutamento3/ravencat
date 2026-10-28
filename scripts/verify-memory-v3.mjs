@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
+import { createCoordinatedSqliteFixture, databaseErrors } from './helpers/coordinated-sqlite-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const nativeRequire = createRequire(import.meta.url);
@@ -42,15 +43,16 @@ const executor = {
 };
 const coordinator = { openTaskExecutor: () => executor, transaction: (_meta, operation) => executor.withExclusiveTransactionAsync(operation) };
 const cache = new Map();
-function load(relative) {
+function load(relative, dependencies = {}) {
   const filename = path.resolve(root, relative);
   if (cache.has(filename)) return cache.get(filename).exports;
   const module = { exports: {} }; cache.set(filename, module);
   const source = fs.readFileSync(filename, 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const requireLocal = (specifier) => {
+    if (Object.hasOwn(dependencies, specifier)) return dependencies[specifier];
     if (specifier === './HttpExchangeCapture') return { beginAIHttpCapture: async () => null };
-    if (specifier === '@platform/persistence') return { databaseCoordinator: coordinator };
+    if (specifier === '@platform/persistence') return { databaseCoordinator: coordinator, ...databaseErrors };
     if (specifier === 'expo-file-system/legacy') return {};
     if (filename === path.join(root, 'src/platform/persistence/helpers.ts') && specifier === './runtime'
       || filename === path.join(root, 'src/platform/persistence/sqlite/initialization.ts') && specifier === '../runtime') {
@@ -488,6 +490,29 @@ try {
   assert.equal(remaining.timeline_order_anchor_id, anchor);
   summaryRuntime.configureChatSummaryRuntime({ repository: summary, getBatchSize: async () => 1,
     generateAddition: async () => '10 月 4 日讨论 10 月 10 日考试' });
+  // 提示词的启用状态只消费摘要设置，暂停或固定原文不会产生第二份提示词开关。
+  let promptStateConversation = null;
+  load('src/features/chat/conversation/application/ChatConversationRuntime.ts').configureChatConversationRuntime({
+    sessions: { getCanonicalConversation: async () => promptStateConversation },
+  });
+  assert.deepEqual(await summaryApplication.getAssistantChatSummaryGenerationState('prompt-settings-ai'), { primaryEnabled: true, secondaryEnabled: true });
+  database.prepare('INSERT INTO ai_assistants(id,agent_id,name,model,created_at,updated_at) VALUES (?,?,?,?,?,?)')
+    .run('prompt-settings-ai', 'prompt-settings-agent', '摘要设置', 'chat', now, now);
+  database.prepare("INSERT INTO chat_conversations(id,kind) VALUES ('prompt-settings-chat','direct')").run();
+  database.prepare('INSERT INTO sessions(id,ai_assistant_id,name,created_at,updated_at) VALUES (?,?,?,?,?)')
+    .run('prompt-settings-chat', 'prompt-settings-ai', '摘要设置', now, now);
+  promptStateConversation = { id: 'prompt-settings-chat' };
+  await summary.updateSettings('prompt-settings-chat', { secondaryEnabled: false });
+  assert.deepEqual(await summaryApplication.getAssistantChatSummaryGenerationState('prompt-settings-ai'), { primaryEnabled: true, secondaryEnabled: false });
+  await summary.updateSettings('prompt-settings-chat', { generationEnabled: false, secondaryEnabled: true });
+  assert.deepEqual(await summaryApplication.getAssistantChatSummaryGenerationState('prompt-settings-ai'), { primaryEnabled: false, secondaryEnabled: false });
+  await summary.updateSettings('prompt-settings-chat', { generationEnabled: true, injectEnabled: false });
+  assert.deepEqual(await summaryApplication.getAssistantChatSummaryGenerationState('prompt-settings-ai'), { primaryEnabled: true, secondaryEnabled: true }, '已有摘要注入开关不控制提取任务');
+  database.prepare("INSERT INTO messages(id,session_id,text,is_me,sender_type,created_at,status) VALUES (4900,'prompt-settings-chat','固定原文',1,'user',?,'sent')").run(now);
+  await summary.setFixedStart('prompt-settings-chat', 4900);
+  assert.deepEqual(await summaryApplication.getAssistantChatSummaryGenerationState('prompt-settings-ai'), { primaryEnabled: false, secondaryEnabled: false });
+  database.prepare("DELETE FROM ai_assistants WHERE id='prompt-settings-ai'").run();
+  database.prepare("DELETE FROM chat_conversations WHERE id='prompt-settings-chat'").run();
   const dates = buildSummaryInput({ ...summaryClaim, messages: [{ ...summaryClaim.messages[0], content: '10 月 10 日考试' }] });
   assert.ok(JSON.parse(dates).newMessagesOnly[0].localDateTime.startsWith('2026-10-04'));
 
@@ -1026,7 +1051,7 @@ try {
   const { sessionRepository } = load('src/features/chat/conversation/infrastructure/SQLiteSessionRepository.ts');
   await sessionRepository.clearConversationHistory('fixed-context');
   const clearedFixed = await summary.readContext('fixed-context',[]);
-  assert.equal(clearedFixed.fixedStart,null,'清空隐藏历史也取消固定');
+  assert.equal(clearedFixed.fixedStart,null,'清空删除原文并取消固定');
   assert.deepEqual(clearedFixed.raw,[]);
   assert.deepEqual(clearedFixed.segments,fixedSummaries,'清空保留旧摘要');
   assert.equal(clearedFixed.settings.generationEnabled,false);
@@ -1271,6 +1296,103 @@ try {
   const toolOriginal = await summary.readContext('tool-summary', []);
   const fullText = '共同前缀，事件1\n\n共同前缀，事件2';
   assert.equal((await GetSecondarySummaryTool.execute({}, editContext)).data.content, fullText, '完整读取独立于注入与生成开关');
+
+  // 使用真实协调器覆盖错误包装边界，不能让简化事务 fixture 掩盖业务错误类型丢失。
+  const realFixture = createCoordinatedSqliteFixture(raw);
+  const { diagnostics } = realFixture;
+  const { AgentToolExecutor } = load('src/platform/agentRuntime/AgentToolExecutor.ts', {
+    '@shared/aiTools': { matchesAgentToolInputSchema },
+  });
+  const summaryTools = [GetSecondarySummaryTool, EditSecondarySummaryTool, EditPrimarySummaryTool, DeletePrimarySummaryTool,
+    nativeTools.RememberMemoryTool, nativeTools.UpdateMemoryTool];
+  const summaryToolExecutor = new AgentToolExecutor({
+    get: name => {
+      const tool = summaryTools.find(item => item.name === name);
+      return { descriptor: { name, inputSchema: tool.definition.parameters }, execute: tool.execute };
+    },
+  });
+  const runtimeContext = {
+    ...editContext, runId: 'summary-error-run',
+    task: { ...editContext.task, id: 'summary-error-task', allowedToolNames: summaryTools.map(tool => tool.name) },
+  };
+  const executeSummaryTool = (tool, input, context = runtimeContext) => summaryToolExecutor.execute(
+    summaryToolExecutor.prepare({ id: 'summary-error-call', name: tool.name, arguments: JSON.stringify(input) }, context.task),
+    context,
+  );
+  const previousOpenTaskExecutor = coordinator.openTaskExecutor;
+  const realCoordinator = realFixture.databaseCoordinator;
+  coordinator.openTaskExecutor = meta => realCoordinator.openTaskExecutor(meta);
+  const previousConsoleError = console.error;
+  const toolErrorLogs = [];
+  const failedEditEvents = [];
+  const unsubscribeFailedEdits = summaryRuntime.subscribeChatSummaryChanged(id => failedEditEvents.push(id));
+  console.error = (...args) => toolErrorLogs.push(args);
+  try {
+    for (const [tool, input, message] of [
+      [EditSecondarySummaryTool, { mode: 'replace_all', oldText: '过期原文', newText: '不能覆盖' }, '摘要原文不匹配或已变化，请重新读取后再编辑'],
+      [EditSecondarySummaryTool, { mode: 'replace_text', oldText: '共同前缀', newText: '不能猜测' }, '原文片段有多处匹配，请提供更长且唯一的片段'],
+      [EditPrimarySummaryTool, { segmentId: 'tool-p1', mode: 'replace_all', oldText: '过期原文', newText: '不能覆盖' }, '摘要原文不匹配或已变化，请重新读取后再编辑'],
+      [DeletePrimarySummaryTool, { segmentId: 'tool-p1', expectedContent: '过期原文' }, '一级摘要已变化，请重新查询后再删除'],
+      [GetSecondarySummaryTool, { conversationId: 'missing-conversation' }, '来源会话不存在或当前 AI 无权访问'],
+    ]) {
+      const outcome = await executeSummaryTool(tool, input);
+      assert.deepEqual(outcome, { status: 'error', code: 'CHAT_SUMMARY_EDIT_ERROR', retryable: false, modelContent: message },
+        '业务拒绝穿过真实事务与工具执行器后仍向模型提供具体原因');
+    }
+    assert.equal(toolErrorLogs.length, 0, '可预期的摘要业务拒绝不触发开发版红色错误日志');
+    assert.equal(diagnostics.filter(event => event.outcome === 'rolled_back').length, 5, '业务拒绝仍回滚并保留事务诊断');
+
+    const memoryContext = { ...runtimeContext, runId: 'memory-error-run', toolCallId: 'memory-error-call',
+      task: { ...runtimeContext.task, assistantId: 'a' } };
+    const deletedWriteKey = JSON.stringify([memoryContext.runId, memoryContext.toolCallId]);
+    await create('deleted-error-memory', '用户将删除的记忆', now, 'pool-a', deletedWriteKey);
+    await repository.deleteEntry('pool-a', 'deleted-error-memory');
+    const memoryRowsBefore = database.prepare('SELECT * FROM memory_items ORDER BY id').all();
+    for (const [tool, input] of [
+      [nativeTools.UpdateMemoryTool, { memoryId: 'missing-error-memory', content: '不能更新不存在的记忆' }],
+      [nativeTools.RememberMemoryTool, { content: '不能用回执恢复用户删除的记忆' }],
+    ]) {
+      assert.deepEqual(await executeSummaryTool(tool, input, memoryContext), {
+        status: 'error', code: 'MEMORY_INPUT_ERROR', retryable: false, modelContent: '当前记忆空间中不存在这条记忆',
+      });
+    }
+    await assert.rejects(repository.getEntryByWriteKey('pool-a', deletedWriteKey), domain.MemoryNotFoundError,
+      '读回执后的业务拒绝保持原类型，无需再解包');
+    assert.deepEqual(database.prepare('SELECT * FROM memory_items ORDER BY id').all(), memoryRowsBefore);
+    assert.equal(toolErrorLogs.length, 0, '记忆不存在通过 observation 返回，不触发红色错误日志');
+    await create('storage-error-memory', '存储故障前的正文');
+    database.exec("CREATE TRIGGER reject_memory_error_test BEFORE UPDATE ON memory_items WHEN OLD.id='storage-error-memory' BEGIN SELECT RAISE(ABORT,'memory storage failure'); END;");
+    try {
+      const failure = await executeSummaryTool(nativeTools.UpdateMemoryTool,
+        { memoryId: 'storage-error-memory', content: '不能保存' }, memoryContext);
+      assert.equal(failure.code, 'TOOL_EXECUTION_FAILED');
+      assert.equal(toolErrorLogs.length, 1);
+      assert.ok(toolErrorLogs[0][1].error instanceof databaseErrors.CoordinatedDatabaseError);
+      assert.equal((await repository.getEntry('pool-a', 'storage-error-memory')).content, '存储故障前的正文');
+    } finally {
+      database.exec('DROP TRIGGER reject_memory_error_test');
+      await repository.deleteEntry('pool-a', 'storage-error-memory');
+    }
+    toolErrorLogs.length = 0;
+
+    database.exec("CREATE TRIGGER reject_summary_error_test BEFORE UPDATE OF revision ON chat_summary_state WHEN OLD.conversation_id='tool-summary' BEGIN SELECT RAISE(ABORT,'摘要存储故障'); END;");
+    try {
+      const outcome = await executeSummaryTool(EditSecondarySummaryTool, { mode: 'replace_text', oldText: '事件1', newText: '不能部分保存' });
+      assert.equal(outcome.code, 'TOOL_EXECUTION_FAILED', '真实 SQLite 故障不能误报成业务拒绝');
+      assert.equal(toolErrorLogs.length, 1);
+      assert.ok(toolErrorLogs[0][1].error instanceof databaseErrors.CoordinatedDatabaseError);
+      assert.match(toolErrorLogs[0][1].error.cause.message, /摘要存储故障/);
+    } finally {
+      database.exec('DROP TRIGGER reject_summary_error_test');
+    }
+    assert.deepEqual(await summary.readContext('tool-summary', []), toolOriginal, '所有失败均保留原正文与进度');
+    assert.deepEqual(failedEditEvents, [], '失败事务不通知提交后消费者');
+  } finally {
+    console.error = previousConsoleError;
+    coordinator.openTaskExecutor = previousOpenTaskExecutor;
+    unsubscribeFailedEdits();
+  }
+
   const expectEditFailure = async (input, context = editContext) => {
     const before = await summary.readContext('tool-summary', []);
     assert.equal((await EditSecondarySummaryTool.execute(input, context)).status, 'error');

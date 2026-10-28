@@ -27,6 +27,8 @@ import type {
 } from './ChatReplyTypes';
 
 export interface AssistantTurnCommitPort {
+  /** 为持久展示绑定本次交付上下文；正式消息提交仍由 T3 独占。 */
+  configureSegmentDelivery?: (params: Pick<PersistCompletedAssistantReplyParams, 'aiConfig' | 'runtimeContext' | 'callbacks'>) => void;
   /** canonical 展示快照接缝；旁路提交不拥有 ConversationTurn 展示记录。 */
   timelineSink?: import('../agent/ChatAgentTimeline').AgentTimelineTransientSink;
   recordToolExecutionStarted?: () => Promise<void>;

@@ -1,23 +1,7 @@
 /** 验证无交互自动裁剪：居中裁剪矩形与比例、小图不放大、动态图单帧信息、失败清理与产物所有权。 */
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import fs from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
-
-const root = path.resolve(import.meta.dirname, '..');
-function load(relative, dependencies = {}) {
-  const compiled = ts.transpileModule(fs.readFileSync(path.join(root, relative), 'utf8'), {
-    fileName: relative,
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  new Function('require', 'module', 'exports', compiled)((name) => {
-    assert.ok(Object.hasOwn(dependencies, name), `${relative} 缺少依赖 ${name}`);
-    return dependencies[name];
-  }, module, module.exports);
-  return module.exports;
-}
+import { loadTypeScriptModule as load } from './helpers/load-typescript-module.mjs';
 
 // ---- 边界假实现：文件系统、尺寸读取、原生裁剪 ----
 const files = new Map(); // uri -> Uint8Array

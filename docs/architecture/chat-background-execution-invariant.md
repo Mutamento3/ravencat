@@ -16,7 +16,7 @@
 回合固定输入区间、T1～T4、revision 与提交 fence 的持久化约束见
 [`conversation-turn-coordination-invariant.md`](./conversation-turn-coordination-invariant.md)。
 
-assistant message T3 commit 之后的用户交付与通知策略，
+完整正文持久展示发布与 assistant message T3 commit 之后的用户交付与通知策略，
 见 docs/architecture/ai-message-delivery-invariant.md。
 
 ## 1. 已发生过的真实故障
@@ -84,7 +84,7 @@ Notification   ≠ execution host
 最终回复回调）。普通页面即使携带非空 callback，仍然必须委派 Android execution host；
 callback 是否存在不得改变所有权。
 
-通知只在 assistant message commit 之后由统一 delivery 协调器决定是否展示，不能承担
+通知只在完整正文展示版本或正式消息 commit 之后由统一 delivery 协调器决定是否展示，不能承担
 持有、恢复或推进 AI run 的 execution-host 职责。
 
 ## 5. 明确禁止

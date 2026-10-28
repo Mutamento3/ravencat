@@ -26,6 +26,7 @@ export type { MimeAwareImageProps } from './MimeAwareImage';
 export { default as ModalSheet } from './ModalSheet';
 export { default as ModelPickerModal } from './ModelPickerModal';
 export { default as ToggleField } from './ToggleField';
+export type { ToggleFieldProps } from './ToggleField';
 export { default as Toggle } from './Toggle';
 export type { ToggleProps } from './Toggle';
 export { default as Slider } from './Slider';

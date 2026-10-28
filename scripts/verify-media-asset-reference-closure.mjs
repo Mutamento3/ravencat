@@ -60,6 +60,7 @@ const { MEDIA_ASSET_SCHEMA, MEDIA_ASSET_CONTENT_HASH_INDEX } = await loadTypeScr
   'src/platform/persistence/sqlite/mediaAssetSchema.ts',
 );
 const { CALL_BACKGROUND_SELECTION_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callBackgroundSchema.ts');
+const { CALL_RINGTONE_SELECTION_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callRingtoneSchema.ts');
 const { CALL_HISTORY_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/callHistorySchema.ts');
 const { CHAT_FAVORITES_SCHEMA } = await loadTypeScriptModule('src/platform/persistence/sqlite/chatFavoriteSchema.ts');
 const chatTimelineSqlModule = await loadTypeScriptModule('src/features/chat/messages/infrastructure/ChatTimelineSql.ts');
@@ -104,6 +105,7 @@ function createDatabase() {
   db.exec(`
     CREATE TABLE profile_wallpaper_selections (selection_key TEXT PRIMARY KEY, media_asset_id TEXT, legacy_uri TEXT, revision INTEGER);
     ${CALL_BACKGROUND_SELECTION_SCHEMA}
+    ${CALL_RINGTONE_SELECTION_SCHEMA}
     CREATE TABLE user_profile (id TEXT PRIMARY KEY, avatar_media_asset_id TEXT, moments_cover_media_asset_id TEXT);
     CREATE TABLE ai_assistants (
       id TEXT PRIMARY KEY,
@@ -757,9 +759,30 @@ for (const kind of ['attachment', 'thumbnail', 'voice', 'sticker']) {
 }
 
 // ============================================================================
-// B1. AI 级联删除：候选收集与删除同属一个事务。
-//     注入「收集发起之后、删除之前新提交的引用 C」，它必须进入候选集并被释放。
+// 来电、拨出与其他角色共享铃声：最后一个引用消失后才回收。
 // ============================================================================
+{
+  const { db, writer, lifecycle, assistants } = createHarness();
+  db.exec("INSERT INTO ai_assistants (id) VALUES ('ring-a'), ('ring-b');");
+  insertAsset(db, 'shared-ringtone');
+  writer.canonicalKeys.add('catalog/media/shared-ringtone.bin');
+  db.exec(`INSERT INTO call_ringtone_selection VALUES
+    ('ring-a', 'incoming', 'shared-ringtone', 'ring.mp3', 0),
+    ('ring-a', 'outgoing', 'shared-ringtone', 'ring.mp3', 0),
+    ('ring-b', 'incoming', 'shared-ringtone', 'ring.mp3', 0);`);
+  const audit = await lifecycle.audit();
+  assert.equal(audit.references.filter(ref => ref.kind === 'call_ringtone').length, 3);
+  assert.deepEqual((await lifecycle.releaseCandidates(['shared-ringtone'])).releasedAssets, []);
+  const first = await assistants.delete('ring-a');
+  assert.deepEqual(first.mediaAssetCandidates, ['shared-ringtone']);
+  assert.deepEqual((await lifecycle.releaseCandidates(first.mediaAssetCandidates)).releasedAssets, []);
+  const second = await assistants.delete('ring-b');
+  assert.deepEqual((await lifecycle.releaseCandidates(second.mediaAssetCandidates)).releasedAssets.map(asset => asset.id), ['shared-ringtone']);
+  assert.equal(writer.canonicalKeys.has('catalog/media/shared-ringtone.bin'), false);
+}
+
+// B1. AI 级联删除：候选收集与删除同属一个事务。
+// 注入「收集发起之后、删除之前新提交的引用 C」，它必须进入候选集并被释放。
 {
   const { db, writer, lifecycle, assistants } = createHarness();
   const buildAi = (aiId, sessionId) => {

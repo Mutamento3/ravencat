@@ -655,35 +655,6 @@ export class AIAssistantRepository implements IAIAssistantRepository {
       : null;
   }
 
-  async getAvatarMediaAssetMigrationCandidate(
-    ownerId: string,
-  ): Promise<AIAvatarMediaAssetMigrationCandidate | null> {
-    const database = databaseCoordinator.openTaskExecutor({
-      name: 'assistants.get-avatar-media-asset-candidate',
-      feature: 'assistants',
-      priority: 'maintenance',
-    });
-    const row = await database.getFirstAsync<{
-      id: string;
-      avatar: string;
-      avatar_media_asset_id: string | null;
-    }>(
-      `SELECT id, avatar, avatar_media_asset_id
-       FROM ai_assistants
-       WHERE id = ?
-         AND avatar IS NOT NULL
-         AND TRIM(avatar) <> ''`,
-      [ownerId],
-    );
-    return row
-      ? {
-          id: row.id,
-          avatar: row.avatar,
-          avatarMediaAssetId: row.avatar_media_asset_id || null,
-        }
-      : null;
-  }
-
   async commitAvatarMediaAssetReferenceInTransaction(
     transaction: DatabaseTransactionExecutor,
     input: CommitAIAvatarMediaAssetReferenceInput,

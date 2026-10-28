@@ -12,6 +12,7 @@ import path from 'node:path';
 import ts from 'typescript';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { loadTypeScriptModule as loadTypeScriptModuleWithMocks } from './helpers/load-typescript-module.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -21,20 +22,6 @@ async function loadTypeScriptModule(relativePath) {
     compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   return import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`);
-}
-
-function loadTypeScriptModuleWithMocks(relativePath, mocks) {
-  const source = fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
-  const output = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  const requireMock = (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `未声明的运行时依赖：${specifier}`);
-    return mocks[specifier];
-  };
-  new Function('exports', 'require', 'module', output)(module.exports, requireMock, module);
-  return module.exports;
 }
 
 const abortSignalRuntime = loadTypeScriptModuleWithMocks(

@@ -5,7 +5,7 @@ import { memorySearchText, normalizeMemoryText, type PassiveTriggerMemory } from
 import { listMemoryTriggerEntries } from '../application/MemoryQueries';
 import { deleteMemoryTrigger, editMemoryTrigger, setMemoryAutoRecall } from '../application/MemoryCommands';
 import { useTheme, useThemedStyles } from '@shared/theme';
-import { NavigationHeader, Toggle, useBusyBackHandler, showAppDialog } from '@shared/ui';
+import { NavigationHeader, ToggleField, useBusyBackHandler, showAppDialog } from '@shared/ui';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronDown, ChevronUp, Plus } from 'lucide-react-native';
 import { createMemoryScreenStyles } from './memoryScreenStyles';
@@ -26,14 +26,14 @@ function TriggerMemoryCard({ relation, adding, busy, onAssociate, onToggle }: {
   // 长正文先展示预览，开关始终位于卡片顶部，避免被正文推到屏幕之外。
   const longContent = Array.from(relation.memory.content).length > 120;
   return <View style={styles.card}>
-    <View style={styles.row}>
-      {relation.memory.summary || !adding
-        ? <Text style={[styles.label, styles.grow]}>{relation.memory.summary ?? '自动带入'}</Text>
-        : <View style={styles.grow} />}
-      {adding ? <Pressable accessibilityRole="button" accessibilityLabel="关联这条记忆" disabled={busy} style={styles.triggerAction} onPress={onAssociate}>
+    {adding ? <View style={styles.row}>
+      {relation.memory.summary ? <Text style={[styles.label, styles.grow]}>{relation.memory.summary}</Text> : <View style={styles.grow} />}
+      <Pressable accessibilityRole="button" accessibilityLabel="关联这条记忆" disabled={busy} style={styles.triggerAction} onPress={onAssociate}>
         <Plus size={16} color={theme.colors.brand.primary} /><Text style={styles.action}>关联</Text>
-      </Pressable> : <Toggle accessibilityLabel="自动带入关联记忆" disabled={busy} value={relation.autoRecall} onValueChange={onToggle} />}
-    </View>
+      </Pressable>
+    </View> : <ToggleField layout="inline" rowStyle={styles.row} label="自动带入关联记忆" disabled={busy} value={relation.autoRecall} onValueChange={onToggle}>
+      <Text style={[styles.label, styles.grow]}>{relation.memory.summary ?? '自动带入'}</Text>
+    </ToggleField>}
     <Text style={styles.body} numberOfLines={longContent && !expanded ? 4 : undefined}>{relation.memory.content}</Text>
     {longContent && <Pressable accessibilityRole="button" accessibilityState={{ expanded }} style={styles.triggerAction} onPress={() => setExpanded(!expanded)}>
       <Text style={styles.action}>{expanded ? '收起' : '展开全文'}</Text>
@@ -102,7 +102,9 @@ export default function MemoryTriggerScreen({ assistantId, triggerId, onBack }: 
         {editingGroup ? <View style={styles.card}>
           <View style={styles.row}><Text style={styles.label}>触发词</Text><Pressable accessibilityRole="button" disabled={busy} style={styles.triggerAction} onPress={() => setEditingGroup(false)}><Text style={styles.action}>取消</Text></Pressable></View>
           <TextInput multiline accessibilityLabel="编辑关联组的触发词" style={styles.input} value={keywordInput} onChangeText={setKeywordInput} editable={!busy} placeholder="多个词用逗号、顿号、分号或换行分隔" placeholderTextColor={theme.colors.text.tertiary} />
-          <View style={styles.row}><Text style={[styles.body, styles.grow]}>按文本自动关联</Text><Toggle accessibilityLabel="自动关联包含触发词的记忆" disabled={busy} value={autoAssociate} onValueChange={setAutoAssociate} /></View>
+          <ToggleField layout="inline" rowStyle={styles.row} label="按文本自动关联" accessibilityLabel="自动关联包含触发词的记忆" disabled={busy} value={autoAssociate} onValueChange={setAutoAssociate}>
+            <Text style={[styles.body, styles.grow]}>按文本自动关联</Text>
+          </ToggleField>
         </View> : <View style={styles.card}>
           <Text style={styles.triggerTitle}>{trigger.keywords.map(word => word.keyword).join('、')}</Text>
           <Text style={styles.meta}>{trigger.autoAssociate ? '按正文或摘要自动关联' : '手动关联'}</Text>

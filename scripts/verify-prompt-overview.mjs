@@ -158,7 +158,7 @@ const executor = {
 const { sqlitePromptDefaultsRepository: repository } = load('src/features/prompting/infrastructure/SQLitePromptDefaultsRepository.ts', {
   '@platform/persistence': { databaseCoordinator: { openTaskExecutor: () => executor } },
 });
-assert.deepEqual(await repository.read(), { overrides: {}, userPrompts: [], toolPermissions: {}, agentRegistryExcludedAssistantIds: [] });
+assert.deepEqual(await repository.read(), { overrides: {}, userPrompts: [], toolPermissions: {}, appToolPackages: {}, agentRegistryExcludedAssistantIds: [] });
 const first = { id: 'p1', name: '第一条', content: '规则一', enabled: true, sortOrder: 10 };
 const second = { id: 'p2', name: '第二条', content: '规则二', enabled: true, sortOrder: 20 };
 await repository.saveUserPrompt(first); await repository.saveUserPrompt(second);
@@ -192,6 +192,13 @@ const registryDependencies = {
 const registryManagement = load('src/features/prompting/application/ManagePromptDefaults.ts', {
   './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => registryDependencies },
 });
+assert.deepEqual(await registryManagement.getAppToolPackageSettings(), {});
+await registryManagement.setAppToolPackageEnabled('xiaohongshu', true);
+await registryManagement.setAppToolPackageEnabled('neteaseMusic', false);
+assert.deepEqual(await registryManagement.getAppToolPackageSettings(), { xiaohongshu: true, neteaseMusic: false });
+await registryManagement.setAppToolPackageEnabled('xiaohongshu', false);
+assert.deepEqual((await repository.read()).appToolPackages, { xiaohongshu: false, neteaseMusic: false });
+assert.equal((await repository.read()).toolPermissions.open_app, false, '应用包总开关不改写单项工具权限');
 const registryConfiguration = load('src/features/prompting/application/ManageAssistantPrompts.ts', {
   './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => registryDependencies },
 });
@@ -220,6 +227,7 @@ const { assembleResolvedChatPromptPack: assembleRegistryPack } = load('src/host/
   }) } },
   './compiler': {}, './DeviceBatteryPromptBlock': { createDeviceBatteryPromptBlocks: async () => [] },
   './PromptPackBlockFactory': {},
+  './PromptBuiltInContent': load('src/host/prompt/PromptBuiltInContent.ts'),
 });
 assert.ok((await registryManagement.getAgentRegistrySettings()).every((item) => item.included), '无配置时默认全部勾选');
 await registryManagement.setAgentRegistryAssistantIncluded('ai-2', false);
@@ -268,6 +276,53 @@ const scopedManagement = load('src/features/prompting/application/ManageAssistan
     catalog: { getById: () => ({ protection: 'overridable', defaultContent: '默认规则' }) },
   }) },
 });
+// 使用真实 SQLite 验证可选提示词的默认状态、覆盖继承与 AI 隔离。
+const coreDefaultManagement = load('src/features/prompting/application/ManagePromptDefaults.ts', {
+  './PromptingRuntimeDependencies': { getPromptingRuntimeDependencies: () => ({ defaults: repository, catalog: { getById: () => ({ defaultContent: '代码默认规则' }) } }) },
+});
+await coreDefaultManagement.saveDefaultDefinition('foundation.default_core', '');
+assert.equal((await repository.read()).overrides['foundation.default_core'], '', '全局默认允许主动保存空基础规则');
+await coreDefaultManagement.saveDefaultDefinition('foundation.default_core', '保留的全局基础规则');
+await scopedManagement.saveAssistantDefinitionOverride({ assistantId: 'ai-1', definitionId: 'foundation.default_core', locale: 'zh-CN', content: '' });
+assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-1', scenarioId: 'chat.private_reply' })).overrides['foundation.default_core'], '', '空覆盖不能回填全局默认');
+assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-2', scenarioId: 'chat.private_reply' })).overrides['foundation.default_core'], '保留的全局基础规则');
+await scopedManagement.resetAssistantDefinitionOverride({ assistantId: 'ai-1', definitionId: 'foundation.default_core', locale: 'zh-CN' });
+assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-1', scenarioId: 'chat.private_reply' })).overrides['foundation.default_core'], '保留的全局基础规则');
+await coreDefaultManagement.resetDefaultDefinition('foundation.default_core');
+assert.throws(() => coreDefaultManagement.saveDefaultDefinition('output.paragraph_breaks', ''), /不能为空/u);
+assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-1', scenarioId: 'chat.private_reply' })).paragraphBreaksEnabled, false);
+assert.equal(await scopedManagement.resolveImageGroundingPrompt('ai-1'), '默认规则');
+await repository.saveOverride('input.image_grounding', '全局图片提醒');
+assert.equal(await scopedManagement.resolveImageGroundingPrompt('ai-1'), '全局图片提醒');
+await scopedManagement.saveAssistantDefinitionOverride({ assistantId: 'ai-1', definitionId: 'input.image_grounding', locale: 'zh-CN', content: '专属图片提醒' });
+assert.equal(await scopedManagement.resolveImageGroundingPrompt('ai-1'), '专属图片提醒');
+assert.equal(await scopedManagement.resolveImageGroundingPrompt('ai-2'), '全局图片提醒');
+await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'input.image_grounding', enabled: false });
+await scopedManagement.resetAssistantDefinitionOverride({ assistantId: 'ai-1', definitionId: 'input.image_grounding', locale: 'zh-CN' });
+assert.equal(await scopedManagement.resolveImageGroundingPrompt('ai-1'), null, '恢复正文不改变关闭状态');
+assert.equal(await scopedManagement.resolveImageGroundingPrompt('ai-2'), '全局图片提醒');
+await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'input.image_grounding', enabled: true });
+assert.equal(await scopedManagement.resolveImageGroundingPrompt('ai-1'), '全局图片提醒');
+await repository.resetOverride('input.image_grounding');
+// 两级摘要正文复用相同的覆盖、恢复与全局默认语义，不读提示词状态表决定是否生成。
+for (const [level, definitionId] of [['primary', 'internal.chat_summary'], ['secondary', 'internal.chat_secondary_summary']]) {
+  assert.equal(await scopedManagement.resolveChatSummaryPromptOverride('ai-1', level), undefined);
+  await coreDefaultManagement.saveDefaultDefinition(definitionId, `全局${level}正文`);
+  assert.equal(await scopedManagement.resolveChatSummaryPromptOverride('ai-1', level), `全局${level}正文`);
+  await scopedManagement.saveAssistantDefinitionOverride({ assistantId: 'ai-1', definitionId, locale: 'zh-CN', content: `专属${level}正文` });
+  assert.equal(await scopedManagement.resolveChatSummaryPromptOverride('ai-1', level), `专属${level}正文`);
+  assert.equal(await scopedManagement.resolveChatSummaryPromptOverride('ai-2', level), `全局${level}正文`);
+  assert.equal(await scopedManagement.resolveChatSummaryPromptOverride(null, level), `全局${level}正文`, '群不使用任何 AI 的专属正文');
+  await scopedManagement.resetAssistantDefinitionOverride({ assistantId: 'ai-1', definitionId, locale: 'zh-CN' });
+  assert.equal(await scopedManagement.resolveChatSummaryPromptOverride('ai-1', level), `全局${level}正文`);
+  await coreDefaultManagement.resetDefaultDefinition(definitionId);
+  assert.equal(await scopedManagement.resolveChatSummaryPromptOverride('ai-1', level), undefined);
+  assert.throws(() => scopedManagement.saveAssistantDefinitionOverride({ assistantId: 'ai-1', definitionId, locale: 'zh-CN', content: ' ' }), /不能为空/u);
+}
+await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'output.paragraph_breaks', enabled: true });
+assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-1', scenarioId: 'chat.private_reply' })).paragraphBreaksEnabled, true);
+assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-2', scenarioId: 'chat.private_reply' })).paragraphBreaksEnabled, false);
+await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'output.paragraph_breaks', enabled: false });
 await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'context.time_awareness', enabled: false });
 await scopedManagement.saveAssistantDefinitionState({ assistantId: 'ai-1', definitionId: 'context.device_battery', enabled: false });
 assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId: 'ai-1', scenarioId: 'chat.private_reply' })).messageTimestampsEnabled, false);
@@ -291,6 +346,32 @@ await scopedManagement.deleteAssistantUserPrompt(exclusive.id, 'ai-1');
 assert.deepEqual(await assistantRepository.listDefinitionOverrides('ai-1'), []);
 assert.equal((await assistantRepository.listDefinitionStates('ai-1'))[0].enabled, false);
 assert.deepEqual(await assistantRepository.listDefinitionStates('ai-2'), []);
+
+// 正文全局应用覆盖现有 AI 的同一项；开关、其他项、旧语言行和默认配置保持原样。
+const statesBeforeGlobalPrompt = database.prepare('SELECT * FROM assistant_prompt_definition_states ORDER BY assistant_id, definition_id').all();
+const defaultsBeforeGlobalPrompt = await repository.read();
+await assistantRepository.saveDefinitionOverride({ assistantId: 'ai-2', definitionId: 'foundation.default_core', locale: 'en-US', content: '保留的旧语言行', updatedAt: 'old' });
+for (const definitionId of ['foundation.default_core', 'output.paragraph_breaks', 'input.image_grounding', 'internal.chat_summary', 'internal.chat_secondary_summary']) {
+  const otherOverridesBefore = database.prepare("SELECT * FROM assistant_prompt_definition_overrides WHERE definition_id <> ? OR locale <> 'zh-CN' ORDER BY assistant_id, definition_id, locale").all(definitionId);
+  const draft = `尚未单独保存的统一正文：${definitionId}`;
+  await scopedManagement.applyAssistantDefinitionGlobally({ definitionId, content: draft });
+  for (const assistantId of ['ai-1', 'ai-2', 'ai-3']) {
+    const resolvedConfig = await scopedManagement.resolveAssistantPromptConfiguration({ assistantId, scenarioId: 'chat.private_reply' });
+    assert.equal(resolvedConfig.overrides[definitionId], draft);
+  }
+  assert.deepEqual(database.prepare("SELECT * FROM assistant_prompt_definition_overrides WHERE definition_id <> ? OR locale <> 'zh-CN' ORDER BY assistant_id, definition_id, locale").all(definitionId), otherOverridesBefore);
+  assert.deepEqual(database.prepare('SELECT * FROM assistant_prompt_definition_states ORDER BY assistant_id, definition_id').all(), statesBeforeGlobalPrompt);
+  assert.deepEqual(await repository.read(), defaultsBeforeGlobalPrompt);
+}
+await scopedManagement.applyAssistantDefinitionGlobally({ definitionId: 'foundation.default_core', content: '' });
+for (const assistantId of ['ai-1', 'ai-2', 'ai-3']) assert.equal((await scopedManagement.resolveAssistantPromptConfiguration({ assistantId, scenarioId: 'chat.private_reply' })).overrides['foundation.default_core'], '');
+const overridesBeforeGlobalFailure = database.prepare('SELECT * FROM assistant_prompt_definition_overrides ORDER BY assistant_id, definition_id, locale').all();
+await assert.rejects(scopedManagement.applyAssistantDefinitionGlobally({ definitionId: 'output.paragraph_breaks', content: '  ' }), /不能为空/u);
+database.exec("CREATE TRIGGER reject_global_prompt BEFORE UPDATE ON assistant_prompt_definition_overrides WHEN OLD.assistant_id = 'ai-3' AND NEW.definition_id = 'foundation.default_core' BEGIN SELECT RAISE(ABORT, '拒绝全局正文'); END;");
+await assert.rejects(scopedManagement.applyAssistantDefinitionGlobally({ definitionId: 'foundation.default_core', content: '失败时不得留下部分更新' }), /拒绝全局正文/u);
+assert.deepEqual(database.prepare('SELECT * FROM assistant_prompt_definition_overrides ORDER BY assistant_id, definition_id, locale').all(), overridesBeforeGlobalFailure, '批量中途失败时回滚所有正文');
+assert.deepEqual(database.prepare('SELECT * FROM assistant_prompt_definition_states ORDER BY assistant_id, definition_id').all(), statesBeforeGlobalPrompt);
+database.exec('DROP TRIGGER reject_global_prompt');
 
 // 特批偏好独立于权限保存，重读、取消及角色删除都保持真实 SQLite 契约。
 await scopedManagement.setAssistantDirectToolExposure('ai-1', 'read_memory', true);
@@ -331,6 +412,7 @@ for (const id of ['ai-2', 'ai-3']) assert.deepEqual(await scopedManagement.listA
 assert.deepEqual(database.prepare('SELECT * FROM assistant_tool_permissions ORDER BY assistant_id, tool_name').all(), permissionsBefore);
 database.exec("INSERT INTO ai_assistants VALUES ('ai-future');");
 assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-future'), [], '快照不成为未来新增 AI 的默认配置');
+assert.deepEqual(await assistantRepository.listDefinitionOverrides('ai-future'), [], '正文快照不成为未来新增 AI 的默认配置');
 await scopedManagement.setAssistantDirectToolExposure('ai-2', 'send_voice_message', true);
 database.exec('PRAGMA foreign_keys = ON; DELETE FROM ai_assistants WHERE id = \'ai-2\';');
 assert.deepEqual(await scopedManagement.listAssistantDirectToolNames('ai-2'), [], '角色删除同时清除特批配置');
@@ -347,9 +429,6 @@ native.PanResponder = { create: (handlers) => ({ panHandlers: {
   onResponderRelease: handlers.onPanResponderRelease,
   onResponderTerminate: handlers.onPanResponderTerminate,
 } }) };
-const customRows = load('src/features/prompting/presentation/CustomPromptRow.tsx', {
-  'react-native': native, '@shared/ui': { Toggle: 'Switch' }, '@shared/theme': { ThemedSurface: 'View' },
-});
 const fixture = { overrides: { 'foundation.default_core': '私密正文不会出现在首页' }, userPrompts: [], toolPermissions: {},
   tools: [{ name: 'read_memory', owner: 'memory', hostOnly: false, defaultEnabled: true, enabled: true, mutating: false, callOnly: false, description: '完整工具说明' },
     { name: 'schedule_self_wake', owner: 'companion', hostOnly: true, defaultEnabled: true, enabled: true, mutating: true, callOnly: false, description: '完整主理工具说明' }] };
@@ -361,20 +440,49 @@ let optionListError = false;
 const aiReads = [];
 const aiDetails = { overrides: [], userPrompts: [], tools: [], directToolNames: [], timeEnabled: true, batteryEnabled: true, messageTimestampsEnabled: false, userStateEnabled: true, socialEnabled: true };
 const otherDetails = { overrides: [], userPrompts: [], tools: [], directToolNames: [], timeEnabled: true, batteryEnabled: true, messageTimestampsEnabled: false, userStateEnabled: true, socialEnabled: true };
+let summaryGenerationState = { primaryEnabled: true, secondaryEnabled: true };
 const detailsFor = (id) => id === ai.id ? aiDetails : otherDetails;
 const globalSnapshots = [];
+const globalPromptSnapshots = [];
+let failGlobalPromptApply = false;
+let glassEnabled = false;
+native.StyleSheet = { create: (styles) => styles, hairlineWidth: 1 };
+const editorTheme = {
+  effects: { glass: { get enabled() { return glassEnabled; } } },
+  radius: { md: 12, lg: 20 }, spacing: { xs: 4, sm: 8, md: 12, lg: 16 },
+  colors: {
+    text: { primary: '#111', secondary: '#444', tertiary: '#666' },
+    brand: { primary: '#09f', onPrimary: '#fff' }, feedback: { error: '#f00' },
+    surface: { default: '#fff', input: '#eee', raised: '#ddd' }, border: { light: '#ccc' },
+    background: { app: '#fff', screen: '#f5f5f5' },
+  },
+};
+const editorThemePorts = { GlassSurface: 'GlassSurface', ThemedSurface: 'View', useTheme: () => editorTheme, useThemedStyles: (factory) => factory(editorTheme) };
+const ToggleField = load('src/shared/ui/ToggleField.tsx', {
+  'react-native': native, '@shared/theme': editorThemePorts, './Toggle': { default: 'Switch', __esModule: true },
+}).default;
+const customRows = load('src/features/prompting/presentation/CustomPromptRow.tsx', {
+  'react-native': native, '@shared/ui': { ToggleField }, '@shared/theme': { ThemedSurface: 'View' },
+});
+const nativeEditor = load('src/shared/ui/AppTextInput.tsx', { 'react-native': native, '@shared/theme': editorThemePorts });
+const editorField = load('src/shared/ui/InputField.tsx', { 'react-native': native, '@shared/theme': editorThemePorts, './AppTextInput': nativeEditor }).default;
+const editorStyles = load('src/features/prompting/presentation/promptCenterStyles.ts', { 'react-native': native });
 let definitionSaveGate;
 const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx', {
   '@shared/prompt': { CHAT_PROMPT_READING_FLOW },
   '@features/assistants': { getAssistantDisplayName: (assistant) => assistant.nickname ?? assistant.name },
-  '@shared/ui': { Toggle: 'Switch', showAppDialog: ({ title, message, buttons }) => alerts.push([title, message, buttons]) },
+  '@shared/ui': { InputField: editorField, KeyboardAvoidingContainer: 'View', ToggleField, showAppDialog: ({ title, message, buttons }) => alerts.push([title, message, buttons]) },
   'react-native': native, 'lucide-react-native': { ChevronDown: 'ChevronDown', ChevronRight: 'ChevronRight', Square: 'Square', SquareCheck: 'SquareCheck', Star: 'Star' },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
-  '@shared/theme': { ThemedSurface: 'View', useTheme: () => ({ effects: { glass: { enabled: false } }, colors: { text: { tertiary: '#666' }, brand: { primary: '#f90' } } }), useThemedStyles: () => ({}) },
+  '@shared/theme': editorThemePorts,
   '@shared/ui/NavigationHeader': { default: ({ title, onGoBack, rightButton, help }) => React.createElement('Header', { title, onGoBack, help }, rightButton), __esModule: true },
   '@shared/ui/ModalSheet': { default: ({ children, onClose }) => React.createElement('ModalSheet', { onClose }, children), __esModule: true },
   '../application/GetPromptCenterSnapshot': { getPromptCenterSnapshot: () => ({ definitions: [
-    { id: 'foundation.default_core', defaultContent: '代码默认规则' }, { id: 'foundation.visual_grounding', defaultContent: '视觉默认规则' },
+    { id: 'foundation.default_core', defaultContent: '代码默认规则' },
+    { id: 'input.image_grounding', defaultContent: '图片默认提醒' },
+    { id: 'output.paragraph_breaks', defaultContent: '默认分段规则' },
+    { id: 'internal.chat_summary', defaultContent: '默认一级摘要规则' },
+    { id: 'internal.chat_secondary_summary', defaultContent: '默认二级摘要规则' },
   ] }) },
   '../application/ManagePromptDefaults': {
     getAgentRegistrySettings: registryManagement.getAgentRegistrySettings,
@@ -392,6 +500,14 @@ const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx'
     },
   },
   '../application/ManageAssistantPrompts': {
+    getSummaryPromptGenerationState: async () => ({ ...summaryGenerationState }),
+    applyAssistantDefinitionGlobally: async (draft) => {
+      if (failGlobalPromptApply) throw new Error('无法应用正文');
+      globalPromptSnapshots.push({ ...draft });
+      for (const details of [aiDetails, otherDetails]) {
+        details.overrides = [...details.overrides.filter((item) => item.definitionId !== draft.definitionId || item.locale !== 'zh-CN'), { ...draft, locale: 'zh-CN' }];
+      }
+    },
     applyAssistantDirectToolsGlobally: async (names) => {
       globalSnapshots.push([...names]);
       const ordinary = names.filter((name) => !fixture.tools.find((tool) => tool.name === name).hostOnly);
@@ -401,7 +517,7 @@ const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx'
     },
     getAssistantPromptEditorDetails: async (id) => { aiReads.push(['details', id]); return { ...detailsFor(id) }; },
     saveAssistantDefinitionState: async ({ assistantId, definitionId, enabled }) => {
-      detailsFor(assistantId)[{ 'context.device_battery': 'batteryEnabled', 'context.time_awareness': 'timeEnabled', 'context.message_timestamps': 'messageTimestampsEnabled', 'context.user_state': 'userStateEnabled', 'context.social': 'socialEnabled' }[definitionId]] = enabled;
+      detailsFor(assistantId)[{ 'context.device_battery': 'batteryEnabled', 'context.time_awareness': 'timeEnabled', 'context.message_timestamps': 'messageTimestampsEnabled', 'context.user_state': 'userStateEnabled', 'context.social': 'socialEnabled', 'output.paragraph_breaks': 'paragraphBreaksEnabled', 'input.image_grounding': 'imageGroundingEnabled' }[definitionId]] = enabled;
     },
     saveAssistantDefinitionOverride: async (override) => { detailsFor(override.assistantId).overrides = [override]; },
     resetAssistantDefinitionOverride: async ({ assistantId }) => { detailsFor(assistantId).overrides = []; },
@@ -411,7 +527,7 @@ const Screen = load('src/features/prompting/presentation/PromptCenterScreen.tsx'
       const details = detailsFor(id);
       details.directToolNames = exposed ? [...details.directToolNames, name] : details.directToolNames.filter((item) => item !== name);
     },
-  }, './CustomPromptRow': customRows, './promptCenterStyles': {},
+  }, './CustomPromptRow': customRows, './promptCenterStyles': editorStyles,
 }).default;
 // 执行真实 App 入口和 Host 适配，使用原生 Stack 相同的 Router 处理 GO_BACK。
 const routeContext = React.createContext(null);
@@ -488,7 +604,7 @@ await renderer.act(async () => button('用户人设').props.onPress());
 assert.equal(stackState.routes.at(-1).name, 'profile');
 await systemBack();
 assert.equal(currentTitle(), '提示词中心');
-const overviewLabels = ['系统基础规则', '人设', '协议空间常驻提示词', 'AI 身份池', '群聊身份背景', '自定义提示词', '工具调用', 'MCP',
+const overviewLabels = ['系统基础规则', '换行规则', '人设', '协议空间常驻提示词', 'AI 身份池', '群聊身份背景', '自定义提示词', '工具调用', 'MCP',
   '历史聊天', '工具运行上下文', '用户状态与一起听', '时刻社交信息', '环境信息', 'AI 当前身份状态', '被动记忆', '手机电量', '当前时间', '消息时间戳', '本轮回应要求', '当前聊天'];
 const overviewText = text(activeScreen());
 assert.ok(overviewText.includes('增加输入 Token') && overviewText.includes('模仿时间格式'), '开关旁明确说明开销和模仿风险');
@@ -509,6 +625,12 @@ assert.ok(text(activeScreen()).indexOf('环境信息') < text(activeScreen()).in
 assert.equal(button('环境信息'), undefined, '环境信息只展示说明，不提供详情跳转');
 await renderer.act(async () => button('系统基础规则').props.onPress());
 assert.equal(activeScreen().findByType('TextInput').props.value, '私密正文不会出现在首页');
+assert.equal(button('全局应用'), undefined, '无 AI 默认页不显示一次性应用入口');
+const editorInput = activeScreen().findByType('TextInput');
+const nativeEditorStyle = Object.assign({}, ...editorInput.props.style.flat(Infinity));
+assert.equal(editorInput.props.multiline, true);
+assert.ok(nativeEditorStyle.height === undefined || nativeEditorStyle.height >= (nativeEditorStyle.minHeight ?? 0),
+  '原生正文编辑区的固定高度不能小于最小高度，否则父布局和文本绘制范围可能不一致');
 await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('修改后的全局规则'));
 await renderer.act(async () => button('保存').props.onPress());
 assert.equal(fixture.overrides['foundation.default_core'], '修改后的全局规则');
@@ -572,13 +694,8 @@ assert.equal(currentTitle(), '提示词中心');
 await renderer.act(async () => button('系统基础规则').props.onPress());
 const ruleEntryDepth = stackState.routes.length;
 await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('基础规则未保存草稿'));
-await renderer.act(async () => button('视觉规则').props.onPress());
-assert.equal(currentTitle(), '视觉真实性规则');
-assert.equal(activeScreen().findByType('TextInput').props.value, '视觉默认规则');
-assert.equal(stackState.routes.length, ruleEntryDepth, '基础规则与视觉规则是同一入口的两个条目，切换不能压栈');
-await renderer.act(async () => button('基础规则').props.onPress());
-assert.equal(currentTitle(), '系统基础规则');
-assert.equal(activeScreen().findByType('TextInput').props.value, '基础规则未保存草稿', '切回时保留另一条规则的未保存正文');
+assert.equal(button('视觉规则'), undefined, '基础页只保留通用规则');
+assert.equal(activeScreen().findByType('TextInput').props.value, '基础规则未保存草稿');
 assert.equal(stackState.routes.length, ruleEntryDepth);
 let finishSave;
 definitionSaveGate = new Promise((resolve) => { finishSave = resolve; });
@@ -596,6 +713,40 @@ assert.deepEqual(aiReads, [], '全局概览与工具、自定义提示词只读�
 assistantOptions = [otherAI, ai];
 await renderer.act(async () => expo.useRouter().push('/prompt-center'));
 assert.equal(stackState.routes.at(-1).params.assistantId, ai.id, '已有 AI 时应选主理，而不是列表首位');
+await renderer.act(async () => button('条件提示词').props.onPress());
+assert.equal(stackState.routes.at(-1).name, 'prompt-center/conditional');
+assert.equal(stackState.routes.at(-1).params.assistantId, ai.id);
+assert.ok(text(activeScreen()).includes('图片'));
+assert.ok(activeScreen().findByType('Header').props.help.sections.some((section) => section.body.includes('OCR')));
+assert.equal(activeScreen().findAllByType('Switch').length, 0, '条件列表只提供正文页入口');
+await renderer.act(async () => button('图片防幻觉提醒').props.onPress());
+assert.equal(currentTitle(), '图片防幻觉提醒');
+assert.equal(activeScreen().findByType('Switch').props.value, true);
+await renderer.act(async () => activeScreen().findByType('Switch').props.onValueChange(false));
+assert.equal(activeScreen().findByType('Switch').props.value, false);
+await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('可编辑图片提醒'));
+await renderer.act(async () => button('保存').props.onPress());
+assert.equal(currentTitle(), '条件提示词');
+await renderer.act(async () => button('图片防幻觉提醒').props.onPress());
+assert.equal(activeScreen().findByType('TextInput').props.value, '可编辑图片提醒');
+await renderer.act(async () => button('恢复默认').props.onPress());
+await renderer.act(async () => alerts.at(-1)[2].find((item) => item.text === '恢复').onPress());
+assert.equal(activeScreen().findByType('TextInput').props.value, '图片默认提醒');
+assert.equal(activeScreen().findByType('Switch').props.value, false);
+await systemBack();
+await systemBack();
+await renderer.act(async () => button('换行规则').props.onPress());
+assert.equal(currentTitle(), '换行规则');
+assert.equal(activeScreen().findByType('Switch').props.value, false);
+await renderer.act(async () => activeScreen().findByType('Switch').props.onValueChange(true));
+await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('自定义分段规则'));
+await renderer.act(async () => button('保存').props.onPress());
+assert.equal(currentTitle(), '提示词中心');
+assert.equal(activeScreen().findAllByProps({ accessibilityLabel: '注入换行规则' }).length, 0, '概览不重复提供编辑页开关');
+await renderer.act(async () => button('换行规则').props.onPress());
+assert.equal(activeScreen().findByType('Switch').props.value, true);
+assert.equal(activeScreen().findByType('TextInput').props.value, '自定义分段规则');
+await systemBack();
 registryAssistants = [{ ...ai, model: 'model-one' }, { ...otherAI, model: 'model-two' }];
 await renderer.act(async () => button('AI 身份池').props.onPress());
 assert.equal(stackState.routes.at(-1).params?.assistantId, undefined, '全局名单不绑定编辑对象');
@@ -663,12 +814,13 @@ assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入用户状�
 assert.equal(activeScreen().findByProps({ accessibilityLabel: '注入时刻社交信息' }).props.value, true);
 assert.ok(text(activeScreen()).includes('另一位 AI'));
 const globalBefore = JSON.stringify(fixture);
+const firstAIOverridesBefore = structuredClone(aiDetails.overrides);
 await renderer.act(async () => button('系统基础规则').props.onPress());
 assert.equal(activeScreen().findByType('TextInput').props.value, fixture.overrides['foundation.default_core']);
 await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('只为另一位 AI 修改基础规则'));
 await renderer.act(async () => button('保存').props.onPress());
 assert.equal(otherDetails.overrides[0].content, '只为另一位 AI 修改基础规则');
-assert.deepEqual(aiDetails.overrides, []);
+assert.deepEqual(aiDetails.overrides, firstAIOverridesBefore);
 assert.equal(JSON.stringify(fixture), globalBefore);
 await renderer.act(async () => button('自定义提示词').props.onPress());
 assert.equal(stackState.routes.at(-1).params.assistantId, otherAI.id);
@@ -785,6 +937,78 @@ assert.deepEqual(aiDetails.directToolNames, ['schedule_self_wake'], '普通 AI �
 assert.equal(otherDetails.tools[0].enabled, false, '同步星标不修改调用权限');
 await systemBack();
 await systemBack();
+// 当前草稿可直接全局应用，操作后保留编辑页；内置正文与两级摘要共用同一行为。
+await renderer.act(async () => expo.useRouter().push({ pathname: '/prompt-center', params: { assistantId: ai.id } }));
+const switchStates = (details) => [details.paragraphBreaksEnabled, details.imageGroundingEnabled, details.timeEnabled, details.batteryEnabled];
+const uiSwitchStatesBefore = [switchStates(aiDetails), switchStates(otherDetails)];
+const globalDefaultBeforeApply = structuredClone(fixture);
+for (const [definitionId, label] of [['foundation.default_core', '系统基础规则'], ['output.paragraph_breaks', '换行规则'], ['input.image_grounding', '图片防幻觉提醒'], ['internal.chat_summary', '一级摘要提示词'], ['internal.chat_secondary_summary', '二级摘要提示词']]) {
+  if (definitionId === 'input.image_grounding') await renderer.act(async () => button('条件提示词').props.onPress());
+  const summaryRule = definitionId.startsWith('internal.chat_');
+  if (summaryRule) {
+    await renderer.act(async () => button('其他提示词').props.onPress());
+    assert.equal(currentTitle(), '其他提示词');
+    assert.equal(activeScreen().findAllByType('TextInput').length, 0);
+  }
+  await renderer.act(async () => button(label).props.onPress());
+  if (summaryRule) {
+    assert.equal(activeScreen().findAllByType('Switch').length, 0, '摘要提示词不拥有独立开关');
+    assert.ok(text(activeScreen()).includes('已开启'));
+  }
+  const draft = `当前未保存草稿：${label}`;
+  await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText(draft));
+  assert.ok(activeScreen().findByType('Header').props.help.sections.some((section) => section.title === '全局应用'));
+  await renderer.act(async () => button('全局应用').props.onPress());
+  assert.deepEqual(globalPromptSnapshots.at(-1), { definitionId, content: draft });
+  assert.equal(currentTitle(), label);
+  assert.equal(activeScreen().findByType('TextInput').props.value, draft);
+  assert.equal(alerts.at(-1)[0], '已全局应用');
+  for (const details of [aiDetails, otherDetails]) assert.equal(details.overrides.find((item) => item.definitionId === definitionId && item.locale === 'zh-CN').content, draft);
+  assert.deepEqual([switchStates(aiDetails), switchStates(otherDetails)], uiSwitchStatesBefore);
+  await systemBack();
+  if (definitionId === 'input.image_grounding' || summaryRule) await systemBack();
+}
+assert.deepEqual(fixture, globalDefaultBeforeApply);
+// 关闭期间仍可编辑；从摘要设置回来时刷新状态，但不覆盖编辑草稿。
+summaryGenerationState = { primaryEnabled: true, secondaryEnabled: false };
+await renderer.act(async () => button('其他提示词').props.onPress());
+await renderer.act(async () => button('二级摘要提示词').props.onPress());
+assert.ok(text(activeScreen()).includes('已关闭'));
+await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('关闭期间保存的摘要规则'));
+await renderer.act(async () => button('保存').props.onPress());
+assert.equal(currentTitle(), '其他提示词');
+summaryGenerationState = { primaryEnabled: true, secondaryEnabled: true };
+await renderer.act(async () => button('二级摘要提示词').props.onPress());
+assert.ok(text(activeScreen()).includes('已开启'));
+assert.equal(activeScreen().findByType('TextInput').props.value, '关闭期间保存的摘要规则');
+await renderer.act(async () => button('恢复默认').props.onPress());
+await renderer.act(async () => alerts.at(-1)[2].find((item) => item.text === '恢复').onPress());
+assert.equal(activeScreen().findByType('TextInput').props.value, '默认二级摘要规则');
+assert.deepEqual(summaryGenerationState, { primaryEnabled: true, secondaryEnabled: true });
+await systemBack();
+await systemBack();
+await renderer.act(async () => button('系统基础规则').props.onPress());
+await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText(''));
+await renderer.act(async () => button('保存').props.onPress());
+await renderer.act(async () => button('系统基础规则').props.onPress());
+assert.equal(activeScreen().findByType('TextInput').props.value, '', '重新打开编辑页保留主动清空的正文');
+await renderer.act(async () => button('全局应用').props.onPress());
+assert.deepEqual(globalPromptSnapshots.at(-1), { definitionId: 'foundation.default_core', content: '' });
+await renderer.act(async () => button('恢复默认').props.onPress());
+await renderer.act(async () => alerts.at(-1)[2].find((item) => item.text === '恢复').onPress());
+assert.equal(activeScreen().findByType('TextInput').props.value, fixture.overrides['foundation.default_core'] ?? '代码默认规则');
+assert.equal(otherDetails.overrides.find((item) => item.definitionId === 'foundation.default_core').content, '', '单独恢复默认不改写其他 AI 的空覆盖');
+await renderer.act(async () => activeScreen().findByType('TextInput').props.onChangeText('失败时保留编辑草稿'));
+const uiOverridesBeforeFailure = structuredClone([aiDetails.overrides, otherDetails.overrides]);
+failGlobalPromptApply = true;
+await renderer.act(async () => button('全局应用').props.onPress());
+assert.equal(alerts.at(-1)[0], '保存失败');
+assert.equal(activeScreen().findByType('TextInput').props.value, '失败时保留编辑草稿');
+assert.deepEqual([aiDetails.overrides, otherDetails.overrides], uiOverridesBeforeFailure);
+assert.equal(button('全局应用').props.disabled, false);
+failGlobalPromptApply = false;
+await systemBack();
+await systemBack();
 optionListError = true;
 await renderer.act(async () => expo.useRouter().push('/prompt-center'));
 assert.ok(text(activeScreen()).includes('未能读取 AI 列表'));
@@ -819,5 +1043,13 @@ await renderer.act(async () => kimiToggle().props.onValueChange(false));
 assert.equal(kimiToggle().props.value, false);
 assert.equal(kimiStar().props.accessibilityState.checked, true, '关闭权限不会删除星标偏好');
 await renderer.act(async () => kimiScreen.unmount());
+
+glassEnabled = true;
+let glassScreen;
+await renderer.act(async () => { glassScreen = renderer.create(React.createElement(Screen, { ...kimiProps, page: { kind: 'conditional' } })); });
+assert.equal(glassScreen.root.findAllByType('GlassSurface').length, 1, '玻璃主题的图片设置沿用原生玻璃条目');
+assert.equal(glassScreen.root.findAllByType('TextInput').length, 0, '条件列表不展开正文编辑器');
+assert.ok(glassScreen.root.findByType('Header').props.help.sections.length > 0);
+await renderer.act(async () => glassScreen.unmount());
 database.close();
 console.log('提示词顺序与默认概览行为通过：历史后系统上下文、批量输入、工具续轮、中文与配置继承、编辑重置、真实路由接线、逐层返回、主理默认选择、AI 切换隔离、按 AI 保存时间、手机开关所有权、全局提示词管理，以及身份池名单保存、默认入选、模型名注入和排除记录隐私。');

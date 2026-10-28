@@ -3,28 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { loadTypeScriptModule } from './helpers/load-typescript-module.mjs';
 
-const require = createRequire(import.meta.url);
-const ts = require('typescript');
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'group-prompt-privacy-'));
-
-function loadTypeScriptModule(relativePath, mocks) {
-  const sourcePath = path.join(repoRoot, relativePath);
-  const output = ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: sourcePath,
-  });
-  const module = { exports: {} };
-  const execute = new Function('exports', 'require', 'module', output.outputText);
-  execute(module.exports, (specifier) => {
-    assert.ok(Object.hasOwn(mocks, specifier), `${relativePath} 存在未声明依赖：${specifier}`);
-    return mocks[specifier];
-  }, module);
-  return module.exports;
-}
 
 const builtInContent = loadTypeScriptModule('src/host/prompt/PromptBuiltInContent.ts', {});
 const { PromptPackBlockFactory } = loadTypeScriptModule(
@@ -156,8 +137,8 @@ const { PromptHistoryBuilder } = loadTypeScriptModule(
       parseMessageMetadata: (message) => JSON.parse(message.metadataJson || '{}'),
       getMessageSticker: (message) => JSON.parse(message.metadataJson || '{}').sticker || null,
       buildStickerModelText: (sticker) => `[表情]${sticker?.name || ''}`,
-      buildVoiceMessageModelText: (message) =>
-        JSON.parse(message.metadataJson || '{}').voice?.transcript || '',
+      buildVoiceMessageModelText: chatMetadata.buildVoiceMessageModelText,
+      getMessageVoice: chatMetadata.getMessageVoice,
     },
   },
 );
@@ -545,6 +526,27 @@ assert.match(timedSegments[2].content, /2026-08-14T00:00:01Z/);
 assert.match(timedSegments[4].content, /2026-08-14T00:00:02Z/);
 assert.ok(timedSegments.filter((message) => message.role === 'assistant').every((message) => !message.content.includes('Z]')));
 assert.deepEqual(globalThis.__GROUP_PROMPT_TIMELINE__.map(({ text }) => text), ['之前的用户消息', '第一段', '第二段']);
+
+// 同一逻辑回复中的语音与文字不能混合，否则语音提示会错误覆盖文字分段。
+const historicalVoice = (actorAIId) => JSON.stringify({ kind: 'voice', actorAIId, voice: {
+  schemaVersion: 1, mediaAssetId: 'group-voice', mimeType: 'audio/wav', durationMs: 900, transcriptSource: 'assistant_source_text',
+} });
+globalThis.__GROUP_PROMPT_TIMELINE__ = [
+  { id: 51, createdAt: '2026-08-14T08:00:01.000Z', text: '我用语音说过的话', isMe: false, senderType: 'assistant',
+    logicalMessageId: 'mixed-reply', metadataJson: historicalVoice('ai-secret-2') },
+  { id: 52, createdAt: '2026-08-14T08:00:01.000Z', text: '接下来是普通文字', isMe: false, senderType: 'assistant',
+    logicalMessageId: 'mixed-reply', metadataJson: JSON.stringify({ actorAIId: 'ai-secret-2' }) },
+  { id: 53, createdAt: '2026-08-14T08:00:02.000Z', text: '其他成员的语音', isMe: false, senderType: 'assistant',
+    metadataJson: historicalVoice('ai-secret-1') },
+];
+const groupVoiceHistory = await historyBuilder.loadGroupSummaryContext({ sessionId: 'group-session', aiConfig: { id: 'ai-secret-2' },
+  runtimeContext });
+assert.deepEqual(groupVoiceHistory.messages.map((message) => message.role), ['assistant', 'assistant', 'user']);
+assert.deepEqual(groupVoiceHistory.messages.map((message) => message.content), ['我用语音说过的话', '接下来是普通文字', '同名成员：其他成员的语音']);
+assert.equal(groupVoiceHistory.messages[1].systemNotice, undefined);
+const voiceRequests = groupVoiceHistory.messages.flatMap((message) => timestampRenderer.renderPromptMessageWithTimestamp(message, false));
+assert.equal(voiceRequests.filter((message) => message.role === 'system' && message.content.includes('send_voice_message')).length, 2);
+assert.equal(voiceRequests.filter((message) => message.role === 'assistant').some((message) => message.content.includes('send_voice_message')), false);
 
 // 单聊与通话的摘要／完整原文契约由 verify-memory-v3-prompt 验证，退休旧 over-fetch 窗口断言。
 

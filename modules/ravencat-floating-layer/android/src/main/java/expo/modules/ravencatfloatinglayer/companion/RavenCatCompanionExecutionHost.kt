@@ -5,6 +5,7 @@ import android.util.Log
 import expo.modules.ravencatfloatinglayer.RavenCatCompanionWakeEvent
 import expo.modules.ravencatfloatinglayer.RavenCatCompanionWakeHeadlessTaskService
 import expo.modules.ravencatfloatinglayer.RavenCatCompanionWakeStore
+import expo.modules.ravencatfloatinglayer.AIScheduleDiagnosticStage
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -153,13 +154,19 @@ internal object RavenCatCompanionExecutionHost {
     val completion = CountDownLatch(1)
     waitingForRunnerCompletion[deliveryEventId] = completion
     Log.i(TAG, "companion_execution_host_started deliveryEventId=$deliveryEventId")
+    RavenCatCompanionWakeStore.recordScheduleDiagnostic(context, deliveryEventId,
+      AIScheduleDiagnosticStage.HOST_STARTED, dispatch.event.expectedRemindAtEpochMs)
 
+    RavenCatCompanionWakeStore.recordScheduleDiagnostic(context, deliveryEventId,
+      AIScheduleDiagnosticStage.FOREGROUND_REQUESTED)
     val foregroundStartRequested = port.requestExecutionForeground(
       context,
       deliveryEventId,
       buildExecutionContext(dispatch),
     )
     if (!foregroundStartRequested) {
+      RavenCatCompanionWakeStore.recordScheduleDiagnostic(context, deliveryEventId,
+        AIScheduleDiagnosticStage.FOREGROUND_REJECTED)
       Log.w(TAG, "companion_execution_host_foreground_start_rejected deliveryEventId=$deliveryEventId")
     }
 

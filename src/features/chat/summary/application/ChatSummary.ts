@@ -2,8 +2,9 @@
 import { randomUUID } from 'expo-crypto';
 import { throwIfAbortSignalAborted } from '@shared/runtime/abortSignal';
 import { emitChatSummaryChanged, getChatSummaryRuntime } from './ChatSummaryRuntime';
-import { ChatSummaryEditError, type ChatSummaryTextEdit, ChatSummaryGenerationError, type ChatSummaryTaskClaim, type ChatSummaryModelInput, type ChatSummarySettingsPatch, type ChatSummarySearchInput, type ChatSummarySegment , ChatBackgroundContextOptions } from '../domain/ChatSummaryRepository';
+import { DEFAULT_CHAT_SUMMARY_SETTINGS, ChatSummaryEditError, type ChatSummaryTextEdit, ChatSummaryGenerationError, type ChatSummaryTaskClaim, type ChatSummaryModelInput, type ChatSummarySettingsPatch, type ChatSummarySearchInput, type ChatSummarySegment , ChatBackgroundContextOptions } from '../domain/ChatSummaryRepository';
 import { buildSharedChatRecordText } from '../../messages/domain/SharedChatRecord';
+import { getChatConversationRuntimeDependencies } from '../../conversation/application/ChatConversationRuntime';
 import type { DatabaseTransactionExecutor } from '@platform/persistence';
 
 /** Host在资产变更事务中调用；正文、进度和配置引用保持不变。 */
@@ -74,6 +75,13 @@ export async function updateChatSummarySettings(conversationId: string, patch: C
 }
 export function getChatSummarySettings(conversationId: string) {
   return getChatSummaryRuntime().repository.readSettings(conversationId);
+}
+/** 提示词启用状态派生自摘要 owner，不在提示词配置中另存一份开关。 */
+export async function getAssistantChatSummaryGenerationState(assistantId: string) {
+  const conversation = await getChatConversationRuntimeDependencies().sessions.getCanonicalConversation(assistantId);
+  const settings = conversation ? await getChatSummarySettings(conversation.id) : DEFAULT_CHAT_SUMMARY_SETTINGS;
+  const primaryEnabled = settings.generationEnabled && settings.fixedMessageId === null;
+  return { primaryEnabled, secondaryEnabled: primaryEnabled && settings.secondaryEnabled };
 }
 export async function setFixedChatContextStart(conversationId: string, messageId: number | null) {
   await getChatSummaryRuntime().repository.setFixedStart(conversationId, messageId);
@@ -192,6 +200,7 @@ export function buildChatSummaryModelInput(input: ChatSummaryModelInput, current
   })), newMessagesOnly: input.messages.map((message) => ({
     timestamp: message.timestamp, localDateTime: new Date(message.timestamp).toLocaleString('sv-SE', { timeZone: input.timeZone }),
     source: message.source, callId: message.callId, speaker: message.speaker,
+    ...(message.isVoiceMessage ? { isVoiceMessage: true } : {}),
     content: message.sharedRecord ? buildSharedChatRecordText(message.sharedRecord, message.sharedComment!, currentAgentId) : message.content,
     ...(message.actor ? { actor: message.actor } : {}),
   })) });

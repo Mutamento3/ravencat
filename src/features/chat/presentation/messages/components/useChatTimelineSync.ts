@@ -16,6 +16,7 @@ interface UseChatTimelineSyncParams {
   setIsTyping: BooleanStateSetter;
   setMessages: MessageStateSetter;
   lastMessageIdRef: ValueRef<number | null>;
+  resetHistory: () => void;
 }
 
 export function useChatTimelineSync({
@@ -25,6 +26,7 @@ export function useChatTimelineSync({
   setIsTyping,
   setMessages,
   lastMessageIdRef,
+  resetHistory,
 }: UseChatTimelineSyncParams) {
   const isTypingRef = useRef(isTyping);
   const messagesRef = useRef(messages);
@@ -44,6 +46,10 @@ export function useChatTimelineSync({
       sessionId,
       getAfterId: () => lastMessageIdRef.current,
       getLoadedMessageIds: () => messagesRef.current.map(message => message.id),
+      onReset: () => {
+        messagesRef.current = [];
+        resetHistory();
+      },
       onReplace: (messages) => {
         setMessages(messages);
         lastMessageIdRef.current = messageTimeline.getLastMessageId(messages);
@@ -74,7 +80,7 @@ export function useChatTimelineSync({
       setIsTyping(false);
       unsubscribe();
     };
-  }, [sessionId, setMessages, lastMessageIdRef, setIsTyping]);
+  }, [sessionId, setMessages, lastMessageIdRef, setIsTyping, resetHistory]);
 
   useEffect(() => {
     if (!sessionId) {

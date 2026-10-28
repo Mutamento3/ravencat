@@ -1,3 +1,8 @@
 export { configureWebToolsRuntime } from './application/WebToolsRuntime';
-export { sqliteSearchSettingsRepository } from './infrastructure/SQLiteSearchSettingsRepository';
-export { secureSearchCredentialStore } from './infrastructure/SecureSearchCredentialStore';
+export { sqliteSearchSettingsRepository, readSearchCredentialReferences } from './infrastructure/SQLiteSearchSettingsRepository';
+export {
+  secureSearchCredentialStore,
+  readSearchCredentialsBackup,
+  validateSearchCredentialsBackup,
+  restoreSearchCredentialsBackup,
+} from './infrastructure/SecureSearchCredentialStore';
